@@ -8,6 +8,7 @@ public partial class ReadingPage : ContentPage
 {
     private readonly LocalSpeech speech = new();
     private TextSelection? selection;
+    private string? documentId;
     public ReadingPage() => InitializeComponent();
 
     protected override void OnAppearing()
@@ -25,15 +26,26 @@ public partial class ReadingPage : ContentPage
         base.OnDisappearing();
     }
 
-    private void SessionChanged(object? sender, PropertyChangedEventArgs args) => UpdateHighlight();
+    private void SessionChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        UpdateHighlight();
+        if (args.PropertyName == nameof(ReaderSession.Error) && AppState.Session.Error.Length > 0)
+            SemanticScreenReader.Default.Announce(AppState.Session.Error);
+    }
     private void UpdateHighlight()
     {
         var sentence = AppState.Session.Sentence;
         SourceText.HighlightLength = sentence is null ? 0 : sentence.EndUtf16 - sentence.StartUtf16;
+        if (documentId == AppState.Session.Document?.Id) return;
+        documentId = AppState.Session.Document?.Id;
+        selection = null;
+        WordCard.IsVisible = false;
+        Translation.Text = "";
     }
 
     private async void SourceSelected(object? sender, TextSelection selected)
     {
+        if (selection != selected) Translation.Text = "";
         selection = selected;
         SelectedWord.Text = selected.Text;
         RangeLabel.Text = $"Джерело UTF-16: {selected.StartUtf16} + {selected.LengthUtf16}";

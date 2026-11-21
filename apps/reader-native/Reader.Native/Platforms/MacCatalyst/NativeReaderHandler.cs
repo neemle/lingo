@@ -7,6 +7,7 @@ namespace Reader.Native.Controls;
 public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextView>
 {
     private UITapGestureRecognizer? tap;
+    private bool updating;
     public static readonly IPropertyMapper<NativeReaderView, NativeReaderHandler> ReaderMapper =
         new PropertyMapper<NativeReaderView, NativeReaderHandler>(ViewMapper)
         {
@@ -42,6 +43,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
 
     private void Selected(object? sender, EventArgs args)
     {
+        if (updating) return;
         var range = PlatformView.SelectedRange;
         if (range.Length > 0) VirtualView.SelectSource((int)range.Location, (int)range.Length);
     }
@@ -61,6 +63,8 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
 
     private static void MapText(NativeReaderHandler handler, NativeReaderView view)
     {
+        var preserveSelection = handler.PlatformView.Text == view.Text;
+        var selected = handler.PlatformView.SelectedRange;
         using var text = new NSMutableAttributedString(view.Text, new UIStringAttributes
         {
             Font = UIFont.SystemFontOfSize(22), ForegroundColor = UIColor.FromRGB(45, 49, 43),
@@ -69,7 +73,15 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
             view.HighlightStart, view.HighlightLength);
         if (selection is not null) text.AddAttribute(UIStringAttributeKey.BackgroundColor,
             UIColor.FromRGB(222, 230, 213), new NSRange(selection.StartUtf16, selection.LengthUtf16));
-        handler.PlatformView.AttributedText = text;
+        handler.updating = true;
+        try
+        {
+            handler.PlatformView.AttributedText = text;
+            if (preserveSelection && selected.Location <= view.Text.Length
+                && selected.Length <= view.Text.Length - selected.Location)
+                handler.PlatformView.SelectedRange = selected;
+        }
+        finally { handler.updating = false; }
         if (selection is not null)
             handler.PlatformView.ScrollRangeToVisible(new NSRange(selection.StartUtf16, selection.LengthUtf16));
     }

@@ -530,7 +530,38 @@ mod tests {
     fn text_pdf_import_retains_original() {
         let dir = tempfile::tempdir().unwrap();
         let mut db = Store::open(&dir.path().join("pdf.db")).unwrap();
-        let bytes = include_bytes!("../../../tests/fixtures/sample_en.pdf");
+        let bytes = b"%PDF-1.4\n\
+        1 0 obj\n\
+        << /Type /Catalog /Pages 2 0 R >>\n\
+        endobj\n\
+        2 0 obj\n\
+        << /Type /Pages /Kids [3 0 R] /Count 1 >>\n\
+        endobj\n\
+        3 0 obj\n\
+        << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\n\
+        endobj\n\
+        4 0 obj\n\
+        << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\n\
+        endobj\n\
+        5 0 obj\n\
+        << /Length 65 >>\n\
+        stream\n\
+        BT /F1 18 Tf 72 700 Td (Hello reader. This is a local PDF.) Tj ET\n\
+        endstream\n\
+        endobj\n\
+        xref\n\
+        0 6\n\
+        0000000000 65535 f\x20\n\
+        0000000009 00000 n\x20\n\
+        0000000058 00000 n\x20\n\
+        0000000115 00000 n\x20\n\
+        0000000241 00000 n\x20\n\
+        0000000311 00000 n\x20\n\
+        trailer\n\
+        << /Size 6 /Root 1 0 R >>\n\
+        startxref\n\
+        426\n\
+        %%EOF\n";
         let doc = db.import("sample_en.pdf", bytes, "en").unwrap();
         assert!(doc.text.contains("Hello reader."));
         assert!(!doc.sentences.is_empty());

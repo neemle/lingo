@@ -3,6 +3,30 @@
  xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
  xmlns:controls="clr-namespace:Reader.Native.Controls" x:Class="Reader.Native.Features.Reading.ReadingPage"
  Title="Читання">
+ <ContentPage.MenuBarItems>
+  <MenuBarItem Text="Читання">
+   <MenuFlyoutItem Text="Попереднє речення" Clicked="PreviousClicked" IsEnabled="{Binding CanInteract}">
+    <MenuFlyoutItem.KeyboardAccelerators>
+     <KeyboardAccelerator Modifiers="{OnPlatform MacCatalyst=Cmd, WinUI=Ctrl}" Key="[" />
+    </MenuFlyoutItem.KeyboardAccelerators>
+   </MenuFlyoutItem>
+   <MenuFlyoutItem Text="Наступне речення" Clicked="NextClicked" IsEnabled="{Binding CanInteract}">
+    <MenuFlyoutItem.KeyboardAccelerators>
+     <KeyboardAccelerator Modifiers="{OnPlatform MacCatalyst=Cmd, WinUI=Ctrl}" Key="]" />
+    </MenuFlyoutItem.KeyboardAccelerators>
+   </MenuFlyoutItem>
+   <MenuFlyoutItem Text="Озвучити / повторити" Clicked="SpeakClicked" IsEnabled="{Binding CanInteract}">
+    <MenuFlyoutItem.KeyboardAccelerators>
+     <KeyboardAccelerator Modifiers="{OnPlatform MacCatalyst=Cmd, WinUI=Ctrl}" Key="R" />
+    </MenuFlyoutItem.KeyboardAccelerators>
+   </MenuFlyoutItem>
+   <MenuFlyoutItem Text="Зупинити озвучення" Clicked="StopClicked">
+    <MenuFlyoutItem.KeyboardAccelerators>
+     <KeyboardAccelerator Modifiers="{OnPlatform MacCatalyst=Cmd, WinUI=Ctrl}" Key="K" />
+    </MenuFlyoutItem.KeyboardAccelerators>
+   </MenuFlyoutItem>
+  </MenuBarItem>
+ </ContentPage.MenuBarItems>
  <Grid Padding="28,18" RowDefinitions="Auto,Auto,*,Auto,Auto" RowSpacing="12">
   <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
    <Label Text="{Binding Document.Title}" FontSize="26" FontAttributes="Bold" />
@@ -22,16 +46,19 @@
     <Label x:Name="RangeLabel" FontSize="11" TextColor="#63725C" />
     <Label Text="Автоматичний аналіз недоступний. Введіть перевірений вами український переклад." FontSize="12" />
     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-     <Entry x:Name="Translation" Placeholder="Ваш перевірений переклад" />
-     <Button Grid.Column="1" Text="До словника" Clicked="SaveWordClicked" />
+     <Entry x:Name="Translation" Placeholder="Ваш перевірений переклад"
+      SemanticProperties.Description="Український переклад виділеного слова" ReturnType="Done"
+      Completed="SaveWordClicked" />
+     <Button Grid.Column="1" Text="До словника" Clicked="SaveWordClicked" IsEnabled="{Binding CanInteract}" />
     </Grid>
    </VerticalStackLayout>
   </Border>
   <VerticalStackLayout Grid.Row="4" Spacing="8">
    <Label Text="{Binding Error}" TextColor="#A65F43" />
-   <HorizontalStackLayout Spacing="10" IsEnabled="{Binding CanInteract}">
-    <Button Text="← Назад" Clicked="PreviousClicked" /><Button Text="Далі →" Clicked="NextClicked" />
-    <Button Text="Озвучити / повторити" Clicked="SpeakClicked" />
+   <HorizontalStackLayout Spacing="10">
+    <Button Text="← Назад" Clicked="PreviousClicked" IsEnabled="{Binding CanInteract}" />
+    <Button Text="Далі →" Clicked="NextClicked" IsEnabled="{Binding CanInteract}" />
+    <Button Text="Озвучити / повторити" Clicked="SpeakClicked" IsEnabled="{Binding CanInteract}" />
     <Button Text="Стоп" Clicked="StopClicked" />
     <Picker x:Name="Rate" WidthRequest="95" Title="Темп" SelectedIndex="1">
      <Picker.Items><x:String>0.75×</x:String><x:String>1×</x:String><x:String>1.25×</x:String></Picker.Items>

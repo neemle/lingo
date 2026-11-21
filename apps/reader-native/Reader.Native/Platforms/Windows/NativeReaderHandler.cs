@@ -1,7 +1,7 @@
 using Microsoft.Maui.Handlers;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Media;
+using WinBrush = Microsoft.UI.Xaml.Media.SolidColorBrush;
 using WinColor = Windows.UI.Color;
 
 namespace Reader.Native.Controls;
@@ -10,6 +10,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, RichEdit
 {
     private bool updating;
     private Reader.Presentation.WindowsTextMap textMap = new("");
+    private string sourceText = "";
     public static readonly IPropertyMapper<NativeReaderView, NativeReaderHandler> ReaderMapper =
         new PropertyMapper<NativeReaderView, NativeReaderHandler>(ViewMapper)
         {
@@ -22,7 +23,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, RichEdit
     protected override RichEditBox CreatePlatformView() => new()
     {
         IsReadOnly = true, FontSize = 22, TextWrapping = Microsoft.UI.Xaml.TextWrapping.Wrap,
-        Background = new SolidColorBrush(WinColor.FromArgb(255, 246, 243, 236)),
+        Background = new WinBrush(WinColor.FromArgb(255, 246, 243, 236)),
         Padding = new Microsoft.UI.Xaml.Thickness(24),
     };
 
@@ -60,8 +61,14 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, RichEdit
         handler.updating = true;
         try
         {
-            handler.textMap = new Reader.Presentation.WindowsTextMap(view.Text);
-            handler.PlatformView.Document.SetText(TextSetOptions.None, handler.textMap.Text);
+            if (handler.sourceText != view.Text)
+            {
+                handler.sourceText = view.Text;
+                handler.textMap = new Reader.Presentation.WindowsTextMap(view.Text);
+                handler.PlatformView.Document.SetText(TextSetOptions.None, handler.textMap.Text);
+            }
+            handler.PlatformView.Document.GetRange(0, handler.textMap.Text.Length)
+                .CharacterFormat.BackgroundColor = WinColor.FromArgb(255, 246, 243, 236);
             var selected = Reader.Presentation.SourceRanges.Selection(view.Text,
                 view.HighlightStart, view.HighlightLength);
             if (selected is not null) handler.PlatformView.Document.GetRange(
