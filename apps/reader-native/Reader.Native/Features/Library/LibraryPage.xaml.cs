@@ -50,9 +50,12 @@ public partial class LibraryPage : ContentPage
                 {
                     if (importing) ImportStatus.Text = $"Розпізнавання сторінки {page}…";
                 });
-                var result = await PdfScan.RecognizeAsync(bytes, language, progress);
-                if (result.Lines.Length == 0) throw new InvalidDataException("У PDF не знайдено тексту.");
-                await AppState.Session.ImportScannedPdfAsync(file.FileName, bytes, language, result.Lines, result.Pages);
+                var pages = await PdfScan.PageCountAsync(bytes);
+                PdfRecognition.CheckPageCount(pages);
+                var session = AppState.Session;
+                var missing = await session.PdfPagesNeedingOcrAsync(file.FileName, bytes, pages);
+                var lines = missing.Length == 0 ? [] : (await PdfScan.RecognizeAsync(bytes, language, missing, progress)).Lines;
+                await session.ImportMixedPdfAsync(file.FileName, bytes, language, lines, pages);
             }
             else if (ImageExtensions.Contains(extension))
             {

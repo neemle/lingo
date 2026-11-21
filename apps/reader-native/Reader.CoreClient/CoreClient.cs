@@ -37,6 +37,14 @@ public sealed class CoreClient : IDisposable
             bytes = bytes.Select(value => (int)value).ToArray(), language, lines });
     }
 
+    public int[] PdfPagesNeedingOcr(string name, byte[] bytes, int pages) =>
+        Call<int[]>(new { version = 1, operation = "pdf_pages_needing_ocr", name,
+            bytes = bytes.Select(value => (int)value).ToArray(), pages });
+
+    public Document ImportMixedPdf(string name, byte[] bytes, string language, OcrLine[] lines, int pages) =>
+        Call<Document>(new { version = 1, operation = "import_mixed_pdf", name,
+            bytes = bytes.Select(value => (int)value).ToArray(), language, lines, pages });
+
     public Document ImportScannedPdf(string name, byte[] bytes, string language, OcrLine[] lines, int pages)
     {
         if (bytes.Length is 0 or > MaxImportBytes)

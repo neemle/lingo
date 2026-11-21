@@ -48,7 +48,14 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
 
     public int OriginalPageIndex()
     {
-        if (Document?.OcrLines is not { Length: > 0 } lines || Sentence is not { } sentence) return 0;
+        if (Document is not { } document || Sentence is not { } sentence) return 0;
+        if (document.PdfPageStarts is { } starts)
+        {
+            for (var index = starts.Length - 1; index >= 0; index--)
+                if (starts[index] is int offsetOnPage && offsetOnPage <= sentence.StartUtf16) return index;
+            return 0;
+        }
+        if (document.OcrLines is not { Length: > 0 } lines) return 0;
         var offset = 0;
         var page = lines[0].Page;
         foreach (var line in lines)
@@ -66,6 +73,16 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         var id = client.ImportImage(name, bytes, language, lines).Id;
         return (client.Snapshot(), id);
     });
+
+    public Task<int[]> PdfPagesNeedingOcrAsync(string name, byte[] bytes, int pages) =>
+        Task.Run(() => client.PdfPagesNeedingOcr(name, bytes, pages));
+
+    public Task ImportMixedPdfAsync(string name, byte[] bytes, string language, OcrLine[] lines, int pages) =>
+        RunAsync(() =>
+        {
+            var id = client.ImportMixedPdf(name, bytes, language, lines, pages).Id;
+            return (client.Snapshot(), id);
+        });
 
     public Task ImportScannedPdfAsync(string name, byte[] bytes, string language, OcrLine[] lines, int pages) =>
         RunAsync(() =>

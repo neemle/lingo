@@ -55,7 +55,7 @@ directions and backup/restore. Native C#/XAML compilation has passed locally for
 blocked by absent Xcode. Native CI builds and launched Windows/macOS selection, accessibility and speech checks
 remain separate gates. The explicit text/voice probe is available in Settings.
 
-Speech uses system voices and reports missing languages. Precise word timing, mixed-PDF page classification, additional offline translation pairs,
+Speech uses system voices and reports missing languages. Precise word timing, OCR correction, additional offline translation pairs,
 mobile releases, signed installers and the 4 GiB hardware target remain unverified or unimplemented.
 
 ## Photo and PDF OCR
@@ -65,10 +65,10 @@ by the operating system. The app reads the image on-device, saves the recognized
 original. The **Оригінал** action shows a preview with optional line overlays. Archive restore preserves the
 recognized text and line positions.
 
-For an image-only PDF, use **Розпізнати PDF** in the library. This action processes up to 40 pages
-and preserves the original PDF. It opens the source page for a recognized sentence in the reader.
-Ordinary PDF import uses the embedded text layer. For a mixed PDF, choose text import or whole-document
-recognition explicitly. The app can preview the pages of both kinds of PDF.
+For a scanned or mixed PDF, use **Розпізнати PDF** in the library. It reads each available text layer
+and runs OCR only on pages without extractable text, up to 40 pages. The original is preserved, and
+the reader can open the source page for the active sentence. Ordinary PDF import still reads only
+the embedded text layer.
 
 Mac Catalyst uses Apple Vision. Windows OCR uses the installed system recognition language and requires
 MSIX package identity. The unpackaged Windows build can read and preview photos restored from a backup.

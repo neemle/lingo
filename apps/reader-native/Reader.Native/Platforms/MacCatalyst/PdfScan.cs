@@ -23,7 +23,7 @@ internal static class PdfScan
         return Render(document, page, 1800);
     });
 
-    internal static Task<PdfRecognition> RecognizeAsync(byte[] bytes, string language, IProgress<int> progress) =>
+    internal static Task<PdfRecognition> RecognizeAsync(byte[] bytes, string language, int[] missingPages, IProgress<int> progress) =>
         Task.Run(() =>
         {
             using var pool = new NSAutoreleasePool();
@@ -32,7 +32,7 @@ internal static class PdfScan
             var count = checked((int)document.PageCount);
             PdfRecognition.CheckPageCount(count);
             var lines = new List<OcrLine>();
-            for (var page = 0; page < count; page++)
+            foreach (var page in missingPages)
             {
                 progress.Report(page + 1);
                 using var pagePool = new NSAutoreleasePool();

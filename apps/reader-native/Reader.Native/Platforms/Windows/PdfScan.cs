@@ -21,14 +21,14 @@ internal static class PdfScan
         return await RenderAsync(document, page, 1800);
     }
 
-    internal static async Task<PdfRecognition> RecognizeAsync(byte[] bytes, string language, IProgress<int> progress)
+    internal static async Task<PdfRecognition> RecognizeAsync(byte[] bytes, string language, int[] missingPages, IProgress<int> progress)
     {
         using var stream = await OpenStreamAsync(bytes);
         var document = await OpenAsync(stream);
         var count = checked((int)document.PageCount);
         PdfRecognition.CheckPageCount(count);
         var lines = new List<OcrLine>();
-        for (var page = 0; page < count; page++)
+        foreach (var page in missingPages)
         {
             progress.Report(page + 1);
             var rendered = await RenderAsync(document, page, 2600);

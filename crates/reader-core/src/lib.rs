@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 mod marian_provider;
 pub mod ocr;
+pub mod pdf_layers;
 pub mod translation;
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -42,6 +43,8 @@ pub struct Document {
     pub ocr_lines: Option<Vec<ocr::OcrLine>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ocr_pdf_pages: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pdf_page_starts: Option<Vec<Option<usize>>>,
     pub created_at: i64,
     pub source_hash: String,
     pub format: String,
@@ -272,7 +275,7 @@ impl Store {
         })
     }
     pub fn import(&mut self, name: &str, bytes: &[u8], language: &str) -> Result<Document> {
-        self.import_document(name, bytes, language, None, None)
+        self.import_document(name, bytes, language, None, None, false)
     }
 
     pub fn import_image(
@@ -282,7 +285,7 @@ impl Store {
         language: &str,
         lines: Vec<ocr::OcrLine>,
     ) -> Result<Document> {
-        self.import_document(name, bytes, language, Some(lines), None)
+        self.import_document(name, bytes, language, Some(lines), None, false)
     }
 
     pub fn import_scanned_pdf(
@@ -293,7 +296,18 @@ impl Store {
         lines: Vec<ocr::OcrLine>,
         pages: u16,
     ) -> Result<Document> {
-        self.import_document(name, bytes, language, Some(lines), Some(pages))
+        self.import_document(name, bytes, language, Some(lines), Some(pages), false)
+    }
+
+    pub fn import_mixed_pdf(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+        language: &str,
+        lines: Vec<ocr::OcrLine>,
+        pages: u16,
+    ) -> Result<Document> {
+        self.import_document(name, bytes, language, Some(lines), Some(pages), true)
     }
 
     fn import_document(
@@ -303,12 +317,20 @@ impl Store {
         language: &str,
         ocr_lines: Option<Vec<ocr::OcrLine>>,
         ocr_pdf_pages: Option<u16>,
+        mixed: bool,
     ) -> Result<Document> {
         valid_language(language)?;
-        let image_text = ocr_lines
-            .as_deref()
-            .map(|lines| ocr::recognized_text(name, bytes, lines, ocr_pdf_pages))
-            .transpose()?;
+        let (text, pdf_page_starts) = match (ocr_lines.as_deref(), ocr_pdf_pages, mixed) {
+            (Some(lines), Some(pages), true) => {
+                let (text, offsets) = pdf_layers::merge(name, bytes, pages, lines)?;
+                (Some(text), Some(offsets))
+            }
+            (Some(lines), pages, false) => {
+                (Some(ocr::recognized_text(name, bytes, lines, pages)?), None)
+            }
+            (None, None, false) => (None, None),
+            _ => return Err("Некоректні параметри імпорту PDF".into()),
+        };
         let hash = format!("{:x}", Sha256::digest(bytes));
         let existing: Option<String> = self
             .connection
@@ -319,9 +341,27 @@ impl Store {
             )
             .ok();
         if let Some(body) = existing {
-            return serde_json::from_str(&body).map_err(|e| e.to_string());
+            let existing: Document = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+            if mixed && existing.pdf_page_starts.is_none() {
+                if existing.language != language {
+                    return Err("Виберіть мову вже імпортованого PDF перед розпізнаванням".into());
+                }
+                let (Some(text), Some(offsets), Some(lines), Some(pages)) =
+                    (text, pdf_page_starts, ocr_lines, ocr_pdf_pages)
+                else {
+                    return Err("Некоректні параметри імпорту PDF".into());
+                };
+                let mut updated = existing.clone();
+                self.edit_document(&existing.id, |document| {
+                    pdf_layers::upgrade(document, text, offsets, lines, pages)?;
+                    updated = document.clone();
+                    Ok(true)
+                })?;
+                return Ok(updated);
+            }
+            return Ok(existing);
         }
-        let text = match image_text {
+        let text = match text {
             Some(text) => text,
             None => parse_file(name, bytes)?,
         };
@@ -345,6 +385,7 @@ impl Store {
             reviewed_translations: BTreeMap::new(),
             ocr_lines,
             ocr_pdf_pages,
+            pdf_page_starts,
             created_at: now(),
             source_hash: hash,
             format: Path::new(name)
@@ -616,15 +657,26 @@ impl Store {
             if format!("{:x}", Sha256::digest(&original.bytes)) != doc.source_hash {
                 return Err("Пошкоджений оригінал в архіві".into());
             }
-            let text = match (&doc.ocr_lines, doc.ocr_pdf_pages) {
-                (Some(lines), pages) => {
-                    ocr::recognized_text(&original.name, &original.bytes, lines, pages)?
+            let (text, pdf_page_starts) = match (
+                &doc.ocr_lines,
+                doc.ocr_pdf_pages,
+                doc.pdf_page_starts.is_some(),
+            ) {
+                (Some(lines), Some(pages), true) => {
+                    let (text, offsets) =
+                        pdf_layers::merge(&original.name, &original.bytes, pages, lines)?;
+                    (text, Some(offsets))
                 }
-                (None, None) => parse_file(&original.name, &original.bytes)?,
-                (None, Some(_)) => return Err("В архіві PDF немає розпізнаних рядків".into()),
+                (Some(lines), pages, false) => (
+                    ocr::recognized_text(&original.name, &original.bytes, lines, pages)?,
+                    None,
+                ),
+                (None, None, false) => (parse_file(&original.name, &original.bytes)?, None),
+                _ => return Err("В архіві PDF немає потрібних даних сторінок".into()),
             };
             let mut d = doc.clone();
             d.text = text;
+            d.pdf_page_starts = pdf_page_starts;
             d.sentences = segment(&d.text, &d.id);
             d.position = d.position.min(d.sentences.len().saturating_sub(1));
             if !d.bookmarks.is_empty() || !d.reviewed_translations.is_empty() {

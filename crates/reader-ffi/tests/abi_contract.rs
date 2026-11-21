@@ -405,3 +405,112 @@ fn scanned_pdf_pages_survive_restore_and_invalid_page_geometry_is_rejected() {
     );
     assert_eq!(original["data"]["bytes"], json!(source));
 }
+
+#[test]
+fn mixed_pdf_uses_embedded_text_and_keeps_existing_annotations() {
+    let store = StoreFixture::new();
+    let pdf = mixed_pdf_fixture();
+    let inspect = |handle| {
+        call(
+            handle,
+            json!({
+                "version":1,"operation":"pdf_pages_needing_ocr","name":"mixed.pdf","bytes":pdf,"pages":2
+            }),
+        )
+    };
+    assert_eq!(inspect(store.handle)["data"], json!([0]));
+
+    let old = call(
+        store.handle,
+        json!({
+            "version":1,"operation":"import","name":"mixed.pdf","bytes":pdf,"language":"en"
+        }),
+    );
+    assert_eq!(old["ok"], true, "{old}");
+    let document = &old["data"];
+    let id = &document["id"];
+    let embedded_sentence = &document["sentences"][0]["id"];
+    let bookmark = call(
+        store.handle,
+        json!({
+            "version":1,"operation":"set_bookmark","id":id,"sentenceId":embedded_sentence,"saved":true
+        }),
+    );
+    assert_eq!(bookmark["ok"], true, "{bookmark}");
+    let note = call(
+        store.handle,
+        json!({
+            "version":1,"operation":"set_reviewed_translation","id":id,
+            "sentenceId":embedded_sentence,"target":"uk","text":"Текстовий шар."
+        }),
+    );
+    assert_eq!(note["ok"], true, "{note}");
+
+    let scan = |page| {
+        call(
+            store.handle,
+            json!({
+                "version":1,"operation":"import_mixed_pdf","name":"mixed.pdf","bytes":pdf,"language":"en","pages":2,
+                "lines":[{"page":page,"text":"Scanned first page.","x":0.1,"y":0.1,"width":0.7,"height":0.1,"confidence":null}]
+            }),
+        )
+    };
+    assert_error(&scan(1), "core_error");
+    let mixed = scan(0);
+    assert_eq!(mixed["ok"], true, "{mixed}");
+    assert_eq!(mixed["data"]["id"], *id);
+    assert_eq!(
+        mixed["data"]["text"],
+        "Scanned first page.\n\nEmbedded second page."
+    );
+    assert_eq!(mixed["data"]["pdfPageStarts"], json!([0, 21]));
+    assert_eq!(mixed["data"]["position"], 1);
+    let moved = mixed["data"]["sentences"][1]["id"].as_str().unwrap();
+    assert_eq!(mixed["data"]["bookmarks"], json!([moved]));
+    assert_eq!(
+        mixed["data"]["reviewedTranslations"]["uk"][moved],
+        "Текстовий шар."
+    );
+
+    let exported = call(store.handle, json!({"version":1,"operation":"export"}));
+    let mut backup = exported["data"].clone();
+    backup["snapshot"]["documents"][0]["pdfPageStarts"] = json!([17, 18]);
+    let restored = StoreFixture::new();
+    let result = call(
+        restored.handle,
+        json!({"version":1,"operation":"restore","backup":backup}),
+    );
+    assert_eq!(result["ok"], true, "{result}");
+    let current = call(restored.handle, json!({"version":1,"operation":"snapshot"}));
+    assert_eq!(current["data"]["documents"][0], mixed["data"]);
+}
+
+fn mixed_pdf_fixture() -> Vec<u8> {
+    use std::io::Write;
+    let content = "BT /F1 24 Tf 50 700 Td (Embedded second page.) Tj ET";
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        writeln!(&mut pdf, "{} 0 obj\n{object}\nendobj", index + 1).unwrap();
+    }
+    let xref = pdf.len();
+    writeln!(&mut pdf, "xref\n0 7\n0000000000 65535 f ").unwrap();
+    for offset in offsets {
+        writeln!(&mut pdf, "{offset:010} 00000 n ").unwrap();
+    }
+    writeln!(
+        &mut pdf,
+        "trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF"
+    )
+    .unwrap();
+    pdf
+}

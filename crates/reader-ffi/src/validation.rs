@@ -28,6 +28,8 @@ fn validate(command: &Command) -> Result<()> {
         Command::Import { bytes, name, .. }
         | Command::ImportImage { bytes, name, .. }
         | Command::ImportScannedPdf { bytes, name, .. }
+        | Command::ImportMixedPdf { bytes, name, .. }
+        | Command::PdfPagesNeedingOcr { bytes, name, .. }
             if bytes.is_empty()
                 || bytes.len() > reader_core::MAX_IMPORT
                 || name.is_empty()

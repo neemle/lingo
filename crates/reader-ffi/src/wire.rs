@@ -29,6 +29,18 @@ pub enum Command {
         language: String,
         lines: Vec<reader_core::ocr::OcrLine>,
     },
+    PdfPagesNeedingOcr {
+        name: String,
+        bytes: Vec<u8>,
+        pages: u16,
+    },
+    ImportMixedPdf {
+        name: String,
+        bytes: Vec<u8>,
+        language: String,
+        lines: Vec<reader_core::ocr::OcrLine>,
+        pages: u16,
+    },
     ImportScannedPdf {
         name: String,
         bytes: Vec<u8>,

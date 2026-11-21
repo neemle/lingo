@@ -25,6 +25,22 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             language,
             lines,
         } => value(store.import_image(&name, &bytes, &language, lines)),
+        Command::PdfPagesNeedingOcr { name, bytes, pages } => value(
+            reader_core::pdf_layers::text_pages(&name, &bytes, pages).map(|pages| {
+                pages
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, page)| page.is_empty().then_some(index))
+                    .collect::<Vec<_>>()
+            }),
+        ),
+        Command::ImportMixedPdf {
+            name,
+            bytes,
+            language,
+            lines,
+            pages,
+        } => value(store.import_mixed_pdf(&name, &bytes, &language, lines, pages)),
         Command::ImportScannedPdf {
             name,
             bytes,
