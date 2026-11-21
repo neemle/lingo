@@ -1,0 +1,50 @@
+name: Specification freeze
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  spec-freeze:
+    name: Spec freeze
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify frozen source or committed authority evidence
+        shell: python
+        run: |
+          import datetime, hashlib, json, pathlib, subprocess
+          root = pathlib.Path('.')
+          scope = json.loads((root/'docs/spec-cutover/FROZEN_SCOPE.json').read_text())
+          assert scope['source_commit'] == '5e053871b36044d3744fbe484fb5ded743de1a96'
+          frozen = subprocess.check_output(['git','show',scope['source_commit']+':docs/spec.md'])
+          expected = '68940ab69b1139634c1c31c2b350861546d96db330bbbe1ee208142c5364ffde'
+          assert hashlib.sha256(frozen).hexdigest() == expected
+          assert (root/scope['evidence_mirror']).read_bytes() == frozen
+          assert not list((root/'docs/spec').glob('**/*'))
+          marker = root/'docs/spec-cutover/CUTOVER_COMMITTED.json'
+          if not marker.exists():
+              assert (root/'docs/spec.md').read_bytes() == frozen, 'Frozen requirements changed before cutover'
+              print('Frozen source unchanged; no authority transfer committed.')
+          else:
+              control = json.loads(marker.read_text())
+              assert control['migration_id'] == scope['migration_id']
+              assert control['source_commit'] == scope['source_commit']
+              assert control['authority_epoch'] == scope['authority_epoch']
+              assert control['scope_manifest_sha256'] == hashlib.sha256((root/'docs/spec-cutover/FROZEN_SCOPE.json').read_bytes()).hexdigest()
+              snapshot = root/'docs/spec-cutover/runtime-export.json'
+              assert hashlib.sha256(snapshot.read_bytes()).hexdigest() == control['target_export_sha256']
+              report = json.loads((root/'docs/spec-cutover/comparison-report.json').read_text())
+              assert report['source_sha256'] == expected
+              assert report['target_export_sha256'] == control['target_export_sha256']
+              assert report['source_byte_differences'] == 0
+              subprocess.run(['openssl','pkeyutl','-verify','-pubin','-inkey','docs/spec-cutover/reviewer-public.pem','-rawin','-in','docs/spec-cutover/comparison-report.json','-sigfile','docs/spec-cutover/comparison-report.sig'],check=True)
+              waiver = json.loads((root/'docs/spec-cutover/WAIVER.json').read_text())
+              assert waiver['status'] == 'USER_APPROVED'
+              assert waiver['approval_reference']
+              assert datetime.date.today() <= datetime.date.fromisoformat(waiver['review_by'])
+              pointer = (root/'docs/spec.md').read_text()
+              assert pointer.startswith('# Legacy specification pointer')
+              assert 'NON-GOVERNING' in pointer and control['migration_id'] in pointer
+              assert len(pointer) < 2500
+              print('Committed frozen-integrity evidence verified; live MCP confirmation remains a reader obligation.')
