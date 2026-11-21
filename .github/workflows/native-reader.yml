@@ -41,7 +41,7 @@ jobs:
         with:
           targets: aarch64-apple-ios-macabi
       # Workload 10.0.401 matches the Xcode installed on this runner image.
-      - run: dotnet workload install maui --version 10.0.401
+      - run: dotnet workload install maui-maccatalyst --version 10.0.401
       - run: cargo build -p reader-ffi --release --locked --target aarch64-apple-ios-macabi
       - run: >-
           dotnet build apps/reader-native/Reader.Native/Reader.Native.csproj
@@ -59,7 +59,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
           targets: x86_64-pc-windows-msvc
-      - run: dotnet workload install maui
+      - run: dotnet workload install maui-windows
       - run: cargo build -p reader-ffi --release --locked --target x86_64-pc-windows-msvc
       - run: >-
           dotnet build apps/reader-native/Reader.Native/Reader.Native.csproj
