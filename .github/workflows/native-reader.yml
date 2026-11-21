@@ -4,6 +4,9 @@ on:
   pull_request:
 permissions:
   contents: read
+concurrency:
+  group: native-reader-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 jobs:
   headless:
     runs-on: macos-15
@@ -11,68 +14,117 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.100
+          dotnet-version: 10.0.x
       - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt, clippy
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo build -p reader-ffi --locked
       - run: dotnet build apps/reader-native/Reader.Presentation/Reader.Presentation.csproj --nologo
   catalyst:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.100
+          dotnet-version: 10.0.x
       - uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: '26.1'
+          xcode-version: '26.6'
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
           targets: aarch64-apple-ios-macabi
-      - run: dotnet workload install maui --version 10.0.100
+      # Workload 10.0.401 matches the Xcode installed on this runner image.
+      - run: dotnet workload install maui --version 10.0.401
       - run: cargo build -p reader-ffi --release --locked --target aarch64-apple-ios-macabi
       - run: >-
           dotnet build apps/reader-native/Reader.Native/Reader.Native.csproj
           -f net10.0-maccatalyst -c Release -p:RuntimeIdentifier=maccatalyst-arm64
           -p:EnableCodeSigning=false -p:CreatePackage=false --nologo
-      - name: Preserve app bundle permissions
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import tarfile
-          output = Path('apps/reader-native/Reader.Native/bin/Release/net10.0-maccatalyst')
-          bundles = list(output.rglob('*.app'))
-          if len(bundles) != 1:
-              raise SystemExit(f'Expected one app bundle, got {len(bundles)}')
-          with tarfile.open(output / 'reader-native-catalyst-arm64.tar.gz', 'w:gz') as archive:
-              archive.add(bundles[0], arcname=bundles[0].name)
-          PY
-      - uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: catalyst-build
-          path: apps/reader-native/Reader.Native/bin/Release/net10.0-maccatalyst/*.tar.gz
-          if-no-files-found: error
   windows:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.100
+          dotnet-version: 10.0.x
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
           targets: x86_64-pc-windows-msvc
-      - run: dotnet workload install maui --version 10.0.100
+      - run: dotnet workload install maui
       - run: cargo build -p reader-ffi --release --locked --target x86_64-pc-windows-msvc
       - run: >-
           dotnet build apps/reader-native/Reader.Native/Reader.Native.csproj
           -f net10.0-windows10.0.19041.0 -c Release -p:RuntimeIdentifier=win-x64 --nologo
-      - uses: actions/upload-artifact@v4
-        if: always()
+  cleanup:
+    needs: [headless, catalyst, windows]
+    if: ${{ always() && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    concurrency:
+      group: repository-actions-retention
+      cancel-in-progress: false
+    steps:
+      - name: Keep latest 20 runs and remove Actions artifacts
+        uses: actions/github-script@v7
         with:
-          name: windows-build
-          path: apps/reader-native/Reader.Native/bin/Release/net10.0-windows10.0.19041.0/
-          if-no-files-found: warn
+          script: |
+            const repo = context.repo;
+            const numericId = value => {
+              if (!Number.isSafeInteger(value) || value <= 0) {
+                throw new Error('Invalid Actions identifier');
+              }
+              return value;
+            };
+            const ignoreMissing = async operation => {
+              try {
+                await operation();
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
+            };
+            // Snapshot all pages before deleting, so deletion cannot shift pagination.
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              ...repo, per_page: 100
+            });
+            for (const run of runs) {
+              numericId(run.id);
+              if (!Number.isFinite(Date.parse(run.created_at))) {
+                throw new Error('Invalid workflow creation date');
+              }
+            }
+            runs.sort((left, right) =>
+              Date.parse(right.created_at) - Date.parse(left.created_at) || right.id - left.id);
+            const preserved = new Set(runs.slice(0, 20).map(run => run.id));
+            preserved.add(numericId(context.runId));
+            let deletedRuns = 0;
+            for (const run of runs) {
+              if (preserved.has(run.id) || run.status !== 'completed') continue;
+              let current;
+              try {
+                ({ data: current } = await github.rest.actions.getWorkflowRun({
+                  ...repo, run_id: run.id
+                }));
+              } catch (error) {
+                if (error.status === 404) continue;
+                throw error;
+              }
+              if (current.status !== 'completed') continue;
+              await ignoreMissing(() => github.rest.actions.deleteWorkflowRun({
+                ...repo, run_id: run.id
+              }));
+              deletedRuns++;
+            }
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              ...repo, per_page: 100
+            });
+            for (const artifact of artifacts) numericId(artifact.id);
+            for (const artifact of artifacts) {
+              await ignoreMissing(() => github.rest.actions.deleteArtifact({
+                ...repo, artifact_id: artifact.id
+              }));
+            }
+            core.info(`Deleted ${deletedRuns} older completed runs and ${artifacts.length} artifacts; preserved the newest 20 runs and all active runs.`);
