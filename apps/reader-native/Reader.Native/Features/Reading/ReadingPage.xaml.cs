@@ -6,6 +6,24 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage : ContentPage
 {
+    private static readonly (string Code, string Name)[] TranslationLanguages =
+    [
+        ("uk", "Українська"), ("en", "Англійська"), ("fr", "Французька"), ("de", "Німецька"),
+        ("es", "Іспанська"), ("it", "Італійська"), ("pt", "Португальська"), ("pl", "Польська"),
+        ("nl", "Нідерландська"), ("cs", "Чеська"), ("ro", "Румунська"), ("sv", "Шведська"),
+    ];
+    private (string Code, string Name)[] availableTargets = [];
+    private string? lastSourceLanguage;
+    private bool updatingTargets;
+    private bool stacked;
+    private string? TargetCode
+    {
+        get
+        {
+            var index = TargetLanguage.SelectedIndex;
+            return index >= 0 && index < availableTargets.Length ? availableTargets[index].Code : null;
+        }
+    }
     private readonly LocalSpeech speech = new();
     private TextSelection? selection;
     private string? documentId;
@@ -18,6 +36,7 @@ public partial class ReadingPage : ContentPage
         BindingContext = AppState.Session;
         AppState.Session.PropertyChanged += SessionChanged;
         UpdateHighlight();
+        UpdateTranslation();
     }
 
     protected override void OnDisappearing()
@@ -29,7 +48,12 @@ public partial class ReadingPage : ContentPage
 
     private void SessionChanged(object? sender, PropertyChangedEventArgs args)
     {
-        UpdateHighlight();
+        // Notifications describe a completed session state. Update once per state change.
+        if (args.PropertyName == nameof(ReaderSession.Snapshot))
+        {
+            UpdateHighlight();
+            UpdateTranslation();
+        }
         if (args.PropertyName == nameof(ReaderSession.Error) && AppState.Session.Error.Length > 0)
             SemanticScreenReader.Default.Announce(AppState.Session.Error);
     }
@@ -42,6 +66,70 @@ public partial class ReadingPage : ContentPage
         selection = null;
         WordCard.IsVisible = false;
         Translation.Text = "";
+    }
+
+    protected override void OnSizeAllocated(double width, double height)
+    {
+        base.OnSizeAllocated(width, height);
+        if (ReadingColumns is null || TranslationPane is null || width <= 0 || stacked == (width < 800)) return;
+
+        stacked = width < 800;
+        ReadingColumns.ColumnDefinitions[1].Width = stacked ? 0 : new GridLength(2, GridUnitType.Star);
+        ReadingColumns.RowDefinitions[1].Height = stacked ? new GridLength(1, GridUnitType.Star) : 0;
+        ReadingColumns.RowSpacing = stacked ? 12 : 0;
+        Grid.SetColumn(TranslationPane, stacked ? 0 : 1);
+        Grid.SetRow(TranslationPane, stacked ? 1 : 0);
+    }
+
+    private void UpdateTranslation()
+    {
+        var session = AppState.Session;
+        var source = session.Document?.Language;
+        if (source != lastSourceLanguage)
+        {
+            var previous = TargetCode;
+            lastSourceLanguage = source;
+            updatingTargets = true;
+            try
+            {
+                availableTargets = TranslationLanguages.Where(language => language.Code != source).ToArray();
+                TargetLanguage.ItemsSource = availableTargets.Select(language => language.Name).ToArray();
+                var previousIndex = Array.FindIndex(availableTargets, language => language.Code == previous);
+                TargetLanguage.SelectedIndex = Math.Max(0, previousIndex);
+            }
+            finally { updatingTargets = false; }
+        }
+
+        var active = session.Sentence is not null && TargetCode is not null;
+        var text = TargetCode is { } target ? session.ReviewedTranslation(target) : null;
+        TranslationNotice.Text = !active ? "Відкрийте документ для читання."
+            : text is null ? "Перекладу ще немає. Можна додати свій."
+            : "Ваш переклад активного речення";
+        SegmentTranslation.Text = text ?? "";
+        EditTranslation.Text = text is null ? "Додати свій переклад" : "Змінити переклад";
+        EditTranslation.IsEnabled = active && !session.Busy;
+        TargetLanguage.IsEnabled = active && !session.Busy;
+    }
+
+    private void TargetChanged(object? sender, EventArgs args)
+    {
+        if (TranslationNotice is not null && !updatingTargets) UpdateTranslation();
+    }
+
+    private async void EditTranslationClicked(object? sender, EventArgs args)
+    {
+        var session = AppState.Session;
+        if (session.Document is not { } document || session.Sentence is not { } sentence
+            || TargetCode is not { } target || session.Busy)
+            return;
+
+        var existing = session.ReviewedTranslation(target);
+        var text = await DisplayPromptAsync("Переклад речення",
+            existing is null ? sentence.Text : "Очистьте поле, щоб видалити цей переклад.",
+            accept: "Зберегти", cancel: "Скасувати", maxLength: 4000, initialValue: existing ?? "");
+        if (text is not null && session.Document?.Id == document.Id && session.Sentence?.Id == sentence.Id
+            && TargetCode == target && !session.Busy)
+            await session.SetReviewedTranslationAsync(document.Id, sentence.Id, target, text);
     }
 
     private async void SourceSelected(object? sender, TextSelection selected)

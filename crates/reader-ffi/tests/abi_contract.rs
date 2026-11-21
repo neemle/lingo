@@ -220,3 +220,77 @@ fn bookmarks_are_idempotent_and_survive_restart_and_restore() {
         json!([])
     );
 }
+
+#[test]
+fn reviewed_translations_follow_stable_segments_and_target_languages() {
+    let mut store = StoreFixture::new();
+    let imported = call(
+        store.handle,
+        json!({
+            "version": 1, "operation": "import", "name": "story.txt",
+            "language": "fr", "bytes": b"Bonjour. Bonne nuit."
+        }),
+    );
+    assert_eq!(imported["ok"], true, "{imported}");
+    let doc = &imported["data"];
+    let id = &doc["id"];
+    let first = doc["sentences"][0]["id"].as_str().unwrap();
+    let second = doc["sentences"][1]["id"].as_str().unwrap();
+    let set = |handle, sentence, target, text| {
+        call(
+            handle,
+            json!({
+                "version": 1, "operation": "set_reviewed_translation",
+                "id": id, "sentenceId": sentence, "target": target, "text": text
+            }),
+        )
+    };
+    assert_eq!(set(store.handle, first, "uk", " Вітаю! ")["ok"], true);
+    assert_eq!(set(store.handle, second, "uk", "На добраніч.")["ok"], true);
+    assert_eq!(set(store.handle, first, "en", "Hello.")["ok"], true);
+    assert_error(&set(store.handle, first, "fr", "Salut."), "core_error");
+    assert_error(
+        &set(store.handle, "missing", "uk", "Невідоме."),
+        "core_error",
+    );
+    let oversized = "😀".repeat(2001);
+    assert_error(&set(store.handle, first, "uk", &oversized), "core_error");
+
+    store.reopen();
+    let exported = call(store.handle, json!({"version": 1, "operation": "export"}));
+    assert_eq!(exported["ok"], true, "{exported}");
+    let backup = &exported["data"];
+    let translations = &backup["snapshot"]["documents"][0]["reviewedTranslations"];
+    assert_eq!(translations["uk"][first], "Вітаю!");
+    assert_eq!(translations["uk"][second], "На добраніч.");
+    assert_eq!(translations["en"][first], "Hello.");
+    let target = StoreFixture::new();
+    let restore = |handle, backup| {
+        call(
+            handle,
+            json!({
+                "version": 1, "operation": "restore", "backup": backup
+            }),
+        )
+    };
+    assert_eq!(restore(target.handle, backup.clone())["ok"], true);
+    assert_eq!(set(target.handle, first, "uk", " ")["ok"], true);
+    let snapshot = call(
+        target.handle,
+        json!({"version": 1, "operation": "snapshot"}),
+    );
+    let remaining = &snapshot["data"]["documents"][0]["reviewedTranslations"];
+    assert!(remaining["uk"].get(first).is_none());
+    assert_eq!(remaining["uk"][second], "На добраніч.");
+    assert_eq!(remaining["en"][first], "Hello.");
+
+    let mut invalid = backup.clone();
+    invalid["snapshot"]["documents"][0]["reviewedTranslations"]["uk"]["other"] = json!("Невідоме.");
+    let invalid_target = StoreFixture::new();
+    assert_error(&restore(invalid_target.handle, invalid), "core_error");
+    let snapshot = call(
+        invalid_target.handle,
+        json!({"version": 1, "operation": "snapshot"}),
+    );
+    assert_eq!(snapshot["data"]["documents"], json!([]));
+}

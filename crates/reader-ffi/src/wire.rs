@@ -33,6 +33,13 @@ pub enum Command {
         sentence_id: String,
         saved: bool,
     },
+    SetReviewedTranslation {
+        id: String,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        target: String,
+        text: String,
+    },
     SaveWord {
         entry: Vocabulary,
     },

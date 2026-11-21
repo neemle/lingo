@@ -2,6 +2,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     io::{Cursor, Read},
     path::Path,
 };
@@ -31,6 +32,8 @@ pub struct Document {
     pub position: usize,
     #[serde(default)]
     pub bookmarks: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reviewed_translations: BTreeMap<String, BTreeMap<String, String>>,
     pub created_at: i64,
     pub source_hash: String,
     pub format: String,
@@ -128,6 +131,13 @@ fn valid_language(language: &str) -> Result<()> {
         Err("Непідтримуваний код мови".into())
     }
 }
+fn validate_translation(text: &str) -> Result<()> {
+    if text.encode_utf16().take(4001).count() > 4000 {
+        return Err("Переклад речення задовгий".into());
+    }
+    Ok(())
+}
+
 pub fn parse_file(name: &str, bytes: &[u8]) -> Result<String> {
     if bytes.len() > MAX_IMPORT {
         return Err("Файл завеликий. Максимум — 20 МБ.".into());
@@ -281,6 +291,7 @@ impl Store {
             text,
             position: 0,
             bookmarks: Vec::new(),
+            reviewed_translations: BTreeMap::new(),
             created_at: now(),
             source_hash: hash,
             format: Path::new(name)
@@ -356,6 +367,46 @@ impl Store {
                 }
                 _ => return Ok(false),
             }
+            Ok(true)
+        })
+    }
+
+    pub fn set_reviewed_translation(
+        &mut self,
+        id: &str,
+        sentence_id: &str,
+        target: &str,
+        text: &str,
+    ) -> Result<()> {
+        valid_language(target)?;
+        let text = text.trim();
+        validate_translation(text)?;
+        self.edit_document(id, |document| {
+            if target == document.language {
+                return Err("Мова перекладу має відрізнятися від мови джерела".into());
+            }
+            if !document
+                .sentences
+                .iter()
+                .any(|sentence| sentence.id == sentence_id)
+            {
+                return Err("Речення для перекладу не знайдено".into());
+            }
+            let translations = &mut document.reviewed_translations;
+            if text.is_empty() {
+                let Some(segments) = translations.get_mut(target) else {
+                    return Ok(false);
+                };
+                let removed = segments.remove(sentence_id).is_some();
+                if segments.is_empty() {
+                    translations.remove(target);
+                }
+                return Ok(removed);
+            }
+            translations
+                .entry(target.into())
+                .or_default()
+                .insert(sentence_id.into(), text.into());
             Ok(true)
         })
     }
@@ -517,7 +568,7 @@ impl Store {
             d.text = text;
             d.sentences = segment(&d.text, &d.id);
             d.position = d.position.min(d.sentences.len().saturating_sub(1));
-            if !d.bookmarks.is_empty() {
+            if !d.bookmarks.is_empty() || !d.reviewed_translations.is_empty() {
                 let known: std::collections::HashSet<_> = d
                     .sentences
                     .iter()
@@ -528,6 +579,18 @@ impl Store {
                 }
                 d.bookmarks.sort_unstable();
                 d.bookmarks.dedup();
+                for (target, segments) in &d.reviewed_translations {
+                    valid_language(target)?;
+                    if target == &d.language {
+                        return Err("Некоректна мова перекладу в архіві".into());
+                    }
+                    for (sentence_id, text) in segments {
+                        if !known.contains(sentence_id.as_str()) || text.trim().is_empty() {
+                            return Err("Некоректний переклад речення в архіві".into());
+                        }
+                        validate_translation(text)?;
+                    }
+                }
             }
             validated.push((d, original));
         }

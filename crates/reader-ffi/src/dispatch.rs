@@ -25,6 +25,12 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             sentence_id,
             saved,
         } => value(store.set_bookmark(&id, &sentence_id, saved)),
+        Command::SetReviewedTranslation {
+            id,
+            sentence_id,
+            target,
+            text,
+        } => value(store.set_reviewed_translation(&id, &sentence_id, &target, &text)),
         Command::SaveWord { entry } => value(store.save_word(entry)),
         Command::Review {
             id,

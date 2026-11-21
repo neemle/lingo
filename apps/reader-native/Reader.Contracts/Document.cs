@@ -12,4 +12,5 @@ public sealed record Document(
     string Format)
 {
     public string[] Bookmarks { get; init; } = [];
+    public Dictionary<string, Dictionary<string, string>> ReviewedTranslations { get; init; } = [];
 }

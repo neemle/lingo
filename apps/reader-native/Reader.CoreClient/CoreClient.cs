@@ -33,6 +33,8 @@ public sealed class CoreClient : IDisposable
         Call<JsonElement>(new { version = 1, operation = "position", id, position });
     public void SetBookmark(string id, string sentenceId, bool saved) =>
         Call<JsonElement>(new { version = 1, operation = "set_bookmark", id, sentenceId, saved });
+    public void SetReviewedTranslation(string id, string sentenceId, string target, string text) =>
+        Call<JsonElement>(new { version = 1, operation = "set_reviewed_translation", id, sentenceId, target, text });
     public Vocabulary SaveWord(Vocabulary entry) =>
         Call<Vocabulary>(new { version = 1, operation = "save_word", entry });
     public void Review(string id, string direction, byte grade) =>

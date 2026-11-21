@@ -23,7 +23,10 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public bool HasBookmarks => !busy && Document is { Bookmarks.Length: > 0 };
     public string BookmarkAction => Sentence is { } sentence && Document!.Bookmarks.Contains(sentence.Id)
         ? "Видалити закладку" : "Додати закладку";
-    public string TranslationStatus => "Офлайн-переклад недоступний: мовний пакет не встановлено.";
+    public string? ReviewedTranslation(string target) =>
+        Document is { } document && Sentence is { } sentence &&
+        document.ReviewedTranslations.TryGetValue(target, out var translations) &&
+        translations.TryGetValue(sentence.Id, out var text) ? text : null;
     public ReaderSession(string path) => client = new Client(path);
 
     public Task RefreshAsync() => RunAsync(Read);
@@ -56,6 +59,13 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
             client.SetBookmark(document.Id, sentence.Id, !document.Bookmarks.Contains(sentence.Id));
         return Read();
     });
+
+    public Task SetReviewedTranslationAsync(string documentId, string sentenceId, string target, string text) =>
+        RunAsync(() =>
+        {
+            client.SetReviewedTranslation(documentId, sentenceId, target, text);
+            return Read();
+        });
 
     public Task SaveWordAsync(TextSelection selection, string translation) => RunAsync(() =>
     {
