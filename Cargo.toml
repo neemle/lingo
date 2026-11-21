@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/reader-core", "apps/reader/src-tauri"]
+resolver = "2"

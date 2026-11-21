@@ -1,0 +1,55 @@
+import {bootstrapApplication} from '@angular/platform-browser';
+import {Component,signal,computed,HostListener,OnInit} from '@angular/core';
+import {FormsModule} from '@angular/forms';
+import {listen} from '@tauri-apps/api/event';
+import {Icon} from './icon';
+import {api,desktop,LANGUAGES,SAMPLE_TEXT,SAMPLE_TRANSLATIONS,LEXICON,emptyReview,ReaderDocument,Snapshot,Word,Voice,Backup,Original} from './data';
+
+@Component({selector:'app-root',standalone:true,imports:[FormsModule,Icon],templateUrl:'./reader.html'})
+class App implements OnInit {
+ readonly Math=Math;readonly desktop=desktop;readonly languages=LANGUAGES;readonly lexicon=LEXICON;
+ view=signal('reader');data=signal<Snapshot>({documents:[],vocabulary:[]});activeId=signal('');active=computed(()=>this.data().documents.find(d=>d.id===this.activeId()));
+ playing=signal(false);repeat=signal(false);voiceList=signal<Voice[]>([]);voice='';rate=1;target='uk';source='fr';fontSize=23;translationVisible=true;
+ selected=signal<{word:string;context:string;kind:string;note:string}|null>(null);translation='';toast=signal('');error=signal('');busy=signal(false);search='';importOpen=signal(false);pasteText='';pasteTitle='Мій текст';direction=signal<'forward'|'reverse'>('forward');revealed=signal(false);quizMode='self';answer='';quizResult=signal('');
+ quizWord=computed(()=>this.data().vocabulary.find(v=>v[this.direction()].dueAt<=Date.now()/1000));
+ filteredWords(){const q=this.search.toLocaleLowerCase();return this.data().vocabulary.filter(w=>(w.word+' '+w.translation).toLocaleLowerCase().includes(q));}
+ availableVoices=computed(()=>this.voiceList().filter(v=>v.language.split('-')[0]===(this.active()?.language||this.source)));
+ due=computed(()=>this.data().vocabulary.filter(v=>v[this.direction()].dueAt<=Date.now()/1000).length);
+ nativeGeneration=0;utterance:SpeechSynthesisUtterance|null=null;speechEpoch=0;
+ async ngOnInit(){await this.run(async()=>{await this.refresh();const stored=localStorage.getItem('lingo-active');this.activeId.set(this.data().documents.some(d=>d.id===stored)?stored!:this.data().documents[0]?.id||'');if(!this.data().documents.length){const doc=await api<ReaderDocument>('import_document',{name:'Un matin à Paris.txt',bytes:Array.from(new TextEncoder().encode(SAMPLE_TEXT)),language:'fr'});await this.refresh();this.open(doc);}if(desktop){this.voiceList.set(await api<Voice[]>('voices'));await listen<{generation:number;error:string|null}>('speech-finished',event=>{if(this.playing()&&event.payload.generation===this.nativeGeneration){if(event.payload.error){this.error.set(event.payload.error);void this.stop();}else void this.ended();}});}else{const update=()=>this.voiceList.set(('speechSynthesis' in window?speechSynthesis.getVoices():[]).filter(v=>v.localService).map(v=>({id:v.name,name:v.name,language:v.lang})));update();if('speechSynthesis' in window)speechSynthesis.addEventListener('voiceschanged',update);}});}
+ async refresh(){this.data.set(await api<Snapshot>('load'));}
+ async run(fn:()=>Promise<void>){this.error.set('');try{await fn();}catch(e){this.error.set(String(e instanceof Error?e.message:e));}}
+ notify(text:string){this.toast.set(text);setTimeout(()=>this.toast.set(''),3200);}
+ hasVoice(code:string){return this.voiceList().some(v=>v.language.split('-')[0]===code);}
+ name(code:string){return LANGUAGES.find(l=>l[0]===code)?.[1]||code;}
+ isSample(){return this.active()?.text===SAMPLE_TEXT;}
+ translationFor(index:number){return this.isSample()&&this.target==='uk'?SAMPLE_TRANSLATIONS[index]||'Демонстраційний переклад відсутній.':'';}
+ progress(doc:ReaderDocument){return Math.round(((doc.position+1)/doc.sentences.length)*100);}
+ tokens(text:string){return [...new Intl.Segmenter(this.active()?.language||'fr',{granularity:'word'}).segment(text)].map(s=>({text:s.segment,word:s.isWordLike}));}
+ open(doc:ReaderDocument){void this.stop();this.activeId.set(doc.id);this.source=doc.language;this.view.set('reader');this.selected.set(null);this.voice='';localStorage.setItem('lingo-active',doc.id);}
+ navigate(view:string){void this.stop();this.selected.set(null);this.view.set(view);}
+ async position(index:number){const doc=this.active();if(!doc||index<0||index>=doc.sentences.length)return;const wasPlaying=this.playing();await this.stop();await this.run(async()=>{await api('save_position',{id:doc.id,position:index});await this.refresh();requestAnimationFrame(()=>document.querySelector(`[data-sentence="${index}"]`)?.scrollIntoView({block:'nearest',behavior:'smooth'}));if(wasPlaying)await this.play();});}
+ async step(delta:number){await this.position((this.active()?.position||0)+delta);}
+ async play(){if(this.playing()){await this.stop();return;}await this.run(async()=>{const doc=this.active();if(!doc)return;const voices=this.availableVoices();if(!voices.length)throw new Error('Локальний голос для цієї мови не знайдено. Встановіть його в налаштуваннях ОС.');this.playing.set(true);const epoch=++this.speechEpoch;const voice=voices.find(v=>v.id===this.voice)||voices[0];this.voice=voice.id;const text=doc.sentences[doc.position].text;try{if(desktop)this.nativeGeneration=await api<number>('speak',{text,voice:voice.id,rate:this.rate});else{const u=new SpeechSynthesisUtterance(text);u.voice=speechSynthesis.getVoices().find(v=>v.name===voice.id)||null;u.lang=doc.language;u.rate=this.rate;u.onend=()=>{if(this.speechEpoch===epoch&&this.playing())void this.ended();};u.onerror=()=>{if(this.speechEpoch===epoch){this.playing.set(false);this.error.set('Системний голос недоступний.');}};this.utterance=u;speechSynthesis.speak(u);}}catch(e){this.playing.set(false);throw e;}});}
+ async stop(){this.playing.set(false);this.speechEpoch++;if(desktop)await api('stop_speech').catch(()=>{});else if('speechSynthesis' in window)speechSynthesis.cancel();}
+ async ended(){const doc=this.active();if(!doc)return;this.playing.set(false);if(this.repeat()){await this.play();return;}if(doc.position+1<doc.sentences.length){await this.position(doc.position+1);await this.play();}}
+ async changeRate(){const was=this.playing();await this.stop();if(was)await this.play();}
+ selectWord(word:string,context:string,event:MouseEvent){event.stopPropagation();const key=word.toLocaleLowerCase().replace(/^[’']|[’']$/g,'');const entry=this.active()?.language==='fr'&&this.target==='uk'?LEXICON[key]:undefined;this.translation=entry?.translation||'';this.selected.set({word,context,kind:entry?.kind||'Власна словникова картка',note:entry?.note||'Для цього слова немає локального пояснення. Додайте перевірений переклад власноруч.'});}
+ async saveWord(){const s=this.selected(),doc=this.active();if(!s||!doc)return;await this.run(async()=>{if(!this.translation.trim())throw new Error('Введіть переклад');await api<Word>('save_word',{entry:{id:'',word:s.word,translation:this.translation.trim(),language:doc.language,targetLanguage:this.target,context:s.context,documentId:doc.id,forward:emptyReview(),reverse:emptyReview()}});await this.refresh();this.selected.set(null);this.notify('Збережено до словника');});}
+ saved(word:string){return this.data().vocabulary.some(w=>w.word.toLocaleLowerCase()===word.toLocaleLowerCase()&&w.language===this.active()?.language);}
+ async importFiles(event:Event){const files=(event.target as HTMLInputElement).files;if(!files)return;await this.importList(Array.from(files));(event.target as HTMLInputElement).value='';}
+ async importList(files:File[]){this.busy.set(true);try{await this.run(async()=>{for(const file of files){if(file.size>20*1024*1024)throw new Error('Максимальний розмір файлу — 20 МБ');const doc=await api<ReaderDocument>('import_document',{name:file.name,bytes:Array.from(new Uint8Array(await file.arrayBuffer())),language:this.source});await this.refresh();this.open(doc);}this.importOpen.set(false);this.notify('Документ у вашій бібліотеці');});}finally{this.busy.set(false);}}
+ async paste(){if(!this.pasteText.trim())return;await this.importList([new File([this.pasteText],(this.pasteTitle.trim()||'Мій текст')+'.txt',{type:'text/plain'})]);if(!this.error())this.pasteText='';}
+ onDrop(event:DragEvent){event.preventDefault();if(event.dataTransfer?.files.length)void this.importList(Array.from(event.dataTransfer.files));}
+ download(bytes:Uint8Array,name:string,type:string){const url=URL.createObjectURL(new Blob([bytes as BlobPart],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+ async export(){await this.run(async()=>{if(desktop){if(await api<boolean>('export_file',{kind:'backup',id:null}))this.notify('Резервну копію експортовано');return;}const b=await api<Backup>('export_backup');this.download(new TextEncoder().encode(JSON.stringify(b)),`lingo-backup-${new Date().toISOString().slice(0,10)}.json`,'application/json');this.notify('Резервну копію експортовано');});}
+ async restore(event:Event){const file=(event.target as HTMLInputElement).files?.[0];if(!file)return;await this.run(async()=>{if(file.size>100*1024*1024)throw new Error('Архів завеликий');const b=JSON.parse(await file.text()) as Backup;await api('restore_backup',{backup:b});await this.refresh();if(!this.active())this.activeId.set(this.data().documents[0]?.id||'');this.notify('Дані відновлено');});(event.target as HTMLInputElement).value='';}
+ async original(){await this.run(async()=>{if(!this.active())return;if(desktop){await api('export_file',{kind:'original',id:this.active()!.id});return;}const o=await api<Original>('original',{id:this.active()!.id});this.download(new Uint8Array(o.bytes),o.name,'application/octet-stream');});}
+ quizPrompt(){const w=this.quizWord();return w?(this.direction()==='forward'?w.word:w.translation):'';}
+ quizAnswer(){const w=this.quizWord();return w?(this.direction()==='forward'?w.translation:w.word):'';}
+ reveal(){if(this.quizMode==='typing'){const normalize=(s:string)=>s.normalize('NFKC').trim().toLocaleLowerCase().replace(/[.!?]+$/,'');const accepted=this.quizAnswer().split(/[;,]/).map(normalize);this.quizResult.set(accepted.includes(normalize(this.answer))?'Відповідь збігається':'Порівняйте з відповіддю й оцініть себе');}this.revealed.set(true);}
+ async grade(value:number){const word=this.quizWord();if(!word)return;await this.run(async()=>{await api('review',{id:word.id,direction:this.direction(),grade:value});await this.refresh();this.resetQuiz();});}
+ resetQuiz(){this.revealed.set(false);this.answer='';this.quizResult.set('');}
+ @HostListener('document:keydown',['$event']) keys(e:KeyboardEvent){if(e.key==='Escape'){this.selected.set(null);this.importOpen.set(false);return;}if(['INPUT','TEXTAREA','SELECT'].includes((e.target as HTMLElement).tagName)||this.importOpen()||this.selected())return;if(this.view()!=='reader')return;if(e.code==='Space'){e.preventDefault();void this.play();}if(e.code==='ArrowRight'){e.preventDefault();void this.step(1);}if(e.code==='ArrowLeft'){e.preventDefault();void this.step(-1);}if(e.key.toLowerCase()==='r')this.repeat.set(!this.repeat());}
+}
+bootstrapApplication(App).catch(console.error);

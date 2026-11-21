@@ -1,0 +1,21 @@
+node_modules/
+dist/
+target/
+.angular/
+out-tsc/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+test-results/
+playwright-report/
+artifacts/*.zip
+artifacts/verified-original.txt
+
+# leasevibe-local:begin
+AGENTS.md
+.leasevibe.yaml
+.env
+.env.*
+.claude/
+# leasevibe-local:end

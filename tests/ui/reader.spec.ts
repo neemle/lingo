@@ -1,0 +1,48 @@
+import {test,expect} from '@playwright/test';
+test('import, read, save vocabulary, review both directions and resume offline',async({page,context})=>{
+ const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto('/');await expect(page.getByRole('heading',{name:'Un matin à Paris',exact:true})).toBeVisible();
+ await page.screenshot({path:'artifacts/reader-desktop.png',fullPage:true});
+ const count=await page.locator('.sentence-row').count();expect(count).toBe(12);
+ await page.getByRole('button',{name:'matins',exact:true}).click();await expect(page.getByRole('dialog')).toBeVisible();
+ await expect(page.getByLabel('Переклад · Українська')).toHaveValue('ранки');
+ await page.getByRole('button',{name:'Додати до словника',exact:true}).click();
+ await page.getByRole('button',{name:'Мій словник',exact:false}).first().click();
+ await expect(page.getByRole('heading',{name:'matins',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Повторити слова',exact:true}).click();
+ await page.getByRole('button',{name:'Показати відповідь',exact:true}).click();await page.getByRole('button',{name:'Добре',exact:false}).click();
+ await expect(page.getByRole('heading',{name:'На сьогодні все!'})).toBeVisible();
+ await page.getByRole('button',{name:'Переклад → слово',exact:true}).click();await expect(page.getByRole('heading',{name:'ранки',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Показати відповідь',exact:true}).click();await page.getByRole('button',{name:'Легко',exact:false}).click();
+ await page.getByRole('button',{name:'Продовжити читати',exact:false}).click();
+ await page.getByRole('button',{name:'Наступне речення',exact:true}).click();await expect(page.locator('[data-sentence="1"]')).toHaveClass(/selected-sentence/);
+ await page.reload();await expect(page.locator('[data-sentence="1"]')).toHaveClass(/selected-sentence/);
+ await page.getByRole('button',{name:'Додати документ',exact:true}).click();
+ await page.getByRole('textbox',{name:'Назва документа'}).fill('Мій тест');
+ await page.getByRole('textbox',{name:'Текст документа'}).fill('Bonjour 👋🏽. Україна — це дім.');
+ await page.getByRole('button',{name:'Почати читати',exact:false}).click();
+ await expect(page.getByRole('heading',{name:'Мій тест',exact:true})).toBeVisible();await expect(page.getByText('Для цієї пари немає встановленого', {exact:false})).toBeVisible();
+ await page.getByRole('button',{name:'Наступне речення',exact:true}).click();await expect(page.locator('[data-sentence="1"]')).toHaveClass(/selected-sentence/);
+ await page.reload();await expect(page.getByRole('heading',{name:'Мій тест',exact:true})).toBeVisible();await context.setOffline(true);await page.getByRole('button',{name:'Попереднє речення',exact:true}).click();await page.getByRole('button',{name:'Наступне речення',exact:true}).click();
+ await expect(page.locator('[data-sentence="1"]')).toHaveClass(/selected-sentence/);
+ expect(errors).toEqual([]);
+});
+test('narrow layout and import errors remain usable',async({page})=>{
+ await page.setViewportSize({width:390,height:844});await page.goto('/');await expect(page.getByRole('heading',{name:'Un matin à Paris',exact:true})).toBeVisible();
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+ await page.screenshot({path:'artifacts/reader-mobile.png',fullPage:true});
+ await page.setViewportSize({width:1440,height:1000});await page.getByRole('button',{name:'Додати документ',exact:true}).click();
+ await page.locator('input[type=file]').first().setInputFiles({name:'scan.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4')});
+ await expect(page.getByRole('dialog').getByRole('alert')).toContainText('DOCX і PDF');await expect(page.getByRole('button',{name:'Почати читати',exact:false})).toBeVisible();
+});
+test('backup restores source documents and independent review history',async({page,browser})=>{
+ await page.goto('/');await expect(page.getByRole('heading',{name:'Un matin à Paris',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'matins',exact:true}).click();await page.getByRole('button',{name:'Додати до словника',exact:true}).click();
+ await page.getByRole('button',{name:'Практика',exact:false}).first().click();await page.getByRole('button',{name:'Показати відповідь',exact:true}).click();await page.getByRole('button',{name:'Добре',exact:false}).click();
+ await page.getByRole('button',{name:'Мови та ресурси',exact:true}).first().click();
+ const downloadPromise=page.waitForEvent('download');await page.getByRole('button',{name:'Експорт резервної копії',exact:true}).click();const download=await downloadPromise;const path=await download.path();expect(path).toBeTruthy();
+ const context=await browser.newContext();const restored=await context.newPage();await restored.goto('http://127.0.0.1:1420');await expect(restored.getByRole('heading',{name:'Un matin à Paris',exact:true})).toBeVisible();
+ await restored.getByRole('button',{name:'Мови та ресурси',exact:true}).first().click();await restored.locator('input[type=file]').setInputFiles(path!);await expect(restored.getByRole('status')).toContainText('Дані відновлено');
+ await restored.getByRole('button',{name:'Практика',exact:false}).first().click();await expect(restored.getByRole('heading',{name:'На сьогодні все!'})).toBeVisible();
+ await restored.getByRole('button',{name:'Переклад → слово',exact:true}).click();await expect(restored.getByRole('heading',{name:'ранки',exact:true})).toBeVisible();await context.close();
+});
