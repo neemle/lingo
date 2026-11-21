@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
- xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml" x:Class="Reader.Native.Features.Library.LibraryPage"
+ xmlns:models="clr-namespace:Reader.Contracts;assembly=Reader.Contracts"
+ xmlns:state="clr-namespace:Reader.Presentation;assembly=Reader.Presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml" x:DataType="state:ReaderSession"
+ x:Class="Reader.Native.Features.Library.LibraryPage"
  Title="Бібліотека">
  <ContentPage.MenuBarItems>
   <MenuBarItem Text="Файл">
@@ -37,7 +40,7 @@
    <CollectionView.EmptyView>
     <Label Text="Додайте перший текст, щоб почати читання." Margin="0,32" />
    </CollectionView.EmptyView>
-   <CollectionView.ItemTemplate><DataTemplate>
+   <CollectionView.ItemTemplate><DataTemplate x:DataType="models:Document">
     <Border Padding="20" Margin="0,0,0,12" Stroke="#DEDCCF" BackgroundColor="#FFFDFA" StrokeShape="RoundRectangle 14">
      <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" RowSpacing="8">
       <Label Text="{Binding Title}" FontSize="21" FontAttributes="Bold" />

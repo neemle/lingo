@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+ xmlns:models="clr-namespace:Reader.Contracts;assembly=Reader.Contracts"
+ xmlns:state="clr-namespace:Reader.Presentation;assembly=Reader.Presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
- xmlns:controls="clr-namespace:Reader.Native.Controls" x:Class="Reader.Native.Features.Reading.ReadingPage"
+ xmlns:controls="clr-namespace:Reader.Native.Controls" x:DataType="state:ReaderSession"
+ x:Class="Reader.Native.Features.Reading.ReadingPage"
  Title="Читання">
  <ContentPage.MenuBarItems>
   <MenuBarItem Text="Читання">
@@ -34,7 +37,7 @@
    <Label Grid.Row="1" Text="{Binding TranslationStatus}" TextColor="#A65F43" FontSize="13" />
   </Grid>
   <Picker Grid.Row="1" x:Name="SentencePicker" Title="Перейти до речення"
-   ItemsSource="{Binding Document.Sentences}" ItemDisplayBinding="{Binding Text}"
+   ItemsSource="{Binding Document.Sentences}" ItemDisplayBinding="{Binding Text, x:DataType=models:Sentence}"
    SelectedIndex="{Binding Document.Position, Mode=OneWay}" SelectedIndexChanged="SentenceChanged" />
   <controls:NativeReaderView Grid.Row="2" x:Name="SourceText" Text="{Binding Document.Text}"
    HighlightStart="{Binding Sentence.StartUtf16}" SourceSelected="SourceSelected"
