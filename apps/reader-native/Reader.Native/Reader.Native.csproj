@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net10.0-maccatalyst</TargetFrameworks>
+    <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('windows'))">net10.0-windows10.0.19041.0</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Reader.Native</RootNamespace>
+    <UseMaui>true</UseMaui>
+    <SingleProject>true</SingleProject>
+    <MauiVersion>10.0.0</MauiVersion>
+    <ApplicationTitle>Читай</ApplicationTitle>
+    <ApplicationId>dev.lingoreader.native</ApplicationId>
+    <ApplicationDisplayVersion>0.1</ApplicationDisplayVersion>
+    <ApplicationVersion>1</ApplicationVersion>
+    <WindowsPackageType>None</WindowsPackageType>
+    <SupportedOSPlatformVersion Condition="$(TargetFramework.Contains('maccatalyst'))">15.0</SupportedOSPlatformVersion>
+    <RuntimeIdentifier Condition="$(TargetFramework.Contains('maccatalyst'))">maccatalyst-arm64</RuntimeIdentifier>
+    <SupportedOSPlatformVersion
+      Condition="$(TargetFramework.Contains('windows'))">10.0.17763.0</SupportedOSPlatformVersion>
+    <TargetPlatformMinVersion Condition="$(TargetFramework.Contains('windows'))">10.0.17763.0</TargetPlatformMinVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Reader.Presentation/Reader.Presentation.csproj" />
+    <MauiIcon Include="Resources/AppIcon/appicon.svg"
+      ForegroundFile="Resources/AppIcon/appiconfg.svg" Color="#63725C" />
+    <MauiSplashScreen Include="Resources/Splash/splash.svg" Color="#F6F3EC" BaseSize="128,128" />
+    <PackageReference Include="Microsoft.Maui.Controls" Version="10.0.0" />
+  </ItemGroup>
+  <ItemGroup Condition="$(TargetFramework.Contains('maccatalyst'))">
+    <NativeReference Include="../../../target/aarch64-apple-ios-macabi/release/libreader_ffi.a">
+      <Kind>Static</Kind><ForceLoad>true</ForceLoad><SmartLink>false</SmartLink>
+    </NativeReference>
+  </ItemGroup>
+  <ItemGroup Condition="$(TargetFramework.Contains('windows'))">
+    <Content Include="../../../target/x86_64-pc-windows-msvc/release/reader_ffi.dll"
+      Link="reader_ffi.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -19,3 +19,8 @@ AGENTS.md
 .env.*
 .claude/
 # leasevibe-local:end
+
+# Native MAUI/.NET build outputs
+apps/reader-native/**/bin/
+apps/reader-native/**/obj/
+apps/reader-native/native/

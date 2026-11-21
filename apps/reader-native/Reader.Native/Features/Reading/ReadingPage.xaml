@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+ xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+ xmlns:controls="clr-namespace:Reader.Native.Controls" x:Class="Reader.Native.Features.Reading.ReadingPage"
+ Title="Читання">
+ <Grid Padding="28,18" RowDefinitions="Auto,Auto,*,Auto,Auto" RowSpacing="12">
+  <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+   <Label Text="{Binding Document.Title}" FontSize="26" FontAttributes="Bold" />
+   <Label Grid.Column="1" Text="{Binding Progress}" FontSize="16" TextColor="#63725C" />
+   <Label Grid.Row="1" Text="{Binding TranslationStatus}" TextColor="#A65F43" FontSize="13" />
+  </Grid>
+  <Picker Grid.Row="1" x:Name="SentencePicker" Title="Перейти до речення"
+   ItemsSource="{Binding Document.Sentences}" ItemDisplayBinding="{Binding Text}"
+   SelectedIndex="{Binding Document.Position, Mode=OneWay}" SelectedIndexChanged="SentenceChanged" />
+  <controls:NativeReaderView Grid.Row="2" x:Name="SourceText" Text="{Binding Document.Text}"
+   HighlightStart="{Binding Sentence.StartUtf16}" SourceSelected="SourceSelected"
+   SemanticProperties.Description="Оригінальний текст. Виділіть слово для картки." />
+  <Border Grid.Row="3" x:Name="WordCard" IsVisible="False" Padding="16" Stroke="#D9DCCF"
+   BackgroundColor="#FFFDFA" StrokeShape="RoundRectangle 12">
+   <VerticalStackLayout Spacing="8">
+    <Label x:Name="SelectedWord" FontSize="21" FontAttributes="Bold" />
+    <Label x:Name="RangeLabel" FontSize="11" TextColor="#63725C" />
+    <Label Text="Автоматичний аналіз недоступний. Введіть перевірений вами український переклад." FontSize="12" />
+    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+     <Entry x:Name="Translation" Placeholder="Ваш перевірений переклад" />
+     <Button Grid.Column="1" Text="До словника" Clicked="SaveWordClicked" />
+    </Grid>
+   </VerticalStackLayout>
+  </Border>
+  <VerticalStackLayout Grid.Row="4" Spacing="8">
+   <Label Text="{Binding Error}" TextColor="#A65F43" />
+   <HorizontalStackLayout Spacing="10">
+    <Button Text="← Назад" Clicked="PreviousClicked" /><Button Text="Далі →" Clicked="NextClicked" />
+    <Button Text="Озвучити / повторити" Clicked="SpeakClicked" />
+    <Button Text="Стоп" Clicked="StopClicked" />
+    <Picker x:Name="Rate" WidthRequest="95" Title="Темп" SelectedIndex="1">
+     <Picker.Items><x:String>0.75×</x:String><x:String>1×</x:String><x:String>1.25×</x:String></Picker.Items>
+    </Picker>
+   </HorizontalStackLayout>
+   <Label x:Name="SpeechStatus" FontSize="12" TextColor="#63725C" />
+  </VerticalStackLayout>
+ </Grid>
+</ContentPage>

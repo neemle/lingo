@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+ xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+ xmlns:controls="clr-namespace:Reader.Native.Controls"
+ x:Class="Reader.Native.Features.Settings.ProbePage" Title="Перевірка нативного тексту">
+ <Grid Padding="24" RowDefinitions="Auto,*,Auto,Auto,Auto" RowSpacing="16">
+  <Label Text="Торкніться слова, виділіть фразу й змініть розмір вікна.
+Перевірте апострофи, комбіновані знаки, emoji, CJK і RTL. Результат нижче — фактичний діапазон джерела." />
+  <controls:NativeReaderView Grid.Row="1" x:Name="ProbeText" SourceSelected="Selected" />
+  <Editor Grid.Row="2" x:Name="Result" HeightRequest="150" IsReadOnly="True"
+   Text="Подій ще немає. Цей екран самостійно не оголошує перевірку успішною." />
+  <HorizontalStackLayout Grid.Row="3" Spacing="12">
+   <Button Text="Голос EN / повторити" Clicked="SpeakClicked" />
+   <Button Text="Стоп" Clicked="StopClicked" />
+   <Slider x:Name="Rate" Minimum="0.5" Maximum="1.5" Value="1" WidthRequest="180"
+    SemanticProperties.Description="Темп голосу" />
+  </HorizontalStackLayout>
+  <Label Grid.Row="4" x:Name="SpeechResult" Text="Нативний запуск і офлайн-голос потребують перевірки на кожній ОС." />
+ </Grid>
+</ContentPage>

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+ xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml" x:Class="Reader.Native.Features.Library.LibraryPage"
+ Title="Бібліотека">
+ <Grid Padding="32" RowDefinitions="Auto,Auto,Auto,*" RowSpacing="18">
+  <VerticalStackLayout Spacing="8">
+   <Label Text="ВАШ ПРОСТІР ДЛЯ МОВ" FontSize="12" CharacterSpacing="3" TextColor="#63725C" />
+   <Label Text="Що почитаємо сьогодні?" FontSize="32" FontAttributes="Bold" />
+   <Label Text="Книжки, нотатки й нові слова. Усе зберігається на цьому пристрої." FontSize="16" />
+  </VerticalStackLayout>
+  <HorizontalStackLayout Grid.Row="1" Spacing="12">
+   <Button Text="Додати документ" Clicked="ImportClicked" />
+   <Picker x:Name="Language" Title="Мова тексту" WidthRequest="140" SelectedIndex="0">
+    <Picker.Items><x:String>en</x:String><x:String>fr</x:String><x:String>de</x:String><x:String>es</x:String>
+     <x:String>uk</x:String><x:String>it</x:String><x:String>pt</x:String><x:String>pl</x:String>
+     <x:String>nl</x:String><x:String>cs</x:String><x:String>ro</x:String><x:String>sv</x:String></Picker.Items>
+   </Picker>
+   <ActivityIndicator IsRunning="{Binding Busy}" IsVisible="{Binding Busy}" />
+  </HorizontalStackLayout>
+  <VerticalStackLayout Grid.Row="2" Spacing="6">
+   <Label Text="TXT · DOCX · текстовий PDF · до 20 МБ. Для сканів OCR ще не встановлено."
+    TextColor="#63725C" FontSize="13" />
+   <Label Text="{Binding Error}" TextColor="#A65F43" SemanticProperties.Description="Помилка операції" />
+   <Label x:Name="StartupError" TextColor="#A65F43" />
+  </VerticalStackLayout>
+  <CollectionView Grid.Row="3" ItemsSource="{Binding Snapshot.Documents}" SelectionMode="Single"
+   SelectionChanged="DocumentSelected">
+   <CollectionView.EmptyView>
+    <Label Text="Додайте перший текст, щоб почати читання." Margin="0,32" />
+   </CollectionView.EmptyView>
+   <CollectionView.ItemTemplate><DataTemplate>
+    <Border Padding="20" Margin="0,0,0,12" Stroke="#DEDCCF" BackgroundColor="#FFFDFA" StrokeShape="RoundRectangle 14">
+     <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" RowSpacing="8">
+      <Label Text="{Binding Title}" FontSize="21" FontAttributes="Bold" />
+      <Label Grid.Column="1" Text="{Binding Language}" TextColor="#63725C" />
+      <Label Grid.Row="1" Text="{Binding Format}" TextColor="#63725C" />
+      <Label Grid.Row="1" Grid.Column="1" Text="Читати →" TextColor="#A65F43" />
+     </Grid>
+    </Border>
+   </DataTemplate></CollectionView.ItemTemplate>
+  </CollectionView>
+ </Grid>
+</ContentPage>

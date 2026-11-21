@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+ xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+ x:Class="Reader.Native.Features.Practice.PracticePage" Title="Практика">
+ <VerticalStackLayout Padding="40" Spacing="24" MaximumWidthRequest="760">
+  <Label Text="Трохи практики щодня" FontSize="30" FontAttributes="Bold" />
+  <Picker x:Name="Direction" SelectedIndexChanged="DirectionChanged" Title="Напрям повторення" SelectedIndex="0">
+   <Picker.Items><x:String>Слово → український переклад</x:String>
+    <x:String>Український переклад → слово</x:String></Picker.Items>
+  </Picker>
+  <Label x:Name="QueueStatus" TextColor="#63725C" />
+  <Border Padding="40" Stroke="#D9DCCF" BackgroundColor="#FFFDFA" StrokeShape="RoundRectangle 18">
+   <VerticalStackLayout Spacing="24">
+    <Label x:Name="Prompt" FontSize="36" HorizontalTextAlignment="Center" />
+    <Label x:Name="Answer" FontSize="25" HorizontalTextAlignment="Center" TextColor="#63725C" />
+    <Button x:Name="Reveal" Text="Показати відповідь" Clicked="RevealClicked" />
+   </VerticalStackLayout>
+  </Border>
+  <HorizontalStackLayout x:Name="Grades" Spacing="12" IsVisible="False">
+   <Button Text="Ще раз" CommandParameter="0" Clicked="GradeClicked" />
+   <Button Text="Важко" CommandParameter="1" Clicked="GradeClicked" />
+   <Button Text="Добре" CommandParameter="2" Clicked="GradeClicked" />
+   <Button Text="Легко" CommandParameter="3" Clicked="GradeClicked" />
+  </HorizontalStackLayout>
+  <Label Text="{Binding Error}" TextColor="#A65F43" />
+ </VerticalStackLayout>
+</ContentPage>

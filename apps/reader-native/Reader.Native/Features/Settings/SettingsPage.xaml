@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+ xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+ x:Class="Reader.Native.Features.Settings.SettingsPage" Title="Налаштування">
+ <ScrollView><VerticalStackLayout Padding="36" Spacing="20" MaximumWidthRequest="820">
+  <Label Text="Ваші дані. Ваш пристрій." FontSize="30" FontAttributes="Bold" />
+  <Label Text="Тексти, оригінали, слова й прогрес зберігаються локально. Обліковий запис не потрібен."
+   FontSize="17" />
+  <Border Padding="24" BackgroundColor="#FFFDFA" Stroke="#D9DCCF" StrokeShape="RoundRectangle 14">
+   <VerticalStackLayout Spacing="12">
+    <Label Text="Резервна копія" FontSize="22" FontAttributes="Bold" />
+    <Label Text="Архів містить ваші документи й історію навчання. Збережіть його у вибраному вами місці." />
+    <Button Text="Експортувати резервну копію" Clicked="ExportClicked" />
+    <Button Text="Відновити з архіву" Clicked="RestoreClicked" />
+    <Button Text="Зберегти оригінал відкритого документа" Clicked="OriginalClicked" />
+   </VerticalStackLayout>
+  </Border>
+  <Label Text="Мовні можливості" FontSize="22" FontAttributes="Bold" />
+  <Label Text="Офлайн-перекладач і OCR не встановлено. Автоматичний граматичний аналіз недоступний."
+   TextColor="#A65F43" />
+  <Label Text="Озвучення використовує голоси операційної системи. Встановіть потрібну мову в системних налаштуваннях.
+Точна синхронізація окремих слів ще недоступна." />
+  <Button Text="Відкрити перевірку нативного тексту й голосу" Clicked="ProbeClicked" />
+  <Label x:Name="Status" TextColor="#63725C" />
+  <Label Text="{Binding Error}" TextColor="#A65F43" />
+ </VerticalStackLayout></ScrollView>
+</ContentPage>

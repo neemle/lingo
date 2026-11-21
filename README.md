@@ -1,6 +1,6 @@
 # Lingo Reader
 
-Offline-first language reader, bootstrapped from [the product specification](docs/spec.md). Ukrainian interface, Angular 22 + Tauri 2 + Rust + local SQLite.
+Offline-first language reader, bootstrapped from [the specification authority reference](SPECIFICATION.md). Ukrainian interface, Angular 22 + Tauri 2 + Rust + local SQLite.
 
 ## Run
 
@@ -37,4 +37,4 @@ The UI test configuration uses the installed Google Chrome on macOS; override it
 
 This is a first working slice, **not the completed M0–M9 release**. OCR/photo/scanned PDF import, original-page rendering, verified word timing, production offline translation, model management, deep grammar packs, full native sharing, mobile builds and the 4 GB hardware gate remain unimplemented/unverified. Original files can currently be downloaded for opening in their native viewer. Windows native adapters and CI are provided but have not been executed on this Mac. French demo translations are fixtures, not a translation engine; the UI labels them accordingly. Installing OS voices is managed by the operating system.
 
-See [implementation notes](docs/implementation.md) and [verification record](docs/verification.md).
+The MCP control record preserves the non-normative historical implementation and verification companions. See [the authority reference](SPECIFICATION.md).

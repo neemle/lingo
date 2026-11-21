@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Shell x:Class="Reader.Native.AppShell" xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+ xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+ xmlns:library="clr-namespace:Reader.Native.Features.Library"
+ xmlns:reading="clr-namespace:Reader.Native.Features.Reading"
+ xmlns:words="clr-namespace:Reader.Native.Features.Vocabulary"
+ xmlns:practice="clr-namespace:Reader.Native.Features.Practice"
+ xmlns:settings="clr-namespace:Reader.Native.Features.Settings" Title="Читай"
+ Shell.TabBarBackgroundColor="#F6F3EC" Shell.TabBarForegroundColor="#63725C">
+ <TabBar>
+  <ShellContent Title="Бібліотека" Route="library" ContentTemplate="{DataTemplate library:LibraryPage}" />
+  <ShellContent Title="Читання" Route="reading" ContentTemplate="{DataTemplate reading:ReadingPage}" />
+  <ShellContent Title="Словник" Route="vocabulary" ContentTemplate="{DataTemplate words:VocabularyPage}" />
+  <ShellContent Title="Практика" Route="practice" ContentTemplate="{DataTemplate practice:PracticePage}" />
+  <ShellContent Title="Налаштування" Route="settings" ContentTemplate="{DataTemplate settings:SettingsPage}" />
+ </TabBar>
+</Shell>
