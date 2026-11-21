@@ -6,6 +6,7 @@ namespace Reader.Native.Features.Settings;
 public partial class ProbePage : ContentPage
 {
     private readonly LocalSpeech speech = new();
+    private int speechRequest;
     private const string Sample = "Don't stop. L’esprit. Cafe\u0301 👩🏽‍💻 😀.\r\n中文 日本語。\nمرحبا بالعالم. שלום עולם.";
     public ProbePage()
     {
@@ -26,10 +27,21 @@ public partial class ProbePage : ContentPage
     private async void SpeakClicked(object? sender, EventArgs args)
     {
         speech.Rate = (float)Rate.Value;
+        var request = ++speechRequest;
         SpeechResult.Text = "Озвучення речення: Don't stop.";
-        await speech.SpeakAsync("Don't stop.", "en");
-        SpeechResult.Text = speech.Status;
+        var status = await speech.SpeakAsync("Don't stop.", "en");
+        if (request == speechRequest && status is not null) SpeechResult.Text = status;
     }
-    private void StopClicked(object? sender, EventArgs args) { speech.Stop(); SpeechResult.Text = "Зупинено."; }
-    protected override void OnDisappearing() { speech.Stop(); base.OnDisappearing(); }
+    private void StopClicked(object? sender, EventArgs args)
+    {
+        speechRequest++;
+        speech.Stop();
+        SpeechResult.Text = "Зупинено.";
+    }
+    protected override void OnDisappearing()
+    {
+        speechRequest++;
+        speech.Stop();
+        base.OnDisappearing();
+    }
 }

@@ -9,6 +9,7 @@ public partial class ReadingPage : ContentPage
     private readonly LocalSpeech speech = new();
     private TextSelection? selection;
     private string? documentId;
+    private int speechRequest;
     public ReadingPage() => InitializeComponent();
 
     protected override void OnAppearing()
@@ -21,7 +22,7 @@ public partial class ReadingPage : ContentPage
 
     protected override void OnDisappearing()
     {
-        speech.Stop();
+        StopSpeech();
         AppState.Session.PropertyChanged -= SessionChanged;
         base.OnDisappearing();
     }
@@ -48,12 +49,11 @@ public partial class ReadingPage : ContentPage
         if (selection != selected) Translation.Text = "";
         selection = selected;
         SelectedWord.Text = selected.Text;
-        RangeLabel.Text = $"Джерело UTF-16: {selected.StartUtf16} + {selected.LengthUtf16}";
         WordCard.IsVisible = true;
         if (AppState.Session.Document is not { } doc) return;
         var index = Array.FindIndex(doc.Sentences, sentence => selected.StartUtf16 >= sentence.StartUtf16
             && selected.StartUtf16 < sentence.EndUtf16);
-        if (index >= 0 && index != doc.Position) { speech.Stop(); await AppState.Session.SelectSentenceAsync(index); }
+        if (index >= 0 && index != doc.Position) { StopSpeech(); await AppState.Session.SelectSentenceAsync(index); }
     }
 
     private async void SaveWordClicked(object? sender, EventArgs args)
@@ -65,28 +65,36 @@ public partial class ReadingPage : ContentPage
 
     private async void PreviousClicked(object? sender, EventArgs args)
     {
-        speech.Stop(); await AppState.Session.MoveAsync(-1);
+        StopSpeech(); await AppState.Session.MoveAsync(-1);
     }
     private async void NextClicked(object? sender, EventArgs args)
     {
-        speech.Stop(); await AppState.Session.MoveAsync(1);
+        StopSpeech(); await AppState.Session.MoveAsync(1);
     }
     private async void SentenceChanged(object? sender, EventArgs args)
     {
         if (SentencePicker.SelectedIndex < 0 || AppState.Session.Busy) return;
-        speech.Stop(); await AppState.Session.SelectSentenceAsync(SentencePicker.SelectedIndex);
+        StopSpeech(); await AppState.Session.SelectSentenceAsync(SentencePicker.SelectedIndex);
     }
 
     private async void SpeakClicked(object? sender, EventArgs args)
     {
         if (AppState.Session.Sentence is not { } sentence || AppState.Session.Document is not { } doc) return;
+        var request = ++speechRequest;
         speech.Rate = Rate.SelectedIndex switch { 0 => .75f, 2 => 1.25f, _ => 1f };
         SpeechStatus.Text = "Озвучення поточного речення…";
-        await speech.SpeakAsync(sentence.Text, doc.Language);
-        SpeechStatus.Text = speech.Status;
+        var status = await speech.SpeakAsync(sentence.Text, doc.Language);
+        if (request == speechRequest && status is not null) SpeechStatus.Text = status;
     }
     private void StopClicked(object? sender, EventArgs args)
     {
-        speech.Stop(); SpeechStatus.Text = "Озвучення зупинено.";
+        StopSpeech();
+    }
+
+    private void StopSpeech()
+    {
+        speechRequest++;
+        speech.Stop();
+        SpeechStatus.Text = "Озвучення зупинено.";
     }
 }

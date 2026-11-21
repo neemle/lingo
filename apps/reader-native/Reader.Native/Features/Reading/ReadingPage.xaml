@@ -43,7 +43,6 @@
    BackgroundColor="#FFFDFA" StrokeShape="RoundRectangle 12">
    <VerticalStackLayout Spacing="8">
     <Label x:Name="SelectedWord" FontSize="21" FontAttributes="Bold" />
-    <Label x:Name="RangeLabel" FontSize="11" TextColor="#63725C" />
     <Label Text="Автоматичний аналіз недоступний. Введіть перевірений вами український переклад." FontSize="12" />
     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
      <Entry x:Name="Translation" Placeholder="Ваш перевірений переклад"

@@ -1,40 +1,59 @@
-# Lingo Reader
+# Lingo Reader — Читай
 
-Offline-first language reader, bootstrapped from [the specification authority reference](SPECIFICATION.md). Ukrainian interface, Angular 22 + Tauri 2 + Rust + local SQLite.
+Native desktop language reader with a Ukrainian interface: MAUI XAML/C# on Windows (WinUI 3) and
+macOS (Mac Catalyst), backed by Rust and local SQLite. Requirements and work tracking live in LeaseVibe MCP.
 
-## Run
+The reader imports UTF-8 TXT, DOCX and text PDFs up to 20 MiB, retains originals, restores sentence progress,
+and saves manual translations with context. Forward/reverse practice states and JSON backups use the same Rust core.
+Translation models, OCR and grammar packages are not installed; the app reports their absence.
 
-Requires Node 24.15+ and Rust with platform Tauri prerequisites (Xcode Command Line Tools on macOS; MSVC Build Tools and WebView2 on Windows).
+## Build and run
+
+Use an installed .NET SDK that supports the `net10.0` targets, its compatible MAUI workload, and Rust.
+Windows requires MSVC and the Windows SDK. Mac Catalyst requires full Xcode compatible with the installed
+.NET Apple workload; Command Line Tools alone cannot build or launch the app. No Node or browser runtime is used.
+Run commands from the repository root.
+
+macOS, Apple Silicon:
 
 ```sh
-npm ci
-npm run desktop
+rustup target add aarch64-apple-ios-macabi
+cargo build -p reader-ffi --release --locked --target aarch64-apple-ios-macabi
+reader_project=apps/reader-native/Reader.Native/Reader.Native.csproj
+dotnet build "$reader_project" -f net10.0-maccatalyst -p:EnableCodeSigning=false
+dotnet build "$reader_project" -t:Run -f net10.0-maccatalyst -p:EnableCodeSigning=false
 ```
 
-Browser preview: `npm start`, then open http://127.0.0.1:1420. This preview uses browser storage and supports TXT; the desktop application uses SQLite and supports TXT, DOCX and text PDFs. Browser storage can be cleared by the browser, so export backups for durable use.
+Catalyst links the Rust static library built for `aarch64-apple-ios-macabi`; a regular macOS dylib is incompatible.
+The current native macOS head targets Apple Silicon.
+
+Windows, x64:
+
+```powershell
+rustup target add x86_64-pc-windows-msvc
+cargo build -p reader-ffi --release --locked --target x86_64-pc-windows-msvc
+$readerProject = "apps/reader-native/Reader.Native/Reader.Native.csproj"
+dotnet build $readerProject -f net10.0-windows10.0.19041.0 `
+  -c Release -p:RuntimeIdentifier=win-x64
+dotnet run --project $readerProject -f net10.0-windows10.0.19041.0 `
+  -c Release -p:RuntimeIdentifier=win-x64 --no-build
+```
+
+The Windows head copies the matching Rust DLL beside the application. Rust remains the only database writer.
+The app stores its database in its local application-data directory. Export a backup before changing devices.
+
+## Checks and current limits
 
 ```sh
-npm run desktop:build -- --bundles app  # macOS
-npm run desktop:build -- --bundles nsis # Windows, on Windows
-npm run check
-npm run test:ui
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+dotnet build apps/reader-native/Reader.Presentation/Reader.Presentation.csproj
 ```
 
-The UI test configuration uses the installed Google Chrome on macOS; override its executable path for other hosts. CI compiles native desktop code on macOS and Windows. A committed lockfile pins resolved dependencies.
+Headless interop has exercised document imports, original bytes, restart progress, vocabulary, independent review
+directions and backup/restore. Native C#/XAML compilation has passed locally for Catalyst; full local packaging is
+blocked by absent Xcode. Native CI builds and launched Windows/macOS selection, accessibility and speech checks
+remain separate gates. The explicit text/voice probe is available in Settings.
 
-## Available in this slice
-
-- Two aligned reading columns with a clearly labelled French/Ukrainian sample.
-- TXT, DOCX and text PDF import on desktop, retained originals, SHA-256 deduplication, stable sentence IDs and UTF-8/UTF-16 spans.
-- Sentence selection and navigation, progress recovery after restart.
-- Sentence-level system speech: local macOS `say`, Windows System.Speech adapter. Only locally detected voices are offered. Stop/restart playback resumes at the current sentence.
-- Context word cards and an authored demo lexicon; manual translations for other words. Saved words retain their source sentence.
-- Forward and reverse quizzes with independent intervals, self-rating and typed answers. The small deterministic repetition algorithm is not FSRS.
-- Versioned JSON backups with source files, vocabulary, directional states and review history; integrity checking and transactional restore on desktop.
-- Resource screen showing actual voice availability and missing translation/OCR/model packages. No automatic downloads and no cloud document processing.
-
-## Still open
-
-This is a first working slice, **not the completed M0–M9 release**. OCR/photo/scanned PDF import, original-page rendering, verified word timing, production offline translation, model management, deep grammar packs, full native sharing, mobile builds and the 4 GB hardware gate remain unimplemented/unverified. Original files can currently be downloaded for opening in their native viewer. Windows native adapters and CI are provided but have not been executed on this Mac. French demo translations are fixtures, not a translation engine; the UI labels them accordingly. Installing OS voices is managed by the operating system.
-
-The MCP control record preserves the non-normative historical implementation and verification companions. See [the authority reference](SPECIFICATION.md).
+Speech uses system voices and reports missing languages. Precise word timing, OCR, automatic offline translation,
+mobile releases, signed installers and the 4 GiB hardware target remain unverified or unimplemented.

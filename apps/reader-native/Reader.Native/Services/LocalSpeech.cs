@@ -1,36 +1,30 @@
+using Reader.Presentation;
+
 namespace Reader.Native.Services;
 
 public sealed class LocalSpeech : IDisposable
 {
-    private CancellationTokenSource? cancellation;
+    private readonly SpeechPlayback playback = new();
     public float Rate { get; set; } = 1;
-    public string Status { get; private set; } = "Використовуються голоси операційної системи.";
 
-    public async Task SpeakAsync(string text, string language)
+    public Task<string?> SpeakAsync(string text, string language)
     {
-        Stop();
-        cancellation = new CancellationTokenSource();
-        var token = cancellation.Token;
-        try
-        {
-            var locales = await TextToSpeech.Default.GetLocalesAsync();
-            var locale = locales.FirstOrDefault(item => item.Language.StartsWith(language,
-                StringComparison.OrdinalIgnoreCase));
-            if (locale is null) { Status = "Голос цієї мови не встановлено в системі."; return; }
-            Status = "Озвучення поточного речення. Точні межі слів недоступні.";
-            await TextToSpeech.Default.SpeakAsync(text, new SpeechOptions { Locale = locale, Rate = Rate }, token);
-            Status = "Озвучення завершено.";
-        }
-        catch (OperationCanceledException) { Status = "Озвучення зупинено."; }
-        catch (Exception error) { Status = $"Озвучення недоступне: {error.Message}"; }
+        var rate = Rate;
+        return playback.PlayAsync(token => SpeakCoreAsync(text, language, rate, token));
     }
 
-    public void Stop()
+    private static async Task<string> SpeakCoreAsync(string text, string language, float rate, CancellationToken token)
     {
-        cancellation?.Cancel();
-        cancellation?.Dispose();
-        cancellation = null;
+        var locales = await TextToSpeech.Default.GetLocalesAsync();
+        token.ThrowIfCancellationRequested();
+        var locale = locales.FirstOrDefault(item => item.Language.StartsWith(language,
+            StringComparison.OrdinalIgnoreCase));
+        if (locale is null) return "Голос цієї мови не встановлено в системі.";
+        await TextToSpeech.Default.SpeakAsync(text, new SpeechOptions { Locale = locale, Rate = rate }, token);
+        token.ThrowIfCancellationRequested();
+        return "Озвучення завершено. Точні межі слів недоступні.";
     }
 
+    public void Stop() => playback.Stop();
     public void Dispose() => Stop();
 }
