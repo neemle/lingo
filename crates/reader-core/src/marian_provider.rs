@@ -34,6 +34,7 @@ struct Package {
     pub source: &'static str,
     pub target: &'static str,
     pub revision: &'static str,
+    pub sizes: [u64; 5],
     pub hashes: [&'static str; 5],
 }
 
@@ -43,6 +44,16 @@ pub struct TranslationPackageStatus {
     pub source: &'static str,
     pub target: &'static str,
     pub files_present: bool,
+    pub revision: &'static str,
+    pub assets: Vec<TranslationAsset>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationAsset {
+    pub name: &'static str,
+    pub bytes: u64,
+    pub sha256: &'static str,
 }
 
 struct MarianProvider<'a> {
@@ -60,6 +71,17 @@ impl Store {
                 source: package.source,
                 target: package.target,
                 files_present: provider.files_present(package),
+                revision: package.revision,
+                assets: ASSETS
+                    .into_iter()
+                    .zip(package.sizes)
+                    .zip(package.hashes)
+                    .map(|((name, bytes), sha256)| TranslationAsset {
+                        name,
+                        bytes,
+                        sha256,
+                    })
+                    .collect(),
             })
             .collect()
     }
@@ -161,7 +183,10 @@ impl Store {
 impl MarianProvider<'_> {
     fn files_present(&self, model: &Package) -> bool {
         let path = self.path(model);
-        ASSETS.iter().all(|asset| path.join(asset).is_file())
+        ASSETS.iter().zip(model.sizes).all(|(asset, expected)| {
+            fs::metadata(path.join(asset))
+                .is_ok_and(|metadata| metadata.is_file() && metadata.len() == expected)
+        })
     }
 
     fn path(&self, model: &Package) -> PathBuf {

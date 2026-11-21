@@ -60,7 +60,9 @@ mobile releases, signed installers and the 4 GiB hardware target remain unverifi
 
 ## Offline translation packages
 
-The reader supports local translation with the five pinned Helsinki-NLP Marian packages below.
+Choose a language pair in **Налаштування** and select **Завантажити пакет**. The download can be stopped
+and resumed. Translation uses local files after installation.
+For offline setup, the app also accepts a ZIP prepared from the pinned Helsinki-NLP packages below.
 Download `config.json`, `source.spm`, `target.spm`, `vocab.json` and `model.safetensors` from the same revision.
 
 - [French → Ukrainian](https://huggingface.co/Helsinki-NLP/opus-mt-fr-uk/tree/e789f8670b3515ed604605d80d108dd97d779848)

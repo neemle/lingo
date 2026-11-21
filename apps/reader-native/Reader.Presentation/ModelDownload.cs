@@ -1,0 +1,152 @@
+using System.IO.Compression;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Security.Cryptography;
+using Reader.Contracts;
+
+namespace Reader.Presentation;
+
+/// <summary>Downloads only pinned model assets. Source documents never enter this path.</summary>
+public sealed class ModelDownload(HttpClient http)
+{
+    private const long AssetLimit = 400_000_000;
+    private static readonly string[] AssetNames =
+        ["config.json", "source.spm", "target.spm", "vocab.json", "model.safetensors"];
+
+    public async Task FetchArchiveAsync(
+        TranslationPackageStatus package, string stagingRoot, string archivePath,
+        IProgress<long>? progress, CancellationToken cancellationToken)
+    {
+        Validate(package);
+        var directory = Path.Combine(stagingRoot, package.Revision);
+        Directory.CreateDirectory(directory);
+        using var gate = OpenGate(stagingRoot, package.Revision);
+
+        long completed = 0;
+        foreach (var asset in package.Assets)
+        {
+            var path = Path.Combine(directory, asset.Name);
+            await FetchAssetAsync(package, asset, path, completed, progress, cancellationToken);
+            completed += asset.Bytes;
+            progress?.Report(completed);
+        }
+
+        await using var output = new FileStream(archivePath, FileMode.CreateNew, FileAccess.Write);
+        using var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true);
+        foreach (var asset in package.Assets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var entry = archive.CreateEntry(asset.Name, CompressionLevel.NoCompression);
+            await using var input = File.OpenRead(Path.Combine(directory, asset.Name));
+            await using var destination = entry.Open();
+            await input.CopyToAsync(destination, cancellationToken);
+        }
+    }
+
+    public static void ClearStaging(TranslationPackageStatus package, string stagingRoot)
+    {
+        Validate(package);
+        var directory = Path.Combine(stagingRoot, package.Revision);
+        using var gate = OpenGate(stagingRoot, package.Revision);
+        foreach (var asset in package.Assets)
+            File.Delete(Path.Combine(directory, asset.Name));
+        if (Directory.Exists(directory)) Directory.Delete(directory);
+    }
+
+    private static FileStream OpenGate(string root, string revision) =>
+        new(Path.Combine(root, $"{revision}.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+
+    private async Task FetchAssetAsync(
+        TranslationPackageStatus package, TranslationAsset asset, string path,
+        long completed, IProgress<long>? progress, CancellationToken cancellationToken)
+    {
+        var previous = File.Exists(path) ? new FileInfo(path).Length : 0;
+        if (previous == asset.Bytes && await MatchesAsync(path, asset, cancellationToken)) return;
+        if (previous >= asset.Bytes)
+        {
+            File.Delete(path);
+            previous = 0;
+        }
+
+        var url = new Uri($"https://huggingface.co/Helsinki-NLP/opus-mt-{package.Source}-{package.Target}" +
+            $"/resolve/{package.Revision}/{asset.Name}");
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.AcceptEncoding.ParseAdd("identity");
+        if (previous != 0) request.Headers.Range = new RangeHeaderValue(previous, null);
+        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        if (response.StatusCode == HttpStatusCode.PartialContent)
+        {
+            var range = response.Content.Headers.ContentRange;
+            if (range is null || range.Unit != "bytes" || range.From != previous ||
+                range.To != asset.Bytes - 1 || range.Length != asset.Bytes)
+            {
+                File.Delete(path);
+                throw new InvalidDataException("Сервер повернув некоректний діапазон. Спробуйте ще раз.");
+            }
+        }
+        else if (response.StatusCode == HttpStatusCode.OK)
+        {
+            previous = 0;
+        }
+        else
+        {
+            throw new InvalidDataException("Сервер повернув непідтримувану відповідь.");
+        }
+
+        if (response.Content.Headers.ContentLength is long length && length != asset.Bytes - previous)
+            throw new InvalidDataException("Розмір відповіді не збігається з каталогом.");
+
+        await using (var input = await response.Content.ReadAsStreamAsync(cancellationToken))
+        await using (var output = new FileStream(path, previous == 0 ? FileMode.Create : FileMode.Append,
+            FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.Asynchronous))
+        {
+            var buffer = new byte[64 * 1024];
+            long received = previous;
+            long lastReport = received;
+            int count;
+            while ((count = await input.ReadAsync(buffer, cancellationToken)) != 0)
+            {
+                if (received + count > asset.Bytes)
+                {
+                    await output.DisposeAsync();
+                    File.Delete(path);
+                    throw new InvalidDataException("Завантажений файл перевищує розмір із каталогу.");
+                }
+                await output.WriteAsync(buffer.AsMemory(0, count), cancellationToken);
+                received += count;
+                if (received - lastReport >= 1_000_000)
+                {
+                    progress?.Report(completed + received);
+                    lastReport = received;
+                }
+            }
+            if (received != asset.Bytes)
+                throw new EndOfStreamException("Завантаження перервалося. Його можна продовжити.");
+        }
+
+        if (!await MatchesAsync(path, asset, cancellationToken))
+        {
+            File.Delete(path);
+            throw new InvalidDataException($"Файл мовного пакета пошкоджений: {asset.Name}.");
+        }
+    }
+
+    private static async Task<bool> MatchesAsync(string path, TranslationAsset asset, CancellationToken token)
+    {
+        await using var stream = File.OpenRead(path);
+        var hash = await SHA256.HashDataAsync(stream, token);
+        return Convert.ToHexString(hash).Equals(asset.Sha256, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void Validate(TranslationPackageStatus package)
+    {
+        static bool Hex(string text, int length) => text.Length == length && text.All(Uri.IsHexDigit);
+        if (package.Source.Length != 2 || package.Target.Length != 2 ||
+            !(package.Source + package.Target).All(char.IsAsciiLetterLower) || !Hex(package.Revision, 40) ||
+            !package.Assets.Select(asset => asset.Name).Order(StringComparer.Ordinal).SequenceEqual(AssetNames.Order(StringComparer.Ordinal)) ||
+            package.Assets.Any(asset => asset.Bytes <= 0 || asset.Bytes > AssetLimit || !Hex(asset.Sha256, 64)) ||
+            package.Assets.Sum(asset => asset.Bytes) > AssetLimit)
+            throw new InvalidDataException("Некоректний каталог мовних пакетів.");
+    }
+}

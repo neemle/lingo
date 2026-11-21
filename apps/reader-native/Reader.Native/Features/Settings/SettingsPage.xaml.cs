@@ -1,10 +1,18 @@
 using Reader.Contracts;
 using Reader.Native.Services;
+using Reader.Presentation;
 
 namespace Reader.Native.Features.Settings;
 
 public partial class SettingsPage : ContentPage
 {
+    private static readonly ModelDownload Downloader = new(new HttpClient(new HttpClientHandler
+    {
+        UseCookies = false,
+    }));
+    private TranslationPackageStatus[] downloadChoices = [];
+    private CancellationTokenSource? activeDownload;
+
     public SettingsPage() { InitializeComponent(); BindingContext = AppState.Session; }
 
     protected override async void OnAppearing()
@@ -21,6 +29,15 @@ public partial class SettingsPage : ContentPage
             TranslationPackages.Text = string.Join(Environment.NewLine, packages.Select(package =>
                 $"{LanguageName(package.Source)} → {LanguageName(package.Target)}: " +
                 (package.FilesPresent ? "файли на місці" : "пакет відсутній")));
+            var previous = ModelChoice.SelectedIndex >= 0 && ModelChoice.SelectedIndex < downloadChoices.Length
+                ? downloadChoices[ModelChoice.SelectedIndex].Revision : null;
+            downloadChoices = packages.Where(package => !package.FilesPresent).ToArray();
+            ModelChoice.ItemsSource = downloadChoices.Select(package =>
+                $"{LanguageName(package.Source)} → {LanguageName(package.Target)} " +
+                $"({package.Assets.Sum(asset => asset.Bytes) / 1_000_000d:F0} МБ)").ToArray();
+            ModelChoice.SelectedIndex = downloadChoices.Length == 0 ? -1
+                : Math.Max(0, Array.FindIndex(downloadChoices, package => package.Revision == previous));
+            DownloadTranslation.IsEnabled = activeDownload is null && downloadChoices.Length > 0;
         }
         catch (Exception error) { TranslationPackages.Text = error.Message; }
     }
@@ -72,9 +89,66 @@ public partial class SettingsPage : ContentPage
         catch (Exception error) { await DisplayAlertAsync("Оригінал", error.Message, "Гаразд"); }
     }
 
+    private async void DownloadTranslationClicked(object? sender, EventArgs args)
+    {
+        var index = ModelChoice.SelectedIndex;
+        if (activeDownload is not null || index < 0 || index >= downloadChoices.Length) return;
+        var package = downloadChoices[index];
+        using var cancellation = new CancellationTokenSource();
+        activeDownload = cancellation;
+
+        var root = Path.Combine(FileSystem.CacheDirectory, "translation-downloads");
+        var archive = Path.Combine(FileSystem.CacheDirectory, $"translation-{Guid.NewGuid():N}.zip");
+        var total = package.Assets.Sum(asset => asset.Bytes);
+        var progress = new Progress<long>(bytes =>
+        {
+            if (activeDownload == cancellation)
+                DownloadProgress.Progress = Math.Clamp((double)bytes / total, 0, 1);
+        });
+
+        InstallTranslation.IsEnabled = DownloadTranslation.IsEnabled = ModelChoice.IsEnabled = false;
+        CancelDownload.IsVisible = DownloadProgress.IsVisible = true;
+        DownloadProgress.Progress = 0;
+        ModelStatus.Text = "Завантаження пакета…";
+        try
+        {
+            await Task.Run(() => Downloader.FetchArchiveAsync(package, root, archive, progress, cancellation.Token),
+                cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            CancelDownload.IsVisible = false;
+            ModelStatus.Text = "Перевірка й встановлення…";
+            var pair = await AppState.Session.InstallTranslationPackageAsync(archive);
+            ModelStatus.Text = $"Мовний пакет встановлено ({pair}).";
+            TryClean(() => ModelDownload.ClearStaging(package, root));
+            await RefreshTranslationPackagesAsync();
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            ModelStatus.Text = "Завантаження зупинено. Натисніть «Завантажити пакет», щоб продовжити.";
+        }
+        catch (Exception error) { ModelStatus.Text = error.Message; }
+        finally
+        {
+            activeDownload = null;
+            CancelDownload.IsVisible = DownloadProgress.IsVisible = false;
+            InstallTranslation.IsEnabled = ModelChoice.IsEnabled = true;
+            DownloadTranslation.IsEnabled = downloadChoices.Length > 0;
+            TryClean(() => File.Delete(archive));
+        }
+    }
+
+    private void CancelDownloadClicked(object? sender, EventArgs args) => activeDownload?.Cancel();
+
+    private void TryClean(Action cleanup)
+    {
+        try { cleanup(); }
+        catch (IOException) { ModelStatus.Text += " Не вдалося видалити тимчасові файли."; }
+        catch (UnauthorizedAccessException) { ModelStatus.Text += " Не вдалося видалити тимчасові файли."; }
+    }
+
     private async void InstallTranslationClicked(object? sender, EventArgs args)
     {
-        InstallTranslation.IsEnabled = false;
+        InstallTranslation.IsEnabled = DownloadTranslation.IsEnabled = false;
         var path = Path.Combine(FileSystem.CacheDirectory, $"translation-{Guid.NewGuid():N}.zip");
         try
         {
@@ -103,7 +177,11 @@ public partial class SettingsPage : ContentPage
             try { File.Delete(path); }
             catch (IOException) { Status.Text += " Не вдалося видалити тимчасову копію архіву."; }
             catch (UnauthorizedAccessException) { Status.Text += " Не вдалося видалити тимчасову копію архіву."; }
-            finally { InstallTranslation.IsEnabled = true; }
+            finally
+            {
+                InstallTranslation.IsEnabled = true;
+                DownloadTranslation.IsEnabled = downloadChoices.Length > 0;
+            }
         }
     }
 

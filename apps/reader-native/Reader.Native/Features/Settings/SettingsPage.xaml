@@ -19,6 +19,13 @@
   </Border>
   <Label Text="Мовні можливості" FontSize="22" FontAttributes="Bold" />
   <Label x:Name="TranslationPackages" />
+  <Picker x:Name="ModelChoice" Title="Мовний пакет" />
+  <FlexLayout Wrap="Wrap" JustifyContent="Start">
+   <Button x:Name="DownloadTranslation" Text="Завантажити пакет" Clicked="DownloadTranslationClicked" Margin="0,0,8,0" />
+   <Button x:Name="CancelDownload" Text="Зупинити завантаження" Clicked="CancelDownloadClicked" IsVisible="False" />
+  </FlexLayout>
+  <ProgressBar x:Name="DownloadProgress" IsVisible="False" />
+  <Label x:Name="ModelStatus" />
   <Button x:Name="InstallTranslation" Text="Встановити мовний пакет із ZIP" Clicked="InstallTranslationClicked" />
   <Label Text="Переклад працює з установленими пакетами. OCR і автоматичний граматичний аналіз недоступні."
    TextColor="#A65F43" />
