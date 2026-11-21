@@ -27,6 +27,12 @@ pub enum Command {
         id: String,
         position: usize,
     },
+    SetBookmark {
+        id: String,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        saved: bool,
+    },
     SaveWord {
         entry: Vocabulary,
     },

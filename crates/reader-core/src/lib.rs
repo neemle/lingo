@@ -29,6 +29,8 @@ pub struct Document {
     pub text: String,
     pub sentences: Vec<Sentence>,
     pub position: usize,
+    #[serde(default)]
+    pub bookmarks: Vec<String>,
     pub created_at: i64,
     pub source_hash: String,
     pub format: String,
@@ -273,6 +275,7 @@ impl Store {
             language: language.into(),
             text,
             position: 0,
+            bookmarks: Vec::new(),
             created_at: now(),
             source_hash: hash,
             format: Path::new(name)
@@ -299,24 +302,59 @@ impl Store {
         tx.commit().map_err(|e| e.to_string())?;
         Ok(document)
     }
-    pub fn position(&mut self, id: &str, position: usize) -> Result<()> {
-        let body: String = self
+    fn edit_document(
+        &mut self,
+        id: &str,
+        edit: impl FnOnce(&mut Document) -> Result<bool>,
+    ) -> Result<()> {
+        let tx = self
             .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        let body: String = tx
             .query_row("SELECT body FROM documents WHERE id=?", [id], |r| r.get(0))
             .map_err(|e| e.to_string())?;
-        let mut doc: Document = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-        if position >= doc.sentences.len() {
-            return Err("Некоректна позиція".into());
+        let mut document: Document = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+        if edit(&mut document)? {
+            let body = serde_json::to_string(&document).map_err(|e| e.to_string())?;
+            tx.execute("UPDATE documents SET body=? WHERE id=?", params![body, id])
+                .map_err(|e| e.to_string())?;
         }
-        doc.position = position;
-        self.connection
-            .execute(
-                "UPDATE documents SET body=? WHERE id=?",
-                params![serde_json::to_string(&doc).unwrap(), id],
-            )
-            .map_err(|e| e.to_string())?;
-        Ok(())
+        tx.commit().map_err(|e| e.to_string())
     }
+
+    pub fn position(&mut self, id: &str, position: usize) -> Result<()> {
+        self.edit_document(id, |document| {
+            if position >= document.sentences.len() {
+                return Err("Некоректна позиція".into());
+            }
+            let changed = document.position != position;
+            document.position = position;
+            Ok(changed)
+        })
+    }
+
+    pub fn set_bookmark(&mut self, id: &str, sentence_id: &str, saved: bool) -> Result<()> {
+        self.edit_document(id, |document| {
+            if !document
+                .sentences
+                .iter()
+                .any(|sentence| sentence.id == sentence_id)
+            {
+                return Err("Речення для закладки не знайдено".into());
+            }
+            let existing = document.bookmarks.iter().position(|id| id == sentence_id);
+            match (saved, existing) {
+                (true, None) => document.bookmarks.push(sentence_id.into()),
+                (false, Some(index)) => {
+                    document.bookmarks.remove(index);
+                }
+                _ => return Ok(false),
+            }
+            Ok(true)
+        })
+    }
+
     pub fn save_word(&mut self, mut entry: Vocabulary) -> Result<Vocabulary> {
         valid_language(&entry.language)?;
         valid_language(&entry.target_language)?;
@@ -474,6 +512,18 @@ impl Store {
             d.text = text;
             d.sentences = segment(&d.text, &d.id);
             d.position = d.position.min(d.sentences.len().saturating_sub(1));
+            if !d.bookmarks.is_empty() {
+                let known: std::collections::HashSet<_> = d
+                    .sentences
+                    .iter()
+                    .map(|sentence| sentence.id.as_str())
+                    .collect();
+                if d.bookmarks.iter().any(|id| !known.contains(id.as_str())) {
+                    return Err("В архіві є закладка для невідомого речення".into());
+                }
+                d.bookmarks.sort_unstable();
+                d.bookmarks.dedup();
+            }
             validated.push((d, original));
         }
         for v in &backup.snapshot.vocabulary {

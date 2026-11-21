@@ -20,6 +20,11 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             language,
         } => value(store.import(&name, &bytes, &language)),
         Command::Position { id, position } => value(store.position(&id, position)),
+        Command::SetBookmark {
+            id,
+            sentence_id,
+            saved,
+        } => value(store.set_bookmark(&id, &sentence_id, saved)),
         Command::SaveWord { entry } => value(store.save_word(entry)),
         Command::Review {
             id,

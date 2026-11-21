@@ -9,4 +9,7 @@ public sealed record Document(
     int Position,
     long CreatedAt,
     string SourceHash,
-    string Format);
+    string Format)
+{
+    public string[] Bookmarks { get; init; } = [];
+}

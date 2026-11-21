@@ -19,6 +19,10 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public bool CanInteract => !busy;
     public string Error => error;
     public string Progress => Document is { } doc ? $"{doc.Position + 1} / {doc.Sentences.Length}" : "";
+    public bool CanBookmark => !busy && Sentence is not null;
+    public bool HasBookmarks => !busy && Document is { Bookmarks.Length: > 0 };
+    public string BookmarkAction => Sentence is { } sentence && Document!.Bookmarks.Contains(sentence.Id)
+        ? "Видалити закладку" : "Додати закладку";
     public string TranslationStatus => "Офлайн-переклад недоступний: мовний пакет не встановлено.";
     public ReaderSession(string path) => client = new Client(path);
 
@@ -43,6 +47,13 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     {
         if (Document is not { } doc || position < 0 || position >= doc.Sentences.Length) return Read();
         client.Position(doc.Id, position);
+        return Read();
+    });
+
+    public Task ToggleBookmarkAsync() => RunAsync(() =>
+    {
+        if (Document is { } document && Sentence is { } sentence)
+            client.SetBookmark(document.Id, sentence.Id, !document.Bookmarks.Contains(sentence.Id));
         return Read();
     });
 
@@ -88,7 +99,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
 
     private void Notify()
     {
-        foreach (var name in new[] { "Snapshot", "Document", "Sentence", "Busy", "CanInteract", "Error", "Progress" })
+        foreach (var name in new[] { nameof(Snapshot), nameof(Document), nameof(Sentence), nameof(Busy),
+            nameof(CanInteract), nameof(Error), nameof(Progress), nameof(CanBookmark), nameof(HasBookmarks),
+            nameof(BookmarkAction) })
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
 

@@ -83,14 +83,23 @@ impl StoreFixture {
         ));
         std::fs::create_dir(&dir).unwrap();
         let mut fixture = Self { handle: 0, dir };
+        fixture.open();
+        fixture
+    }
+
+    pub fn reopen(&mut self) {
+        assert_eq!(reader_close(self.handle), 0);
+        self.open();
+    }
+
+    fn open(&mut self) {
         let result = call(
             0,
-            json!({"version": 1, "operation": "open", "path": fixture.dir.join("reader.db")}),
+            json!({"version": 1, "operation": "open", "path": self.dir.join("reader.db")}),
         );
         assert_eq!(result["ok"], true, "{result}");
-        fixture.handle = result["data"]["handle"].as_u64().unwrap();
-        assert_ne!(fixture.handle, 0);
-        fixture
+        self.handle = result["data"]["handle"].as_u64().unwrap();
+        assert_ne!(self.handle, 0);
     }
 }
 

@@ -63,6 +63,36 @@ public partial class ReadingPage : ContentPage
         if (AppState.Session.Error.Length == 0) { WordCard.IsVisible = false; Translation.Text = ""; }
     }
 
+    private async void BookmarkClicked(object? sender, EventArgs args) =>
+        await AppState.Session.ToggleBookmarkAsync();
+
+    private async void OpenBookmarksClicked(object? sender, EventArgs args)
+    {
+        var session = AppState.Session;
+        if (session.Document is not { } document || !session.HasBookmarks) return;
+        var saved = document.Bookmarks.ToHashSet(StringComparer.Ordinal);
+        var choices = document.Sentences.Select((sentence, index) => (sentence, index))
+            .Where(item => saved.Contains(item.sentence.Id))
+            .ToDictionary(item => BookmarkLabel(item.index, item.sentence.Text), item => item.index);
+
+        var selected = await DisplayActionSheetAsync("Закладки", "Скасувати", null, choices.Keys.ToArray());
+        if (selected is null || !choices.TryGetValue(selected, out var position)
+            || session.Document?.Id != document.Id || session.Busy)
+            return;
+
+        StopSpeech();
+        await session.SelectSentenceAsync(position);
+    }
+
+    private static string BookmarkLabel(int position, string text)
+    {
+        var preview = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var elements = new System.Globalization.StringInfo(preview);
+        if (elements.LengthInTextElements > 48)
+            preview = elements.SubstringByTextElements(0, 48) + "…";
+        return $"{position + 1}. {preview}";
+    }
+
     private async void PreviousClicked(object? sender, EventArgs args)
     {
         StopSpeech(); await AppState.Session.MoveAsync(-1);

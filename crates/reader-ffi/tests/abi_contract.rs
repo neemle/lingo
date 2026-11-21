@@ -127,3 +127,96 @@ fn concurrent_close_and_use_complete_with_valid_responses() {
         "invalid_handle",
     );
 }
+
+#[test]
+fn bookmarks_are_idempotent_and_survive_restart_and_restore() {
+    let mut store = StoreFixture::new();
+    let imported = call(
+        store.handle,
+        json!({
+            "version": 1, "operation": "import", "name": "book.txt",
+            "language": "en", "bytes": b"First sentence. Second sentence."
+        }),
+    );
+    assert_eq!(imported["ok"], true, "{imported}");
+    let doc = &imported["data"];
+    let id = &doc["id"];
+    let sentence_id = &doc["sentences"][1]["id"];
+    assert!(sentence_id.is_string(), "{doc}");
+
+    let set = |handle, saved| {
+        call(
+            handle,
+            json!({
+                "version": 1, "operation": "set_bookmark", "id": id, "sentenceId": sentence_id, "saved": saved
+            }),
+        )
+    };
+    assert_eq!(set(store.handle, true)["ok"], true);
+    assert_eq!(set(store.handle, true)["ok"], true);
+    assert_error(
+        &call(
+            store.handle,
+            json!({
+                "version": 1, "operation": "set_bookmark", "id": id, "sentenceId": "missing", "saved": true
+            }),
+        ),
+        "core_error",
+    );
+    let moved = call(
+        store.handle,
+        json!({
+            "version": 1, "operation": "position", "id": id, "position": 1
+        }),
+    );
+    assert_eq!(moved["ok"], true, "{moved}");
+    let snapshot = |handle| call(handle, json!({"version": 1, "operation": "snapshot"}));
+    store.reopen();
+    let exported = call(store.handle, json!({"version": 1, "operation": "export"}));
+    assert_eq!(exported["ok"], true, "{exported}");
+    let backup = &exported["data"];
+    let restore = |handle, backup| {
+        call(
+            handle,
+            json!({
+                "version": 1, "operation": "restore", "backup": backup
+            }),
+        )
+    };
+
+    let target = StoreFixture::new();
+    assert_eq!(restore(target.handle, backup.clone())["ok"], true);
+    let restored = snapshot(target.handle);
+    assert_eq!(
+        restored["data"]["documents"][0]["bookmarks"],
+        json!([sentence_id])
+    );
+    assert_eq!(restored["data"]["documents"][0]["position"], 1);
+    assert_eq!(set(target.handle, false)["ok"], true);
+    assert_eq!(set(target.handle, false)["ok"], true);
+    assert_eq!(
+        snapshot(target.handle)["data"]["documents"][0]["bookmarks"],
+        json!([])
+    );
+
+    let mut legacy = backup.clone();
+    legacy["snapshot"]["documents"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("bookmarks");
+    let legacy_target = StoreFixture::new();
+    assert_eq!(restore(legacy_target.handle, legacy)["ok"], true);
+    assert_eq!(
+        snapshot(legacy_target.handle)["data"]["documents"][0]["bookmarks"],
+        json!([])
+    );
+
+    let mut invalid = backup.clone();
+    invalid["snapshot"]["documents"][0]["bookmarks"] = json!(["missing"]);
+    let invalid_target = StoreFixture::new();
+    assert_error(&restore(invalid_target.handle, invalid), "core_error");
+    assert_eq!(
+        snapshot(invalid_target.handle)["data"]["documents"],
+        json!([])
+    );
+}
