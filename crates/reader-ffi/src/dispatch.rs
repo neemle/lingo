@@ -31,6 +31,25 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             target,
             text,
         } => value(store.set_reviewed_translation(&id, &sentence_id, &target, &text)),
+        Command::InstallTranslationPackage { path } => {
+            value(store.install_translation_package(std::path::Path::new(&path)))
+        }
+        Command::TranslateSentence {
+            id,
+            sentence_id,
+            target,
+        } => value(
+            store
+                .translate_installed_sentence(&id, &sentence_id, &target)
+                .map(|translated| {
+                    translated.map(|result| {
+                        serde_json::json!({
+                            "text": result.segments[0],
+                            "pivotLanguage": result.route.pivot_language(),
+                        })
+                    })
+                }),
+        ),
         Command::SaveWord { entry } => value(store.save_word(entry)),
         Command::Review {
             id,

@@ -65,8 +65,12 @@
        <Label x:Name="SegmentTranslation" FontSize="19" />
       </VerticalStackLayout>
      </ScrollView>
-     <Button Grid.Row="2" x:Name="EditTranslation" Text="Додати свій переклад"
-      Clicked="EditTranslationClicked" />
+     <FlexLayout Grid.Row="2" Wrap="Wrap" JustifyContent="Start">
+      <Button x:Name="EditTranslation" Text="Додати свій переклад" Margin="0,4,6,0"
+       Clicked="EditTranslationClicked" />
+      <Button x:Name="TranslateOffline" Text="Перекласти офлайн" Margin="0,4,0,0"
+       Clicked="TranslateOfflineClicked" />
+     </FlexLayout>
     </Grid>
    </Border>
   </Grid>

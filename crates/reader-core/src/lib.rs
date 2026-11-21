@@ -9,6 +9,7 @@ use std::{
 use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
 
+mod marian_provider;
 pub mod translation;
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -229,12 +230,16 @@ pub fn parse_file(name: &str, bytes: &[u8]) -> Result<String> {
 
 pub struct Store {
     connection: Connection,
+    model_directory: std::path::PathBuf,
 }
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         let connection = Connection::open(path).map_err(|e| e.to_string())?;
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, body TEXT NOT NULL, source_hash TEXT UNIQUE NOT NULL); CREATE TABLE IF NOT EXISTS originals (document_id TEXT PRIMARY KEY REFERENCES documents(id), name TEXT NOT NULL, bytes BLOB NOT NULL); CREATE TABLE IF NOT EXISTS vocabulary (id TEXT PRIMARY KEY, word_key TEXT UNIQUE NOT NULL, body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS review_events (id INTEGER PRIMARY KEY, entry_id TEXT NOT NULL, direction TEXT NOT NULL, grade INTEGER NOT NULL, reviewed_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS translation_cache (key TEXT PRIMARY KEY, body TEXT NOT NULL); PRAGMA user_version=1;").map_err(|e| e.to_string())?;
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            model_directory: path.with_file_name("translation-models"),
+        })
     }
     pub fn snapshot(&self) -> Result<Snapshot> {
         fn rows<T: serde::de::DeserializeOwned>(

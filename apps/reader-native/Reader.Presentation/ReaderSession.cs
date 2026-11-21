@@ -67,6 +67,12 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
             return Read();
         });
 
+    public Task<string> InstallTranslationPackageAsync(string path) =>
+        Task.Run(() => client.InstallTranslationPackage(path));
+
+    public Task<MachineTranslation?> TranslateSentenceAsync(string id, string sentenceId, string target) =>
+        Task.Run(() => client.TranslateSentence(id, sentenceId, target));
+
     public Task SaveWordAsync(TextSelection selection, string translation) => RunAsync(() =>
     {
         if (Document is not { } doc) return Read();

@@ -40,6 +40,15 @@ pub enum Command {
         target: String,
         text: String,
     },
+    InstallTranslationPackage {
+        path: String,
+    },
+    TranslateSentence {
+        id: String,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        target: String,
+    },
     SaveWord {
         entry: Vocabulary,
     },

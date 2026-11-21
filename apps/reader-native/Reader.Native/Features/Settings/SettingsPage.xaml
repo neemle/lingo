@@ -18,7 +18,8 @@
    </VerticalStackLayout>
   </Border>
   <Label Text="Мовні можливості" FontSize="22" FontAttributes="Bold" />
-  <Label Text="Офлайн-перекладач і OCR не встановлено. Автоматичний граматичний аналіз недоступний."
+  <Button x:Name="InstallTranslation" Text="Встановити мовний пакет із ZIP" Clicked="InstallTranslationClicked" />
+  <Label Text="Переклад працює з установленими пакетами. OCR і автоматичний граматичний аналіз недоступні."
    TextColor="#A65F43" />
   <Label Text="Озвучення використовує голоси операційної системи. Встановіть потрібну мову в системних налаштуваннях.
 Точна синхронізація окремих слів ще недоступна." />

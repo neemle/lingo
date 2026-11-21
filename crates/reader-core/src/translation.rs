@@ -106,7 +106,7 @@ pub trait TranslationProvider {
     ) -> Result<Vec<String>>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AlignedTranslation {
     pub route: Route,
     /// Each entry stays paired to its source. A target entry may contain several sentences.

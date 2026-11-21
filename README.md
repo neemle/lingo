@@ -5,7 +5,7 @@ macOS (Mac Catalyst), backed by Rust and local SQLite. Requirements and work tra
 
 The reader imports UTF-8 TXT, DOCX and text PDFs up to 20 MiB, retains originals, restores sentence progress,
 and saves manual translations with context. Forward/reverse practice states and JSON backups use the same Rust core.
-Translation models, OCR and grammar packages are not installed; the app reports their absence.
+Translation models are optional and installed separately. The app reports unavailable OCR and grammar features.
 
 ## Build and run
 
@@ -55,5 +55,20 @@ directions and backup/restore. Native C#/XAML compilation has passed locally for
 blocked by absent Xcode. Native CI builds and launched Windows/macOS selection, accessibility and speech checks
 remain separate gates. The explicit text/voice probe is available in Settings.
 
-Speech uses system voices and reports missing languages. Precise word timing, OCR, automatic offline translation,
+Speech uses system voices and reports missing languages. Precise word timing, OCR, additional offline translation pairs,
 mobile releases, signed installers and the 4 GiB hardware target remain unverified or unimplemented.
+
+## Offline translation packages
+
+The reader supports local French → Ukrainian and English → Ukrainian Marian models. Obtain the five
+files `config.json`, `source.spm`, `target.spm`, `vocab.json` and `model.safetensors` from one pinned
+Helsinki-NLP model revision:
+
+- [French → Ukrainian](https://huggingface.co/Helsinki-NLP/opus-mt-fr-uk/tree/e789f8670b3515ed604605d80d108dd97d779848)
+- [English → Ukrainian](https://huggingface.co/Helsinki-NLP/opus-mt-en-uk/tree/55104bebd23cd2d87761e650aa6ac7369b379d1c)
+
+Zip just those five files at the archive root. On macOS, run
+`zip -0 model.zip config.json source.spm target.spm vocab.json model.safetensors` in the download directory.
+On Windows, select the five files and compress them to ZIP. In the app, open **Налаштування →
+Встановити мовний пакет із ZIP**. The app verifies the files against the pinned SHA-256 values before
+installing the package. Open the reader, select Ukrainian and choose **Перекласти офлайн**.

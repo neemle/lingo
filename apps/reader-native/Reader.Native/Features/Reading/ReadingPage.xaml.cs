@@ -16,6 +16,10 @@ public partial class ReadingPage : ContentPage
     private string? lastSourceLanguage;
     private bool updatingTargets;
     private bool stacked;
+    private bool translating;
+    private (string Document, string Sentence, string Target)? machineKey;
+    private Reader.Contracts.MachineTranslation? machineTranslation;
+    private string? machineStatus;
     private string? TargetCode
     {
         get
@@ -102,13 +106,49 @@ public partial class ReadingPage : ContentPage
 
         var active = session.Sentence is not null && TargetCode is not null;
         var text = TargetCode is { } target ? session.ReviewedTranslation(target) : null;
+        var key = ActiveTranslationKey();
+        var machine = key is not null && key == machineKey ? machineTranslation : null;
         TranslationNotice.Text = !active ? "Відкрийте документ для читання."
-            : text is null ? "Перекладу ще немає. Можна додати свій."
-            : "Ваш переклад активного речення";
-        SegmentTranslation.Text = text ?? "";
+            : text is not null ? "Ваш переклад активного речення"
+            : machine?.PivotLanguage is { } pivot ? $"Машинний переклад через {pivot}"
+            : machine is not null ? "Машинний переклад"
+            : key == machineKey && machineStatus is not null ? machineStatus
+            : "Перекладу ще немає.";
+        SegmentTranslation.Text = text ?? machine?.Text ?? "";
         EditTranslation.Text = text is null ? "Додати свій переклад" : "Змінити переклад";
-        EditTranslation.IsEnabled = active && !session.Busy;
+        EditTranslation.IsEnabled = active && !session.Busy && !translating;
+        TranslateOffline.IsEnabled = active && !session.Busy && !translating && text is null;
         TargetLanguage.IsEnabled = active && !session.Busy;
+    }
+
+    private (string Document, string Sentence, string Target)? ActiveTranslationKey()
+    {
+        var session = AppState.Session;
+        return session.Document is { } document && session.Sentence is { } sentence && TargetCode is { } target
+            ? (document.Id, sentence.Id, target)
+            : null;
+    }
+
+    private async void TranslateOfflineClicked(object? sender, EventArgs args)
+    {
+        var session = AppState.Session;
+        if (translating || session.Busy || ActiveTranslationKey() is not { } key) return;
+        translating = true;
+        machineKey = key;
+        machineTranslation = null;
+        machineStatus = "Переклад виконується…";
+        UpdateTranslation();
+        try
+        {
+            machineTranslation = await session.TranslateSentenceAsync(key.Document, key.Sentence, key.Target);
+            machineStatus = machineTranslation is null ? "Для цієї пари не встановлено мовний пакет." : null;
+        }
+        catch (Exception error) { machineStatus = error.Message; }
+        finally
+        {
+            translating = false;
+            UpdateTranslation();
+        }
     }
 
     private void TargetChanged(object? sender, EventArgs args)
@@ -126,7 +166,8 @@ public partial class ReadingPage : ContentPage
         var existing = session.ReviewedTranslation(target);
         var text = await DisplayPromptAsync("Переклад речення",
             existing is null ? sentence.Text : "Очистьте поле, щоб видалити цей переклад.",
-            accept: "Зберегти", cancel: "Скасувати", maxLength: 4000, initialValue: existing ?? "");
+            accept: "Зберегти", cancel: "Скасувати", maxLength: 4000,
+            initialValue: existing ?? (ActiveTranslationKey() == machineKey ? machineTranslation?.Text : null) ?? "");
         if (text is not null && session.Document?.Id == document.Id && session.Sentence?.Id == sentence.Id
             && TargetCode == target && !session.Busy)
             await session.SetReviewedTranslationAsync(document.Id, sentence.Id, target, text);

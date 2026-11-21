@@ -35,6 +35,10 @@ public sealed class CoreClient : IDisposable
         Call<JsonElement>(new { version = 1, operation = "set_bookmark", id, sentenceId, saved });
     public void SetReviewedTranslation(string id, string sentenceId, string target, string text) =>
         Call<JsonElement>(new { version = 1, operation = "set_reviewed_translation", id, sentenceId, target, text });
+    public string InstallTranslationPackage(string path) =>
+        Call<string>(new { version = 1, operation = "install_translation_package", path });
+    public MachineTranslation? TranslateSentence(string id, string sentenceId, string target) =>
+        Call<MachineTranslation?>(new { version = 1, operation = "translate_sentence", id, sentenceId, target });
     public Vocabulary SaveWord(Vocabulary entry) =>
         Call<Vocabulary>(new { version = 1, operation = "save_word", entry });
     public void Review(string id, string direction, byte grade) =>

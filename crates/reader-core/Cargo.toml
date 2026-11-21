@@ -12,5 +12,8 @@ unicode-segmentation = "1.12"
 zip = { version = "9.8.1", default-features = false, features = ["deflate"] }
 quick-xml = "0.38"
 pdf-extract = "0.12.1"
-[dev-dependencies]
+candle-core = "0.11.1"
+candle-nn = "0.11.1"
+candle-transformers = "0.11.1"
+sentencepiece-rs = "0.2.2"
 tempfile = "3"
