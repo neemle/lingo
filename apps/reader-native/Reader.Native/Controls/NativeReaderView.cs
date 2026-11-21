@@ -10,7 +10,7 @@ public sealed class NativeReaderView : View
         nameof(HighlightStart), typeof(int), typeof(NativeReaderView), 0);
     public static readonly BindableProperty HighlightLengthProperty = BindableProperty.Create(
         nameof(HighlightLength), typeof(int), typeof(NativeReaderView), 0);
-    public string Text { get => (string)GetValue(TextProperty); set => SetValue(TextProperty, value); }
+    public string Text { get => GetValue(TextProperty) as string ?? ""; set => SetValue(TextProperty, value); }
     public int HighlightStart
     {
         get => (int)GetValue(HighlightStartProperty);

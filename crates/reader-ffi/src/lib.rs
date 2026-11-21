@@ -53,7 +53,14 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         unsafe { std::slice::from_raw_parts(input, len as usize) }
     };
     let command = validation::decode(bytes)?;
-    registry::lock()?.call(handle, command)
+    let mut state = registry::lock()?;
+    catch_unwind(AssertUnwindSafe(|| state.call(handle, command))).unwrap_or_else(|_| {
+        state.close(handle);
+        Err(Error::new(
+            "internal_error",
+            "Rust operation panicked; reopen the store",
+        ))
+    })
 }
 
 #[no_mangle]

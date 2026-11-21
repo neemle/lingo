@@ -29,7 +29,7 @@
   </Border>
   <VerticalStackLayout Grid.Row="4" Spacing="8">
    <Label Text="{Binding Error}" TextColor="#A65F43" />
-   <HorizontalStackLayout Spacing="10">
+   <HorizontalStackLayout Spacing="10" IsEnabled="{Binding CanInteract}">
     <Button Text="← Назад" Clicked="PreviousClicked" /><Button Text="Далі →" Clicked="NextClicked" />
     <Button Text="Озвучити / повторити" Clicked="SpeakClicked" />
     <Button Text="Стоп" Clicked="StopClicked" />

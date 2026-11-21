@@ -37,12 +37,24 @@ jobs:
           dotnet build apps/reader-native/Reader.Native/Reader.Native.csproj
           -f net10.0-maccatalyst -c Release -p:RuntimeIdentifier=maccatalyst-arm64
           -p:EnableCodeSigning=false -p:CreatePackage=false --nologo
+      - name: Preserve app bundle permissions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import tarfile
+          output = Path('apps/reader-native/Reader.Native/bin/Release/net10.0-maccatalyst')
+          bundles = list(output.rglob('*.app'))
+          if len(bundles) != 1:
+              raise SystemExit(f'Expected one app bundle, got {len(bundles)}')
+          with tarfile.open(output / 'reader-native-catalyst-arm64.tar.gz', 'w:gz') as archive:
+              archive.add(bundles[0], arcname=bundles[0].name)
+          PY
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: success()
         with:
           name: catalyst-build
-          path: apps/reader-native/Reader.Native/bin/Release/net10.0-maccatalyst/
-          if-no-files-found: warn
+          path: apps/reader-native/Reader.Native/bin/Release/net10.0-maccatalyst/*.tar.gz
+          if-no-files-found: error
   windows:
     runs-on: windows-2022
     steps:

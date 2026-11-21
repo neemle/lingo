@@ -9,7 +9,8 @@ internal static class NativeMethods
 
     static NativeMethods()
     {
-        NativeLibrary.SetDllImportResolver(typeof(NativeMethods).Assembly, Resolve);
+        if (!OperatingSystem.IsMacCatalyst())
+            NativeLibrary.SetDllImportResolver(typeof(NativeMethods).Assembly, Resolve);
     }
 
     private static nint Resolve(string name, Assembly assembly, DllImportSearchPath? searchPath)

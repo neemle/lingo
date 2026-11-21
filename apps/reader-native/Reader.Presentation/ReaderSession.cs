@@ -16,6 +16,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public Document? Document => snapshot.Documents.FirstOrDefault(item => item.Id == selectedId);
     public Sentence? Sentence => Document?.Sentences.ElementAtOrDefault(Document.Position);
     public bool Busy => busy;
+    public bool CanInteract => !busy;
     public string Error => error;
     public string Progress => Document is { } doc ? $"{doc.Position + 1} / {doc.Sentences.Length}" : "";
     public string TranslationStatus => "Офлайн-переклад недоступний: мовний пакет не встановлено.";
@@ -25,7 +26,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
 
     public async Task SelectAsync(string id)
     {
-        if (busy) return;
+        if (busy) { RejectBusy(); return; }
         selectedId = id;
         await RefreshAsync();
     }
@@ -71,7 +72,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
 
     private async Task RunAsync(Func<(Snapshot Data, string? Selected)> operation)
     {
-        if (busy) return;
+        if (busy) { RejectBusy(); return; }
         busy = true;
         error = "";
         Notify();
@@ -87,8 +88,14 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
 
     private void Notify()
     {
-        foreach (var name in new[] { "Snapshot", "Document", "Sentence", "Busy", "Error", "Progress" })
+        foreach (var name in new[] { "Snapshot", "Document", "Sentence", "Busy", "CanInteract", "Error", "Progress" })
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+    }
+
+    private void RejectBusy()
+    {
+        error = "Попередня операція ще виконується. Зачекайте на її завершення.";
+        Notify();
     }
 
     public void Dispose() => client.Dispose();

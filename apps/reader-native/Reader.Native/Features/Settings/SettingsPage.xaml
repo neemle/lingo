@@ -7,7 +7,7 @@
   <Label Text="Тексти, оригінали, слова й прогрес зберігаються локально. Обліковий запис не потрібен."
    FontSize="17" />
   <Border Padding="24" BackgroundColor="#FFFDFA" Stroke="#D9DCCF" StrokeShape="RoundRectangle 14">
-   <VerticalStackLayout Spacing="12">
+   <VerticalStackLayout Spacing="12" IsEnabled="{Binding CanInteract}">
     <Label Text="Резервна копія" FontSize="22" FontAttributes="Bold" />
     <Label Text="Архів містить ваші документи й історію навчання. Збережіть його у вибраному вами місці." />
     <Button Text="Експортувати резервну копію" Clicked="ExportClicked" />

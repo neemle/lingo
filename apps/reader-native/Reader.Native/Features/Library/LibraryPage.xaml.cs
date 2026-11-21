@@ -17,7 +17,10 @@ public partial class LibraryPage : ContentPage
             var last = Preferences.Get("lastDocument", "");
             if (!string.IsNullOrEmpty(last)) await AppState.Session.SelectAsync(last);
         }
-        catch (Exception error) { StartupError.Text = $"Не вдалося відкрити локальне ядро: {error.Message}"; }
+        catch (Exception error)
+        {
+            StartupError.Text = $"Не вдалося відкрити локальне ядро: {error.GetBaseException().Message}";
+        }
     }
 
     private async void ImportClicked(object? sender, EventArgs args)
