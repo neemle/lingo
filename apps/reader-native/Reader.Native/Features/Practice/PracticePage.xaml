@@ -4,16 +4,27 @@
  xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
  x:DataType="state:ReaderSession"
  x:Class="Reader.Native.Features.Practice.PracticePage" Title="Практика">
+ <ScrollView>
  <VerticalStackLayout Padding="40" Spacing="24" MaximumWidthRequest="760">
-  <Label Text="Трохи практики щодня" FontSize="30" FontAttributes="Bold" />
-  <Picker x:Name="Direction" SelectedIndexChanged="DirectionChanged" Title="Напрям повторення" SelectedIndex="0">
+  <Picker x:Name="Direction" SelectedIndexChanged="PracticeSettingChanged" Title="Напрям повторення" SelectedIndex="0">
    <Picker.Items><x:String>Слово → український переклад</x:String>
     <x:String>Український переклад → слово</x:String></Picker.Items>
+  </Picker>
+  <Picker x:Name="Mode" SelectedIndexChanged="PracticeSettingChanged" Title="Режим практики" SelectedIndex="0">
+   <Picker.Items><x:String>Показ відповіді</x:String><x:String>Введення відповіді</x:String>
+    <x:String>Вибір варіанта</x:String></Picker.Items>
   </Picker>
   <Label x:Name="QueueStatus" TextColor="#63725C" />
   <Border Padding="40" Stroke="#D9DCCF" BackgroundColor="#FFFDFA" StrokeShape="RoundRectangle 18">
    <VerticalStackLayout Spacing="24">
     <Label x:Name="Prompt" FontSize="36" HorizontalTextAlignment="Center" />
+    <Grid x:Name="Typing" ColumnDefinitions="*,Auto" ColumnSpacing="12" IsVisible="False">
+     <Entry x:Name="TypedAnswer" Placeholder="Введіть відповідь" ReturnType="Done" Completed="CheckTyped"
+      SemanticProperties.Description="Ваша відповідь" />
+     <Button Grid.Column="1" Text="Перевірити" Clicked="CheckTyped" />
+    </Grid>
+    <VerticalStackLayout x:Name="Choices" Spacing="8" IsVisible="False" />
+    <Label x:Name="Feedback" IsVisible="False" />
     <Label x:Name="Answer" FontSize="25" HorizontalTextAlignment="Center" TextColor="#63725C" />
     <Button x:Name="Reveal" Text="Показати відповідь" Clicked="RevealClicked" />
    </VerticalStackLayout>
@@ -26,4 +37,5 @@
   </HorizontalStackLayout>
   <Label Text="{Binding Error}" TextColor="#A65F43" />
  </VerticalStackLayout>
+ </ScrollView>
 </ContentPage>
