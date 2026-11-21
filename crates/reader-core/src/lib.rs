@@ -93,6 +93,8 @@ pub fn now() -> i64 {
         .as_secs() as i64
 }
 pub fn segment(text: &str, id: &str) -> Vec<Sentence> {
+    let mut previous_end = 0;
+    let mut utf16_end = 0;
     text.split_sentence_bound_indices()
         .filter_map(|(offset, part)| {
             let trimmed = part.trim();
@@ -101,13 +103,16 @@ pub fn segment(text: &str, id: &str) -> Vec<Sentence> {
             }
             let start = offset + part.len() - part.trim_start().len();
             let end = start + trimmed.len();
+            let start_utf16 = utf16_end + text[previous_end..start].encode_utf16().count();
+            utf16_end = start_utf16 + trimmed.encode_utf16().count();
+            previous_end = end;
             Some(Sentence {
                 id: format!("{id}:{start}"),
                 text: trimmed.into(),
                 start_utf8: start,
                 end_utf8: end,
-                start_utf16: text[..start].encode_utf16().count(),
-                end_utf16: text[..end].encode_utf16().count(),
+                start_utf16,
+                end_utf16: utf16_end,
             })
         })
         .collect()
@@ -623,12 +628,22 @@ mod tests {
             "  Bonjour 👋🏽 ! Україна — це дім.\nNext.",
             "Cafe\u{301}. 你好。مرحبا بالعالم.",
             "L’homme lit. C’est bien !",
+            "\r\n  😀 Café !\r\n\r\n  Next.\tThird.  中。\n",
         ] {
             let s = segment(text, "a");
             assert!(!s.is_empty());
+            let utf16: Vec<u16> = text.encode_utf16().collect();
             for sentence in &s {
                 assert_eq!(&text[sentence.start_utf8..sentence.end_utf8], sentence.text);
-                let utf16: Vec<u16> = text.encode_utf16().collect();
+                assert_eq!(sentence.id, format!("a:{}", sentence.start_utf8));
+                assert_eq!(
+                    sentence.start_utf16,
+                    text[..sentence.start_utf8].encode_utf16().count()
+                );
+                assert_eq!(
+                    sentence.end_utf16,
+                    text[..sentence.end_utf8].encode_utf16().count()
+                );
                 assert_eq!(
                     String::from_utf16(&utf16[sentence.start_utf16..sentence.end_utf16]).unwrap(),
                     sentence.text
