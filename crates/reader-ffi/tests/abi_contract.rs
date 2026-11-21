@@ -353,3 +353,55 @@ fn hex_png_fixture() -> Vec<u8> {
         .map(|index| u8::from_str_radix(&encoded[index..index + 2], 16).unwrap())
         .collect()
 }
+
+#[test]
+fn scanned_pdf_pages_survive_restore_and_invalid_page_geometry_is_rejected() {
+    let store = StoreFixture::new();
+    // Only the PDF signature is inspected by this boundary. Page rendering and OCR run in the platform adapter.
+    let source = b"%PDF-1.7\n%%EOF\n";
+    let recognized = json!([
+        {"page":0,"text":"First scanned page.","x":0.12,"y":0.2,"width":0.5,"height":0.1,"confidence":0.9},
+        {"page":2,"text":"Last scanned page.","x":0.12,"y":0.4,"width":0.6,"height":0.1,"confidence":0.9},
+    ]);
+    let import = |lines, pages| {
+        call(
+            store.handle,
+            json!({
+                "version":1,"operation":"import_scanned_pdf","name":"scan.pdf","language":"en",
+                "bytes":source,"lines":lines,"pages":pages,
+            }),
+        )
+    };
+    assert_error(&import(recognized.clone(), 2), "core_error");
+    assert_error(&import(recognized.clone(), 41), "core_error");
+    let reversed = json!([recognized[1], recognized[0]]);
+    assert_error(&import(reversed, 3), "core_error");
+
+    let imported = import(recognized, 3);
+    assert_eq!(imported["ok"], true, "{imported}");
+    let document = &imported["data"];
+    assert_eq!(document["ocrPdfPages"], 3);
+    assert_eq!(
+        document["text"],
+        "First scanned page.\n\nLast scanned page."
+    );
+    assert_eq!(document["ocrLines"][1]["page"], 2);
+    let backup = call(store.handle, json!({"version":1,"operation":"export"}));
+    let target = StoreFixture::new();
+    let restored = call(
+        target.handle,
+        json!({
+            "version":1,"operation":"restore","backup":backup["data"],
+        }),
+    );
+    assert_eq!(restored["ok"], true, "{restored}");
+    let snapshot = call(target.handle, json!({"version":1,"operation":"snapshot"}));
+    assert_eq!(snapshot["data"]["documents"][0], *document);
+    let original = call(
+        target.handle,
+        json!({
+            "version":1,"operation":"original","id":document["id"],
+        }),
+    );
+    assert_eq!(original["data"]["bytes"], json!(source));
+}

@@ -25,6 +25,13 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             language,
             lines,
         } => value(store.import_image(&name, &bytes, &language, lines)),
+        Command::ImportScannedPdf {
+            name,
+            bytes,
+            language,
+            lines,
+            pages,
+        } => value(store.import_scanned_pdf(&name, &bytes, &language, lines, pages)),
         Command::Position { id, position } => value(store.position(&id, position)),
         Command::SetBookmark {
             id,

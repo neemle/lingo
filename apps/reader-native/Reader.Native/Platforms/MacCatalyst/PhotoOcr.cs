@@ -34,7 +34,7 @@ internal static class PhotoOcr
         }) ?? throw new InvalidDataException("macOS не може прочитати це зображення.");
     }
 
-    private static OcrLine[] Recognize(byte[] bytes, string language)
+    internal static OcrLine[] Recognize(byte[] bytes, string language)
     {
         using var pool = new NSAutoreleasePool();
         using var image = Decode(bytes, 4096);

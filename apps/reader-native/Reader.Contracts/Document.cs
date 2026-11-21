@@ -12,6 +12,7 @@ public sealed record Document(
     string Format)
 {
     public OcrLine[]? OcrLines { get; init; }
+    public int? OcrPdfPages { get; init; }
     public string[] Bookmarks { get; init; } = [];
     public Dictionary<string, Dictionary<string, string>> ReviewedTranslations { get; init; } = [];
 }

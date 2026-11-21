@@ -27,17 +27,34 @@ public partial class LibraryPage : ContentPage
         }
     }
 
-    private async void ImportClicked(object? sender, EventArgs args)
+    private async void ImportClicked(object? sender, EventArgs args) => await ImportAsync(scanPdf: false);
+    private async void ScanPdfClicked(object? sender, EventArgs args) => await ImportAsync(scanPdf: true);
+
+    private async Task ImportAsync(bool scanPdf)
     {
         if (importing || AppState.Session.Busy) return;
         importing = true;
         try
         {
-            var file = await FilePicker.Default.PickAsync(new PickOptions { PickerTitle = "Додати документ або фотографію" });
+            var file = await FilePicker.Default.PickAsync(new PickOptions { PickerTitle = scanPdf ? "Виберіть сканований PDF" : "Додати документ або фотографію" });
             if (file is null) return;
+            var extension = Path.GetExtension(file.FileName);
+            if (scanPdf && !extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Виберіть файл PDF для розпізнавання.");
             var bytes = await NativeFiles.ReadBoundedAsync(file, Reader.CoreClient.CoreClient.MaxImportBytes);
             var language = (string?)Language.SelectedItem ?? "en";
-            if (ImageExtensions.Contains(Path.GetExtension(file.FileName)))
+            if (scanPdf)
+            {
+                ImportStatus.Text = "Відкриваємо PDF…";
+                var progress = new Progress<int>(page =>
+                {
+                    if (importing) ImportStatus.Text = $"Розпізнавання сторінки {page}…";
+                });
+                var result = await PdfScan.RecognizeAsync(bytes, language, progress);
+                if (result.Lines.Length == 0) throw new InvalidDataException("У PDF не знайдено тексту.");
+                await AppState.Session.ImportScannedPdfAsync(file.FileName, bytes, language, result.Lines, result.Pages);
+            }
+            else if (ImageExtensions.Contains(extension))
             {
                 ImportStatus.Text = "Розпізнавання тексту на пристрої…";
                 var lines = await PhotoOcr.RecognizeAsync(bytes, language);

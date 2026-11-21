@@ -29,6 +29,13 @@ pub enum Command {
         language: String,
         lines: Vec<reader_core::ocr::OcrLine>,
     },
+    ImportScannedPdf {
+        name: String,
+        bytes: Vec<u8>,
+        language: String,
+        lines: Vec<reader_core::ocr::OcrLine>,
+        pages: u16,
+    },
     Position {
         id: String,
         position: usize,

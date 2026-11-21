@@ -44,13 +44,35 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         return (client.Snapshot(), id);
     });
 
-    public bool CanViewImage => !busy && Document?.OcrLines is { Length: > 0 };
+    public bool CanViewOriginal => !busy && (Document?.Format == "pdf" || Document?.OcrLines is { Length: > 0 });
+
+    public int OriginalPageIndex()
+    {
+        if (Document?.OcrLines is not { Length: > 0 } lines || Sentence is not { } sentence) return 0;
+        var offset = 0;
+        var page = lines[0].Page;
+        foreach (var line in lines)
+        {
+            if (offset != 0) offset += line.Page == page ? 1 : 2;
+            offset += line.Text.Trim().Length;
+            page = line.Page;
+            if (sentence.StartUtf16 < offset) return page;
+        }
+        return page;
+    }
 
     public Task ImportImageAsync(string name, byte[] bytes, string language, OcrLine[] lines) => RunAsync(() =>
     {
         var id = client.ImportImage(name, bytes, language, lines).Id;
         return (client.Snapshot(), id);
     });
+
+    public Task ImportScannedPdfAsync(string name, byte[] bytes, string language, OcrLine[] lines, int pages) =>
+        RunAsync(() =>
+        {
+            var id = client.ImportScannedPdf(name, bytes, language, lines, pages).Id;
+            return (client.Snapshot(), id);
+        });
 
     public Task MoveAsync(int delta) => SelectSentenceAsync((Document?.Position ?? 0) + delta);
 
@@ -127,7 +149,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     {
         foreach (var name in new[] { nameof(Snapshot), nameof(Document), nameof(Sentence), nameof(Busy),
             nameof(CanInteract), nameof(Error), nameof(Progress), nameof(CanBookmark), nameof(HasBookmarks),
-            nameof(BookmarkAction), nameof(CanViewImage) })
+            nameof(BookmarkAction), nameof(CanViewOriginal) })
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
 

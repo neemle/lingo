@@ -222,20 +222,24 @@ public partial class ReadingPage : ContentPage
         return $"{position + 1}. {preview}";
     }
 
-    private async void ViewPhotoClicked(object? sender, EventArgs args)
+    private async void ViewOriginalClicked(object? sender, EventArgs args)
     {
         var session = AppState.Session;
-        if (!session.CanViewImage || session.Document is not { } document) return;
+        if (!session.CanViewOriginal || session.Document is not { } document) return;
         try
         {
             var original = await session.OriginalAsync(document.Id);
             if (session.Document?.Id != document.Id) return;
             var bytes = original.Bytes.Select(value => checked((byte)value)).ToArray();
-            var preview = await PhotoOcr.PreviewAsync(bytes);
+            var isPdf = document.Format == "pdf";
+            var total = isPdf ? await PdfScan.PageCountAsync(bytes) : 1;
+            var initial = Math.Clamp(session.OriginalPageIndex(), 0, total - 1);
             if (session.Document?.Id != document.Id) return;
-            await Navigation.PushAsync(new PhotoPage(original.Name, preview, document.OcrLines!));
+            await Navigation.PushAsync(new OriginalPage(original.Name, total, initial, isPdf,
+                page => isPdf ? PdfScan.PreviewAsync(bytes, page) : PhotoOcr.PreviewAsync(bytes),
+                document.OcrLines ?? []));
         }
-        catch (Exception error) { await DisplayAlertAsync("Вихідна фотографія", error.Message, "Гаразд"); }
+        catch (Exception error) { await DisplayAlertAsync("Оригінал", error.Message, "Гаразд"); }
     }
 
     private async void PreviousClicked(object? sender, EventArgs args)

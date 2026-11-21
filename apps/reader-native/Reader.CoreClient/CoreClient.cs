@@ -37,6 +37,14 @@ public sealed class CoreClient : IDisposable
             bytes = bytes.Select(value => (int)value).ToArray(), language, lines });
     }
 
+    public Document ImportScannedPdf(string name, byte[] bytes, string language, OcrLine[] lines, int pages)
+    {
+        if (bytes.Length is 0 or > MaxImportBytes)
+            throw new ArgumentOutOfRangeException(nameof(bytes), "Import requires 1..20MiB");
+        return Call<Document>(new { version = 1, operation = "import_scanned_pdf", name,
+            bytes = bytes.Select(value => (int)value).ToArray(), language, lines, pages });
+    }
+
     public void Position(string id, int position) =>
         Call<JsonElement>(new { version = 1, operation = "position", id, position });
     public void SetBookmark(string id, string sentenceId, bool saved) =>

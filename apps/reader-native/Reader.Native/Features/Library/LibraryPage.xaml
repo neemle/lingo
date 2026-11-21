@@ -28,9 +28,10 @@
      <x:String>nl</x:String><x:String>cs</x:String><x:String>ro</x:String><x:String>sv</x:String></Picker.Items>
    </Picker>
    <ActivityIndicator IsRunning="{Binding Busy}" IsVisible="{Binding Busy}" />
+   <Button Text="Розпізнати PDF" Clicked="ScanPdfClicked" IsEnabled="{Binding CanInteract}" />
   </HorizontalStackLayout>
   <VerticalStackLayout Grid.Row="2" Spacing="6">
-   <Label Text="TXT · DOCX · текстовий PDF · фотографії. До 20 МБ."
+   <Label Text="TXT · DOCX · PDF · фотографії. До 20 МБ."
     TextColor="#63725C" FontSize="13" />
    <Label Text="{Binding Error}" TextColor="#A65F43" SemanticProperties.Description="Помилка операції" />
    <Label x:Name="ImportStatus" TextColor="#63725C" />

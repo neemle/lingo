@@ -40,6 +40,8 @@ pub struct Document {
     pub reviewed_translations: BTreeMap<String, BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ocr_lines: Option<Vec<ocr::OcrLine>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ocr_pdf_pages: Option<u16>,
     pub created_at: i64,
     pub source_hash: String,
     pub format: String,
@@ -218,12 +220,12 @@ pub fn parse_file(name: &str, bytes: &[u8]) -> Result<String> {
             }
             result
         }
-        _ => {
-            return Err("Доступний імпорт TXT, DOCX і текстових PDF. OCR ще не встановлено.".into())
-        }
+        _ => return Err("Формат документа не підтримується.".into()),
     };
     if text.trim().is_empty() {
-        return Err("Тексту не знайдено. Для сканів потрібен OCR, який ще не встановлено.".into());
+        return Err(
+            "Тексту не знайдено. Для скану PDF скористайтеся дією «Розпізнати PDF».".into(),
+        );
     }
     if text.len() > MAX_IMPORT {
         return Err("Витягнутий текст завеликий".into());
@@ -270,7 +272,7 @@ impl Store {
         })
     }
     pub fn import(&mut self, name: &str, bytes: &[u8], language: &str) -> Result<Document> {
-        self.import_document(name, bytes, language, None)
+        self.import_document(name, bytes, language, None, None)
     }
 
     pub fn import_image(
@@ -280,7 +282,18 @@ impl Store {
         language: &str,
         lines: Vec<ocr::OcrLine>,
     ) -> Result<Document> {
-        self.import_document(name, bytes, language, Some(lines))
+        self.import_document(name, bytes, language, Some(lines), None)
+    }
+
+    pub fn import_scanned_pdf(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+        language: &str,
+        lines: Vec<ocr::OcrLine>,
+        pages: u16,
+    ) -> Result<Document> {
+        self.import_document(name, bytes, language, Some(lines), Some(pages))
     }
 
     fn import_document(
@@ -289,11 +302,12 @@ impl Store {
         bytes: &[u8],
         language: &str,
         ocr_lines: Option<Vec<ocr::OcrLine>>,
+        ocr_pdf_pages: Option<u16>,
     ) -> Result<Document> {
         valid_language(language)?;
         let image_text = ocr_lines
             .as_deref()
-            .map(|lines| ocr::image_text(name, bytes, lines))
+            .map(|lines| ocr::recognized_text(name, bytes, lines, ocr_pdf_pages))
             .transpose()?;
         let hash = format!("{:x}", Sha256::digest(bytes));
         let existing: Option<String> = self
@@ -330,6 +344,7 @@ impl Store {
             bookmarks: Vec::new(),
             reviewed_translations: BTreeMap::new(),
             ocr_lines,
+            ocr_pdf_pages,
             created_at: now(),
             source_hash: hash,
             format: Path::new(name)
@@ -601,9 +616,12 @@ impl Store {
             if format!("{:x}", Sha256::digest(&original.bytes)) != doc.source_hash {
                 return Err("Пошкоджений оригінал в архіві".into());
             }
-            let text = match &doc.ocr_lines {
-                Some(lines) => ocr::image_text(&original.name, &original.bytes, lines)?,
-                None => parse_file(&original.name, &original.bytes)?,
+            let text = match (&doc.ocr_lines, doc.ocr_pdf_pages) {
+                (Some(lines), pages) => {
+                    ocr::recognized_text(&original.name, &original.bytes, lines, pages)?
+                }
+                (None, None) => parse_file(&original.name, &original.bytes)?,
+                (None, Some(_)) => return Err("В архіві PDF немає розпізнаних рядків".into()),
             };
             let mut d = doc.clone();
             d.text = text;

@@ -42,8 +42,8 @@
    <Button Grid.Column="1" Text="{Binding BookmarkAction}" IsEnabled="{Binding CanBookmark}"
     Clicked="BookmarkClicked" />
    <Button Grid.Column="2" Text="Закладки" IsEnabled="{Binding HasBookmarks}" Clicked="OpenBookmarksClicked" />
-   <Button Grid.Column="3" Text="Фото" IsVisible="{Binding CanViewImage}"
-    Clicked="ViewPhotoClicked" SemanticProperties.Description="Переглянути вихідну фотографію" />
+   <Button Grid.Column="3" Text="Оригінал" IsVisible="{Binding CanViewOriginal}"
+    Clicked="ViewOriginalClicked" SemanticProperties.Description="Переглянути оригінал документа" />
   </Grid>
   <Grid Grid.Row="2" x:Name="ReadingColumns" ColumnDefinitions="3*,2*" RowDefinitions="*,0"
    ColumnSpacing="16">

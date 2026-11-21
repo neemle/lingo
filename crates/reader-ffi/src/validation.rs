@@ -25,7 +25,9 @@ fn validate(command: &Command) -> Result<()> {
                 "Database path must be nonempty and bounded",
             ))
         }
-        Command::Import { bytes, name, .. } | Command::ImportImage { bytes, name, .. }
+        Command::Import { bytes, name, .. }
+        | Command::ImportImage { bytes, name, .. }
+        | Command::ImportScannedPdf { bytes, name, .. }
             if bytes.is_empty()
                 || bytes.len() > reader_core::MAX_IMPORT
                 || name.is_empty()
