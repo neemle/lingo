@@ -32,6 +32,8 @@ public partial class ReadingPage : ContentPage
     private TextSelection? selection;
     private string? documentId;
     private int speechRequest;
+    private bool speechPaused;
+    private bool utteranceActive;
     public ReadingPage() => InitializeComponent();
 
     protected override void OnAppearing()
@@ -255,28 +257,92 @@ public partial class ReadingPage : ContentPage
     }
     private async void SentenceChanged(object? sender, EventArgs args)
     {
-        if (SentencePicker.SelectedIndex < 0 || AppState.Session.Busy) return;
+        if (SentencePicker.SelectedIndex < 0 || AppState.Session.Busy ||
+            SentencePicker.SelectedIndex == AppState.Session.Document?.Position) return;
         StopSpeech(); await AppState.Session.SelectSentenceAsync(SentencePicker.SelectedIndex);
     }
 
     private async void SpeakClicked(object? sender, EventArgs args)
     {
-        if (AppState.Session.Sentence is not { } sentence || AppState.Session.Document is not { } doc) return;
+        var session = AppState.Session;
+        if (session.Busy || session.Document is not { } initial || session.Sentence is null) return;
         var request = ++speechRequest;
+        var receivedCue = false;
+        var status = LocalSpeech.CompletedStatus;
         speech.Rate = Rate.SelectedIndex switch { 0 => .75f, 2 => 1.25f, _ => 1f };
-        SpeechStatus.Text = "Озвучення поточного речення…";
-        var status = await speech.SpeakAsync(sentence.Text, doc.Language);
-        if (request == speechRequest && status is not null) SpeechStatus.Text = status;
+
+        while (request == speechRequest && session.Document is { } doc && doc.Id == initial.Id &&
+            session.Sentence is { } sentence)
+        {
+            SourceText.SpokenWord = null;
+            speechPaused = false;
+            utteranceActive = true;
+            PauseSpeech.Text = "Пауза";
+            PauseSpeech.IsEnabled = true;
+            SpeechStatus.Text = "Озвучення поточного речення…";
+            status = await speech.SpeakAsync(sentence.Text, doc.Language, (start, length) => Dispatcher.Dispatch(() =>
+            {
+                if (request == speechRequest && utteranceActive && !speechPaused &&
+                    session.Document?.Id == doc.Id && session.Sentence?.Id == sentence.Id &&
+                    session.Sentence?.Text == sentence.Text && HighlightSpokenWord(sentence, start, length))
+                    receivedCue = true;
+            }));
+            if (request != speechRequest) return;
+            utteranceActive = false;
+            SourceText.SpokenWord = null;
+            PauseSpeech.IsEnabled = false;
+            if (status != LocalSpeech.CompletedStatus || !ContinueSpeech.IsChecked ||
+                doc.Position + 1 >= doc.Sentences.Length || session.Busy)
+                break;
+
+            await session.SelectSentenceAsync(doc.Position + 1);
+            if (request != speechRequest) return;
+            if (session.Error.Length > 0 || session.Document?.Position != doc.Position + 1)
+            {
+                status = session.Error.Length > 0 ? session.Error : "Не вдалося перейти до наступного речення.";
+                break;
+            }
+        }
+        if (request != speechRequest) return;
+        // Invalidate any late cue posted by an engine just before completion.
+        speechRequest++;
+        SourceText.SpokenWord = null;
+        PauseSpeech.IsEnabled = false;
+        if (status is not null)
+            SpeechStatus.Text = status == LocalSpeech.CompletedStatus && !receivedCue
+                ? $"{status} Межі слів від голосу не отримано." : status;
     }
-    private void StopClicked(object? sender, EventArgs args)
+
+    private bool HighlightSpokenWord(Reader.Contracts.Sentence sentence, int start, int length)
     {
-        StopSpeech();
+        var span = SourceRanges.Selection(sentence.Text, start, length);
+        if (span is null) return false;
+        var absolute = sentence.StartUtf16 + span.StartUtf16;
+        if (absolute < 0 || absolute > SourceText.Text.Length - span.LengthUtf16 ||
+            !SourceText.Text.AsSpan(absolute, span.LengthUtf16).SequenceEqual(span.Text)) return false;
+        SourceText.SpokenWord = span with { StartUtf16 = absolute };
+        return true;
     }
+
+    private void PauseClicked(object? sender, EventArgs args)
+    {
+        if (speechPaused ? !speech.Resume() : !speech.Pause()) return;
+        speechPaused = !speechPaused;
+        PauseSpeech.Text = speechPaused ? "Продовжити" : "Пауза";
+        SpeechStatus.Text = speechPaused ? "Озвучення призупинено." : "Озвучення поточного речення…";
+    }
+
+    private void StopClicked(object? sender, EventArgs args) => StopSpeech();
 
     private void StopSpeech()
     {
         speechRequest++;
         speech.Stop();
+        speechPaused = false;
+        utteranceActive = false;
+        SourceText.SpokenWord = null;
+        PauseSpeech.IsEnabled = false;
+        PauseSpeech.Text = "Пауза";
         SpeechStatus.Text = "Озвучення зупинено.";
     }
 }

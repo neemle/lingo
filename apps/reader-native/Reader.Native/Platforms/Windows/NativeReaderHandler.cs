@@ -9,6 +9,7 @@ namespace Reader.Native.Controls;
 public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, RichEditBox>
 {
     private bool updating;
+    private Reader.Presentation.TextSelection? spokenWord;
     private Reader.Presentation.WindowsTextMap textMap = new("");
     private string sourceText = "";
     public static readonly IPropertyMapper<NativeReaderView, NativeReaderHandler> ReaderMapper =
@@ -17,6 +18,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, RichEdit
             [nameof(NativeReaderView.Text)] = MapText,
             [nameof(NativeReaderView.HighlightStart)] = MapText,
             [nameof(NativeReaderView.HighlightLength)] = MapText,
+            [nameof(NativeReaderView.SpokenWord)] = MapSpokenWord,
         };
     public NativeReaderHandler() : base(ReaderMapper) { }
 
@@ -76,7 +78,34 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, RichEdit
                 handler.textMap.NativeOffset(selected.StartUtf16 + selected.LengthUtf16))
                     .CharacterFormat.BackgroundColor =
                     WinColor.FromArgb(255, 222, 230, 213);
+            handler.spokenWord = null;
+            MapSpokenWord(handler, view);
         }
         finally { handler.updating = false; }
     }
+    private static void MapSpokenWord(NativeReaderHandler handler, NativeReaderView view)
+    {
+        if (handler.sourceText != view.Text) return;
+        var updatingBefore = handler.updating;
+        handler.updating = true;
+        try
+        {
+            if (handler.spokenWord is { } previous)
+                PaintWord(handler, previous, WinColor.FromArgb(255, 222, 230, 213));
+            var word = view.SpokenWord;
+            handler.spokenWord = null;
+            if (word is not null && word.StartUtf16 >= view.HighlightStart &&
+                word.StartUtf16 + word.LengthUtf16 <= view.HighlightStart + view.HighlightLength &&
+                word.StartUtf16 + word.LengthUtf16 <= view.Text.Length)
+            {
+                PaintWord(handler, word, WinColor.FromArgb(255, 247, 201, 112));
+                handler.spokenWord = word;
+            }
+        }
+        finally { handler.updating = updatingBefore; }
+    }
+
+    private static void PaintWord(NativeReaderHandler handler, Reader.Presentation.TextSelection word, WinColor color) =>
+        handler.PlatformView.Document.GetRange(handler.textMap.NativeOffset(word.StartUtf16),
+            handler.textMap.NativeOffset(word.StartUtf16 + word.LengthUtf16)).CharacterFormat.BackgroundColor = color;
 }

@@ -91,14 +91,19 @@
   </Border>
   <VerticalStackLayout Grid.Row="4" Spacing="8">
    <Label Text="{Binding Error}" TextColor="#A65F43" />
-   <HorizontalStackLayout Spacing="10">
-    <Button Text="← Назад" Clicked="PreviousClicked" IsEnabled="{Binding CanInteract}" />
-    <Button Text="Далі →" Clicked="NextClicked" IsEnabled="{Binding CanInteract}" />
-    <Button Text="Озвучити / повторити" Clicked="SpeakClicked" IsEnabled="{Binding CanInteract}" />
-    <Button Text="Стоп" Clicked="StopClicked" />
+   <FlexLayout Wrap="Wrap" JustifyContent="Start">
+    <Button Text="← Назад" Margin="0,0,8,6" Clicked="PreviousClicked" IsEnabled="{Binding CanInteract}" />
+    <Button Text="Далі →" Margin="0,0,8,6" Clicked="NextClicked" IsEnabled="{Binding CanInteract}" />
+    <Button Text="Озвучити / повторити" Margin="0,0,8,6" Clicked="SpeakClicked" IsEnabled="{Binding CanInteract}" />
+    <Button x:Name="PauseSpeech" Text="Пауза" Margin="0,0,8,6" IsEnabled="False" Clicked="PauseClicked" />
+    <Button Text="Стоп" Margin="0,0,8,6" Clicked="StopClicked" />
     <Picker x:Name="Rate" WidthRequest="95" Title="Темп" SelectedIndex="1">
      <Picker.Items><x:String>0.75×</x:String><x:String>1×</x:String><x:String>1.25×</x:String></Picker.Items>
     </Picker>
+   </FlexLayout>
+   <HorizontalStackLayout Spacing="6">
+    <CheckBox x:Name="ContinueSpeech" SemanticProperties.Description="Автоматично озвучувати наступні речення" />
+    <Label Text="Озвучувати наступні речення" VerticalOptions="Center" />
    </HorizontalStackLayout>
    <Label x:Name="SpeechStatus" FontSize="12" TextColor="#63725C" />
   </VerticalStackLayout>

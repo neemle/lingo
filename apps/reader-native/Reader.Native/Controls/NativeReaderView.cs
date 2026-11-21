@@ -10,6 +10,13 @@ public sealed class NativeReaderView : View
         nameof(HighlightStart), typeof(int), typeof(NativeReaderView), 0);
     public static readonly BindableProperty HighlightLengthProperty = BindableProperty.Create(
         nameof(HighlightLength), typeof(int), typeof(NativeReaderView), 0);
+    public static readonly BindableProperty SpokenWordProperty = BindableProperty.Create(
+        nameof(SpokenWord), typeof(TextSelection), typeof(NativeReaderView));
+    public TextSelection? SpokenWord
+    {
+        get => GetValue(SpokenWordProperty) as TextSelection;
+        set => SetValue(SpokenWordProperty, value);
+    }
     public string Text { get => GetValue(TextProperty) as string ?? ""; set => SetValue(TextProperty, value); }
     public int HighlightStart
     {
