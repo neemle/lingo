@@ -11,6 +11,7 @@ public sealed record Document(
     string SourceHash,
     string Format)
 {
+    public OcrLine[]? OcrLines { get; init; }
     public string[] Bookmarks { get; init; } = [];
     public Dictionary<string, Dictionary<string, string>> ReviewedTranslations { get; init; } = [];
 }

@@ -222,6 +222,22 @@ public partial class ReadingPage : ContentPage
         return $"{position + 1}. {preview}";
     }
 
+    private async void ViewPhotoClicked(object? sender, EventArgs args)
+    {
+        var session = AppState.Session;
+        if (!session.CanViewImage || session.Document is not { } document) return;
+        try
+        {
+            var original = await session.OriginalAsync(document.Id);
+            if (session.Document?.Id != document.Id) return;
+            var bytes = original.Bytes.Select(value => checked((byte)value)).ToArray();
+            var preview = await PhotoOcr.PreviewAsync(bytes);
+            if (session.Document?.Id != document.Id) return;
+            await Navigation.PushAsync(new PhotoPage(original.Name, preview, document.OcrLines!));
+        }
+        catch (Exception error) { await DisplayAlertAsync("Вихідна фотографія", error.Message, "Гаразд"); }
+    }
+
     private async void PreviousClicked(object? sender, EventArgs args)
     {
         StopSpeech(); await AppState.Session.MoveAsync(-1);

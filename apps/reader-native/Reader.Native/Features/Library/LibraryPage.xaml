@@ -30,9 +30,10 @@
    <ActivityIndicator IsRunning="{Binding Busy}" IsVisible="{Binding Busy}" />
   </HorizontalStackLayout>
   <VerticalStackLayout Grid.Row="2" Spacing="6">
-   <Label Text="TXT · DOCX · текстовий PDF · до 20 МБ. Для сканів OCR ще не встановлено."
+   <Label Text="TXT · DOCX · текстовий PDF · фотографії. До 20 МБ."
     TextColor="#63725C" FontSize="13" />
    <Label Text="{Binding Error}" TextColor="#A65F43" SemanticProperties.Description="Помилка операції" />
+   <Label x:Name="ImportStatus" TextColor="#63725C" />
    <Label x:Name="StartupError" TextColor="#A65F43" />
   </VerticalStackLayout>
   <CollectionView Grid.Row="3" ItemsSource="{Binding Snapshot.Documents}" SelectionMode="Single"

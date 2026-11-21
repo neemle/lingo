@@ -10,6 +10,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
 
 mod marian_provider;
+pub mod ocr;
 pub mod translation;
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -37,6 +38,8 @@ pub struct Document {
     pub bookmarks: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub reviewed_translations: BTreeMap<String, BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ocr_lines: Option<Vec<ocr::OcrLine>>,
     pub created_at: i64,
     pub source_hash: String,
     pub format: String,
@@ -267,7 +270,31 @@ impl Store {
         })
     }
     pub fn import(&mut self, name: &str, bytes: &[u8], language: &str) -> Result<Document> {
+        self.import_document(name, bytes, language, None)
+    }
+
+    pub fn import_image(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+        language: &str,
+        lines: Vec<ocr::OcrLine>,
+    ) -> Result<Document> {
+        self.import_document(name, bytes, language, Some(lines))
+    }
+
+    fn import_document(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+        language: &str,
+        ocr_lines: Option<Vec<ocr::OcrLine>>,
+    ) -> Result<Document> {
         valid_language(language)?;
+        let image_text = ocr_lines
+            .as_deref()
+            .map(|lines| ocr::image_text(name, bytes, lines))
+            .transpose()?;
         let hash = format!("{:x}", Sha256::digest(bytes));
         let existing: Option<String> = self
             .connection
@@ -280,7 +307,10 @@ impl Store {
         if let Some(body) = existing {
             return serde_json::from_str(&body).map_err(|e| e.to_string());
         }
-        let text = parse_file(name, bytes)?;
+        let text = match image_text {
+            Some(text) => text,
+            None => parse_file(name, bytes)?,
+        };
         let id = Uuid::new_v4().to_string();
         let name = Path::new(name)
             .file_name()
@@ -299,6 +329,7 @@ impl Store {
             position: 0,
             bookmarks: Vec::new(),
             reviewed_translations: BTreeMap::new(),
+            ocr_lines,
             created_at: now(),
             source_hash: hash,
             format: Path::new(name)
@@ -570,7 +601,10 @@ impl Store {
             if format!("{:x}", Sha256::digest(&original.bytes)) != doc.source_hash {
                 return Err("Пошкоджений оригінал в архіві".into());
             }
-            let text = parse_file(&original.name, &original.bytes)?;
+            let text = match &doc.ocr_lines {
+                Some(lines) => ocr::image_text(&original.name, &original.bytes, lines)?,
+                None => parse_file(&original.name, &original.bytes)?,
+            };
             let mut d = doc.clone();
             d.text = text;
             d.sentences = segment(&d.text, &d.id);

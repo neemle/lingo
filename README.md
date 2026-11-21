@@ -3,7 +3,7 @@
 Native desktop language reader with a Ukrainian interface: MAUI XAML/C# on Windows (WinUI 3) and
 macOS (Mac Catalyst), backed by Rust and local SQLite. Requirements and work tracking live in LeaseVibe MCP.
 
-The reader imports UTF-8 TXT, DOCX and text PDFs up to 20 MiB, retains originals, restores sentence progress,
+The reader imports UTF-8 TXT, DOCX, text PDFs and supported photographs up to 20 MiB, retains originals, restores sentence progress,
 and saves manual translations with context. Forward/reverse practice states and JSON backups use the same Rust core.
 Translation models are optional and installed separately. The app reports unavailable OCR and grammar features.
 
@@ -55,8 +55,18 @@ directions and backup/restore. Native C#/XAML compilation has passed locally for
 blocked by absent Xcode. Native CI builds and launched Windows/macOS selection, accessibility and speech checks
 remain separate gates. The explicit text/voice probe is available in Settings.
 
-Speech uses system voices and reports missing languages. Precise word timing, OCR, additional offline translation pairs,
+Speech uses system voices and reports missing languages. Precise word timing, scanned PDF OCR, additional offline translation pairs,
 mobile releases, signed installers and the 4 GiB hardware target remain unverified or unimplemented.
+
+## Photo OCR
+
+Choose the photo's language in the library, then open a JPEG, PNG, WebP or HEIF image supported
+by the operating system. The app reads the image on-device, saves the recognized text, and keeps the
+original. The **Фото** action shows a preview with optional line overlays. Archive restore preserves the
+recognized text and line positions.
+
+Mac Catalyst uses Apple Vision. Windows OCR uses the installed system recognition language and requires
+MSIX package identity. The unpackaged Windows build can read and preview photos restored from a backup.
 
 ## Offline translation packages
 

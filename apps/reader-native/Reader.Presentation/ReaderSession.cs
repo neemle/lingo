@@ -44,6 +44,14 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         return (client.Snapshot(), id);
     });
 
+    public bool CanViewImage => !busy && Document?.OcrLines is { Length: > 0 };
+
+    public Task ImportImageAsync(string name, byte[] bytes, string language, OcrLine[] lines) => RunAsync(() =>
+    {
+        var id = client.ImportImage(name, bytes, language, lines).Id;
+        return (client.Snapshot(), id);
+    });
+
     public Task MoveAsync(int delta) => SelectSentenceAsync((Document?.Position ?? 0) + delta);
 
     public Task SelectSentenceAsync(int position) => RunAsync(() =>
@@ -119,7 +127,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     {
         foreach (var name in new[] { nameof(Snapshot), nameof(Document), nameof(Sentence), nameof(Busy),
             nameof(CanInteract), nameof(Error), nameof(Progress), nameof(CanBookmark), nameof(HasBookmarks),
-            nameof(BookmarkAction) })
+            nameof(BookmarkAction), nameof(CanViewImage) })
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
 

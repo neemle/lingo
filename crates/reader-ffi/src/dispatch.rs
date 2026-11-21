@@ -19,6 +19,12 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             bytes,
             language,
         } => value(store.import(&name, &bytes, &language)),
+        Command::ImportImage {
+            name,
+            bytes,
+            language,
+            lines,
+        } => value(store.import_image(&name, &bytes, &language, lines)),
         Command::Position { id, position } => value(store.position(&id, position)),
         Command::SetBookmark {
             id,

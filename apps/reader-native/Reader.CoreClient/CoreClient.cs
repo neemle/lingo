@@ -29,6 +29,14 @@ public sealed class CoreClient : IDisposable
         return Call<Document>(new { version = 1, operation = "import", name,
             bytes = bytes.ToArray().Select(value => (int)value).ToArray(), language });
     }
+    public Document ImportImage(string name, byte[] bytes, string language, OcrLine[] lines)
+    {
+        if (bytes.Length is 0 or > MaxImportBytes)
+            throw new ArgumentOutOfRangeException(nameof(bytes), "Import requires 1..20MiB");
+        return Call<Document>(new { version = 1, operation = "import_image", name,
+            bytes = bytes.Select(value => (int)value).ToArray(), language, lines });
+    }
+
     public void Position(string id, int position) =>
         Call<JsonElement>(new { version = 1, operation = "position", id, position });
     public void SetBookmark(string id, string sentenceId, bool saved) =>

@@ -23,6 +23,12 @@ pub enum Command {
         bytes: Vec<u8>,
         language: String,
     },
+    ImportImage {
+        name: String,
+        bytes: Vec<u8>,
+        language: String,
+        lines: Vec<reader_core::ocr::OcrLine>,
+    },
     Position {
         id: String,
         position: usize,

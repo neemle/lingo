@@ -294,3 +294,62 @@ fn reviewed_translations_follow_stable_segments_and_target_languages() {
     );
     assert_eq!(snapshot["data"]["documents"], json!([]));
 }
+
+#[test]
+fn photo_import_preserves_original_ocr_geometry_and_rebuilds_offsets_on_restore() {
+    let store = StoreFixture::new();
+    // Valid PNG. OCR results are supplied by the platform adapter and tested here as input data.
+    let png = hex_png_fixture();
+    let lines = json!([
+        {"text":"  Bonjour 🦊.  ","x":0.04622069468642864,"y":0.18456221956844754,"width":0.5683778490339008,"height":0.20831482227031994,"confidence":0.9},
+        {"text":"Вітаю, світе!","x":0.1,"y":0.4,"width":0.6,"height":0.1,"confidence":null},
+    ]);
+    let import = |lines| {
+        call(
+            store.handle,
+            json!({
+                "version":1,"operation":"import_image","name":"photo.png","language":"fr",
+                "bytes":png,"lines":lines
+            }),
+        )
+    };
+    let mut invalid = lines.clone();
+    invalid[0]["width"] = json!(1.0);
+    assert_error(&import(invalid), "core_error");
+    let imported = import(lines.clone());
+    assert_eq!(imported["ok"], true, "{imported}");
+    let document = &imported["data"];
+    let id = &document["id"];
+    assert_eq!(document["text"], "Bonjour 🦊.\nВітаю, світе!");
+    assert_eq!(document["ocrLines"], lines);
+    assert_eq!(import(lines.clone())["data"]["id"], *id);
+    let saved = call(store.handle, json!({"version":1,"operation":"export"}));
+    let mut backup = saved["data"].clone();
+    backup["snapshot"]["documents"][0]["text"] = json!("Forged derived text");
+    backup["snapshot"]["documents"][0]["sentences"] = json!([]);
+
+    let target = StoreFixture::new();
+    let restored = call(
+        target.handle,
+        json!({"version":1,"operation":"restore","backup":backup}),
+    );
+    assert_eq!(restored["ok"], true, "{restored}");
+    let snapshot = call(target.handle, json!({"version":1,"operation":"snapshot"}));
+    let copy = &snapshot["data"]["documents"][0];
+    assert_eq!(copy["text"], document["text"]);
+    assert_eq!(copy["sentences"], document["sentences"]);
+    assert_eq!(copy["ocrLines"], lines);
+    let original = call(
+        target.handle,
+        json!({"version":1,"operation":"original","id":id}),
+    );
+    assert_eq!(original["data"]["bytes"], json!(png));
+}
+
+fn hex_png_fixture() -> Vec<u8> {
+    let encoded = "89504e470d0a1a0a0000000d4948445200000001000000010804000000b51c0c020000000b4944415478da6364f80f00010501012718e3660000000049454e44ae426082";
+    (0..encoded.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&encoded[index..index + 2], 16).unwrap())
+        .collect()
+}
