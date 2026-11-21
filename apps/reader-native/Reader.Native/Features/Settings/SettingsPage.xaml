@@ -18,6 +18,7 @@
    </VerticalStackLayout>
   </Border>
   <Label Text="Мовні можливості" FontSize="22" FontAttributes="Bold" />
+  <Label x:Name="TranslationPackages" />
   <Button x:Name="InstallTranslation" Text="Встановити мовний пакет із ZIP" Clicked="InstallTranslationClicked" />
   <Label Text="Переклад працює з установленими пакетами. OCR і автоматичний граматичний аналіз недоступні."
    TextColor="#A65F43" />

@@ -60,15 +60,19 @@ mobile releases, signed installers and the 4 GiB hardware target remain unverifi
 
 ## Offline translation packages
 
-The reader supports local French → Ukrainian and English → Ukrainian Marian models. Obtain the five
-files `config.json`, `source.spm`, `target.spm`, `vocab.json` and `model.safetensors` from one pinned
-Helsinki-NLP model revision:
+The reader supports local translation with the five pinned Helsinki-NLP Marian packages below.
+Download `config.json`, `source.spm`, `target.spm`, `vocab.json` and `model.safetensors` from the same revision.
 
 - [French → Ukrainian](https://huggingface.co/Helsinki-NLP/opus-mt-fr-uk/tree/e789f8670b3515ed604605d80d108dd97d779848)
+- [Ukrainian → French](https://huggingface.co/Helsinki-NLP/opus-mt-uk-fr/tree/dea3717a7169bffc2ff692e04af8a21fd1c20cae)
+- [English → French](https://huggingface.co/Helsinki-NLP/opus-mt-en-fr/tree/c96fcd7f38a4c0d1ac9b61e255b47f3f7ff55e5e)
+- [French → English](https://huggingface.co/Helsinki-NLP/opus-mt-fr-en/tree/c4aed37b318c763fd177aa449b44e3b783cc6c02)
 - [English → Ukrainian](https://huggingface.co/Helsinki-NLP/opus-mt-en-uk/tree/55104bebd23cd2d87761e650aa6ac7369b379d1c)
 
 Zip just those five files at the archive root. On macOS, run
 `zip -0 model.zip config.json source.spm target.spm vocab.json model.safetensors` in the download directory.
 On Windows, select the five files and compress them to ZIP. In the app, open **Налаштування →
 Встановити мовний пакет із ZIP**. The app verifies the files against the pinned SHA-256 values before
-installing the package. Open the reader, select Ukrainian and choose **Перекласти офлайн**.
+installing the package. Open the reader, select the target language and choose **Перекласти офлайн**.
+With French → English and English → Ukrainian installed, the reader can also translate French → Ukrainian
+through English. The translation panel marks that route. Installing French → Ukrainian enables the direct route.

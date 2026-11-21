@@ -67,6 +67,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
             return Read();
         });
 
+    public Task<TranslationPackageStatus[]> TranslationPackagesAsync() => Task.Run(client.TranslationPackages);
+
     public Task<string> InstallTranslationPackageAsync(string path) =>
         Task.Run(() => client.InstallTranslationPackage(path));
 

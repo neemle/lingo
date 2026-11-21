@@ -40,6 +40,7 @@ pub enum Command {
         target: String,
         text: String,
     },
+    TranslationPackages,
     InstallTranslationPackage {
         path: String,
     },

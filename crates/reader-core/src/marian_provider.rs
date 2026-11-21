@@ -37,11 +37,33 @@ struct Package {
     pub hashes: [&'static str; 5],
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationPackageStatus {
+    pub source: &'static str,
+    pub target: &'static str,
+    pub files_present: bool,
+}
+
 struct MarianProvider<'a> {
     directory: &'a Path,
 }
 
 impl Store {
+    pub fn translation_packages(&self) -> Vec<TranslationPackageStatus> {
+        let provider = MarianProvider {
+            directory: &self.model_directory,
+        };
+        catalog::PACKAGES
+            .iter()
+            .map(|package| TranslationPackageStatus {
+                source: package.source,
+                target: package.target,
+                files_present: provider.files_present(package),
+            })
+            .collect()
+    }
+
     pub fn install_translation_package(&self, archive_path: &Path) -> Result<String> {
         let file = File::open(archive_path).map_err(model_error)?;
         if file.metadata().map_err(model_error)?.len() > 400_000_000 {
@@ -137,6 +159,11 @@ impl Store {
 }
 
 impl MarianProvider<'_> {
+    fn files_present(&self, model: &Package) -> bool {
+        let path = self.path(model);
+        ASSETS.iter().all(|asset| path.join(asset).is_file())
+    }
+
     fn path(&self, model: &Package) -> PathBuf {
         self.directory
             .join(format!("{}-{}", model.source, model.target))
@@ -147,10 +174,7 @@ impl TranslationProvider for MarianProvider<'_> {
     fn installed_models(&self) -> Result<Vec<ModelEdge>> {
         Ok(catalog::PACKAGES
             .iter()
-            .filter(|model| {
-                let path = self.path(model);
-                ASSETS.iter().all(|asset| path.join(asset).is_file())
-            })
+            .filter(|model| self.files_present(model))
             .map(|model| ModelEdge {
                 source: model.source.into(),
                 target: model.target.into(),
@@ -205,6 +229,19 @@ impl TranslationProvider for MarianProvider<'_> {
         }
         let weights = VarBuilder::from_buffered_safetensors(bytes, DType::F32, &Device::Cpu)
             .map_err(model_error)?;
+        // SafeTensors stores a tied embedding once. The verified French→English
+        // revision names that tensor under the decoder instead of model.shared.
+        let weights = if config.share_encoder_decoder_embeddings
+            && !weights.contains_tensor("model.shared.weight")
+            && weights.contains_tensor("model.decoder.embed_tokens.weight")
+        {
+            weights.rename_f(|name| match name {
+                "model.shared.weight" => "model.decoder.embed_tokens.weight".into(),
+                name => name.into(),
+            })
+        } else {
+            weights
+        };
         let mut model = MTModel::new(&config, weights).map_err(model_error)?;
         let unknown = *vocabulary
             .get("<unk>")

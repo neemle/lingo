@@ -7,6 +7,32 @@ public partial class SettingsPage : ContentPage
 {
     public SettingsPage() { InitializeComponent(); BindingContext = AppState.Session; }
 
+    protected override async void OnAppearing()
+    {
+        base.OnAppearing();
+        await RefreshTranslationPackagesAsync();
+    }
+
+    private async Task RefreshTranslationPackagesAsync()
+    {
+        try
+        {
+            var packages = await AppState.Session.TranslationPackagesAsync();
+            TranslationPackages.Text = string.Join(Environment.NewLine, packages.Select(package =>
+                $"{LanguageName(package.Source)} → {LanguageName(package.Target)}: " +
+                (package.FilesPresent ? "файли на місці" : "пакет відсутній")));
+        }
+        catch (Exception error) { TranslationPackages.Text = error.Message; }
+    }
+
+    private static string LanguageName(string code) => code switch
+    {
+        "en" => "Англійська",
+        "fr" => "Французька",
+        "uk" => "Українська",
+        _ => code,
+    };
+
     private async void ExportClicked(object? sender, EventArgs args)
     {
         try
@@ -69,6 +95,7 @@ public partial class SettingsPage : ContentPage
             }
             var pair = await AppState.Session.InstallTranslationPackageAsync(path);
             Status.Text = $"Мовний пакет встановлено ({pair}).";
+            await RefreshTranslationPackagesAsync();
         }
         catch (Exception error) { Status.Text = error.Message; }
         finally
