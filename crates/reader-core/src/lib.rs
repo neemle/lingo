@@ -353,7 +353,10 @@ impl Store {
                 };
                 let mut updated = existing.clone();
                 self.edit_document(&existing.id, |document| {
-                    pdf_layers::upgrade(document, text, offsets, lines, pages)?;
+                    ocr::update_transcript(document, text)?;
+                    document.ocr_lines = Some(lines);
+                    document.ocr_pdf_pages = Some(pages);
+                    document.pdf_page_starts = Some(offsets);
                     updated = document.clone();
                     Ok(true)
                 })?;
@@ -431,6 +434,49 @@ impl Store {
                 .map_err(|e| e.to_string())?;
         }
         tx.commit().map_err(|e| e.to_string())
+    }
+
+    pub fn correct_ocr_line(
+        &mut self,
+        id: &str,
+        index: usize,
+        correction: Option<String>,
+    ) -> Result<()> {
+        let original = self.original(id)?;
+        self.edit_document(id, |document| {
+            let lines = document
+                .ocr_lines
+                .as_mut()
+                .ok_or("У документа немає розпізнаних рядків")?;
+            let line = lines
+                .get_mut(index)
+                .ok_or("Розпізнаний рядок не знайдено")?;
+            let correction = correction.map(|text| text.trim().to_owned());
+            if line.correction == correction {
+                return Ok(false);
+            }
+            line.correction = correction;
+            let (text, offsets) = if let (Some(pages), Some(_)) =
+                (document.ocr_pdf_pages, &document.pdf_page_starts)
+            {
+                let (text, starts) =
+                    pdf_layers::merge(&original.name, &original.bytes, pages, lines)?;
+                (text, Some(starts))
+            } else {
+                (
+                    ocr::recognized_text(
+                        &original.name,
+                        &original.bytes,
+                        lines,
+                        document.ocr_pdf_pages,
+                    )?,
+                    None,
+                )
+            };
+            ocr::update_transcript(document, text)?;
+            document.pdf_page_starts = offsets;
+            Ok(true)
+        })
     }
 
     pub fn position(&mut self, id: &str, position: usize) -> Result<()> {

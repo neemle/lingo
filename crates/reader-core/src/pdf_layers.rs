@@ -58,7 +58,7 @@ pub fn merge(
                 "Розпізнані рядки збігаються зі сторінкою, яка вже містить текстовий шар".into(),
             );
         }
-        page.push_str(line.text.trim());
+        page.push_str(line.reading_text());
         prior = Some(line.page);
     }
 
@@ -85,93 +85,4 @@ pub fn merge(
         return Err("У PDF не знайдено тексту".into());
     }
     Ok((text, offsets))
-}
-
-/// Upgrade an earlier import of the same bytes without dropping user annotations.
-pub(crate) fn upgrade(
-    document: &mut crate::Document,
-    text: String,
-    offsets: Vec<Option<usize>>,
-    lines: Vec<OcrLine>,
-    pages: u16,
-) -> Result<()> {
-    use std::collections::HashMap;
-
-    let sentences = crate::segment(&text, &document.id);
-    let by_id: HashMap<_, _> = sentences
-        .iter()
-        .enumerate()
-        .map(|(index, sentence)| (sentence.id.as_str(), index))
-        .collect();
-    let mut by_text = HashMap::new();
-    for (index, sentence) in sentences.iter().enumerate() {
-        by_text
-            .entry(sentence.text.as_str())
-            .and_modify(|slot| *slot = None)
-            .or_insert(Some(index));
-    }
-    let old_by_id: HashMap<_, _> = document
-        .sentences
-        .iter()
-        .map(|sentence| (sentence.id.as_str(), sentence))
-        .collect();
-    let mut old_counts = HashMap::new();
-    for sentence in &document.sentences {
-        *old_counts.entry(sentence.text.as_str()).or_insert(0usize) += 1;
-    }
-    let matching_index = |old: &crate::Sentence| {
-        by_id
-            .get(old.id.as_str())
-            .copied()
-            .filter(|&index| sentences[index].text == old.text)
-            .or_else(|| {
-                let key = old.text.as_str();
-                (old_counts.get(key) == Some(&1))
-                    .then(|| by_text.get(key).copied().flatten())
-                    .flatten()
-            })
-    };
-    let map_id = |old_id: &str| {
-        old_by_id
-            .get(old_id)
-            .and_then(|old| matching_index(old))
-            .map(|index| sentences[index].id.clone())
-            .ok_or(
-                "Не вдалося безпечно перенести закладку або переклад зі старої версії PDF"
-                    .to_owned(),
-            )
-    };
-
-    let mut bookmarks: Vec<_> = document
-        .bookmarks
-        .iter()
-        .map(|id| map_id(id))
-        .collect::<Result<_>>()?;
-    bookmarks.sort_unstable();
-    bookmarks.dedup();
-    let mut translations = std::collections::BTreeMap::new();
-    for (language, entries) in &document.reviewed_translations {
-        let mut moved = std::collections::BTreeMap::new();
-        for (id, translation) in entries {
-            if moved.insert(map_id(id)?, translation.clone()).is_some() {
-                return Err("Не вдалося розрізнити переклади зі старої версії PDF".into());
-            }
-        }
-        translations.insert(language.clone(), moved);
-    }
-    let position = document
-        .sentences
-        .get(document.position)
-        .and_then(matching_index)
-        .unwrap_or(document.position.min(sentences.len().saturating_sub(1)));
-
-    document.bookmarks = bookmarks;
-    document.reviewed_translations = translations;
-    document.position = position;
-    document.text = text;
-    document.sentences = sentences;
-    document.ocr_lines = Some(lines);
-    document.ocr_pdf_pages = Some(pages);
-    document.pdf_page_starts = Some(offsets);
-    Ok(())
 }

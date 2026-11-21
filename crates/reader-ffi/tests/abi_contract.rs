@@ -514,3 +514,76 @@ fn mixed_pdf_fixture() -> Vec<u8> {
     .unwrap();
     pdf
 }
+
+#[test]
+fn ocr_correction_preserves_raw_recognition_original_and_untouched_annotations() {
+    let store = StoreFixture::new();
+    let png = hex_png_fixture();
+    let imported = call(
+        store.handle,
+        json!({
+            "version":1, "operation":"import_image","name":"photo.png","language":"en","bytes":png,
+            "lines":[
+                {"text":"Ths is a scn.","x":0.1,"y":0.1,"width":0.7,"height":0.15,"confidence":0.42},
+                {"text":"Saved sentence.","x":0.1,"y":0.3,"width":0.7,"height":0.15,"confidence":0.9}
+            ]
+        }),
+    );
+    assert_eq!(imported["ok"], true, "{imported}");
+    let doc = &imported["data"];
+    let id = &doc["id"];
+    let aid = &doc["sentences"][1]["id"];
+    let save = call(
+        store.handle,
+        json!({
+            "version":1, "operation":"set_reviewed_translation","id":id,
+            "sentenceId":aid,"target":"uk","text":"Збережене речення."
+        }),
+    );
+    assert_eq!(save["ok"], true, "{save}");
+    let edit = |handle, index, correction| {
+        call(
+            handle,
+            json!({
+                "version":1,"operation":"correct_ocr_line","id":id,"index":index,"correction":correction,
+            }),
+        )
+    };
+    assert_error(&edit(store.handle, 0, json!("Invalid\nline")), "core_error");
+    assert_error(
+        &edit(store.handle, 1, json!("Conflicting annotated sentence.")),
+        "core_error",
+    );
+    assert_eq!(edit(store.handle, 0, json!("This is a scan."))["ok"], true);
+    let snapshot = |handle| call(handle, json!({"version":1,"operation":"snapshot"}));
+    let changed = snapshot(store.handle);
+    let changed = &changed["data"]["documents"][0];
+    assert_eq!(changed["text"], "This is a scan.\nSaved sentence.");
+    assert_eq!(changed["ocrLines"][0]["text"], "Ths is a scn.");
+    assert_eq!(changed["ocrLines"][0]["correction"], "This is a scan.");
+    assert_eq!(changed["ocrLines"][0]["confidence"], 0.42);
+    let moved = changed["sentences"][1]["id"].as_str().unwrap();
+    assert_eq!(
+        changed["reviewedTranslations"]["uk"][moved],
+        "Збережене речення."
+    );
+
+    let archived = call(store.handle, json!({"version":1,"operation":"export"}));
+    let other = StoreFixture::new();
+    let restored = call(
+        other.handle,
+        json!({"version":1,"operation":"restore","backup":archived["data"]}),
+    );
+    assert_eq!(restored["ok"], true, "{restored}");
+    assert_eq!(snapshot(other.handle)["data"]["documents"][0], *changed);
+    let original = call(
+        other.handle,
+        json!({"version":1,"operation":"original","id":id}),
+    );
+    assert_eq!(original["data"]["bytes"], json!(png));
+    assert_eq!(edit(other.handle, 0, serde_json::Value::Null)["ok"], true);
+    assert_eq!(
+        snapshot(other.handle)["data"]["documents"][0]["text"],
+        doc["text"]
+    );
+}

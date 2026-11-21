@@ -61,7 +61,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         foreach (var line in lines)
         {
             if (offset != 0) offset += line.Page == page ? 1 : 2;
-            offset += line.Text.Trim().Length;
+            offset += (line.Correction ?? line.Text).Trim().Length;
             page = line.Page;
             if (sentence.StartUtf16 < offset) return page;
         }
@@ -90,6 +90,12 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
             var id = client.ImportScannedPdf(name, bytes, language, lines, pages).Id;
             return (client.Snapshot(), id);
         });
+
+    public Task CorrectOcrLineAsync(string id, int index, string? correction) => RunAsync(() =>
+    {
+        client.CorrectOcrLine(id, index, correction);
+        return Read();
+    });
 
     public Task MoveAsync(int delta) => SelectSentenceAsync((Document?.Position ?? 0) + delta);
 

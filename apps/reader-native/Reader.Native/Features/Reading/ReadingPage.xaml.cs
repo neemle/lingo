@@ -17,7 +17,7 @@ public partial class ReadingPage : ContentPage
     private bool updatingTargets;
     private bool stacked;
     private bool translating;
-    private (string Document, string Sentence, string Target)? machineKey;
+    private (string Document, string Sentence, string Target, string Text)? machineKey;
     private Reader.Contracts.MachineTranslation? machineTranslation;
     private string? machineStatus;
     private string? TargetCode
@@ -46,6 +46,9 @@ public partial class ReadingPage : ContentPage
     protected override void OnDisappearing()
     {
         StopSpeech();
+        selection = null;
+        WordCard.IsVisible = false;
+        Translation.Text = "";
         AppState.Session.PropertyChanged -= SessionChanged;
         base.OnDisappearing();
     }
@@ -121,11 +124,11 @@ public partial class ReadingPage : ContentPage
         TargetLanguage.IsEnabled = active && !session.Busy;
     }
 
-    private (string Document, string Sentence, string Target)? ActiveTranslationKey()
+    private (string Document, string Sentence, string Target, string Text)? ActiveTranslationKey()
     {
         var session = AppState.Session;
         return session.Document is { } document && session.Sentence is { } sentence && TargetCode is { } target
-            ? (document.Id, sentence.Id, target)
+            ? (document.Id, sentence.Id, target, sentence.Text)
             : null;
     }
 
@@ -237,7 +240,7 @@ public partial class ReadingPage : ContentPage
             if (session.Document?.Id != document.Id) return;
             await Navigation.PushAsync(new OriginalPage(original.Name, total, initial, isPdf,
                 page => isPdf ? PdfScan.PreviewAsync(bytes, page) : PhotoOcr.PreviewAsync(bytes),
-                document.OcrLines ?? []));
+                document.Id, session, document.OcrLines ?? []));
         }
         catch (Exception error) { await DisplayAlertAsync("Оригінал", error.Message, "Гаразд"); }
     }

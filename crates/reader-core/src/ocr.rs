@@ -15,6 +15,18 @@ pub struct OcrLine {
     pub width: f64,
     pub height: f64,
     pub confidence: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correction: Option<String>,
+}
+
+impl OcrLine {
+    pub fn reading_text(&self) -> &str {
+        self.correction.as_deref().unwrap_or(&self.text).trim()
+    }
+}
+
+fn valid_text(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 8192 && !value.contains(['\0', '\r', '\n'])
 }
 
 fn is_first_page(page: &u16) -> bool {
@@ -64,12 +76,11 @@ pub fn recognized_text(
     let mut previous_page = 0;
     for line in lines {
         let unit = |value: f64| (0.0..=1.0).contains(&value);
-        let value = line.text.trim();
+        let value = line.reading_text();
         if line.page < previous_page
             || line.page >= pdf_pages.unwrap_or(1)
-            || value.is_empty()
-            || value.len() > 8192
-            || value.contains(['\0', '\r', '\n'])
+            || !valid_text(line.text.trim())
+            || !valid_text(value)
             || ![line.x, line.y, line.width, line.height]
                 .into_iter()
                 .all(unit)
@@ -94,4 +105,81 @@ pub fn recognized_text(
         previous_page = line.page;
     }
     Ok(text)
+}
+
+/// Rebuild derived sentences without dropping or guessing user annotations.
+pub(crate) fn update_transcript(document: &mut crate::Document, text: String) -> Result<()> {
+    use std::collections::HashMap;
+
+    let sentences = crate::segment(&text, &document.id);
+    let by_id: HashMap<_, _> = sentences
+        .iter()
+        .enumerate()
+        .map(|(index, sentence)| (sentence.id.as_str(), index))
+        .collect();
+    let mut by_text = HashMap::new();
+    for (index, sentence) in sentences.iter().enumerate() {
+        by_text
+            .entry(sentence.text.as_str())
+            .and_modify(|slot| *slot = None)
+            .or_insert(Some(index));
+    }
+    let old_by_id: HashMap<_, _> = document
+        .sentences
+        .iter()
+        .map(|sentence| (sentence.id.as_str(), sentence))
+        .collect();
+    let mut old_counts = HashMap::new();
+    for sentence in &document.sentences {
+        *old_counts.entry(sentence.text.as_str()).or_insert(0usize) += 1;
+    }
+    let matching_index = |old: &crate::Sentence| {
+        by_id
+            .get(old.id.as_str())
+            .copied()
+            .filter(|&index| sentences[index].text == old.text)
+            .or_else(|| {
+                let key = old.text.as_str();
+                (old_counts.get(key) == Some(&1))
+                    .then(|| by_text.get(key).copied().flatten())
+                    .flatten()
+            })
+    };
+    let map_id = |old_id: &str| {
+        old_by_id
+            .get(old_id)
+            .and_then(|old| matching_index(old))
+            .map(|index| sentences[index].id.clone())
+            .ok_or("Зміна зачіпає речення із закладкою або збереженим перекладом".to_owned())
+    };
+
+    let mut bookmarks: Vec<_> = document
+        .bookmarks
+        .iter()
+        .map(|id| map_id(id))
+        .collect::<Result<_>>()?;
+    bookmarks.sort_unstable();
+    bookmarks.dedup();
+    let mut translations = std::collections::BTreeMap::new();
+    for (language, entries) in &document.reviewed_translations {
+        let mut moved = std::collections::BTreeMap::new();
+        for (id, translation) in entries {
+            if moved.insert(map_id(id)?, translation.clone()).is_some() {
+                return Err("Не вдалося однозначно перенести збережені переклади".into());
+            }
+        }
+        translations.insert(language.clone(), moved);
+    }
+    let position = document
+        .sentences
+        .get(document.position)
+        .and_then(matching_index)
+        .unwrap_or(document.position.min(sentences.len().saturating_sub(1)));
+
+    document.bookmarks = bookmarks;
+    document.reviewed_translations = translations;
+    document.position = position;
+    document.text = text;
+    document.sentences = sentences;
+    Ok(())
 }

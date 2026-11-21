@@ -55,7 +55,7 @@ directions and backup/restore. Native C#/XAML compilation has passed locally for
 blocked by absent Xcode. Native CI builds and launched Windows/macOS selection, accessibility and speech checks
 remain separate gates. The explicit text/voice probe is available in Settings.
 
-Speech uses system voices and reports missing languages. Precise word timing, OCR correction, additional offline translation pairs,
+Speech uses system voices and reports missing languages. Precise word timing, automatic OCR suggestions, additional offline translation pairs,
 mobile releases, signed installers and the 4 GiB hardware target remain unverified or unimplemented.
 
 ## Photo and PDF OCR
@@ -63,7 +63,9 @@ mobile releases, signed installers and the 4 GiB hardware target remain unverifi
 Choose the photo's language in the library, then open a JPEG, PNG, WebP or HEIF image supported
 by the operating system. The app reads the image on-device, saves the recognized text, and keeps the
 original. The **Оригінал** action shows a preview with optional line overlays. Archive restore preserves the
-recognized text and line positions.
+recognized text and line positions. In the preview, choose a recognized line and select **Виправити**
+or **Скинути**. Line corrections change the reading text while retaining the original image/PDF,
+recognition confidence, and raw OCR output. An edit that would detach an annotated sentence is rejected.
 
 For a scanned or mixed PDF, use **Розпізнати PDF** in the library. It reads each available text layer
 and runs OCR only on pages without extractable text, up to 40 pages. The original is preserved, and

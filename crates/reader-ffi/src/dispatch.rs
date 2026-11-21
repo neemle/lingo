@@ -48,6 +48,11 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             lines,
             pages,
         } => value(store.import_scanned_pdf(&name, &bytes, &language, lines, pages)),
+        Command::CorrectOcrLine {
+            id,
+            index,
+            correction,
+        } => value(store.correct_ocr_line(&id, index, correction)),
         Command::Position { id, position } => value(store.position(&id, position)),
         Command::SetBookmark {
             id,

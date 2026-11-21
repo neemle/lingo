@@ -48,6 +48,11 @@ pub enum Command {
         lines: Vec<reader_core::ocr::OcrLine>,
         pages: u16,
     },
+    CorrectOcrLine {
+        id: String,
+        index: usize,
+        correction: Option<String>,
+    },
     Position {
         id: String,
         position: usize,
