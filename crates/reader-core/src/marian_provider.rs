@@ -1187,18 +1187,23 @@ impl MarianProvider<'_> {
                     && start == 0
                     && end == source_pieces.len()
                     && segment.len() <= 768
-                    && units.len() == 1
                 {
-                    if let Some(deadline) = crate::marian_deadline::find(segment) {
-                        if !deadline.accepts(&translated) {
-                            let alternative = decoded
-                                .by_ref()
-                                .filter_map(|tokens| decode_text(&tokens).ok())
-                                .find(|text| deadline.preserves_clause(&translated, text));
-                            if let Some(text) =
-                                alternative.or_else(|| deadline.restore_comparison(&translated))
-                            {
-                                translated = text;
+                    if (2..=3).contains(&units.len()) {
+                        if let Some(text) = crate::marian_deadline::restore_group(&units, &translated) {
+                            translated = text;
+                        }
+                    } else if let [source] = units.as_slice() {
+                        if let Some(deadline) = crate::marian_deadline::find(source) {
+                            if !deadline.accepts(&translated) {
+                                let alternative = decoded
+                                    .by_ref()
+                                    .filter_map(|tokens| decode_text(&tokens).ok())
+                                    .find(|text| deadline.preserves_clause(&translated, text));
+                                if let Some(text) =
+                                    alternative.or_else(|| deadline.restore_comparison(&translated))
+                                {
+                                    translated = text;
+                                }
                             }
                         }
                     }

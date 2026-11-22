@@ -1399,14 +1399,13 @@ fn cache_key(
         segments.iter()
             .map(AsRef::as_ref)
             .filter(|text| text.len() <= 768)
-            .filter_map(crate::marian_deadline::find)
-            .map(|deadline| deadline.cache_revision())
+            .filter_map(crate::marian_deadline::cache_revision)
             .max()
             .unwrap_or(4)
     };
     let version = match route {
         Route::Direct(edge) if from_uk_to_fr(edge) => deadline_revision(),
-        Route::Pivot { second, .. } if from_uk_to_fr(second) => 6,
+        Route::Pivot { second, .. } if from_uk_to_fr(second) => 7,
         Route::Pivot { first, .. } if from_uk_to_fr(first) => deadline_revision(),
         _ => 4,
     };

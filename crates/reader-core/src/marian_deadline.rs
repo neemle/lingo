@@ -4,7 +4,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 pub(crate) struct Deadline {
     french_day: &'static str,
-    by_day: bool,
+    action: Option<PunctualAction>,
 }
 
 pub(crate) fn find(source: &str) -> Option<Deadline> {
@@ -24,9 +24,9 @@ pub(crate) fn find(source: &str) -> Option<Deadline> {
     {
         return None;
     }
-    let by_day = match marker.to_lowercase().as_str() {
-        "раніше" if words.any(|(_, word)| word.to_lowercase() == "не") => false,
-        "до" if punctual_deadline(words.map(|(_, word)| word)) => true,
+    let action = match marker.to_lowercase().as_str() {
+        "раніше" if words.any(|(_, word)| word.to_lowercase() == "не") => None,
+        "до" => Some(punctual_deadline(words.map(|(_, word)| word))?),
         _ => return None,
     };
     let french_day = match day.to_lowercase().replace(['’', 'ʼ'], "'").as_str() {
@@ -39,28 +39,113 @@ pub(crate) fn find(source: &str) -> Option<Deadline> {
         "неділі" => "dimanche",
         _ => return None,
     };
-    Some(Deadline { french_day, by_day })
+    Some(Deadline { french_day, action })
 }
 
-fn punctual_deadline<'a>(words: impl Iterator<Item = &'a str>) -> bool {
-    let mut punctual = false;
-    for word in words {
-        match word.to_lowercase().as_str() {
-            "не" | "або" | "чи" | "якщо" | "коли" | "доки" => return false,
-            "надішлю" | "надішлеш" | "надішле" | "надішлемо" | "надішлете" | "надішлють"
-            | "завершу" | "завершиш" | "завершить" | "завершимо" | "завершите" | "завершать" =>
-            {
-                punctual = true;
-            }
-            _ => {}
+pub(crate) fn cache_revision(text: &str) -> Option<u8> {
+    let mut sentences = text
+        .unicode_sentences()
+        .map(str::trim)
+        .filter(|text| !text.is_empty());
+    let first = sentences.next()?;
+    let Some(second) = sentences.next() else {
+        return find(first).map(|deadline| deadline.cache_revision());
+    };
+    let third = sentences.next();
+    if sentences.next().is_some() {
+        return None;
+    }
+    [Some(first), Some(second), third]
+        .into_iter()
+        .flatten()
+        .any(|sentence| find(sentence).is_some())
+        .then_some(7)
+}
+
+pub(super) fn restore_group(source: &[&str], translated: &str) -> Option<String> {
+    let sentences: Vec<_> = translated
+        .split_sentence_bounds()
+        .take(source.len() + 1)
+        .collect();
+    if sentences.len() == 1 {
+        // A contextual model can combine sentences into one. Only repair the final
+        // clause when it still contains the expected action and weekday.
+        let deadline = find(source.last()?)?;
+        let separator = translated.rfind([',', ';', '—', ':'])?;
+        let (preceding, last) =
+            translated.split_at(separator + translated[separator..].chars().next()?.len_utf8());
+        if !deadline.action?.appears_in(last) || deadline.accepts(last) {
+            return None;
+        }
+        return deadline
+            .restore_comparison(last)
+            .map(|text| format!("{preceding}{text}"));
+    }
+    if sentences.len() != source.len() {
+        return None;
+    }
+    let mut result = String::with_capacity(translated.len());
+    let mut changed = false;
+    for (source, translated) in source.iter().zip(sentences) {
+        if let Some(corrected) = find(source)
+            .filter(|deadline| !deadline.accepts(translated))
+            .and_then(|deadline| deadline.restore_comparison(translated))
+        {
+            result.push_str(&corrected);
+            changed = true;
+        } else {
+            result.push_str(translated);
         }
     }
-    punctual
+    changed.then_some(result)
+}
+
+#[derive(Clone, Copy)]
+enum PunctualAction {
+    Send,
+    Finish,
+}
+
+impl PunctualAction {
+    fn appears_in(self, clause: &str) -> bool {
+        let roots: &[&str] = match self {
+            Self::Send => &["envoi", "enverr", "envoy", "transme", "expédi"],
+            Self::Finish => &["termine", "finis", "finir", "achèv", "achev"],
+        };
+        clause.unicode_words().any(|word| {
+            let word = word
+                .rsplit(['\'', '’'])
+                .next()
+                .unwrap_or(word)
+                .to_lowercase();
+            roots.iter().any(|root| word.starts_with(root))
+        })
+    }
+}
+
+fn punctual_deadline<'a>(words: impl Iterator<Item = &'a str>) -> Option<PunctualAction> {
+    let mut action = None;
+    for word in words {
+        let found = match word.to_lowercase().as_str() {
+            "не" | "або" | "чи" | "якщо" | "коли" | "доки" => return None,
+            "надішлю" | "надішлеш" | "надішле" | "надішлемо" | "надішлете" | "надішлють" => {
+                PunctualAction::Send
+            }
+            "завершу" | "завершиш" | "завершить" | "завершимо" | "завершите" | "завершать" => {
+                PunctualAction::Finish
+            }
+            _ => continue,
+        };
+        if action.replace(found).is_some() {
+            return None;
+        }
+    }
+    action
 }
 
 impl Deadline {
     pub(crate) fn cache_revision(&self) -> u8 {
-        if self.by_day {
+        if self.action.is_some() {
             6
         } else {
             5
@@ -97,7 +182,7 @@ impl Deadline {
     pub(super) fn restore_comparison(&self, translated: &str) -> Option<String> {
         let clause = translated
             .trim_end_matches(|c: char| c.is_whitespace() || matches!(c, '.' | '!' | '?'));
-        if self.by_day {
+        if self.action.is_some() {
             let prefix = self.bare_day_prefix(clause)?;
             return Some(format!(
                 "{prefix} d’ici {}{}",
@@ -124,7 +209,7 @@ impl Deadline {
     pub(super) fn accepts(&self, candidate: &str) -> bool {
         let lower = candidate.to_lowercase();
         let words: Vec<_> = lower.unicode_words().collect();
-        if self.by_day {
+        if self.action.is_some() {
             return words.windows(2).any(|window| {
                 matches!(window[0], "avant" | "pour" | "d’ici" | "d'ici")
                     && window[1] == self.french_day
@@ -141,7 +226,7 @@ impl Deadline {
     }
 
     pub(super) fn preserves_clause(&self, original: &str, candidate: &str) -> bool {
-        if self.by_day || !self.accepts(candidate) {
+        if self.action.is_some() || !self.accepts(candidate) {
             return false;
         }
         let without_deadline = |text: &str| {
