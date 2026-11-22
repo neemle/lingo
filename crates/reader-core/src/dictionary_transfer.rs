@@ -214,21 +214,26 @@ impl Store {
     }
 }
 
-fn apply_collection_contexts(db: &Connection, id: &str, cards: &mut [Vocabulary]) -> Result<()> {
+pub(crate) fn apply_collection_contexts(db: &Connection, id: &str, cards: &mut [Vocabulary]) -> Result<()> {
     if cards.is_empty() {
         return Ok(());
     }
     let Some((document_id, hash)) = find_collection(db, id, None)? else {
         return Ok(());
     };
+    let card_id = match cards {
+        [card] => Some(card.id.as_str()),
+        _ => None,
+    };
     let mut query = db.prepare(
         "SELECT card_id, sentence FROM dictionary_card_contexts
-         WHERE document_id=?1 OR document_id IN (
-             SELECT document_id FROM dictionary_sources WHERE source_hash=?2
-         )
-         ORDER BY rowid",
+         WHERE (?3 IS NULL OR card_id=?3) AND (
+            document_id=?1 OR document_id IN (
+                SELECT document_id FROM dictionary_sources WHERE source_hash=?2
+            )
+         ) ORDER BY rowid",
     ).map_err(error)?;
-    let rows = query.query_map(params![document_id, hash], |row| {
+    let rows = query.query_map(params![document_id, hash, card_id], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     }).map_err(error)?;
     let contexts = rows.collect::<rusqlite::Result<BTreeMap<_, _>>>().map_err(error)?;

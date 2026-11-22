@@ -49,6 +49,7 @@ pub struct PracticeQueue {
     pub due_count: usize,
     pub total_cards: usize,
     pub matches_dictionary: Option<bool>,
+    pub context: Option<String>,
 }
 
 impl SavedQuestion {
@@ -346,7 +347,7 @@ impl Store {
             .collection
             .as_ref()
             .map(|scope| scope.document_id.as_str());
-        let cards = dictionary_transfer::collection_cards(&tx, collection, None)?;
+        let mut cards = dictionary_transfer::collection_cards(&tx, collection, None)?;
         let reverse = progress.direction == "reverse";
         let due_at = |card: &Vocabulary| {
             if reverse { card.reverse.due_at } else { card.forward.due_at }
@@ -379,6 +380,19 @@ impl Store {
                 changed = true;
             }
         }
+        let mut context = None;
+        if !reverse {
+            if let Some(card) = progress.question.as_ref()
+                .and_then(|question| cards.iter_mut().find(|card| card.id == question.card_id))
+            {
+                if let Some(id) = collection {
+                    dictionary_transfer::apply_collection_contexts(&tx, id, std::slice::from_mut(card))?;
+                }
+                if !card.context.trim().is_empty() {
+                    context = Some(card.context.clone());
+                }
+            }
+        }
         if changed {
             progress.advance()?;
             write(&tx, &progress)?;
@@ -389,6 +403,7 @@ impl Store {
             progress,
             due_count,
             total_cards: cards.len(),
+            context,
         })
     }
 

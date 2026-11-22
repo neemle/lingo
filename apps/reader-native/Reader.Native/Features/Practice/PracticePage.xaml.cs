@@ -198,7 +198,7 @@ public partial class PracticePage : ContentPage
         var context = saved is null
             ? noCards ? emptyHint : "Усі картки цього напряму повторено. Можна змінити напрям або повернутися до читання."
             : state.Direction == "reverse" ? "Згадайте слово мовою оригіналу."
-                : card?.Context;
+                : next.Context ?? card?.Context;
         if (state.Direction == "forward" && card?.Sense is { } sense)
         {
             var showGloss = saved?.Revealed == true ||

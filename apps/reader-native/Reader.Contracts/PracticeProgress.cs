@@ -10,6 +10,7 @@ public sealed record PracticeSettings(string Direction, byte Mode, PracticeColle
 public sealed record SavedQuestion(string CardId, string Prompt, string[] Answers, string[] Options,
     bool Revealed = false, string? GivenAnswer = null, long? ElapsedMs = null);
 
-public sealed record PracticeQueue(PracticeProgress Progress, int DueCount, int TotalCards, bool? MatchesDictionary);
+public sealed record PracticeQueue(PracticeProgress Progress, int DueCount, int TotalCards, bool? MatchesDictionary,
+    string? Context = null);
 
 public sealed record PracticeAnswer(PracticeProgress Progress, bool? MatchesDictionary);
