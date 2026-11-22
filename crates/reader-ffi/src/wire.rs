@@ -108,6 +108,10 @@ pub enum Command {
     InstallTranslationPackage {
         path: String,
     },
+    RemoveTranslationPackage {
+        source: String,
+        target: String,
+    },
     CheckTranslationDownloadSpace {
         source: String,
         target: String,

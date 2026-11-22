@@ -107,6 +107,7 @@ Choose a language pair in **Налаштування** and select **Завант
 and resumed. Translation uses local files after installation.
 Before a download, the app checks space for the remaining files, temporary archive, and installed model.
 It checks the destination again before extraction.
+Use **Видалити пакет перекладу** to free its local files. You can download the package again from Settings.
 For offline setup, the app also accepts a ZIP prepared from the pinned Helsinki-NLP packages below.
 Download `config.json`, `source.spm`, `target.spm`, `vocab.json` and `model.safetensors` from the same revision.
 

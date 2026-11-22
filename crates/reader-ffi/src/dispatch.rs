@@ -92,6 +92,9 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::InstallTranslationPackage { path } => {
             value(store.install_translation_package(std::path::Path::new(&path)))
         }
+        Command::RemoveTranslationPackage { source, target } => {
+            value(store.remove_translation_package(&source, &target))
+        }
         Command::CheckTranslationDownloadSpace {
             source,
             target,

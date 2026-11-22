@@ -11,8 +11,10 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         UseCookies = false,
     }));
     private TranslationPackageStatus[] downloadChoices = [];
+    private TranslationPackageStatus[] removablePackages = [];
     private TranslationPair[] requestedPackages = [];
     private CancellationTokenSource? activeDownload;
+    private bool changingTranslationFiles;
 
     public SettingsPage() { InitializeComponent(); BindingContext = AppState.Session; }
 
@@ -83,21 +85,30 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
             var packages = await AppState.Session.TranslationPackagesAsync();
             TranslationPackages.Text = string.Join(Environment.NewLine, packages.Select(package =>
                 $"{DocumentLanguages.Name(package.Source)} → {DocumentLanguages.Name(package.Target)}: " +
-                (package.FilesPresent ? "файли на місці" : "пакет відсутній")));
+                (package.FilesPresent ? "файли на місці" : package.HasLocalFiles ? "лишилися файли пакета" : "пакет відсутній")));
             var previous = ModelChoice.SelectedIndex >= 0 && ModelChoice.SelectedIndex < downloadChoices.Length
                 ? downloadChoices[ModelChoice.SelectedIndex].Revision : null;
             downloadChoices = packages.Where(package => !package.FilesPresent).ToArray();
+            removablePackages = packages.Where(package => package.HasLocalFiles).ToArray();
             ModelChoice.ItemsSource = downloadChoices.Select(package =>
                 $"{DocumentLanguages.Name(package.Source)} → {DocumentLanguages.Name(package.Target)} " +
                 $"({package.Assets.Sum(asset => asset.Bytes) / 1_000_000d:F0} МБ)").ToArray();
             var requested = RequestedPackageIndex();
             ModelChoice.SelectedIndex = downloadChoices.Length == 0 ? -1 : requested >= 0 ? requested
                 : Math.Max(0, Array.FindIndex(downloadChoices, package => package.Revision == previous));
-            DownloadTranslation.IsEnabled = activeDownload is null && downloadChoices.Length > 0;
+            UpdateTranslationControls();
         }
         catch (Exception error) { TranslationPackages.Text = error.Message; }
     }
 
+    private void UpdateTranslationControls()
+    {
+        var busy = activeDownload is not null || changingTranslationFiles;
+        ModelChoice.IsEnabled = InstallTranslation.IsEnabled = !busy;
+        DownloadTranslation.IsEnabled = !busy && downloadChoices.Length > 0;
+        RemoveTranslation.IsVisible = removablePackages.Length > 0;
+        RemoveTranslation.IsEnabled = !busy && RemoveTranslation.IsVisible;
+    }
 
     private async void ExportClicked(object? sender, EventArgs args)
     {
@@ -141,7 +152,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
     private async void DownloadTranslationClicked(object? sender, EventArgs args)
     {
         var index = ModelChoice.SelectedIndex;
-        if (activeDownload is not null || index < 0 || index >= downloadChoices.Length) return;
+        if (changingTranslationFiles || activeDownload is not null || index < 0 || index >= downloadChoices.Length) return;
         var package = downloadChoices[index];
         using var cancellation = new CancellationTokenSource();
         activeDownload = cancellation;
@@ -155,7 +166,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
                 DownloadProgress.Progress = Math.Clamp((double)bytes / total, 0, 1);
         });
 
-        InstallTranslation.IsEnabled = DownloadTranslation.IsEnabled = ModelChoice.IsEnabled = false;
+        UpdateTranslationControls();
         CancelDownload.IsVisible = DownloadProgress.IsVisible = true;
         DownloadProgress.Progress = 0;
         ModelStatus.Text = "Перевірка вільного місця…";
@@ -183,8 +194,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         {
             activeDownload = null;
             CancelDownload.IsVisible = DownloadProgress.IsVisible = false;
-            InstallTranslation.IsEnabled = ModelChoice.IsEnabled = true;
-            DownloadTranslation.IsEnabled = downloadChoices.Length > 0;
+            UpdateTranslationControls();
             TryClean(() => File.Delete(archive));
         }
     }
@@ -198,9 +208,40 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         catch (UnauthorizedAccessException) { ModelStatus.Text += " Не вдалося видалити тимчасові файли."; }
     }
 
+    private async void RemoveTranslationClicked(object? sender, EventArgs args)
+    {
+        if (changingTranslationFiles || activeDownload is not null || removablePackages.Length == 0) return;
+        changingTranslationFiles = true;
+        UpdateTranslationControls();
+        try
+        {
+            var choices = removablePackages.ToDictionary(package =>
+                $"{DocumentLanguages.Name(package.Source)} → {DocumentLanguages.Name(package.Target)}");
+            var choice = await DisplayActionSheetAsync("Видалити пакет перекладу", "Скасувати", null, choices.Keys.ToArray());
+            if (choice is null || !choices.TryGetValue(choice, out var package)) return;
+            if (!await DisplayAlertAsync($"Видалити {choice}?",
+                "Пакет можна буде завантажити знову. Ваші тексти й переклади збережуться.", "Видалити", "Скасувати"))
+                return;
+
+            var removed = await AppState.Session.RemoveTranslationPackageAsync(package.Source, package.Target);
+            ModelStatus.Text = removed ? $"Пакет видалено ({choice})." : "Пакет уже відсутній.";
+            var root = Path.Combine(FileSystem.CacheDirectory, "translation-downloads");
+            if (Directory.Exists(root)) TryClean(() => ModelDownload.ClearStaging(package, root));
+        }
+        catch (Exception error) { ModelStatus.Text = error.Message; }
+        finally
+        {
+            changingTranslationFiles = false;
+            await RefreshTranslationPackagesAsync();
+            UpdateTranslationControls();
+        }
+    }
+
     private async void InstallTranslationClicked(object? sender, EventArgs args)
     {
-        InstallTranslation.IsEnabled = DownloadTranslation.IsEnabled = false;
+        if (changingTranslationFiles || activeDownload is not null) return;
+        changingTranslationFiles = true;
+        UpdateTranslationControls();
         var path = Path.Combine(FileSystem.CacheDirectory, $"translation-{Guid.NewGuid():N}.zip");
         try
         {
@@ -233,8 +274,8 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
             catch (UnauthorizedAccessException) { Status.Text += " Не вдалося видалити тимчасову копію архіву."; }
             finally
             {
-                InstallTranslation.IsEnabled = true;
-                DownloadTranslation.IsEnabled = downloadChoices.Length > 0;
+                changingTranslationFiles = false;
+                UpdateTranslationControls();
             }
         }
     }

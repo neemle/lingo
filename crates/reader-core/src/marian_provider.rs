@@ -58,6 +58,7 @@ pub struct TranslationPackageStatus {
     pub source: &'static str,
     pub target: &'static str,
     pub files_present: bool,
+    pub has_local_files: bool,
     pub revision: &'static str,
     pub assets: Vec<TranslationAsset>,
 }
@@ -126,6 +127,8 @@ impl Store {
                 source: package.source,
                 target: package.target,
                 files_present: provider.files_present(package),
+                has_local_files: provider.path(package).symlink_metadata().is_ok()
+                    || provider.removed_path(package).symlink_metadata().is_ok(),
                 revision: package.revision,
                 assets: ASSETS
                     .into_iter()
@@ -139,6 +142,33 @@ impl Store {
                     .collect(),
             })
             .collect()
+    }
+
+    pub fn remove_translation_package(&self, source: &str, target: &str) -> Result<bool> {
+        let package = catalog::PACKAGES
+            .iter()
+            .find(|package| package.source == source && package.target == target)
+            .ok_or("Для цієї мовної пари немає пакета.")?;
+        let provider = MarianProvider {
+            directory: &self.model_directory,
+        };
+        let active = provider.path(package);
+        let removed = provider.removed_path(package);
+        let cleared_previous = remove_package_directory(&removed)?;
+        match active.symlink_metadata() {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => return Err("Некоректний каталог мовного пакета.".into()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(cleared_previous),
+            Err(error) => return Err(model_error(error)),
+        }
+        match fs::rename(&active, &removed) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(cleared_previous),
+            Err(error) => return Err(model_error(error)),
+        }
+        remove_package_directory(&removed)
+            .map_err(|error| format!("Пакет відключено. Не вдалося прибрати всі файли. {error}"))?;
+        Ok(true)
     }
 
     pub fn install_translation_package(&self, archive_path: &Path) -> Result<String> {
@@ -270,6 +300,25 @@ impl MarianProvider<'_> {
     fn path(&self, model: &Package) -> PathBuf {
         self.directory
             .join(format!("{}-{}", model.source, model.target))
+    }
+
+    fn removed_path(&self, model: &Package) -> PathBuf {
+        self.directory
+            .join(format!(".removed-{}-{}", model.source, model.target))
+    }
+}
+
+fn remove_package_directory(path: &Path) -> Result<bool> {
+    match path.symlink_metadata() {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => return Err("Некоректний каталог мовного пакета.".into()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(model_error(error)),
+    }
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound && !path.exists() => Ok(true),
+        Err(error) => Err(model_error(error)),
     }
 }
 
@@ -450,4 +499,34 @@ fn verify_files(directory: &Path, package: &Package, assets: &[&str]) -> Result<
 
 fn model_error(error: impl std::fmt::Display) -> String {
     format!("Помилка локального мовного пакета: {error}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn package_removal_is_idempotent_and_clears_prior_interrupted_removal() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(&directory.path().join("reader.db")).unwrap();
+        let root = &store.model_directory;
+        let active = root.join("uk-fr");
+        let interrupted = root.join(".removed-uk-fr");
+        let other = root.join("fr-en");
+        for directory in [&active, &interrupted, &other] {
+            fs::create_dir_all(directory).unwrap();
+            fs::write(directory.join("config.json"), b"partial").unwrap();
+        }
+        let status = store
+            .translation_packages()
+            .into_iter()
+            .find(|package| package.source == "uk" && package.target == "fr")
+            .unwrap();
+        assert!(!status.files_present && status.has_local_files);
+        assert!(store.remove_translation_package("uk", "fr").unwrap());
+        assert!(!active.exists() && !interrupted.exists());
+        assert_eq!(fs::read(other.join("config.json")).unwrap(), b"partial");
+        assert!(!store.remove_translation_package("uk", "fr").unwrap());
+        assert!(store.remove_translation_package("../fr", "en").is_err());
+    }
 }
