@@ -1376,19 +1376,21 @@ fn cache_key(
 ) -> Result<String> {
     // Decoder/tokenizer and contextual reranking revisions must not reuse older outputs.
     let from_uk_to_fr = |edge: &ModelEdge| edge.source == "uk" && edge.target == "fr";
-    let can_retry = || {
-        segments.iter().any(|text| {
-            let text = text.as_ref();
-            text.len() <= 768 && crate::marian_deadline::find(text).is_some()
-        })
+    let deadline_revision = || {
+        segments.iter()
+            .map(AsRef::as_ref)
+            .filter(|text| text.len() <= 768)
+            .filter_map(crate::marian_deadline::find)
+            .map(|deadline| deadline.cache_revision())
+            .max()
+            .unwrap_or(4)
     };
-    let deadline_revision = match route {
-        Route::Direct(edge) => from_uk_to_fr(edge) && can_retry(),
-        Route::Pivot { first, second } => {
-            from_uk_to_fr(first) && can_retry() || from_uk_to_fr(second)
-        }
+    let version = match route {
+        Route::Direct(edge) if from_uk_to_fr(edge) => deadline_revision(),
+        Route::Pivot { second, .. } if from_uk_to_fr(second) => 6,
+        Route::Pivot { first, .. } if from_uk_to_fr(first) => deadline_revision(),
+        _ => 4,
     };
-    let version = if deadline_revision { 5 } else { 4 };
     let input = serde_json::to_vec(&(version, route.without_quality(), segments, context, settings))
         .map_err(|error| error.to_string())?;
     Ok(format!("{:x}", Sha256::digest(input)))
