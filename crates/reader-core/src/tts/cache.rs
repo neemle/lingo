@@ -96,7 +96,7 @@ impl SpeechCacheKey {
             return None;
         }
         let pcm_len = wav_bytes.len() - WAV_HEADER_BYTES;
-        if pcm_len % 2 != 0
+        if !pcm_len.is_multiple_of(2)
             || &wav_bytes[..4] != b"RIFF"
             || wav_bytes[4..8] != (pcm_len as u32 + 36).to_le_bytes()
             || &wav_bytes[8..16] != b"WAVEfmt "

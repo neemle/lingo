@@ -163,8 +163,8 @@ mod tests {
         drop(original);
         let original = Store::open(&original_path).unwrap();
         assert_eq!(
-            original.recent_reading_sessions().unwrap(),
-            [latest.clone()]
+            original.recent_reading_sessions().unwrap().as_slice(),
+            std::slice::from_ref(&latest)
         );
 
         let mut backup = serde_json::to_value(original.export().unwrap()).unwrap();
@@ -181,8 +181,8 @@ mod tests {
             ..latest
         };
         assert_eq!(
-            destination.recent_reading_sessions().unwrap(),
-            [restored.clone()]
+            destination.recent_reading_sessions().unwrap().as_slice(),
+            std::slice::from_ref(&restored)
         );
 
         backup.as_object_mut().unwrap().remove("readingSessions");
