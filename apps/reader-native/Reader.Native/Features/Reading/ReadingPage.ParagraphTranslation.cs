@@ -11,7 +11,7 @@ public partial class ReadingPage
     private readonly List<TranslationWindow> translationWindows = [];
     private bool readingPageActive;
     private bool autoTranslate;
-    private CancellationTokenSource? scheduledTranslation;
+    private PendingTranslation? scheduledTranslation;
     private TranslationKey? lastAutoTranslation;
     private TranslationKey? translationScrollKey;
     private bool translationScrollPending;
@@ -20,6 +20,7 @@ public partial class ReadingPage
 
     private sealed record TranslationKey(string Document, string Sentence, string Source, string Target, string Text);
     private sealed record TranslationScope(string Document, string Source, string Target);
+    private sealed record PendingTranslation(TranslationKey Key, CancellationTokenSource Cancellation);
 
     private void TrackTranslationScroll(TranslationKey? key)
     {
@@ -84,27 +85,26 @@ public partial class ReadingPage
     {
         var pending = scheduledTranslation;
         scheduledTranslation = null;
-        pending?.Cancel();
+        pending?.Cancellation.Cancel();
     }
 
     private void ScheduleAutoTranslation()
     {
         var key = PendingAutoTranslation();
-        if (key is null || key == lastAutoTranslation)
-        {
-            CancelScheduledTranslation();
-            return;
-        }
-        if (scheduledTranslation is not null) return;
-        _ = TranslateAfterNavigationAsync(key);
+        if (key == lastAutoTranslation) key = null;
+        if (scheduledTranslation?.Key == key) return;
+        CancelScheduledTranslation();
+        if (key is not null) _ = TranslateAfterNavigationAsync(key);
     }
 
     private async Task TranslateAfterNavigationAsync(TranslationKey key)
     {
-        using var pending = new CancellationTokenSource();
+        using var cancellation = new CancellationTokenSource();
+        var pending = new PendingTranslation(key, cancellation);
         scheduledTranslation = pending;
-        try { await Task.Delay(350, pending.Token); }
+        try { await Task.Delay(350, cancellation.Token); }
         catch (OperationCanceledException) { return; }
+        if (!ReferenceEquals(scheduledTranslation, pending)) return;
         scheduledTranslation = null;
         if (PendingAutoTranslation() != key)
         {
