@@ -113,7 +113,7 @@ impl Store {
         }
         tx.execute("DELETE FROM review_events WHERE entry_id=?1", [id])
             .map_err(|error| error.to_string())?;
-        crate::practice::adjust_after_card_change(&tx, id, true)?;
+        crate::practice::adjust_after_library_change(&tx, Some(id), true)?;
         tx.commit().map_err(|error| error.to_string())?;
         Ok(true)
     }
@@ -183,7 +183,7 @@ impl Store {
         )
         .map_err(|error| error.to_string())?;
         if word_key.is_some() {
-            crate::practice::adjust_after_card_change(&tx, id, false)?;
+            crate::practice::adjust_after_library_change(&tx, Some(id), false)?;
         }
         tx.commit().map_err(|error| error.to_string())?;
         Ok(card)

@@ -116,6 +116,12 @@ fn validate(command: &Command) -> Result<()> {
                 "Word explanation fields exceed their wire bounds",
             ))
         }
+        Command::DeleteDocument { id } if id.is_empty() || id.len() > 256 || id.contains('\0') => {
+            Err(Error::new(
+                "invalid_argument",
+                "Document ID must be nonempty and bounded",
+            ))
+        }
         Command::DeleteVocabularyCard { id }
             if id.is_empty() || id.len() > 256 || id.contains('\0') =>
         {

@@ -155,16 +155,16 @@ fn write(connection: &Connection, progress: &PracticeProgress) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn adjust_after_card_change(
+pub(crate) fn adjust_after_library_change(
     connection: &Connection,
-    card_id: &str,
-    removed: bool,
+    card_id: Option<&str>,
+    check_collection: bool,
 ) -> Result<()> {
     let body: Option<String> = connection
         .query_row(
             "SELECT body FROM practice WHERE id=1 AND
              (json_extract(body, '$.question.cardId')=?1 OR (?2 AND json_type(body, '$.collection')='object'))",
-            rusqlite::params![card_id, removed],
+            rusqlite::params![card_id, check_collection],
             |row| row.get(0),
         )
         .optional()
@@ -177,12 +177,12 @@ pub(crate) fn adjust_after_card_change(
     let question_removed = progress
         .question
         .as_ref()
-        .is_some_and(|question| question.card_id == card_id);
+        .is_some_and(|question| Some(question.card_id.as_str()) == card_id);
     if question_removed {
         progress.question = None;
     }
     let mut collection_removed = false;
-    if let Some(collection) = progress.collection.as_ref().filter(|_| removed) {
+    if let Some(collection) = progress.collection.as_ref().filter(|_| check_collection) {
         if dictionary_transfer::find_collection(
             connection,
             &collection.document_id,

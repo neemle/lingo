@@ -844,6 +844,40 @@ impl Store {
         })
     }
 
+    pub fn delete_document(&mut self, id: &str) -> Result<bool> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM documents WHERE id=?1)",
+                [id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if !exists {
+            return Ok(false);
+        }
+
+        dictionary_transfer::retain_removed_document_source(&tx, id)?;
+        // Originals and speech checkpoints in existing libraries use non-cascading foreign keys.
+        tx.execute("DELETE FROM originals WHERE document_id=?1", [id])
+            .map_err(|error| error.to_string())?;
+        tx.execute("DELETE FROM speech_resume WHERE document_id=?1", [id])
+            .map_err(|error| error.to_string())?;
+        tx.execute(
+            "DELETE FROM ocr_jobs WHERE document_id=?1 AND state='completed'",
+            [id],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute("DELETE FROM documents WHERE id=?1", [id])
+            .map_err(|error| error.to_string())?;
+        practice::adjust_after_library_change(&tx, None, true)?;
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(true)
+    }
+
     pub fn set_document_language(&mut self, id: &str, language: &str) -> Result<()> {
         valid_language(language)?;
         self.edit_document(id, |document, _| {
@@ -1455,6 +1489,129 @@ fn validate_sentence_note(note: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deleting_a_document_preserves_its_reviews_and_relinks_the_collection_on_reimport() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&dir.path().join("delete-document.db")).unwrap();
+        let bytes = b"A local book.";
+        let doc = db.import("draft.txt", bytes, "en").unwrap();
+        db.rename_document(&doc.id, "My book").unwrap();
+        let sentence = &doc.sentences[0];
+        db.set_speech_resume(
+            &doc.id,
+            &sentence.id,
+            &format!("{:x}", Sha256::digest(&sentence.text)),
+            Some(2),
+        )
+        .unwrap();
+        db.checkpoint_reading(reading_history::ReadingSession {
+            id: Uuid::new_v4().to_string(),
+            document_id: doc.id.clone(),
+            started_at: 10,
+            ended_at: 20,
+            active_duration_seconds: 8,
+        })
+        .unwrap();
+        let card = db
+            .save_word(Vocabulary {
+                id: String::new(),
+                word: "book".into(),
+                translation: "книга".into(),
+                language: "en".into(),
+                target_language: "uk".into(),
+                context: sentence.text.clone(),
+                document_id: doc.id.clone(),
+                forward: ReviewState::default(),
+                reverse: ReviewState::default(),
+                analysis: None,
+                expression: None,
+                sense: None,
+                accepted_translations: Vec::new(),
+            })
+            .unwrap();
+        db.review(&card.id, "forward", 2).unwrap();
+        db.set_practice(practice::PracticeProgress {
+            collection: Some(practice::PracticeCollection {
+                document_id: doc.id.clone(),
+                source_hash: Some(doc.source_hash.clone()),
+            }),
+            ..practice::PracticeProgress::default()
+        })
+        .unwrap();
+        db.connection
+            .execute(
+                "INSERT INTO ocr_jobs(id,kind,input_hash,name,language,engine_version,page_count,missing_pages,state,updated_at,document_id)
+                 VALUES ('done','pdf_ocr',?1,'same.pdf','en','fixture',1,'[0]','completed',0,?2),
+                        ('pending','pdf_ocr',?1,'same.pdf','fr','fixture',1,'[0]','pending',0,NULL)",
+                params![doc.source_hash, doc.id],
+            )
+            .unwrap();
+
+        assert!(db.delete_document(&doc.id).unwrap());
+        assert!(!db.delete_document(&doc.id).unwrap());
+        assert!(db.snapshot().unwrap().documents.is_empty());
+        assert!(db.original(&doc.id).is_err());
+        assert!(db.speech_resume(&doc.id).unwrap().is_none());
+        assert!(db.recent_reading_sessions().unwrap().is_empty());
+        let jobs = db
+            .pdf_ocr_job(ocr_jobs::JobRequest::List {
+                include_terminal: true,
+            })
+            .unwrap();
+        assert_eq!(jobs.as_array().unwrap().len(), 1);
+        assert_eq!(jobs[0]["id"], "pending");
+
+        let archive = db.export_dictionary(Some(&doc.id)).unwrap();
+        assert_eq!(archive.entries[0].id, card.id);
+        assert_eq!(archive.reviews.len(), 1);
+        assert_eq!(archive.sources[0].title.as_deref(), Some("My book"));
+        assert_eq!(
+            archive.sources[0].source_hash.as_deref(),
+            Some(doc.source_hash.as_str())
+        );
+        assert_eq!(
+            db.practice().unwrap().collection.unwrap().document_id,
+            doc.id
+        );
+
+        let reimported = db.import("draft.txt", bytes, "en").unwrap();
+        assert_ne!(reimported.id, doc.id);
+        assert_eq!(
+            db.dictionary_collection(Some(&reimported.id)).unwrap()[0].id,
+            card.id
+        );
+        assert_eq!(
+            db.practice().unwrap().collection.unwrap().document_id,
+            reimported.id
+        );
+    }
+
+    #[test]
+    fn deleting_an_empty_practice_collection_preserves_practice_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = Store::open(&dir.path().join("delete-empty-document.db")).unwrap();
+        let doc = db.import("empty.txt", b"No saved words.", "en").unwrap();
+        let before = db
+            .set_practice(practice::PracticeProgress {
+                direction: "reverse".into(),
+                mode: 1,
+                collection: Some(practice::PracticeCollection {
+                    document_id: doc.id.clone(),
+                    source_hash: None,
+                }),
+                ..practice::PracticeProgress::default()
+            })
+            .unwrap();
+        assert!(db.delete_document(&doc.id).unwrap());
+        let after = db.practice().unwrap();
+        assert!(after.collection.is_none());
+        assert_eq!(after.direction, "reverse");
+        assert_eq!(after.mode, 1);
+        assert_eq!(after.revision, before.revision + 1);
+        assert!(db.dictionary_sources().unwrap().is_empty());
+    }
+
     #[test]
     fn text_pdf_import_retains_original() {
         let dir = tempfile::tempdir().unwrap();

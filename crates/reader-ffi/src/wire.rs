@@ -80,6 +80,9 @@ pub enum Command {
         id: String,
         title: String,
     },
+    DeleteDocument {
+        id: String,
+    },
     Position {
         id: String,
         position: usize,

@@ -603,6 +603,26 @@ fn promote(mut local: Vocabulary, incoming: &Vocabulary) -> Vocabulary {
     local
 }
 
+pub(crate) fn retain_removed_document_source(db: &Connection, id: &str) -> Result<()> {
+    db.execute(
+        "INSERT INTO dictionary_sources(document_id,title,source_hash)
+         SELECT id, json_extract(body, '$.title'), source_hash FROM documents
+         WHERE id=?1 AND (
+             EXISTS (SELECT 1 FROM dictionary_card_sources WHERE document_id=?1)
+             OR EXISTS (SELECT 1 FROM vocabulary WHERE ?1 IN (
+                  json_extract(body, '$.documentId'),
+                  json_extract(body, '$.analysis.documentId'),
+                  json_extract(body, '$.expression.documentId')
+             ))
+         )
+         ON CONFLICT(document_id) DO UPDATE SET
+             title=excluded.title, source_hash=excluded.source_hash",
+        [id],
+    )
+    .map_err(error)?;
+    Ok(())
+}
+
 pub(crate) fn link_card_document(db: &Connection, card_id: &str, document_id: &str) -> Result<()> {
     let Some((title, source_hash)) = source_metadata(db, document_id)? else {
         return Ok(());

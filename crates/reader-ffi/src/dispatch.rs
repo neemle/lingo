@@ -98,6 +98,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::SetDocumentLanguage { id, language } => {
             value(store.set_document_language(&id, &language))
         }
+        Command::DeleteDocument { id } => value(store.delete_document(&id)),
         Command::RenameDocument { id, title } => value(store.rename_document(&id, &title)),
         Command::SpeechResume { id } => value(store.speech_resume(&id)),
         Command::SetSpeechResume {
