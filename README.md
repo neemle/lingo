@@ -19,8 +19,8 @@ macOS, Apple Silicon:
 ```sh
 rustup target add aarch64-apple-ios-macabi
 CMAKE_OSX_SYSROOT="$(xcrun --sdk macosx --show-sdk-path)" \
-  CFLAGS_aarch64_apple_ios_macabi="-target arm64-apple-ios15.0-macabi" \
-  CXXFLAGS_aarch64_apple_ios_macabi="-target arm64-apple-ios15.0-macabi" \
+  CFLAGS_aarch64_apple_ios_macabi="-target arm64-apple-ios26.0-macabi" \
+  CXXFLAGS_aarch64_apple_ios_macabi="-target arm64-apple-ios26.0-macabi" \
   cargo rustc -p reader-ffi --release --locked --target aarch64-apple-ios-macabi --crate-type staticlib
 reader_project=apps/reader-native/Reader.Native/Reader.Native.csproj
 dotnet build "$reader_project" -f net10.0-maccatalyst -p:EnableCodeSigning=false
@@ -28,7 +28,8 @@ dotnet build "$reader_project" -t:Run -f net10.0-maccatalyst -p:EnableCodeSignin
 ```
 
 Catalyst links the Rust static library built for `aarch64-apple-ios-macabi`; a regular macOS dylib is incompatible.
-The current native macOS head targets Apple Silicon.
+Lingo targets the two latest major releases of macOS and iOS, currently 26 and 27.
+The Mac Catalyst app targets Apple Silicon with macOS 26.0 as its minimum. The iOS app is planned.
 
 To create the locally installable package with the same layout as CI:
 

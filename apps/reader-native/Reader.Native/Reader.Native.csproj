@@ -14,7 +14,7 @@
     <ApplicationDisplayVersion>0.1</ApplicationDisplayVersion>
     <ApplicationVersion>1</ApplicationVersion>
     <WindowsPackageType>None</WindowsPackageType>
-    <SupportedOSPlatformVersion Condition="$(TargetFramework.Contains('maccatalyst'))">15.0</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion Condition="$(TargetFramework.Contains('maccatalyst'))">26.0</SupportedOSPlatformVersion>
     <RuntimeIdentifier Condition="$(TargetFramework.Contains('maccatalyst'))">maccatalyst-arm64</RuntimeIdentifier>
     <SupportedOSPlatformVersion
       Condition="$(TargetFramework.Contains('windows'))">10.0.17763.0</SupportedOSPlatformVersion>

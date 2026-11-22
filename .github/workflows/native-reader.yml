@@ -56,8 +56,8 @@ jobs:
       - run: dotnet workload install maui-maccatalyst --version 10.0.401
       - name: Build the Mac Catalyst core and llama.cpp
         env:
-          CFLAGS_aarch64_apple_ios_macabi: -target arm64-apple-ios15.0-macabi
-          CXXFLAGS_aarch64_apple_ios_macabi: -target arm64-apple-ios15.0-macabi
+          CFLAGS_aarch64_apple_ios_macabi: -target arm64-apple-ios26.0-macabi
+          CXXFLAGS_aarch64_apple_ios_macabi: -target arm64-apple-ios26.0-macabi
         run: |
           export CMAKE_OSX_SYSROOT="$(xcrun --sdk macosx --show-sdk-path)"
           cargo rustc -p reader-ffi --release --locked --target aarch64-apple-ios-macabi --crate-type staticlib
