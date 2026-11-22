@@ -83,7 +83,7 @@ impl SpeechJob {
     pub fn run(self) -> Result<SpeechAudio> {
         self.model.run_interactive(|directory, should_yield| {
             let config = PiperConfig::load(directory)?;
-            let chunks = config.chunks(&self.text)?;
+            let chunks = config.chunks(&ukrainian_stress(&self.text))?;
             let threads = std::thread::available_parallelism().map_or(1, |count| count.get().min(3));
             let mut session = Session::builder(onnx_runtime::environment()?)
                 .map_err(speech_error)?
@@ -134,6 +134,47 @@ impl SpeechJob {
             to_wav(&waveform, SAMPLE_RATE)
         })
     }
+}
+
+pub(crate) const STRESS_MARK: char = '\u{301}';
+
+pub(crate) fn ukrainian_stress(text: &str) -> std::borrow::Cow<'_, str> {
+    let mut spoken = String::new();
+    let mut copied = 0;
+    let mut previous = (0, "");
+    for (offset, word) in text.unicode_word_indices() {
+        let (previous_end, previous_word) = previous;
+        previous = (offset + word.len(), word);
+        if !word
+            .chars()
+            .flat_map(char::to_lowercase)
+            .eq("вікна".chars())
+            || !text[previous_end..offset].chars().all(char::is_whitespace)
+        {
+            continue;
+        }
+
+        let context: String = previous_word
+            .chars()
+            .filter(|&c| c != STRESS_MARK)
+            .flat_map(char::to_lowercase)
+            .collect();
+        // "Біля" requires the genitive, where this form is singular.
+        // "Відчинені" agrees with the nominative or accusative plural.
+        let stressed_end = match context.as_str() {
+            "біля" => word.len(),
+            "відчинені" => word.chars().take(2).map(char::len_utf8).sum(),
+            _ => continue,
+        } + offset;
+        spoken.push_str(&text[copied..stressed_end]);
+        spoken.push(STRESS_MARK);
+        copied = stressed_end;
+    }
+    if copied == 0 {
+        return text.into();
+    }
+    spoken.push_str(&text[copied..]);
+    spoken.into()
 }
 
 #[derive(Deserialize)]
@@ -303,4 +344,35 @@ pub(crate) fn to_wav(samples: &[f32], sample_rate: u32) -> Result<SpeechAudio> {
 
 fn speech_error(error: impl std::fmt::Display) -> String {
     format!("Локальне озвучення Piper: {error}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ukrainian_stress;
+
+    #[test]
+    fn marks_contextual_window_stress_without_rewriting_source() {
+        for (source, spoken) in [
+            (
+                "Увечері ми читаємо книжку біля вікна.",
+                "Увечері ми читаємо книжку біля вікна́.",
+            ),
+            ("У кімнаті відчинені вікна.", "У кімнаті відчинені ві́кна."),
+            (
+                "БІ́ЛЯ ВІКНА; ВІДЧИНЕНІ\tВІКНА.",
+                "БІ́ЛЯ ВІКНА́; ВІДЧИНЕНІ\tВІ́КНА.",
+            ),
+            (
+                "Усі вікна; біля, вікна; біля «Вікна».",
+                "Усі вікна; біля, вікна; біля «Вікна».",
+            ),
+            ("біля ві́кна; відчинені вікна́", "біля ві́кна; відчинені вікна́"),
+            (
+                "біля цього вікна; відчинені два вікна",
+                "біля цього вікна; відчинені два вікна",
+            ),
+        ] {
+            assert_eq!(ukrainian_stress(source), spoken, "{source}");
+        }
+    }
 }

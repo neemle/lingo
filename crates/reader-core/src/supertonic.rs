@@ -5,7 +5,7 @@
 //! The independently distributed model weights are licensed under OpenRAIL.
 
 use crate::optional_models::OptionalModelJob;
-use crate::tts::{to_wav, SpeechAudio};
+use crate::tts::{to_wav, ukrainian_stress, SpeechAudio, STRESS_MARK};
 use crate::{onnx_runtime, Document, Result, Store};
 use ort::session::Session;
 use ort::value::Tensor;
@@ -88,7 +88,12 @@ impl MultilingualSpeechJob {
     pub fn run(self) -> Result<SpeechAudio> {
         self.model.run_interactive(|directory, should_yield| {
             let mut engine = Engine::load(directory, self.voice)?;
-            let chunks = text_chunks(&self.text, &engine.indexer)?;
+            let spoken = if self.language == "uk" {
+                ukrainian_stress(&self.text)
+            } else {
+                self.text.as_str().into()
+            };
+            let chunks = text_chunks(&spoken, &engine.indexer)?;
             let mut waveform = Vec::new();
             for chunk in chunks {
                 check_interrupted(should_yield)?;
@@ -267,9 +272,16 @@ impl Engine {
 
         let latent_len = sample_count.div_ceil(LATENT_HOP);
         let latent_shape = [1, LATENT_CHANNELS, latent_len];
+        // An explicit Ukrainian stress mark changes pronunciation, not the
+        // initial noise used to choose prosody for the same text.
+        let seed = if language == "uk" && tagged.contains(STRESS_MARK) {
+            tagged.replace(STRESS_MARK, "").into()
+        } else {
+            std::borrow::Cow::Borrowed(tagged.as_str())
+        };
         let mut latent = tensor(
             latent_shape,
-            initial_noise(tagged.as_bytes(), latent_len * LATENT_CHANNELS),
+            initial_noise(seed.as_bytes(), latent_len * LATENT_CHANNELS),
         )?;
         let latent_mask = tensor([1, 1, latent_len], vec![1.0_f32; latent_len])?;
         let total_steps = tensor([1], vec![STEPS as f32])?;
