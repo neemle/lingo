@@ -47,32 +47,39 @@ pub(crate) fn neighboring_fragments(
 pub(crate) fn canonical_fragments(
     store: &Store, document: &Document, sentence: &Sentence,
 ) -> Result<(Option<String>, Option<String>)> {
+    canonical_edge_fragments(store, document, None, Some(sentence), Some(sentence))
+}
+
+pub(crate) fn canonical_edge_fragments(
+    store: &Store, document: &Document, target: Option<&str>,
+    first: Option<&Sentence>, last: Option<&Sentence>,
+) -> Result<(Option<String>, Option<String>)> {
     let Some(starts) = &document.pdf_page_starts else { return Ok((None, None)); };
     let page_at = |offset| starts.iter().rposition(|start| start.is_some_and(|start| start <= offset));
-    let previous_page = sentence.text.starts_with(char::is_lowercase)
-        .then(|| page_at(sentence.start_utf16)).flatten()
-        .and_then(|page| {
+    let previous = first.filter(|first| first.text.starts_with(char::is_lowercase))
+        .and_then(|first| {
+            let page = page_at(first.start_utf16)?;
             let previous = page.checked_sub(1)?;
             let start = ocr::byte_at_utf16(&document.text, starts[page]?)?;
-            (starts[previous].is_none()
-                && document.text.get(start..sentence.start_utf8)?.trim().is_empty())
-                .then(|| u16::try_from(previous).ok()).flatten()
+            if starts[previous].is_some() || !document.text.get(start..first.start_utf8)?.trim().is_empty() {
+                return None;
+            }
+            Some((u16::try_from(previous).ok()?, first.text.len()))
         });
-    let next_page = word_hyphen(&sentence.text)
-        .and_then(|_| page_at(sentence.end_utf16.checked_sub(1)?))
-        .and_then(|page| {
-            let next = page + 1;
-            if starts.get(next)? != &None { return None; }
-            let (_, end) = pdf_reading_position::page_bounds(document, u16::try_from(page).ok()?)?;
-            let end = ocr::byte_at_utf16(&document.text, end)?;
-            document.text.get(sentence.end_utf8..end)?.trim().is_empty()
-                .then(|| u16::try_from(next).ok()).flatten()
-        });
-    let previous = previous_page.map(|page| excerpt(
-        store, &document.id, page, None, Neighbor::Previous, sentence.text.len(),
+    let next = last.filter(|last| word_hyphen(&last.text).is_some()).and_then(|last| {
+        let page = page_at(last.end_utf16.checked_sub(1)?)?;
+        let next = page + 1;
+        if starts.get(next)?.is_some() { return None; }
+        let (_, end) = pdf_reading_position::page_bounds(document, u16::try_from(page).ok()?)?;
+        let end = ocr::byte_at_utf16(&document.text, end)?;
+        if !document.text.get(last.end_utf8..end)?.trim().is_empty() { return None; }
+        Some((u16::try_from(next).ok()?, last.text.len()))
+    });
+    let previous = previous.map(|(page, bytes)| excerpt(
+        store, &document.id, page, target, Neighbor::Previous, bytes,
     )).transpose()?.flatten();
-    let next = next_page.map(|page| excerpt(
-        store, &document.id, page, None, Neighbor::Next, sentence.text.len(),
+    let next = next.map(|(page, bytes)| excerpt(
+        store, &document.id, page, target, Neighbor::Next, bytes,
     )).transpose()?.flatten();
     Ok((previous, next))
 }

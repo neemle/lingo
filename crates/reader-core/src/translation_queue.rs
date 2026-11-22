@@ -142,7 +142,7 @@ impl Store {
         .map_err(database_error)?;
         tx.commit().map_err(database_error)?;
 
-        let result = self.translate_document_paragraph(&document, selected, &target, true);
+        let result = self.translate_document_paragraph(&document, selected, &target, true, crate::translation::PageBoundaries::Canonical);
         let complete = result.as_ref().is_ok_and(|window| {
             window.units.iter().all(|unit| unit.translation.is_some())
         });

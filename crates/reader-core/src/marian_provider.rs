@@ -21,9 +21,9 @@ use crate::{
     resources::RESOURCES,
     space::{ensure_capacity, PACKAGE_OVERHEAD},
     translation::{
-        cached_translation, route_readiness, search_cached_translation, sentence_translation_input,
+        cached_translation, route_readiness, search_cached_translation, sentence_input,
         translate_paragraph, AlignedTranslation, CachedTranslation, ModelEdge,
-        ParagraphTranslation, SelectedTranslation, TranslationProvider, TranslationReadiness, TranslationRequest,
+        PageBoundaries, ParagraphTranslation, SelectedTranslation, TranslationProvider, TranslationReadiness, TranslationRequest,
         TranslationRouteStatus, TranslationSearchPage, TranslationSelection, TranslationSettings,
     },
     Result, Store,
@@ -667,19 +667,15 @@ impl Store {
         target: &str,
     ) -> Result<Option<AlignedTranslation>> {
         let (document, selected) = self.translation_selection(document_id, sentence_id)?;
-        let (text, sentence_ids) = sentence_translation_input(&document, selected);
+        let (text, sentence_ids) = sentence_input(self, &document, selected, target, PageBoundaries::Canonical)?;
         self.translate_machine_sentence(document_id, &document.language, target, text, sentence_ids)
     }
 
     pub fn translate_detached_pdf_sentence(
         &mut self, id: &str, page: u16, sentence_id: &str, target: &str,
     ) -> Result<Option<AlignedTranslation>> {
-        let current = self.detached_pdf_sentence(id, page, None)?
-            .filter(|current| current.sentence.id == sentence_id)
-            .ok_or("Позиція читання сторінки PDF змінилася.")?;
-        self.translate_machine_sentence(
-            id, &current.language, target, current.sentence.text, vec![current.sentence.id],
-        )
+        let (language, input) = self.detached_sentence_input(id, page, sentence_id, target)?;
+        self.translate_machine_sentence(id, &language, target, input, vec![sentence_id.to_owned()])
     }
 
     pub fn translate_installed_paragraph(
@@ -699,7 +695,7 @@ impl Store {
         background: bool,
     ) -> Result<ParagraphTranslation> {
         let (document, selected) = self.translation_selection(document_id, sentence_id)?;
-        self.translate_document_paragraph(&document, selected, target, background)
+        self.translate_document_paragraph(&document, selected, target, background, PageBoundaries::Canonical)
     }
 
     pub(crate) fn translate_document_paragraph(
@@ -708,18 +704,22 @@ impl Store {
         selected: usize,
         target: &str,
         background: bool,
+        boundaries: PageBoundaries,
     ) -> Result<ParagraphTranslation> {
         let directory = self.model_directory.clone();
-        translate_paragraph(
+        let translated = translate_paragraph(
             self,
             &mut MarianProvider {
                 directory: &directory,
                 background,
             },
-            document,
-            selected,
-            target,
-        )
+            document, selected, target, boundaries,
+        )?;
+        if translated.units.iter().any(|unit| !unit.reviewed && unit.translation.is_some()) {
+            return Ok(translated);
+        }
+        let routes = self.translation_cache_routes(&document.language, target)?;
+        Ok(routes.cached_window(self, document, selected, target, boundaries)?.paragraph)
     }
 
     pub fn cached_installed_translation(

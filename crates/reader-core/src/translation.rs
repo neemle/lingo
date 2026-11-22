@@ -1,10 +1,10 @@
 //! Routes translations through models already installed on the device.
 
-use crate::{valid_language, Result, Store};
+use crate::{pdf_detached_pages::word_break, valid_language, Document, Result, Store};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{cmp::Ordering, collections::HashSet};
+use std::{cmp::Ordering, collections::HashSet, ops::RangeInclusive};
 use unicode_normalization::UnicodeNormalization;
 
 const MAX_BATCH_BYTES: usize = 64 * 1024;
@@ -419,17 +419,24 @@ struct ParagraphPlan {
     pending: Vec<(usize, String)>,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum PageBoundaries {
+    Canonical,
+    Projected,
+}
+
 pub(crate) fn translate_paragraph(
     store: &mut Store,
     provider: &mut impl TranslationProvider,
     document: &crate::Document,
     selected: usize,
     target: &str,
+    boundaries: PageBoundaries,
 ) -> Result<ParagraphTranslation> {
     let ParagraphPlan {
         mut result,
         pending,
-    } = paragraph_plan(document, selected, target)?;
+    } = paragraph_plan(store, document, selected, target, boundaries)?;
     if !pending.is_empty() {
         let (indices, input): (Vec<_>, Vec<_>) = pending.into_iter().unzip();
         if let Some(aligned) =
@@ -454,14 +461,7 @@ pub(crate) fn cached_translation(
     target: &str,
 ) -> Result<CachedTranslation> {
     let routes = CacheRoutes::resolve(installed, catalog, &document.language, target)?;
-    cached_translation_with_routes(
-        store,
-        &routes,
-        document,
-        selected,
-        target,
-        CacheScope::Window,
-    )
+    routes.cached_window(store, document, selected, target, PageBoundaries::Canonical)
 }
 
 pub(crate) struct CacheRoutes {
@@ -489,10 +489,16 @@ impl CacheRoutes {
         })
     }
 
+    pub(crate) fn cached_window(
+        &self, store: &Store, document: &Document, position: usize, target: &str, boundaries: PageBoundaries,
+    ) -> Result<CachedTranslation> {
+        cached_translation_with_routes(store, self, document, position, target, CacheScope::Window, boundaries)
+    }
+
     pub(crate) fn cached_active(
         &self, store: &Store, document: &crate::Document, position: usize, target: &str,
     ) -> Result<CachedTranslation> {
-        cached_translation_with_routes(store, self, document, position, target, CacheScope::Active)
+        cached_translation_with_routes(store, self, document, position, target, CacheScope::Active, PageBoundaries::Projected)
     }
 
     pub(crate) fn cached_standalone(
@@ -549,11 +555,12 @@ fn cached_translation_with_routes(
     selected: usize,
     target: &str,
     scope: CacheScope,
+    boundaries: PageBoundaries,
 ) -> Result<CachedTranslation> {
     let ParagraphPlan {
         result: mut paragraph,
         pending,
-    } = paragraph_plan(document, selected, target)?;
+    } = paragraph_plan(store, document, selected, target, boundaries)?;
     paragraph.pivot_language = routes
         .preferred
         .as_ref()
@@ -565,7 +572,8 @@ fn cached_translation_with_routes(
         .units
         .iter()
         .any(|unit| unit.reviewed && unit.sentence_ids.contains(active_id));
-    let standalone = (!active_reviewed).then(|| sentence_translation_input(document, selected));
+    let standalone = (!active_reviewed)
+        .then(|| sentence_input(store, document, selected, target, boundaries)).transpose()?;
     let mut best = None;
     for route in &routes.candidates {
         let mut units = Vec::new();
@@ -676,7 +684,7 @@ pub(crate) fn search_cached_translation(
             document,
             position,
             target,
-            CacheScope::Active,
+            CacheScope::Active, PageBoundaries::Canonical,
         )?;
         let active_unit = cached
             .paragraph
@@ -750,9 +758,7 @@ fn catalog_routes<'a>(
 }
 
 fn paragraph_plan(
-    document: &crate::Document,
-    selected: usize,
-    target: &str,
+    store: &Store, document: &Document, selected: usize, target: &str, boundaries: PageBoundaries,
 ) -> Result<ParagraphPlan> {
     valid_language(target)?;
     if document.language == target {
@@ -828,6 +834,10 @@ fn paragraph_plan(
         if review.is_none() {
             let input = inference_span(document, index, next - 1)
                 .ok_or("Межі абзацу пошкоджені.")?;
+            let input = match boundaries {
+                PageBoundaries::Canonical => with_adjacent_pdf_text(store, document, index, next - 1, target, input)?,
+                PageBoundaries::Projected => input,
+            };
             pending.push((units.len(), input));
         }
         let mut unit = ParagraphUnit {
@@ -868,19 +878,19 @@ fn paragraph_plan(
 
 #[cfg(test)]
 fn input_for_sentence(document: &crate::Document, selected: usize) -> (String, bool) {
-    let (text, sentence_ids) = sentence_translation_input(document, selected);
-    (text, sentence_ids.len() > 1)
+    let (text, range) = sentence_span_input(document, selected);
+    (text, range.start() != range.end())
 }
 
-pub(crate) fn sentence_translation_input(
-    document: &crate::Document,
+fn sentence_span_input(
+    document: &Document,
     selected: usize,
-) -> (String, Vec<String>) {
+) -> (String, RangeInclusive<usize>) {
     const MAX_JOINED_BYTES: usize = 1024;
     const MAX_FRAGMENTS: usize = 12;
     let active = &document.sentences[selected];
     if document.format != "pdf" && document.ocr_lines.is_none() {
-        return (active.text.clone(), vec![active.id.clone()]);
+        return (active.text.clone(), selected..=selected);
     }
     let within_budget = |left: usize, right: usize| {
         right - left < MAX_FRAGMENTS
@@ -901,14 +911,51 @@ pub(crate) fn sentence_translation_input(
         end += 1;
     }
     if let Some(input) = inference_span(document, start, end) {
-        let ids = document.sentences[start..=end]
-            .iter()
-            .map(|sentence| sentence.id.clone())
-            .collect();
-        (input, ids)
+        (input, start..=end)
     } else {
-        (active.text.clone(), vec![active.id.clone()])
+        (active.text.clone(), selected..=selected)
     }
+}
+
+pub(crate) fn sentence_input(
+    store: &Store, document: &Document, selected: usize, target: &str, boundaries: PageBoundaries,
+) -> Result<(String, Vec<String>)> {
+    let (input, range) = sentence_span_input(document, selected);
+    let input = match boundaries {
+        PageBoundaries::Canonical => with_adjacent_pdf_text(store, document, *range.start(), *range.end(), target, input)?,
+        PageBoundaries::Projected => input,
+    };
+    let ids = document.sentences[range].iter().map(|sentence| sentence.id.clone()).collect();
+    Ok((input, ids))
+}
+
+fn with_adjacent_pdf_text(
+    store: &Store, document: &Document, first: usize, last: usize, target: &str, input: String,
+) -> Result<String> {
+    if document.pdf_page_starts.is_none() || input.len() > 1024 {
+        return Ok(input);
+    }
+    let reviews = document.reviewed_translations.get(target);
+    let unreviewed = |index: usize| {
+        let sentence = &document.sentences[index];
+        reviews.is_none_or(|reviews| !reviews.contains_key(&sentence.id)).then_some(sentence)
+    };
+    let (previous, next) = word_break::canonical_edge_fragments(
+        store, document, Some(target), unreviewed(first), unreviewed(last),
+    )?;
+    if previous.is_none() && next.is_none() {
+        return Ok(input);
+    }
+    let detached = Document::default();
+    let normalize = |fragment: String| normalize_ocr_input(&detached, &fragment, 0);
+    let previous = previous.map(normalize);
+    let next = next.map(normalize);
+    if let Some(joined) = word_break::join_fragments(&input, previous.as_deref(), next.as_deref()) {
+        if joined.text.len() <= 1024 {
+            return Ok(joined.text);
+        }
+    }
+    Ok(input)
 }
 
 fn inference_span(document: &crate::Document, first: usize, last: usize) -> Option<String> {

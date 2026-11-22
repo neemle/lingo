@@ -1,5 +1,5 @@
 use super::{annotations, word_break, CachedSentences};
-use crate::translation::{CacheRoutes, ParagraphTranslation};
+use crate::translation::{sentence_input, CacheRoutes, PageBoundaries, ParagraphTranslation};
 use crate::{document_layout, Document, Result, Sentence, Store};
 use serde::Serialize;
 use std::{collections::BTreeMap, ops::Range};
@@ -68,11 +68,27 @@ impl Store {
         }
         let position = projection.physical.start + selected;
         let translated =
-            self.translate_document_paragraph(&projection.document, position, target, background)?;
-        Ok(
-            active_translation(&projection.document, position, translated)
-                .map(|value| projection.localize(value)),
-        )
+            self.translate_document_paragraph(&projection.document, position, target, background, PageBoundaries::Projected)?;
+        if let Some(active) = active_translation(&projection.document, position, translated) {
+            return Ok(Some(projection.localize(active)));
+        }
+        let routes = self.translation_cache_routes(&projection.document.language, target)?;
+        cached_page_translation(self, &routes, &projection, selected, target)
+    }
+
+    pub(crate) fn detached_sentence_input(
+        &self, id: &str, page: u16, sentence_id: &str, target: &str,
+    ) -> Result<(String, String)> {
+        let CachedSentences { language, text, saved, sentences, .. } = self
+            .detached_pdf_sentences(id, page)?.ok_or("Текст сторінки PDF недоступний.")?;
+        let selected = saved.min(sentences.len() - 1);
+        if sentences[selected].id != sentence_id {
+            return Err("Позиція читання сторінки PDF змінилася.".into());
+        }
+        let projection = self.project_pdf_translation_page(id, page, target, text, sentences, language)?;
+        let position = projection.physical.start + selected;
+        let (input, _) = sentence_input(self, &projection.document, position, target, PageBoundaries::Projected)?;
+        Ok((projection.document.language, input))
     }
 
     pub(super) fn project_pdf_translation_page(
