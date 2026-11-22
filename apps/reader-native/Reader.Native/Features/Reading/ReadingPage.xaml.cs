@@ -599,6 +599,19 @@ public partial class ReadingPage : ContentPage
 
     private async void SpeakClicked(object? sender, EventArgs args) => await SpeakAsync();
 
+    private async void ToggleSpeechClicked(object? sender, EventArgs args)
+    {
+        if (!AppState.Session.CanInteract) return;
+        if (utteranceActive)
+        {
+            if (PauseSpeech.IsEnabled) ToggleSpeechPause();
+            return;
+        }
+
+        RefreshSpeechResume();
+        await SpeakAsync(speechResume);
+    }
+
     private async void ResumeSpeechClicked(object? sender, EventArgs args)
     {
         RefreshSpeechResume();
@@ -761,7 +774,9 @@ public partial class ReadingPage : ContentPage
         return span.StartUtf16;
     }
 
-    private void PauseClicked(object? sender, EventArgs args)
+    private void PauseClicked(object? sender, EventArgs args) => ToggleSpeechPause();
+
+    private void ToggleSpeechPause()
     {
         if (speechPaused ? !speech.Resume() : !speech.Pause()) return;
         speechPaused = !speechPaused;
