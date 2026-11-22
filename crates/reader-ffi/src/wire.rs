@@ -58,6 +58,10 @@ pub enum Command {
         bytes: Vec<u8>,
         pages: u16,
     },
+    PdfReadWindow {
+        id: String,
+        center: u16,
+    },
     PdfOcrNeededPages {
         id: String,
         center: u16,

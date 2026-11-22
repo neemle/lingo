@@ -2,6 +2,37 @@
 
 use crate::{document_layout, document_revisions, ocr, pdf_layers, Document, Result, Store};
 use rusqlite::{params, Connection};
+use serde::Serialize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PdfReadPageState {
+    TextLayer,
+    Recognized,
+    Empty,
+    NeedsOcr,
+    Unavailable,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfReadPage {
+    pub page: u16,
+    pub state: PdfReadPageState,
+    pub text: String,
+    pub span: Option<ocr::OcrSpan>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfReadWindow {
+    pub center: u16,
+    pub page_count: usize,
+    pub pages: Vec<PdfReadPage>,
+    pub context: String,
+    /// Canonical source covered by the normalized context.
+    pub context_span: Option<ocr::OcrSpan>,
+}
 
 pub(crate) fn initialize(db: &Connection) -> Result<()> {
     db.execute_batch(
@@ -15,11 +46,18 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
 }
 
 pub(crate) fn completed_pages(db: &Connection, id: &str) -> Result<Vec<u16>> {
+    completed_pages_between(db, id, 0, u16::MAX)
+}
+
+fn completed_pages_between(db: &Connection, id: &str, first: u16, last: u16) -> Result<Vec<u16>> {
     let mut query = db
-        .prepare("SELECT page FROM pdf_ocr_completed_pages WHERE document_id=?1 ORDER BY page")
+        .prepare(
+            "SELECT page FROM pdf_ocr_completed_pages
+             WHERE document_id=?1 AND page BETWEEN ?2 AND ?3 ORDER BY page",
+        )
         .map_err(database_error)?;
     let pages = query
-        .query_map([id], |row| row.get(0))
+        .query_map(params![id, first, last], |row| row.get(0))
         .map_err(database_error)?;
     pages.collect::<rusqlite::Result<_>>().map_err(database_error)
 }
@@ -34,6 +72,54 @@ pub(crate) fn mark_completed(db: &Connection, id: &str, page: u16) -> Result<()>
 }
 
 impl Store {
+    /// Provide enough text for the active page and both immediate neighbors.
+    pub fn pdf_read_window(&self, id: &str, center: u16) -> Result<PdfReadWindow> {
+        let (body, file_backed): (String, bool) = self
+            .connection
+            .query_row(
+                "SELECT body, EXISTS(SELECT 1 FROM file_originals WHERE document_id=?1)
+                 FROM documents WHERE id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(database_error)?;
+        let document: Document = serde_json::from_str(&body).map_err(database_error)?;
+        let starts = document
+            .pdf_page_starts
+            .as_deref()
+            .filter(|_| document.format == "pdf")
+            .ok_or("У документа немає розмітки сторінок PDF")?;
+        let index = usize::from(center);
+        if index >= starts.len() {
+            return Err("Сторінку PDF не знайдено".into());
+        }
+
+        let completed = completed_pages_between(
+            &self.connection, id, center.saturating_sub(1), center.saturating_add(1),
+        )?;
+        let first = index.saturating_sub(1);
+        let last = (index + 1).min(starts.len() - 1);
+        let pages = (first..=last)
+            .map(|page| reading_page(&document, starts, &completed, page, file_backed))
+            .collect::<Result<Vec<_>>>()?;
+
+        let context_span = reading_context(&pages, index - first);
+        let context = context_span.map_or_else(String::new, |span| {
+            crate::translation::normalize_ocr_input(
+                &document,
+                &document.text[span.start_utf8..span.end_utf8],
+                span.start_utf16,
+            )
+        });
+        Ok(PdfReadWindow {
+            center,
+            page_count: starts.len(),
+            pages,
+            context,
+            context_span,
+        })
+    }
+
     /// Return the unrecognized pages in this window, starting with the requested page.
     pub fn pdf_ocr_needed_pages(&self, id: &str, center: u16) -> Result<Vec<u16>> {
         let Some(pages) = self.native_pdf_page_text(id)? else {
@@ -47,7 +133,9 @@ impl Store {
             .query_row("SELECT body FROM documents WHERE id=?1", [id], |row| row.get(0))
             .map_err(database_error)?;
         let document: Document = serde_json::from_str(&body).map_err(database_error)?;
-        let completed = completed_pages(&self.connection, id)?;
+        let completed = completed_pages_between(
+            &self.connection, id, center.saturating_sub(1), center.saturating_add(1),
+        )?;
         let window = [Some(center), center.checked_sub(1), center.checked_add(1)];
         Ok(window
             .into_iter()
@@ -131,6 +219,72 @@ impl Store {
         })?;
         updated.ok_or_else(|| "Не вдалося оновити сторінку PDF".to_owned())
     }
+}
+
+fn reading_page(
+    document: &Document,
+    starts: &[Option<usize>],
+    completed: &[u16],
+    index: usize,
+    file_backed: bool,
+) -> Result<PdfReadPage> {
+    let page = u16::try_from(index).map_err(database_error)?;
+    let mut result = PdfReadPage {
+        page,
+        state: PdfReadPageState::Unavailable,
+        text: String::new(),
+        span: None,
+    };
+    let Some(start_utf16) = starts[index] else {
+        result.state = if completed.binary_search(&page).is_ok() {
+            PdfReadPageState::Empty
+        } else if file_backed {
+            PdfReadPageState::NeedsOcr
+        } else {
+            PdfReadPageState::Unavailable
+        };
+        return Ok(result);
+    };
+
+    let invalid_span = "Межі сторінки PDF пошкоджені";
+    let text = &document.text;
+    let start_utf8 = ocr::byte_at_utf16(text, start_utf16).ok_or(invalid_span)?;
+    let end_utf8 = match starts[index + 1..].iter().flatten().next() {
+        Some(next) => ocr::byte_at_utf16(text, *next).ok_or(invalid_span)?,
+        None => text.len(),
+    };
+    let content = text.get(start_utf8..end_utf8).ok_or(invalid_span)?.trim_end();
+    result.state = if has_ocr_lines(document, page) {
+        PdfReadPageState::Recognized
+    } else {
+        PdfReadPageState::TextLayer
+    };
+    result.text = content.to_owned();
+    result.span = Some(ocr::OcrSpan {
+        start_utf8,
+        end_utf8: start_utf8 + content.len(),
+        start_utf16,
+        end_utf16: start_utf16 + content.encode_utf16().count(),
+    });
+    Ok(result)
+}
+
+fn reading_context(pages: &[PdfReadPage], center: usize) -> Option<ocr::OcrSpan> {
+    let current = pages[center].span?;
+    let start = center
+        .checked_sub(1)
+        .and_then(|index| pages[index].span)
+        .unwrap_or(current);
+    let end = pages
+        .get(center + 1)
+        .and_then(|page| page.span)
+        .unwrap_or(current);
+    Some(ocr::OcrSpan {
+        start_utf8: start.start_utf8,
+        end_utf8: end.end_utf8,
+        start_utf16: start.start_utf16,
+        end_utf16: end.end_utf16,
+    })
 }
 
 fn has_ocr_lines(document: &Document, page: u16) -> bool {

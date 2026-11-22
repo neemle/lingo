@@ -656,9 +656,16 @@ fn inference_span(document: &crate::Document, first: usize, last: usize) -> Opti
         return Some(first.text.clone());
     }
 
+    Some(normalize_ocr_input(document, span, first.start_utf16))
+}
+
+pub(crate) fn normalize_ocr_input(
+    document: &crate::Document,
+    span: &str,
+    mut offset: usize,
+) -> String {
     let mut normalized = String::with_capacity(span.len());
     let mut rest = span;
-    let mut offset = first.start_utf16;
     while !rest.is_empty() {
         let word_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
         let (word, separator_and_tail) = rest.split_at(word_end);
@@ -684,7 +691,7 @@ fn inference_span(document: &crate::Document, first: usize, last: usize) -> Opti
         rest = tail;
         offset = tail_start_utf16;
     }
-    Some(normalized)
+    normalized
 }
 
 fn word_hyphen(word: &str) -> Option<&str> {

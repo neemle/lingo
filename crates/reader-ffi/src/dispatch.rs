@@ -78,6 +78,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
                     .collect::<Vec<_>>()
             }),
         ),
+        Command::PdfReadWindow { id, center } => value(store.pdf_read_window(&id, center)),
         Command::PdfOcrNeededPages { id, center } => value(store.pdf_ocr_needed_pages(&id, center)),
         Command::CachePdfOcrPage { id, page, lines } => {
             value(store.cache_pdf_ocr_page(&id, page, lines))

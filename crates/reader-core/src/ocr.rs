@@ -157,7 +157,7 @@ pub(crate) fn recognized_lines(lines: &[OcrLine], pages: u16) -> Result<String> 
     Ok(text)
 }
 
-fn byte_at_utf16(text: &str, target: usize) -> Option<usize> {
+pub(crate) fn byte_at_utf16(text: &str, target: usize) -> Option<usize> {
     let mut remaining = target;
     for (offset, character) in text.char_indices() {
         if remaining == 0 {

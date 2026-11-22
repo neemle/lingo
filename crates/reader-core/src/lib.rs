@@ -30,6 +30,7 @@ mod onnx_runtime;
 pub mod optional_models;
 pub mod pdf_layers;
 mod pdf_page_ocr;
+pub use pdf_page_ocr::{PdfReadPage, PdfReadPageState, PdfReadWindow};
 pub mod practice;
 pub mod qwen;
 pub mod reading_history;
