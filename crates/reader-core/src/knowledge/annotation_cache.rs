@@ -14,19 +14,38 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
             cache_key BLOB NOT NULL,
             annotation_blob TEXT NOT NULL,
             UNIQUE(document_id, cache_key)
-        );",
+        );
+        CREATE TABLE IF NOT EXISTS model_hints (
+            document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            cache_key BLOB NOT NULL,
+            annotation_blob TEXT NOT NULL,
+            PRIMARY KEY(document_id, cache_key)
+        ) WITHOUT ROWID;",
     )
     .map_err(|error| error.to_string())
 }
 
 pub(super) fn read(db: &Connection, document_id: &str, key: &[u8]) -> Option<Value> {
+    read_value(
+        db,
+        "SELECT annotation_blob FROM linguistic_annotations WHERE document_id=?1 AND cache_key=?2",
+        document_id,
+        key,
+    )
+}
+
+pub(crate) fn read_model_hint(db: &Connection, document_id: &str, key: &[u8]) -> Option<Value> {
+    read_value(
+        db,
+        "SELECT annotation_blob FROM model_hints WHERE document_id=?1 AND cache_key=?2",
+        document_id,
+        key,
+    )
+}
+
+fn read_value(db: &Connection, query: &str, document_id: &str, key: &[u8]) -> Option<Value> {
     let body: Option<String> = db
-        .query_row(
-            "SELECT annotation_blob FROM linguistic_annotations
-             WHERE document_id=?1 AND cache_key=?2",
-            params![document_id, key],
-            |row| row.get(0),
-        )
+        .query_row(query, params![document_id, key], |row| row.get(0))
         .optional()
         .ok()?;
     serde_json::from_str(&body?).ok()
@@ -41,6 +60,16 @@ pub(super) fn write(db: &Connection, document_id: &str, key: &[u8], annotation: 
     // Derived data: a locked database or a concurrently deleted document
     // should not prevent returning the freshly computed analysis.
     let _ = save(db, document_id, key, &body);
+}
+
+pub(crate) fn write_model_hint(db: &Connection, document_id: &str, key: &[u8], hint: &Value) {
+    let body = hint.to_string();
+    if body.len() <= MAX_ANNOTATION_BYTES {
+        let _ = db.execute(
+            "INSERT OR IGNORE INTO model_hints (document_id, cache_key, annotation_blob) VALUES (?1, ?2, ?3)",
+            params![document_id, key, body],
+        );
+    }
 }
 
 fn save(db: &Connection, document_id: &str, key: &[u8], body: &str) -> rusqlite::Result<()> {

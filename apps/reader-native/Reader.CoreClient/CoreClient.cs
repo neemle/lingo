@@ -297,12 +297,15 @@ public sealed class CoreClient : IDisposable
         Call<JsonElement>(new { version = 1, operation = "set_speech_text", id, sentenceId, text });
     public void SetReviewedTranslation(string id, string sentenceId, string target, string text) =>
         Call<JsonElement>(new { version = 1, operation = "set_reviewed_translation", id, sentenceId, target, text });
-    public SentenceReview ReviewSentence(string model, string document, int? page, string? sentence,
-        object? focus = null, string? revisionId = null) =>
-        CallIndependent<SentenceReview>(new { version = 1, operation = "review_sentence", model, document, page, sentence, focus, revisionId });
+    public SentenceReview? ReviewSentence(string model, string document, int? page, string? sentence,
+        object? focus = null, string? revisionId = null, bool cachedOnly = false) =>
+        CallIndependent<SentenceReview?>(new
+        {
+            version = 1, operation = "review_sentence", model, document, page, sentence, focus, revisionId, cachedOnly,
+        });
 
-    public WordExplanation ExplainWord(string model, string document, string sentence, string word) =>
-        CallIndependent<WordExplanation>(new { version = 1, operation = "explain_word", model, document, sentence, word });
+    public WordExplanation? ExplainWord(string model, string document, string sentence, string word, bool cachedOnly = false) =>
+        CallIndependent<WordExplanation?>(new { version = 1, operation = "explain_word", model, document, sentence, word, cachedOnly });
     public string[] SemanticVocabulary(string query, string? documentId = null) =>
         CallIndependent<string[]>(new { version = 1, operation = "semantic_vocabulary", query, documentId });
 

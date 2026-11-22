@@ -195,6 +195,7 @@ fn validate(command: &Command) -> Result<()> {
             document,
             sentence,
             word,
+            ..
         } if model.len() > 32
             || document.len() > 128
             || sentence.len() > 128

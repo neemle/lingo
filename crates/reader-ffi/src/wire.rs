@@ -344,12 +344,16 @@ pub enum Command {
         focus: Option<reader_core::qwen::ReviewFocus>,
         #[serde(rename = "revisionId")]
         revision_id: Option<String>,
+        #[serde(default, rename = "cachedOnly")]
+        cached_only: bool,
     },
     ExplainWord {
         model: String,
         document: String,
         sentence: String,
         word: String,
+        #[serde(default, rename = "cachedOnly")]
+        cached_only: bool,
     },
     OptionalModels,
     ModelTransfer {

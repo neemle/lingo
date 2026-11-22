@@ -392,12 +392,12 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         return Read();
     });
 
-    public Task<SentenceReview> ReviewSentenceAsync(string model, string document, int? page, string? sentence,
-        object? focus = null, string? revisionId = null) =>
-        Task.Run(() => client.ReviewSentence(model, document, page, sentence, focus, revisionId));
+    public Task<SentenceReview?> ReviewSentenceAsync(string model, string document, int? page, string? sentence,
+        object? focus = null, string? revisionId = null, bool cachedOnly = false) =>
+        Task.Run(() => client.ReviewSentence(model, document, page, sentence, focus, revisionId, cachedOnly));
 
-    public Task<WordExplanation> ExplainWordAsync(string model, string document, string sentence, string word) =>
-        Task.Run(() => client.ExplainWord(model, document, sentence, word));
+    public Task<WordExplanation?> ExplainWordAsync(string model, string document, string sentence, string word, bool cachedOnly = false) =>
+        Task.Run(() => client.ExplainWord(model, document, sentence, word, cachedOnly));
 
     public Task<string[]> SemanticVocabularyAsync(string query, string? documentId = null) =>
         Task.Run(() => client.SemanticVocabulary(query, documentId));

@@ -86,7 +86,7 @@ public partial class ReadingPage
             || session.Sentence is not { } sentence) return;
         await ShowAnalysisPageAsync("Перевірка речення", sentence.Text,
             start => session.AnalyzeSentenceAsync(document.Id, sentence.Id, revision, start),
-            model => session.ReviewSentenceAsync(model, document.Id, null, sentence.Id, revisionId: revision));
+            (model, cachedOnly) => session.ReviewSentenceAsync(model, document.Id, null, sentence.Id, revisionId: revision, cachedOnly: cachedOnly));
     }
 
     private async void OpenExpressionAnalysisClicked(object? sender, EventArgs args)
@@ -122,8 +122,8 @@ public partial class ReadingPage
             }
             await ShowAnalysisPageAsync("Перевірка виразу", choice.Text,
                 _ => session.AnalyzeExpressionAsync(document.Id, sentence.Id, revision, choice.Members),
-                model => session.ReviewSentenceAsync(model, document.Id, null, sentence.Id,
-                    new { kind = "expression", memberStartsUtf16 = choice.Members }, revision));
+                (model, cachedOnly) => session.ReviewSentenceAsync(model, document.Id, null, sentence.Id,
+                    new { kind = "expression", memberStartsUtf16 = choice.Members }, revision, cachedOnly));
         }
         catch (Exception error)
         {
@@ -138,7 +138,7 @@ public partial class ReadingPage
         AppState.Session.Sentence?.Id == sentence.Id;
 
     private async Task ShowAnalysisPageAsync(string title, string text, Func<int, Task<LinguisticAnalysis>> load,
-        Func<string, Task<SentenceReview>>? review = null)
+        Func<string, bool, Task<SentenceReview?>>? review = null)
     {
         if (!readingPageActive) return;
         StopAnalysisPrefetch();
@@ -150,6 +150,9 @@ public partial class ReadingPage
     {
         private readonly Func<int, Task<LinguisticAnalysis>> load;
         private readonly Label status = new();
+        private readonly Func<string, bool, Task<SentenceReview?>>? review;
+        private readonly Button check = new() { Text = "Перевірити з Qwen", HorizontalOptions = LayoutOptions.Start };
+        private readonly Label hints = new() { IsVisible = false };
         private readonly VerticalStackLayout results = new() { Spacing = 9 };
         private readonly Button more = new() { Text = "Наступні слова", IsVisible = false };
         private readonly HashSet<(string Dependent, string Head, string Relation)> displayedLinks = [];
@@ -158,10 +161,11 @@ public partial class ReadingPage
         private bool loading;
 
         internal AnalysisPage(string title, string text, Func<int, Task<LinguisticAnalysis>> load,
-            Func<string, Task<SentenceReview>>? review)
+            Func<string, bool, Task<SentenceReview?>>? review)
         {
             Title = title;
             this.load = load;
+            this.review = review;
             var close = new Button { Text = "Закрити" };
             close.Clicked += async (_, _) => await Navigation.PopModalAsync();
             more.Clicked += async (_, _) => await LoadAsync();
@@ -171,9 +175,7 @@ public partial class ReadingPage
             stack.Children.Add(close);
             if (review is not null)
             {
-                var check = new Button { Text = "Перевірити з Qwen", HorizontalOptions = LayoutOptions.Start };
-                var hints = new Label { IsVisible = false };
-                check.Clicked += async (_, _) => await ReviewLocallyAsync(review, check, hints);
+                check.Clicked += async (_, _) => await ReviewLocallyAsync(cachedOnly: false);
                 stack.Children.Add(check);
                 stack.Children.Add(hints);
             }
@@ -183,36 +185,55 @@ public partial class ReadingPage
             Content = new ScrollView { Content = stack };
         }
 
-        private static async Task ReviewLocallyAsync(
-            Func<string, Task<SentenceReview>> review, Button check, Label hints)
+        private async Task ReviewLocallyAsync(bool cachedOnly)
         {
-            if (!check.IsEnabled) return;
+            if (!check.IsEnabled || review is null) return;
             check.IsEnabled = false;
-            hints.IsVisible = true;
-            hints.Text = "Перевіряємо локальні моделі…";
+            if (!cachedOnly)
+            {
+                hints.IsVisible = true;
+                hints.Text = "Шукаємо збережену перевірку…";
+            }
             try
             {
-                var models = (await AppState.Session.OptionalModelsAsync()).Where(model =>
-                    model.FilesPresent && (model.Id is "qwen-0.8b" or "qwen-2b")).ToArray();
-                var model = models.Where(item => item.Memory?.Ready != false)
-                    .OrderBy(item => item.Id == "qwen-2b" ? 1 : 0).FirstOrDefault();
-                if (model is null)
+                var models = (await AppState.Session.OptionalModelsAsync())
+                    .Where(model => model.Id is "qwen-0.8b" or "qwen-2b")
+                    .OrderBy(model => model.Id == "qwen-2b" ? 1 : 0).ToArray();
+                foreach (var model in models)
                 {
-                    hints.Text = models.Length == 0
+                    if (await review(model.Id, true) is not { } cached) continue;
+                    ShowReview(model.Name, cached);
+                    return;
+                }
+                if (cachedOnly) return;
+
+                var installed = models.Where(model => model.FilesPresent).ToArray();
+                var available = installed.FirstOrDefault(model => model.Memory?.Ready != false);
+                if (available is null)
+                {
+                    hints.Text = installed.Length == 0
                         ? "Установіть Qwen у налаштуваннях. Підказки мовного пакета залишаються доступними."
                         : "Для встановлених моделей Qwen зараз бракує пам’яті.";
                     return;
                 }
-                hints.Text = $"{model.Name} перевіряє текст…";
-                var result = await review(model.Id);
-                var notes = new List<string> { $"Підказки {model.Name}" };
-                if (result.Spelling is { } spelling) notes.Add($"Правопис · {spelling}");
-                if (result.Syntax is { } syntax) notes.Add($"Синтаксис · {syntax}");
-                if (notes.Count == 1) notes.Add("Модель не запропонувала виправлень.");
-                hints.Text = string.Join(Environment.NewLine, notes);
+                hints.Text = $"{available.Name} перевіряє текст…";
+                if (await review(available.Id, false) is { } result) ShowReview(available.Name, result);
             }
-            catch (Exception error) { hints.Text = error.Message; }
+            catch (Exception error)
+            {
+                if (!cachedOnly) hints.Text = error.Message;
+            }
             finally { check.IsEnabled = true; }
+        }
+
+        private void ShowReview(string name, SentenceReview result)
+        {
+            var notes = new List<string> { result.Cached ? $"Збережені підказки {name}" : $"Підказки {name}" };
+            if (result.Spelling is { } spelling) notes.Add($"Правопис · {spelling}");
+            if (result.Syntax is { } syntax) notes.Add($"Синтаксис · {syntax}");
+            if (notes.Count == 1) notes.Add("Модель не запропонувала виправлень.");
+            hints.Text = string.Join(Environment.NewLine, notes);
+            hints.IsVisible = true;
         }
 
         protected override async void OnAppearing()
@@ -220,6 +241,7 @@ public partial class ReadingPage
             base.OnAppearing();
             if (started) return;
             started = true;
+            _ = ReviewLocallyAsync(cachedOnly: true);
             await LoadAsync();
         }
 

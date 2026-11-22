@@ -1,5 +1,5 @@
 use crate::{
-    knowledge::{detached_selection, select_words, AnalysisScope},
+    knowledge::{annotation_cache, detached_selection, select_words, AnalysisScope},
     optional_models::OptionalModelJob,
     Document, Result, Sentence, Store,
 };
@@ -10,10 +10,12 @@ use llama_cpp_2::{
     model::{params::LlamaModelParams, LlamaModel},
     sampling::LlamaSampler,
 };
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     num::NonZeroU32,
-    path::Path,
+    path::{Path, PathBuf},
     sync::OnceLock,
     time::{Duration, Instant},
 };
@@ -59,9 +61,10 @@ struct WordExample<'a> {
     sentence: &'a str,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct WordExplanation {
     pub explanation: String,
+    pub cached: bool,
 }
 
 #[derive(Serialize)]
@@ -105,9 +108,72 @@ fn review_note<'de, D: serde::Deserializer<'de>>(
     Option::<String>::deserialize(decoder)
 }
 
-pub struct ReviewSentenceJob {
-    model: OptionalModelJob,
-    example: String,
+#[derive(Serialize)]
+pub struct SentenceReviewResult {
+    #[serde(flatten)]
+    review: SentenceReview,
+    cached: bool,
+}
+
+pub struct ReviewSentenceJob(HintWork<SentenceReview>);
+
+enum HintWork<T> {
+    Cached(Option<T>),
+    Generate {
+        model: OptionalModelJob,
+        example: String,
+        cache: HintCache,
+    },
+}
+
+impl<T: Serialize + serde::de::DeserializeOwned> HintWork<T> {
+    fn run(self, system: &str, parse: impl Fn(&[u8]) -> Result<T>) -> Result<Option<(T, bool)>> {
+        match self {
+            Self::Cached(result) => Ok(result.map(|result| (result, true))),
+            Self::Generate {
+                model,
+                example,
+                cache,
+            } => run_prompt(model, system, &example, &cache, parse).map(Some),
+        }
+    }
+}
+
+struct HintCache {
+    database: Option<PathBuf>,
+    document_id: String,
+    key: [u8; 32],
+}
+
+impl HintCache {
+    fn load<T: serde::de::DeserializeOwned>(&self) -> Option<T> {
+        let path = self.database.as_ref()?;
+        let db = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .ok()?;
+        let value = annotation_cache::read_model_hint(&db, &self.document_id, &self.key)?;
+        serde_json::from_value(value).ok()
+    }
+
+    fn save(&self, review: &impl Serialize) {
+        let Some(path) = &self.database else {
+            return;
+        };
+        let Ok(db) = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ) else {
+            return;
+        };
+        if db.pragma_update(None, "foreign_keys", true).is_err() {
+            return;
+        }
+        if let Ok(value) = serde_json::to_value(review) {
+            annotation_cache::write_model_hint(&db, &self.document_id, &self.key, &value);
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -144,8 +210,7 @@ impl Role {
 }
 
 pub struct ExplainWordJob {
-    model: OptionalModelJob,
-    example: String,
+    work: HintWork<WordExplanation>,
     word: String,
 }
 
@@ -158,6 +223,7 @@ impl Store {
         sentence_id: Option<&str>,
         focus: Option<&ReviewFocus>,
         revision: Option<&str>,
+        cached_only: bool,
     ) -> Result<ReviewSentenceJob> {
         if !matches!(model, "qwen-0.8b" | "qwen-2b") {
             return Err("Виберіть одну з моделей Qwen.".into());
@@ -212,9 +278,52 @@ impl Store {
             None => (exact_sentence()?, None),
         };
         let example = review_example(&language, sentence, scope)?;
-        Ok(ReviewSentenceJob {
-            model: self.prepare_optional_model(model)?,
-            example: serde_json::to_string(&example).map_err(|error| error.to_string())?,
+        let example = serde_json::to_string(&example).map_err(|error| error.to_string())?;
+        self.prepare_hint_work(
+            model,
+            document,
+            "qwen-sentence-review-v1",
+            REVIEW_SYSTEM,
+            example,
+            cached_only,
+        )
+        .map(ReviewSentenceJob)
+    }
+
+    fn prepare_hint_work<T: serde::de::DeserializeOwned>(
+        &self,
+        model: &str,
+        document: &str,
+        version: &str,
+        prompt: &str,
+        example: String,
+        cached_only: bool,
+    ) -> Result<HintWork<T>> {
+        let package = self.prepare_optional_model(model)?;
+        let identity =
+            serde_json::to_vec(&(version, model, package.revision(), prompt, END, &example))
+                .map_err(|error| error.to_string())?;
+        let key: [u8; 32] = Sha256::digest(identity).into();
+        let cached = annotation_cache::read_model_hint(&self.connection, document, &key)
+            .and_then(|value| serde_json::from_value::<T>(value).ok());
+        if cached_only || cached.is_some() {
+            return Ok(HintWork::Cached(cached));
+        }
+        let database = self
+            .connection
+            .path()
+            .map(Path::new)
+            .filter(|path| path.is_absolute())
+            .map(Path::to_owned);
+        let cache = HintCache {
+            database,
+            document_id: document.to_owned(),
+            key,
+        };
+        Ok(HintWork::Generate {
+            model: package,
+            example,
+            cache,
         })
     }
 
@@ -224,6 +333,7 @@ impl Store {
         document: &str,
         sentence: &str,
         word: &str,
+        cached_only: bool,
     ) -> Result<ExplainWordJob> {
         if !matches!(model, "qwen-0.8b" | "qwen-2b") {
             return Err("Виберіть одну з моделей Qwen.".into());
@@ -240,6 +350,7 @@ impl Store {
                 |row| row.get(0),
             )
             .map_err(|_| "Документ відсутній.".to_string())?;
+        let document_id = document;
         let document: Document = serde_json::from_str(&body).map_err(|error| error.to_string())?;
         let sentence = document
             .sentences
@@ -252,21 +363,37 @@ impl Store {
             sentence: word_context(&sentence.text, word)
                 .ok_or("Виділеного слова немає в реченні.")?,
         };
+        let example = serde_json::to_string(&example).map_err(|error| error.to_string())?;
+        let work = self.prepare_hint_work(
+            model,
+            document_id,
+            "qwen-word-explanation-v1",
+            SYSTEM,
+            example,
+            cached_only,
+        )?;
         Ok(ExplainWordJob {
-            model: self.prepare_optional_model(model)?,
-            example: serde_json::to_string(&example).map_err(|error| error.to_string())?,
+            work,
             word: word.to_owned(),
         })
     }
 }
 
 impl ExplainWordJob {
-    pub fn run(self) -> Result<WordExplanation> {
-        run_prompt(self.model, SYSTEM, &self.example, |output| {
-            let analysis = parse_explanation(output)
-                .ok_or("Qwen не повернув пояснення у правильному форматі.")?;
-            Ok(render_explanation(&self.word, analysis))
-        })
+    pub fn run(self) -> Result<Option<WordExplanation>> {
+        let word = self.word;
+        self.work
+            .run(SYSTEM, |output| {
+                let analysis = parse_explanation(output)
+                    .ok_or("Qwen не повернув пояснення у правильному форматі.")?;
+                Ok(render_explanation(&word, analysis))
+            })
+            .map(|result| {
+                result.map(|(mut explanation, cached)| {
+                    explanation.cached = cached;
+                    explanation
+                })
+            })
     }
 }
 
@@ -318,39 +445,46 @@ fn review_example<'a>(
 }
 
 impl ReviewSentenceJob {
-    pub fn run(self) -> Result<SentenceReview> {
-        run_prompt(self.model, REVIEW_SYSTEM, &self.example, |output| {
-            let mut review: SentenceReview = serde_json::from_str(
-                json_output(output).ok_or("Qwen не повернув перевірку у правильному форматі.")?,
-            )
-            .map_err(|_| "Qwen не повернув перевірку у правильному форматі.")?;
-            for note in [&mut review.spelling, &mut review.syntax]
-                .into_iter()
-                .flatten()
-            {
-                let text = note.trim();
-                if text.is_empty()
-                    || text.chars().count() > 240
-                    || text
-                        .chars()
-                        .any(|ch| ch.is_control() || matches!(ch, '<' | '>'))
+    pub fn run(self) -> Result<Option<SentenceReviewResult>> {
+        self.0
+            .run(REVIEW_SYSTEM, |output| {
+                let mut review: SentenceReview = serde_json::from_str(
+                    json_output(output)
+                        .ok_or("Qwen не повернув перевірку у правильному форматі.")?,
+                )
+                .map_err(|_| "Qwen не повернув перевірку у правильному форматі.")?;
+                for note in [&mut review.spelling, &mut review.syntax]
+                    .into_iter()
+                    .flatten()
                 {
-                    return Err("Qwen повернув некоректну підказку.".into());
+                    let text = note.trim();
+                    if text.is_empty()
+                        || text.chars().count() > 240
+                        || text
+                            .chars()
+                            .any(|ch| ch.is_control() || matches!(ch, '<' | '>'))
+                    {
+                        return Err("Qwen повернув некоректну підказку.".into());
+                    }
+                    *note = text.to_owned();
                 }
-                *note = text.to_owned();
-            }
-            Ok(review)
-        })
+                Ok(review)
+            })
+            .map(|result| result.map(|(review, cached)| SentenceReviewResult { review, cached }))
     }
 }
 
-fn run_prompt<T>(
+fn run_prompt<T: Serialize + serde::de::DeserializeOwned>(
     job: OptionalModelJob,
     system: &str,
     example: &str,
+    cache: &HintCache,
     parse: impl Fn(&[u8]) -> Result<T>,
-) -> Result<T> {
+) -> Result<(T, bool)> {
     job.run(|directory, should_yield| {
+        if let Some(result) = cache.load() {
+            return Ok((result, true));
+        }
         let backend = backend()?;
         let path = directory.join("model.gguf");
         let timeout = Instant::now() + Duration::from_secs(20);
@@ -374,7 +508,9 @@ fn run_prompt<T>(
                 Ok(model) => match model.new_context(backend, context_parameters()) {
                     Ok(mut context) => {
                         let output = generate(&model, &mut context, system, example, check)?;
-                        return parse(&output);
+                        let result = parse(&output)?;
+                        cache.save(&result);
+                        return Ok((result, false));
                     }
                     Err(error) if layers == 0 => return Err(runtime_error(error)),
                     Err(_) => {}
@@ -531,7 +667,10 @@ fn render_explanation(word: &str, analysis: GeneratedAnalysis) -> WordExplanatio
     if let Some(role) = analysis.role.label() {
         explanation.push_str(&format!(" У цьому реченні — {role}."));
     }
-    WordExplanation { explanation }
+    WordExplanation {
+        explanation,
+        cached: false,
+    }
 }
 
 fn word_context<'a>(sentence: &'a str, word: &str) -> Option<&'a str> {

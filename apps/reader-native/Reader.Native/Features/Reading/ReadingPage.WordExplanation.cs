@@ -22,10 +22,20 @@ public partial class ReadingPage
         ExplainWord.IsEnabled = false;
         try
         {
-            var installed = (await session.OptionalModelsAsync())
-                .Where(model => model.FilesPresent && (model.Id is "qwen-0.8b" or "qwen-2b"))
-                .ToArray();
+            var models = (await session.OptionalModelsAsync())
+                .Where(model => model.Id is "qwen-0.8b" or "qwen-2b").ToArray();
             if (!CurrentSelection()) return;
+            foreach (var model in models)
+            {
+                var saved = await session.ExplainWordAsync(model.Id, document.Id, sentence.Id, word.Text, cachedOnly: true);
+                if (!CurrentSelection()) return;
+                if (saved is not null)
+                {
+                    ShowExplanation(model.Name, saved);
+                    return;
+                }
+            }
+            var installed = models.Where(model => model.FilesPresent).ToArray();
             if (installed.Length == 0)
             {
                 if (await DisplayAlertAsync("Локальне пояснення",
@@ -47,8 +57,7 @@ public partial class ReadingPage
             WordExplanationText.IsVisible = true;
             WordExplanationText.Text = $"{selected.Name} готує пояснення…";
             var explanation = await session.ExplainWordAsync(selected.Id, document.Id, sentence.Id, word.Text);
-            if (CurrentSelection())
-                WordExplanationText.Text = $"Припущення {selected.Name} · {explanation.Explanation}";
+            if (CurrentSelection() && explanation is not null) ShowExplanation(selected.Name, explanation);
         }
         catch (Exception error)
         {
@@ -63,5 +72,12 @@ public partial class ReadingPage
             explainingWord = false;
             ExplainWord.IsEnabled = true;
         }
+    }
+
+    private void ShowExplanation(string model, WordExplanation explanation)
+    {
+        WordExplanationText.IsVisible = true;
+        var label = explanation.Cached ? "Збережене пояснення" : "Припущення";
+        WordExplanationText.Text = $"{label} {model} · {explanation.Explanation}";
     }
 }

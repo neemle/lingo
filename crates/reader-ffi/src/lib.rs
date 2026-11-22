@@ -247,10 +247,10 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
-        Command::ReviewSentence { model, document, page, sentence, focus, revision_id } => {
+        Command::ReviewSentence { model, document, page, sentence, focus, revision_id, cached_only } => {
             let job = registry::lock()?
                 .store(handle)?
-                .prepare_sentence_review(model, document, *page, sentence.as_deref(), focus.as_ref(), revision_id.as_deref())
+                .prepare_sentence_review(model, document, *page, sentence.as_deref(), focus.as_ref(), revision_id.as_deref(), *cached_only)
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
@@ -259,10 +259,11 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             document,
             sentence,
             word,
+            cached_only,
         } => {
             let job = registry::lock()?
                 .store(handle)?
-                .prepare_word_explanation(model, document, sentence, word)
+                .prepare_word_explanation(model, document, sentence, word, *cached_only)
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
