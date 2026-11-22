@@ -1,13 +1,13 @@
 using System.Text;
 using Reader.Contracts;
 using Reader.Native.Services;
+using Reader.Presentation;
 
 namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage
 {
     private const int MaxSpeechTextBytes = 1000;
-    private const char AcuteAccent = '\u0301';
     private bool editingSpeechText;
 
     private static string EffectiveSpeechText(Document document, Sentence sentence) =>
@@ -39,7 +39,7 @@ public partial class ReadingPage
         var form = new VerticalStackLayout { Padding = 24, Spacing = 12, MaximumWidthRequest = 680 };
         form.Children.Add(new Label { Text = "Вимова речення", Style = (Style)resources["SerifTitle"] });
         var instruction = document.Language == "uk"
-            ? "Редагується лише текст для озвучення. Поставте курсор після голосної та натисніть «Додати наголос». Наприклад, «відчинені ві́кна» й «біля вікна́»."
+            ? "Редагується лише текст для озвучення. Поставте курсор після голосної та натисніть «Поставити наголос». Наприклад, «відчинені ві́кна» й «біля вікна́»."
             : "Редагується лише текст для озвучення.";
         form.Children.Add(new Label { Text = instruction });
         form.Children.Add(editor);
@@ -60,7 +60,7 @@ public partial class ReadingPage
         };
         var accent = new Button
         {
-            Text = "Додати наголос",
+            Text = "Поставити наголос",
             Style = (Style)resources["OutlineButton"],
             IsVisible = document.Language == "uk",
         };
@@ -72,17 +72,15 @@ public partial class ReadingPage
         accent.Clicked += (_, _) =>
         {
             var text = editor.Text ?? "";
-            var index = editor.CursorPosition + editor.SelectionLength;
-            if (index <= 0 || index > text.Length || !"аеєиіїоуюяАЕЄИІЇОУЮЯ".Contains(text[index - 1]))
+            var caret = editor.CursorPosition + editor.SelectionLength;
+            if (UkrainianStressEdit.AtCaret(text, caret) is not { } moved)
             {
                 status.Text = "Поставте курсор після голосної.";
                 return;
             }
-            if (index < text.Length && text[index] == AcuteAccent) return;
-
-            editor.Text = text.Insert(index, AcuteAccent.ToString());
+            editor.Text = moved.Text;
             editor.Focus();
-            editor.CursorPosition = index + 1;
+            editor.CursorPosition = moved.Caret;
             editor.SelectionLength = 0;
             status.Text = "";
         };
