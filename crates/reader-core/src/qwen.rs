@@ -1065,11 +1065,13 @@ fn run_prompt<T: Serialize + serde::de::DeserializeOwned>(
     )
 }
 
+const GENERATION_TIMEOUT: &str = "Qwen не завершив локальний аналіз вчасно.";
+
 fn prompt_checkpoint(should_yield: &dyn Fn() -> bool, deadline: Instant) -> Result<()> {
     if should_yield() {
         Err("Локальний аналіз перервано, щоб виконати переклад.".into())
     } else if Instant::now() >= deadline {
-        Err("Qwen не завершив локальний аналіз вчасно.".into())
+        Err(GENERATION_TIMEOUT.into())
     } else {
         Ok(())
     }

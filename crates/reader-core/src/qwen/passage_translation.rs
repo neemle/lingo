@@ -1,8 +1,8 @@
 use super::{
     generate_in_mode, json_output, prompt_checkpoint, with_prompt_context, GenerationMode,
-    HintCacheMode, HintWork, HINT_GENERATION_MODEL,
+    HintCacheMode, HintWork, GENERATION_TIMEOUT, HINT_GENERATION_MODEL,
 };
-use crate::{translation::normalize_pdf_translation_input, Document, Result, Store};
+use crate::{pdf_sentences::Layout, translation::normalize_pdf_translation_input, Document, Result, Store};
 use serde::{Deserialize, Serialize};
 use std::{
     ops::Range,
@@ -253,34 +253,30 @@ impl TranslatePassageJob {
                                 if let Some(value) = previous {
                                     value
                                 } else {
-                                    let source_text =
-                                        example.split_once('\n').map_or("", |(_, text)| text);
-                                    let mut render = |regenerate| {
-                                        let finish = Instant::now() + Duration::from_secs(25);
+                                    let (instruction, source_text) = example.split_once('\n')
+                                        .ok_or("Qwen не отримав текст уривка.")?;
+                                    let render = |fragment: &str, regenerate| {
+                                        let prompt = format!("{instruction}\n{fragment}");
+                                        let seconds = if fragment == source_text { 25 } else { 16 };
+                                        let finish = Instant::now() + Duration::from_secs(seconds);
                                         context.clear_kv_cache();
                                         generate_in_mode(
                                             model,
                                             context,
                                             SYSTEM,
-                                            example,
+                                            &prompt,
                                             GRAMMAR,
                                             GenerationMode::Passage { regenerate },
                                             || prompt_checkpoint(should_yield, finish),
                                         )
                                     };
-                                    let output = render(self.regenerate)?;
-                                    let value = match parse(
-                                        &output,
+                                    let value = translate_chunk(
+                                        source_text,
                                         &self.source,
                                         &self.target,
-                                        source_text,
-                                    ) {
-                                        Err(_) => {
-                                            let retry = render(!self.regenerate)?;
-                                            parse(&retry, &self.source, &self.target, source_text)?
-                                        }
-                                        other => other?,
-                                    };
+                                        self.regenerate,
+                                        render,
+                                    )?;
                                     updates.push((cache, translated.len()));
                                     value
                                 }
@@ -304,6 +300,51 @@ impl TranslatePassageJob {
         }
         PassageTranslation { text, source_text: self.source_text.clone(), cached }
     }
+}
+
+fn translate_chunk(
+    input: &str,
+    source: &str,
+    target: &str,
+    regenerate: bool,
+    mut render: impl FnMut(&str, bool) -> Result<Vec<u8>>,
+) -> Result<TranslationChunk> {
+    let first = render(input, regenerate);
+    let allow_same_size_retry = first.is_ok();
+    match first {
+        Ok(bytes) => {
+            if let Ok(translated) = parse(&bytes, source, target, input) {
+                return Ok(translated);
+            }
+        }
+        Err(error) if error == GENERATION_TIMEOUT => {}
+        Err(error) => return Err(error),
+    }
+    if let Some((left, right)) = split_for_retry(input) {
+        let first = parse(&render(left, !regenerate)?, source, target, left)?;
+        let second = parse(&render(right, !regenerate)?, source, target, right)?;
+        return Ok(TranslationChunk { text: format!("{} {}", first.text, second.text) });
+    }
+    if !allow_same_size_retry {
+        return Err(GENERATION_TIMEOUT.into());
+    }
+    parse(&render(input, !regenerate)?, source, target, input)
+}
+
+fn split_for_retry(input: &str) -> Option<(&str, &str)> {
+    let middle = input.len() / 2;
+    let nearest = |position: &usize| position.abs_diff(middle);
+    let offset = Layout::ClosingQuotes.segment(input, "").iter().skip(1)
+        .map(|sentence| sentence.start_utf8)
+        .min_by_key(nearest)
+        .or_else(|| {
+            input.match_indices([';', ',', ':'])
+                .map(|(offset, mark)| offset + mark.len())
+                .filter(|&offset| input[..offset].chars().count() >= 32 &&
+                    input[offset..].trim_start().chars().count() >= 32)
+                .min_by_key(nearest)
+        })?;
+    Some((input[..offset].trim_end(), input[offset..].trim_start()))
 }
 
 fn parse(bytes: &[u8], source: &str, target: &str, source_text: &str) -> Result<TranslationChunk> {
@@ -405,6 +446,37 @@ fn language_name(language: &str) -> Result<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incomplete_chunk_retries_both_sentences_in_order() {
+        let source = "La note date du 15 février 1815. Le marin entre dans le port.";
+        let mut prompts = Vec::new();
+        let recovered = translate_chunk(source, "fr", "uk", false, |fragment, sampled| {
+            prompts.push((fragment.to_owned(), sampled));
+            let text = match fragment {
+                "La note date du 15 février 1815." => "Нотатка датована 15 лютого 1815 року.",
+                _ => "Моряк заходить у порт.",
+            };
+            Ok(serde_json::to_vec(&TranslationChunk { text: text.into() }).unwrap())
+        }).unwrap();
+        assert_eq!(prompts, [
+            (source.to_owned(), false),
+            ("La note date du 15 février 1815.".to_owned(), true),
+            ("Le marin entre dans le port.".to_owned(), true),
+        ]);
+        assert_eq!(recovered.text, "Нотатка датована 15 лютого 1815 року. Моряк заходить у порт.");
+    }
+
+    #[test]
+    fn interrupted_generation_does_not_issue_more_model_requests() {
+        let mut calls = 0;
+        let result = translate_chunk("La porte est ouverte. Le marin entre.", "fr", "uk", true, |_, _| {
+            calls += 1;
+            Err("Interrupted".into())
+        });
+        assert_eq!(result.err().as_deref(), Some("Interrupted"));
+        assert_eq!(calls, 1);
+    }
 
     #[test]
     fn french_to_ukrainian_passage_preserves_the_month_anchored_by_day_and_year() {
