@@ -195,6 +195,7 @@ fn validate(command: &Command) -> Result<()> {
             Err(Error::new("invalid_argument", "Invalid sentence token address"))
         }
         Command::OpenPdfReadingPage { id, revision_id: Some(revision_id), .. }
+        | Command::ReplacePdfTextLayer { id, revision_id, .. }
         | Command::AnchorReadingSelection { id, revision_id, .. }
             if !valid_token_address(id, revision_id)
                 || revision_id.len() != 64
@@ -222,7 +223,7 @@ fn validate(command: &Command) -> Result<()> {
         {
             Err(Error::new("invalid_argument", "Invalid PDF word explanation request"))
         }
-        Command::CachePdfOcrPage { lines, .. } if lines.len() > 8192 => {
+        Command::CachePdfOcrPage { lines, .. } | Command::ReplacePdfTextLayer { lines, .. } if lines.len() > 8192 => {
             Err(Error::new("invalid_argument", "Too many OCR lines for one PDF page"))
         }
         Command::RetryPdfOcrPage { token, .. }

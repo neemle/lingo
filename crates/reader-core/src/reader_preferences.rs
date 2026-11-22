@@ -61,8 +61,8 @@ impl ReaderPreferences {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
-        if self.speech_rate_percent.is_some_and(|rate| !(50..=200).contains(&rate)) {
-            return Err("Швидкість озвучення має бути від 50 до 200 відсотків.".into());
+        if self.speech_rate_percent.is_some_and(|rate| !(40..=200).contains(&rate)) {
+            return Err("Швидкість озвучення має бути від 40 до 200 відсотків.".into());
         }
         for (source, target) in &self.translation_targets {
             valid_language(source)?;

@@ -83,6 +83,7 @@ public partial class ReadingPage
         pdfOcrFocus = null;
         pdfOcrError = null;
         CancelReaderPdfOcr();
+        repairingPdfText?.Cancel();
         PdfPageControls.IsVisible = false;
         ShowPdfPageNotice(null);
 #endif
@@ -101,6 +102,7 @@ public partial class ReadingPage
     private bool movingPdfPage;
     private bool pdfWindowLoading;
     private bool pdfPagePromptOpen;
+    private CancellationTokenSource? repairingPdfText;
 
     private async Task ReadPdfWindowAsync(ReaderSession session, Document document, bool entering)
     {
@@ -359,6 +361,7 @@ public partial class ReadingPage
                 : readerPdfOcr is not null ? " · оновлюємо OCR" : " · OCR потребує оновлення";
         else if (pdfOcrError is not null && message is null)
             PdfPageStatus.Text += " · помилка OCR сусідньої сторінки";
+        if (repairingPdfText is not null) PdfPageStatus.Text += " · розпізнаємо зображення";
         ShowPdfPageNotice(message, page is { State: "detached" } ? page.Text : null);
         if (page is { State: "detached" } && pdfSnapshot is { } document)
             ShowDetachedPdfPage(document, page);
@@ -400,6 +403,9 @@ public partial class ReadingPage
         NextPdfPage.IsEnabled = enabled && pdfWindow is { } window && window.Center + 1 < window.PageCount;
         RetryPdfOcr.IsVisible = enabled && readerPdfOcr is null
             && pdfWindow?.Pages.Any(RequiresPdfOcr) == true;
+        RepairPdfText.IsVisible = pdfWindow is { } current &&
+            current.Pages.Any(page => page.Page == current.Center && page.State == "textLayer");
+        RepairPdfText.IsEnabled = enabled && repairingPdfText is null && RepairPdfText.IsVisible;
     }
 
     private static bool RequiresPdfOcr(PdfReadPage page) => page.State is "needsOcr" or "needsTextLayer" || page.RefreshPending;
@@ -465,6 +471,40 @@ public partial class ReadingPage
     private static Task ContinuePdfNarrationAsync(string documentId, int completedPage, string? completedSentenceId = null) =>
         Task.CompletedTask;
 #endif
+
+    private async void RepairPdfTextClicked(object? sender, EventArgs args)
+    {
+#if MACCATALYST
+        var session = AppState.Session;
+        if (!RepairPdfText.IsEnabled || pdfWindow is not { } window ||
+            session.Document is not { CurrentRevisionId: { } revision } document) return;
+
+        using var run = new CancellationTokenSource();
+        repairingPdfText = run;
+        UpdatePdfPageDisplay();
+        try
+        {
+            if (await session.OriginalFileAsync(document.Id) is not { } original)
+                throw new InvalidDataException("Оригінал PDF для розпізнавання недоступний.");
+            await PdfPageOcr.ReplaceTextLayerAsync(session, document, original.Path, window.Center,
+                revision, window.PageCount, run.Token);
+            await session.WaitUntilIdleAsync();
+            if (!run.IsCancellationRequested && session.Document?.Id == document.Id) await session.RefreshAsync();
+        }
+        catch (OperationCanceledException) when (run.IsCancellationRequested) { }
+        catch (Exception error) when (readingPageActive && !run.IsCancellationRequested &&
+            session.Document?.Id == document.Id && pdfWindow?.Center == window.Center)
+        {
+            await DisplayAlertAsync("Розпізнавання сторінки", error.Message, "Гаразд");
+        }
+        catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
+        finally
+        {
+            repairingPdfText = null;
+            UpdatePdfPageDisplay();
+        }
+#endif
+    }
 
     private void RetryPdfOcrClicked(object? sender, EventArgs args)
     {

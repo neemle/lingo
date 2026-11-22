@@ -261,6 +261,14 @@ pub enum Command {
         #[serde(rename = "textLayer")]
         text_layer: Option<String>,
     },
+    ReplacePdfTextLayer {
+        id: String,
+        page: u16,
+        #[serde(rename = "revisionId")]
+        revision_id: String,
+        language: String,
+        lines: Vec<reader_core::ocr::OcrLine>,
+    },
     PdfOcrJob {
         job: reader_core::ocr_jobs::JobRequest,
     },

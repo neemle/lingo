@@ -19,7 +19,7 @@ const MODEL: &str = "piper-uk";
 const SAMPLE_RATE: u32 = 22_050;
 const MAX_INPUT_BYTES: usize = 4096;
 const MAX_PHONEMES_PER_CHUNK: usize = 150;
-const MAX_SECONDS: usize = 45;
+pub(crate) const MAX_SECONDS: usize = 75;
 const MAX_SAMPLES: usize = SAMPLE_RATE as usize * MAX_SECONDS;
 const SPEAKERS: [(&str, u32); 3] = [("lada", 0), ("mykyta", 1), ("tetiana", 2)];
 
@@ -57,8 +57,8 @@ impl Store {
         if !SPEAKERS.iter().any(|voice| voice.1 == speaker) {
             return Err("Невідомий голос українського мовного пакета".into());
         }
-        if !(0.5..=2.0).contains(&rate) {
-            return Err("Швидкість озвучення має бути від 0,5 до 2".into());
+        if !(0.4..=2.0).contains(&rate) {
+            return Err("Швидкість озвучення має бути від 0,4 до 2".into());
         }
 
         if source.language != "uk" {

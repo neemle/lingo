@@ -207,6 +207,9 @@ public sealed class CoreClient : IDisposable
             version = 1, operation = "cache_pdf_ocr_page", id, page = claim.Page, token = claim.Token, lines, textLayer,
         });
 
+    public void ReplacePdfTextLayer(string id, int page, string revisionId, string language, OcrLine[] lines) =>
+        Call<JsonElement>(new { version = 1, operation = "replace_pdf_text_layer", id, page, revisionId, language, lines });
+
     public void ReleasePdfOcrPage(string id, PdfOcrRequest claim, bool canceled) =>
         Call<bool>(new
         {

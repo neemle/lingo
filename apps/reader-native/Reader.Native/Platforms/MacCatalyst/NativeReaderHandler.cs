@@ -96,7 +96,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
             VirtualView.SelectSource(source.Start, source.Length);
     }
 
-    private Microsoft.Maui.Graphics.Point? SelectionAnchor(int start, int length)
+    private Microsoft.Maui.Graphics.Rect? SelectionAnchor(int start, int length)
     {
         var displayed = DisplayRange(start, length);
         var beginning = PlatformView.BeginningOfDocument;
@@ -105,10 +105,13 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
         if (first is null || last is null || PlatformView.GetTextRange(first, last) is not { } range) return null;
         var rect = PlatformView.GetFirstRectForRange(range);
         var bounds = PlatformView.Bounds;
-        var x = (double)(rect.X + rect.Width / 2 - bounds.X);
-        var y = (double)(rect.Y + rect.Height / 2 - bounds.Y);
-        return double.IsFinite(x) && double.IsFinite(y) && x >= 0 && x <= bounds.Width && y >= 0 && y <= bounds.Height
-            ? new Microsoft.Maui.Graphics.Point(x, y) : null;
+        var x = (double)(rect.X - bounds.X);
+        var y = (double)(rect.Y - bounds.Y);
+        var width = (double)rect.Width;
+        var height = (double)rect.Height;
+        return double.IsFinite(x) && double.IsFinite(y) && double.IsFinite(width) && double.IsFinite(height) &&
+            width > 0 && height > 0 && x < bounds.Width && y < bounds.Height && x + width > 0 && y + height > 0
+            ? new Microsoft.Maui.Graphics.Rect(x, y, width, height) : null;
     }
 
     private NSRange DisplayRange(int start, int length, bool includeLeadingMarker = false)

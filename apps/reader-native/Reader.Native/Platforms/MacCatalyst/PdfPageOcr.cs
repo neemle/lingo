@@ -7,6 +7,21 @@ internal static class PdfPageOcr
 {
     private static readonly SemaphoreSlim Worker = new(1, 1);
 
+    internal static async Task ReplaceTextLayerAsync(ReaderSession session, Document document, string path,
+        int page, string revision, int pageCount, CancellationToken cancellation)
+    {
+        await Worker.WaitAsync(cancellation);
+        try
+        {
+            OcrLine[] lines = [];
+            await PdfScan.RecognizeAsync(path, document.Language, pageCount, [page],
+                (_, recognized) => lines = recognized, cancellation);
+            cancellation.ThrowIfCancellationRequested();
+            await session.ReplacePdfTextLayerAsync(document.Id, page, revision, document.Language, lines);
+        }
+        finally { Worker.Release(); }
+    }
+
     internal static async Task RecognizeWindowAsync(ReaderSession session, Document document,
         string path, int page, CancellationToken cancellation, Func<Task> onCached, bool updateFocus = true)
     {

@@ -29,7 +29,7 @@ const LATENT_CHANNELS: usize = 24 * 6;
 const LATENT_HOP: usize = 512 * 6;
 const MAX_BYTES: usize = 4096;
 const TEXT_WINDOW: usize = 110;
-const MAX_SAMPLES: usize = SAMPLE_RATE as usize * 45;
+const MAX_SAMPLES: usize = SAMPLE_RATE as usize * crate::tts::MAX_SECONDS;
 const STEPS: usize = 5;
 
 pub struct MultilingualSpeechJob {
@@ -59,8 +59,8 @@ impl Store {
         let voice = *VOICES
             .get(speaker as usize)
             .ok_or("Невідомий голос Supertonic")?;
-        if !(0.5..=2.0).contains(&rate) {
-            return Err("Швидкість озвучення має бути від 0,5 до 2".into());
+        if !(0.4..=2.0).contains(&rate) {
+            return Err("Швидкість озвучення має бути від 0,4 до 2".into());
         }
         if !CORE_LANGUAGES.contains(&source.language.as_str()) {
             return Err("Цей голосовий пакет не підтримує мову документа".into());

@@ -428,8 +428,24 @@ impl Store {
     }
 
     pub fn complete_pdf_page(
-        &mut self, id: &str, page: u16, mut lines: Vec<ocr::OcrLine>, token: Option<&str>,
+        &mut self, id: &str, page: u16, lines: Vec<ocr::OcrLine>, token: Option<&str>,
         text_layer: Option<String>,
+    ) -> Result<Document> {
+        self.commit_pdf_page(id, page, lines, token, text_layer, None)
+    }
+
+    pub fn replace_pdf_text_layer(
+        &mut self, id: &str, page: u16, revision: &str, language: &str, lines: Vec<ocr::OcrLine>,
+    ) -> Result<Document> {
+        if lines.is_empty() {
+            return Err("Розпізнавання не знайшло тексту на сторінці.".into());
+        }
+        self.commit_pdf_page(id, page, lines, None, None, Some((revision, language)))
+    }
+
+    fn commit_pdf_page(
+        &mut self, id: &str, page: u16, mut lines: Vec<ocr::OcrLine>, token: Option<&str>,
+        text_layer: Option<String>, replaces_revision: Option<(&str, &str)>,
     ) -> Result<Document> {
         if token.is_some_and(|token| !self.owns_pdf_ocr_claim(id, page, token)) {
             return Err("Запит OCR для цієї сторінки вже неактивний".into());
@@ -486,6 +502,27 @@ impl Store {
                 .ok_or("Сторінку PDF не знайдено")?
                 .trim()
                 .is_empty();
+            if let Some((revision, language)) = replaces_revision {
+                if document.current_revision_id.as_deref() != Some(revision)
+                    || document.language != language
+                    || needs_text || has_ocr_lines(document, page)
+                {
+                    return Err("Текст або мова PDF змінилися. Відкрийте сторінку й повторіть OCR.".into());
+                }
+                pages[usize::from(page)].clear();
+                let page_text = serde_json::to_string(&pages).map_err(database_error)?;
+                tx.execute("UPDATE file_originals SET pdf_page_text=?2 WHERE document_id=?1",
+                    params![id, page_text]).map_err(database_error)?;
+                let existing = document.ocr_lines.get_or_insert_with(Vec::new);
+                let insertion = existing.partition_point(|line| line.page < page);
+                existing.splice(insertion..insertion, lines);
+                mark_completed(tx, id, page)?;
+                document.pdf_pending_text_pages.remove(&page);
+                document.pdf_ocr_refresh_pages.remove(&page);
+                update_focused_page(tx, document, page, pages)?;
+                updated = Some(document.clone());
+                return Ok(true);
+            }
             let remaining = crate::MAX_IMPORT.saturating_sub(document.text.len());
             if let Some(previous_language) = pdf_detached_pages::source_language(tx, id, page)? {
                 if token.is_some() && previous_language.as_deref()

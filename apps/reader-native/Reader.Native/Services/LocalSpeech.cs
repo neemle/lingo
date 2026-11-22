@@ -6,6 +6,7 @@ namespace Reader.Native.Services;
 
 public sealed class LocalSpeech : IDisposable
 {
+    internal const int MaxModelAudioSeconds = 75;
     internal const string CompletedStatus = "Озвучення завершено.";
 
     private readonly SpeechPlayback playback = new();
@@ -34,7 +35,7 @@ public sealed class LocalSpeech : IDisposable
     internal Task<string?> PlayWaveAsync(SpeechAudio audio, int startAtMs, Action<int> started) => playback.PlayAsync(async token =>
     {
         if (audio.SampleRate is <= 0 or > 48_000 || audio.Samples <= 0 ||
-            audio.Samples > audio.SampleRate * 45 || audio.WavBytes.Length != 44 + audio.Samples * 2)
+            audio.Samples > audio.SampleRate * MaxModelAudioSeconds || audio.WavBytes.Length != 44 + audio.Samples * 2)
             throw new InvalidOperationException("Голосовий пакет повернув некоректне аудіо.");
         // Both packaged voice engines return a 44-byte mono PCM header and 16-bit samples.
         // Trim on a sample boundary so playback starts at the same position on both platforms.

@@ -28,7 +28,9 @@ public partial class ReadingPage
         var revision = detached ? detachedSentence?.RevisionId : document?.CurrentRevisionId;
         var target = TargetCode;
         var source = detached ? address?.Language : document?.Language;
-        label.IsVisible = false;
+        var listen = detached ? DetachedSpeakWordTranslation : SpeakWordTranslation;
+        listen.IsEnabled = false;
+        label.Text = "Виберіть мову перекладу.";
         if (!detached) wordTranslation = null;
         else detachedWordTranslation = null;
         UpdatePopupTranslationHighlights();
@@ -41,7 +43,6 @@ public partial class ReadingPage
                 : selection == selected && session.Document?.CurrentRevisionId == revision);
 
         label.Text = "Перекладаємо виділене…";
-        label.IsVisible = true;
         try
         {
             await Task.Delay(120);
@@ -57,6 +58,7 @@ public partial class ReadingPage
 
             var original = result.SourceText ?? selected.Text.Trim();
             label.Text = result.Text;
+            listen.IsEnabled = !string.IsNullOrWhiteSpace(result.Text);
             if (detached) detachedWordTranslation = (target, result.Text, original);
             else
             {

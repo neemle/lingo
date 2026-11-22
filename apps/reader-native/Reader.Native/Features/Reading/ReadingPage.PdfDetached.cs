@@ -600,7 +600,7 @@ public partial class ReadingPage
                     {
                         if (detachedSpeech.WavePosition is not { } elapsed) return;
                         var position = actualStartMs + (int)elapsed.TotalMilliseconds;
-                        if (position <= lastPosition || position >= 45_000 ||
+                        if (position <= lastPosition || position >= LocalSpeech.MaxModelAudioSeconds * 1000 ||
                             (long)position * audio.SampleRate >= (long)audio.Samples * 1000) return;
                         var model = new ModelSpeechResume(voice.Id, voice.Revision!, current.Language, ratePercent, position);
                         if (Save(new SpeechResume(sentence.Id, hash, 0, model))) lastPosition = position;

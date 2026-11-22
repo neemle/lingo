@@ -17,7 +17,7 @@ public partial class ReadingPage
     private const string VoicePreferencePrefix = "reader.speech.voice.";
     private const int DefaultSpeechRate = 85;
     private static readonly int[] LegacySpeechRates = [75, 100, 125];
-    private static readonly int[] DefaultSpeechRates = [65, 75, DefaultSpeechRate, 100, 115, 125];
+    private static readonly int[] DefaultSpeechRates = [40, 50, 65, 75, DefaultSpeechRate, 100, 115, 125];
 
     private ReaderPreferences readerPreferences = new();
     private int[] speechRates = DefaultSpeechRates;

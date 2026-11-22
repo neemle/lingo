@@ -137,7 +137,7 @@ public partial class ReadingPage
     private static int? ModelResumePosition(SpeechResume? resume, VoiceChoice? voice, string language, int ratePercent) =>
         resume?.Model is { } model && voice?.Revision is { } revision && model.Revision == revision &&
         model.VoiceId == voice.Id && model.Language == language && model.RatePercent == ratePercent &&
-        model.PositionMs is > 0 and < 45_000
+        model.PositionMs is > 0 and < LocalSpeech.MaxModelAudioSeconds * 1000
             ? model.PositionMs : null;
 
     private static SpeechSource SpeechSourceFor(Document document, Sentence sentence) =>
@@ -161,7 +161,7 @@ public partial class ReadingPage
             if (request != speechRequest || !IsSpeechSourceCurrent(session, source) || speech.WavePosition is not { } position)
                 return;
             var millis = playbackStartMs + (int)position.TotalMilliseconds;
-            if (millis <= lastCheckpointMs || millis >= 45_000) return;
+            if (millis <= lastCheckpointMs || millis >= LocalSpeech.MaxModelAudioSeconds * 1000) return;
             lastCheckpointMs = millis;
             var model = new ModelSpeechResume(voice.Id, voice.Revision!, document.Language, ratePercent, millis);
             pendingSpeechResume = (document.Id, new(sentence.Id, textHash, 0, model));

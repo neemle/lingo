@@ -164,8 +164,8 @@ impl ModelSpeechResume {
             && self.revision.len() <= 128
             && !self.language.is_empty()
             && self.language.len() <= 32
-            && (50..=200).contains(&self.rate_percent)
-            && (1..45_000).contains(&self.position_ms)
+            && (40..=200).contains(&self.rate_percent)
+            && (1..(tts::MAX_SECONDS as u32 * 1000)).contains(&self.position_ms)
     }
 }
 

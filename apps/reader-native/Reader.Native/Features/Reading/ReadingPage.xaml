@@ -81,7 +81,7 @@
      Clicked="ViewOriginalClicked" SemanticProperties.Description="Переглянути оригінал документа" />
    </HorizontalStackLayout>
    <Grid Grid.Row="1" Grid.ColumnSpan="2" x:Name="PdfPageControls" IsVisible="False" Margin="0,8,0,0"
-    ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
+    ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
     <Button x:Name="PreviousPdfPage" Text="‹" Style="{StaticResource PlayerButton}" Clicked="PreviousPdfPageClicked"
      IsEnabled="False" SemanticProperties.Description="Попередня сторінка PDF" />
     <Label Grid.Column="1" x:Name="PdfPageStatus" Style="{StaticResource ReaderMeta}" HorizontalTextAlignment="Center" />
@@ -91,6 +91,9 @@
      Clicked="JumpPdfPageClicked" IsEnabled="False" IsVisible="False" SemanticProperties.Description="Перейти за номером сторінки PDF" />
     <Button Grid.Column="4" x:Name="RetryPdfOcr" Text="Повторити OCR" Style="{StaticResource PlayerButton}"
      Clicked="RetryPdfOcrClicked" IsVisible="False" />
+    <Button Grid.Column="5" x:Name="RepairPdfText" Text="Розпізнати зі скану" Style="{StaticResource PlayerButton}"
+     Clicked="RepairPdfTextClicked" IsVisible="False"
+     SemanticProperties.Description="Замінити текст цієї сторінки розпізнаванням із зображення" />
    </Grid>
   </Grid>
 
@@ -359,22 +362,41 @@
   <BoxView Color="Transparent" AbsoluteLayout.LayoutBounds="0,0,1,1" AbsoluteLayout.LayoutFlags="All">
    <BoxView.GestureRecognizers><TapGestureRecognizer Tapped="CloseWordPopupClicked" /></BoxView.GestureRecognizers>
   </BoxView>
-  <Path x:Name="WordPointer" Data="M0,8 L8,0 L16,8 Z" Aspect="Fill" Fill="#FAFAF5" />
+  <Path x:Name="WordPointer" Data="M0,8 L8,0 L16,8 Z" Aspect="Fill" Fill="#FAFAF5" InputTransparent="True" />
   <Border x:Name="WordCard" IsVisible="False" Padding="14" BackgroundColor="#FAFAF5"
    Stroke="{StaticResource BorderTone}" StrokeShape="RoundRectangle 11">
-   <ScrollView>
-    <VerticalStackLayout Spacing="7">
-     <Grid ColumnDefinitions="*,Auto">
-      <Label x:Name="SelectedWord" Style="{StaticResource SerifTitle}" FontSize="29" />
-      <Button Grid.Column="1" Text="×" Style="{StaticResource PlayerButton}" Clicked="CloseWordPopupClicked"
+   <ScrollView x:Name="WordCardScroll" VerticalScrollBarVisibility="Default">
+    <VerticalStackLayout Spacing="10">
+     <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
+      <Label x:Name="SelectedWord" Style="{StaticResource SerifTitle}" FontSize="29" LineBreakMode="WordWrap" />
+      <Button Grid.Column="1" Text="Слухати" Style="{StaticResource PlayerButton}" Clicked="SpeakPopupWordClicked"
+       SemanticProperties.Description="Прослухати виділене слово мовою оригіналу" />
+      <Button Grid.Column="2" Text="×" Style="{StaticResource PlayerButton}" Clicked="CloseWordPopupClicked"
        SemanticProperties.Description="Закрити пояснення слова" />
      </Grid>
-     <Label x:Name="WordTranslationGloss" BackgroundColor="#FFF0AA" FontAttributes="Bold"
-      Padding="6,2" LineBreakMode="WordWrap" IsVisible="False" />
-     <Label x:Name="KnowledgeAnalysis" Style="{StaticResource ReaderMeta}" />
+     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" Padding="10,6" BackgroundColor="#F3EDDA">
+      <Label x:Name="WordTranslationGloss" FontSize="20" FontAttributes="Bold" VerticalOptions="Center"
+       LineBreakMode="WordWrap" />
+      <Button Grid.Column="1" x:Name="SpeakWordTranslation" Text="Слухати" Style="{StaticResource PlayerButton}"
+       Clicked="SpeakPopupTranslationClicked" IsEnabled="False" SemanticProperties.Description="Прослухати переклад" />
+     </Grid>
+     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+      <Entry x:Name="Translation" Placeholder="Ваш переклад" SemanticProperties.Description="Переклад виділеного слова"
+       ReturnType="Done" Completed="SaveWordClicked" />
+      <Button Grid.Column="1" Text="До словника" Style="{StaticResource AccentButton}"
+       Clicked="SaveWordClicked" IsEnabled="{Binding CanInteract}" />
+     </Grid>
      <FlexLayout Wrap="Wrap" AlignItems="Center">
+      <Button Text="Слухати в реченні" Style="{StaticResource PlayerButton}" Clicked="SpeakPopupContextClicked"
+       Margin="0,0,6,0" />
       <Button x:Name="OpenMeanings" Text="Словникові значення" Style="{StaticResource PlayerButton}"
        Clicked="OpenMeaningsClicked" IsVisible="False" Margin="0,0,7,0" />
+      <Button x:Name="WordDetailsToggle" Text="Більше" Style="{StaticResource PlayerButton}"
+       Clicked="ToggleWordDetailsClicked" />
+     </FlexLayout>
+     <VerticalStackLayout x:Name="WordDetails" IsVisible="False" Spacing="8">
+      <Label x:Name="KnowledgeAnalysis" Style="{StaticResource ReaderMeta}" />
+     <FlexLayout Wrap="Wrap" AlignItems="Center">
       <Button x:Name="OpenSyntax" Text="Синтаксис" Style="{StaticResource PlayerButton}"
        Clicked="OpenSyntaxClicked" IsVisible="False" Margin="0,0,7,0" />
       <Button x:Name="OpenSpelling" Text="Перевірка слова…" Style="{StaticResource PlayerButton}"
@@ -392,52 +414,68 @@
       <Button Grid.Column="1" Text="Зняти вибір" Style="{StaticResource PlayerButton}" Clicked="ClearSenseClicked"
        SemanticProperties.Description="Прибрати вибране значення з картки" />
      </Grid>
-     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="7">
+     <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="7">
       <ActivityIndicator x:Name="WordExplanationBusy" IsVisible="False" WidthRequest="18" HeightRequest="18"
        VerticalOptions="Start" Color="{StaticResource Sage}" />
       <Label Grid.Column="1" x:Name="WordExplanationText" IsVisible="False" />
+      <Button Grid.Column="2" Text="Слухати" Style="{StaticResource PlayerButton}"
+       Clicked="SpeakPopupExplanationClicked" VerticalOptions="Start"
+       IsVisible="{Binding Source={x:Reference WordExplanationText}, Path=IsVisible}"
+       SemanticProperties.Description="Прослухати пояснення слова" />
      </Grid>
      <Picker x:Name="VocabularyReading" Title="Форма для словникової картки" IsVisible="False" />
-     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-      <Entry x:Name="Translation" Placeholder="Ваш перевірений переклад"
-       SemanticProperties.Description="Переклад виділеного слова" ReturnType="Done"
-       Completed="SaveWordClicked" />
-      <Button Grid.Column="1" Text="До словника" Style="{StaticResource AccentButton}"
-       Clicked="SaveWordClicked" IsEnabled="{Binding CanInteract}" />
-     </Grid>
+     </VerticalStackLayout>
     </VerticalStackLayout>
    </ScrollView>
   </Border>
 
   <Border x:Name="DetachedWordCard" IsVisible="False" Padding="14" BackgroundColor="#FAFAF5"
    Stroke="{StaticResource BorderTone}" StrokeShape="RoundRectangle 11">
-   <ScrollView>
-    <VerticalStackLayout Spacing="7">
-     <Grid ColumnDefinitions="*,Auto">
-      <Label x:Name="DetachedSelectedWord" Style="{StaticResource SerifTitle}" FontSize="29" />
-      <Button Grid.Column="1" Text="×" Style="{StaticResource PlayerButton}" Clicked="CloseWordPopupClicked"
+   <ScrollView x:Name="DetachedWordCardScroll" VerticalScrollBarVisibility="Default">
+    <VerticalStackLayout Spacing="10">
+     <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
+      <Label x:Name="DetachedSelectedWord" Style="{StaticResource SerifTitle}" FontSize="29" LineBreakMode="WordWrap" />
+      <Button Grid.Column="1" Text="Слухати" Style="{StaticResource PlayerButton}" Clicked="SpeakPopupWordClicked"
+       SemanticProperties.Description="Прослухати виділене слово мовою оригіналу" />
+      <Button Grid.Column="2" Text="×" Style="{StaticResource PlayerButton}" Clicked="CloseWordPopupClicked"
        SemanticProperties.Description="Закрити пояснення слова" />
      </Grid>
-     <Label x:Name="DetachedWordTranslationGloss" BackgroundColor="#FFF0AA" FontAttributes="Bold"
-      Padding="6,2" LineBreakMode="WordWrap" IsVisible="False" />
+     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" Padding="10,6" BackgroundColor="#F3EDDA">
+      <Label x:Name="DetachedWordTranslationGloss" FontSize="20" FontAttributes="Bold" VerticalOptions="Center"
+       LineBreakMode="WordWrap" />
+      <Button Grid.Column="1" x:Name="DetachedSpeakWordTranslation" Text="Слухати" Style="{StaticResource PlayerButton}"
+       Clicked="SpeakPopupTranslationClicked" IsEnabled="False" SemanticProperties.Description="Прослухати переклад" />
+     </Grid>
+     <Button x:Name="DetachedSaveWord" Text="До словника…" IsVisible="False" Clicked="DetachedSaveWordClicked"
+      HorizontalOptions="Start" Style="{StaticResource AccentButton}" />
+     <FlexLayout Wrap="Wrap" AlignItems="Center">
+      <Button Text="Слухати в реченні" Style="{StaticResource PlayerButton}" Clicked="SpeakPopupContextClicked"
+       Margin="0,0,6,0" />
+      <Button x:Name="DetachedWordDetailsToggle" Text="Більше" Style="{StaticResource PlayerButton}"
+       Clicked="ToggleWordDetailsClicked" />
+     </FlexLayout>
+     <VerticalStackLayout x:Name="DetachedWordDetails" IsVisible="False" Spacing="8">
      <FlexLayout Wrap="Wrap" AlignItems="Center">
        <Button x:Name="DetachedAnalyzeSelection" Text="Аналіз виділення" IsVisible="False"
         Clicked="DetachedAnalyzeSelectionClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedExplainWord" Text="Пояснити з Qwen" IsVisible="False"
         Clicked="DetachedExplainWordClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
-       <Button x:Name="DetachedSaveWord" Text="До словника…" IsVisible="False" Clicked="DetachedSaveWordClicked"
-        Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedTranslateSelection" Text="Перекласти виділення…" IsVisible="False"
         Clicked="TranslateDetachedSelectionClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedShareSelection" Text="Поширити виділене" IsVisible="False"
         Clicked="DetachedShareSelectionClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}"
         SemanticProperties.Description="Поширити виділений уривок сторінки PDF" />
      </FlexLayout>
-     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="7">
+     <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="7">
       <ActivityIndicator x:Name="DetachedWordExplanationBusy" IsVisible="False" WidthRequest="18" HeightRequest="18"
        VerticalOptions="Start" Color="{StaticResource Sage}" />
       <Label Grid.Column="1" x:Name="DetachedWordExplanationText" IsVisible="False" LineBreakMode="WordWrap" />
+      <Button Grid.Column="2" Text="Слухати" Style="{StaticResource PlayerButton}"
+       Clicked="SpeakPopupExplanationClicked" VerticalOptions="Start"
+       IsVisible="{Binding Source={x:Reference DetachedWordExplanationText}, Path=IsVisible}"
+       SemanticProperties.Description="Прослухати пояснення слова" />
      </Grid>
+     </VerticalStackLayout>
     </VerticalStackLayout>
    </ScrollView>
   </Border>

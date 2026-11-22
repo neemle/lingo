@@ -47,7 +47,7 @@ public sealed class NativeReaderView : View
     public event EventHandler<TextSelection>? SourceSelected;
 
     internal event EventHandler<int>? OffsetRevealRequested;
-    internal Func<int, int, Point?>? SelectionAnchor { get; set; }
+    internal Func<int, int, Rect?>? SelectionAnchor { get; set; }
 
     internal void RevealOffset(int offset) => OffsetRevealRequested?.Invoke(this, offset);
 

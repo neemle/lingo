@@ -102,6 +102,7 @@ public partial class ReadingPage : ContentPage
         CancelScheduledTranslation();
         EndReadingHistory(keepVisit: showingMeanings);
         StopSpeech();
+        wordPopupSpeech.Stop();
         voiceCatalogRevision++;
         readinessRequest++;
         if (!showingMeanings)
@@ -399,6 +400,8 @@ public partial class ReadingPage : ContentPage
 
             TargetCode = target;
             Translation.Text = "";
+            if (WordCard.IsVisible || DetachedWordCard.IsVisible)
+                _ = LoadPopupTranslationAsync(DetachedWordCard.IsVisible);
             SaveReaderPreference(ReaderPreferenceChange.TranslationTarget(document.Language, target));
             UpdateTranslation();
             ResetDetachedTranslation();

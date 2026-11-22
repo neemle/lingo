@@ -161,6 +161,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::CachePdfOcrPage { id, page, lines, token, text_layer } => {
             value(store.complete_pdf_page(&id, page, lines, token.as_deref(), text_layer))
         }
+        Command::ReplacePdfTextLayer { id, page, revision_id, language, lines } =>
+            value(store.replace_pdf_text_layer(&id, page, &revision_id, &language, lines)),
         Command::PdfOcrJob { job } => value(store.pdf_ocr_job(job)),
         Command::ImportMixedPdf {
             name,

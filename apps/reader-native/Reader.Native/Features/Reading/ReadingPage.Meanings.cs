@@ -69,7 +69,11 @@ public partial class ReadingPage
             part.Children.Add(pick);
             body.Children.Add(part);
         }
-        page.Disappearing += (_, _) => showingMeanings = false;
+        page.Disappearing += (_, _) =>
+        {
+            showingMeanings = false;
+            wordPopupSpeech.Stop();
+        };
         showingMeanings = true;
         try { await Navigation.PushModalAsync(page); }
         catch (Exception error)
@@ -86,7 +90,11 @@ public partial class ReadingPage
         var result = new TaskCompletionSource<DetachedMeaningChoice?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var body = new VerticalStackLayout { Padding = 24, Spacing = 12 };
         var page = new ContentPage { Title = "Словникова картка", Content = new ScrollView { Content = body } };
-        page.Disappearing += (_, _) => result.TrySetResult(null);
+        page.Disappearing += (_, _) =>
+        {
+            result.TrySetResult(null);
+            wordPopupSpeech.Stop();
+        };
         body.Children.Add(new Label { Text = surface, FontSize = 26, FontAttributes = FontAttributes.Bold });
         var manual = new Button { Text = "Зберегти без словникового значення", HorizontalOptions = LayoutOptions.Start };
         var cancel = new Button { Text = "Скасувати", HorizontalOptions = LayoutOptions.Start };
@@ -116,7 +124,7 @@ public partial class ReadingPage
     {
         var part = new VerticalStackLayout { Spacing = 4 };
         part.Children.Add(new Label { Text = $"{meaning.Lemma} · {meaning.PartOfSpeech}", FontAttributes = FontAttributes.Bold });
-        part.Children.Add(new Label { Text = $"{meaning.Gloss} · {DocumentLanguages.Name(meaning.GlossLanguage)}" });
+        part.Children.Add(WordDetailAudioRow(meaning.Gloss, meaning.GlossLanguage, 17));
         if (meaning.GlossLanguage != "uk" && AppState.Session.Document is { } document)
             AddGlossTranslation(part, document.Id, meaning);
 
@@ -127,10 +135,12 @@ public partial class ReadingPage
             _ => "Можливе значення",
         };
         part.Children.Add(new Label { Text = evidence, FontSize = 12 });
+        var language = AppState.Session.Document?.Language ?? meaning.GlossLanguage;
         foreach (var example in meaning.Examples)
         {
-            var text = example.Translation is { Length: > 0 } ? $"{example.Text}\n{example.Translation}" : example.Text;
-            part.Children.Add(new Label { Text = text, FontSize = 14 });
+            part.Children.Add(WordDetailAudioRow(example.Text, language, 15));
+            if (example.Translation is { Length: > 0 } translation)
+                part.Children.Add(WordDetailAudioRow(translation, meaning.GlossLanguage, 14));
         }
         if (Uri.TryCreate(meaning.SourceUrl, UriKind.Absolute, out var source) &&
             source.Scheme == Uri.UriSchemeHttps && (source.Host == "kaikki.org" || source.Host == "en.wiktionary.org"))
@@ -146,7 +156,7 @@ public partial class ReadingPage
         else part.Children.Add(new Label { Text = $"{meaning.SourceName} · {meaning.SourceLicense}", FontSize = 12 });
         return part;
     }
-    private static void AddGlossTranslation(VerticalStackLayout part, string documentId, WordMeaning meaning)
+    private void AddGlossTranslation(VerticalStackLayout part, string documentId, WordMeaning meaning)
     {
         var translated = new Label { IsVisible = false };
         var button = new Button { Text = "Перекласти українською", HorizontalOptions = LayoutOptions.Start };
@@ -167,7 +177,8 @@ public partial class ReadingPage
                 var route = result.PivotLanguage is { } pivot
                     ? $" · {DocumentLanguages.PivotRoute(meaning.GlossLanguage, pivot, "uk")}"
                     : "";
-                translated.Text = $"{result.Text}{Environment.NewLine}Офлайн-переклад українською{route}";
+                translated.Text = $"Офлайн-переклад українською{route}";
+                part.Children.Insert(part.Children.IndexOf(translated), WordDetailAudioRow(result.Text, "uk", 17));
                 button.IsVisible = false;
             }
             catch (Exception error) { translated.Text = error.Message; }
