@@ -132,6 +132,8 @@ public sealed class CoreClient : IDisposable
         Call<WordLookup?>(new { version = 1, operation = "lookup_word", language, word, context });
     public OcrSuggestion[]? SuggestOcr(string language, string text) =>
         Call<OcrSuggestion[]?>(new { version = 1, operation = "suggest_ocr", language, text });
+    public void ExportTranslationPackage(string source, string target, string path) =>
+        CallIndependent<JsonElement>(new { version = 1, operation = "export_translation_package", source, target, path });
     public string InstallTranslationPackage(string path) =>
         CallIndependent<string>(new { version = 1, operation = "install_translation_package", path });
     public void VerifyTranslationPackage(string source, string target) =>

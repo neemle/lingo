@@ -273,6 +273,8 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         DownloadTranslation.IsEnabled = !busy && downloadChoices.Length > 0;
         RemoveTranslation.IsVisible = removablePackages.Length > 0;
         RemoveTranslation.IsEnabled = !busy && RemoveTranslation.IsVisible;
+        ExportTranslation.IsVisible = translationInventory?.Any(package => package.FilesPresent) == true;
+        ExportTranslation.IsEnabled = !busy && ExportTranslation.IsVisible;
         VerifyTranslation.IsVisible = RemoveTranslation.IsVisible;
         VerifyTranslation.IsEnabled = !busy && VerifyTranslation.IsVisible;
         ValidateTranslation.IsVisible = translationInventory?.Any(CanValidateTranslation) == true;

@@ -123,6 +123,8 @@
        IsVisible="False" Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
       <Button x:Name="InstallTranslation" Text="Встановити мовний пакет із ZIP" Clicked="InstallTranslationClicked"
        Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
+      <Button x:Name="ExportTranslation" Text="Зберегти пакет як ZIP" IsVisible="False" Clicked="ExportTranslationClicked"
+       Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
       <Button x:Name="VerifyTranslation" Text="Перевірити цілісність пакета" IsVisible="False" Clicked="VerifyTranslationClicked"
        Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
       <Button x:Name="ValidateTranslation" Text="Пробний офлайн-переклад" IsVisible="False" Clicked="ValidateTranslationClicked"

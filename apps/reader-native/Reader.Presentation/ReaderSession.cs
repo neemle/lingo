@@ -200,6 +200,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public Task<OcrSuggestion[]?> SuggestOcrAsync(string language, string text) =>
         Task.Run(() => client.SuggestOcr(language, text));
 
+    public Task ExportTranslationPackageAsync(string source, string target, string path) =>
+        Task.Run(() => client.ExportTranslationPackage(source, target, path));
     public Task<string> InstallTranslationPackageAsync(string path) =>
         Task.Run(() => client.InstallTranslationPackage(path));
     public Task VerifyTranslationPackageAsync(string source, string target) =>
