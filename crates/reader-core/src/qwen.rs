@@ -150,39 +150,30 @@ impl<T: Serialize + serde::de::DeserializeOwned> HintWork<T> {
 }
 
 struct HintCache {
-    database: Option<PathBuf>,
+    database: PathBuf,
     document_id: String,
     key: [u8; 32],
 }
 
 impl HintCache {
-    fn load<T: serde::de::DeserializeOwned>(&self) -> Option<T> {
-        let path = self.database.as_ref()?;
+    fn load<T: serde::de::DeserializeOwned>(&self) -> Result<Option<T>> {
         let db = Connection::open_with_flags(
-            path,
+            &self.database,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
-        .ok()?;
-        let value = annotation_cache::read_model_hint(&db, &self.document_id, &self.key)?;
-        serde_json::from_value(value).ok()
+        .map_err(|error| format!("Не вдалося відкрити кеш підказок. {error}"))?;
+        annotation_cache::read_model_hint(&db, &self.document_id, &self.key)
     }
 
-    fn save(&self, review: &impl Serialize) {
-        let Some(path) = &self.database else {
-            return;
-        };
-        let Ok(db) = Connection::open_with_flags(
-            path,
+    fn save(&self, review: &impl Serialize) -> Result<()> {
+        let db = Connection::open_with_flags(
+            &self.database,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        ) else {
-            return;
-        };
-        if db.pragma_update(None, "foreign_keys", true).is_err() {
-            return;
-        }
-        if let Ok(value) = serde_json::to_value(review) {
-            annotation_cache::write_model_hint(&db, &self.document_id, &self.key, &value);
-        }
+        )
+        .map_err(|error| format!("Не вдалося відкрити кеш підказок. {error}"))?;
+        db.pragma_update(None, "foreign_keys", true)
+            .map_err(|error| error.to_string())?;
+        annotation_cache::write_model_hint(&db, &self.document_id, &self.key, review)
     }
 }
 
@@ -315,8 +306,7 @@ impl Store {
             serde_json::to_vec(&(version, model, package.revision(), prompt, END, &example))
                 .map_err(|error| error.to_string())?;
         let key: [u8; 32] = Sha256::digest(identity).into();
-        let cached = annotation_cache::read_model_hint(&self.connection, document, &key)
-            .and_then(|value| serde_json::from_value::<T>(value).ok());
+        let cached = annotation_cache::read_model_hint(&self.connection, document, &key)?;
         if cached_only || cached.is_some() {
             return Ok(HintWork::Cached(cached));
         }
@@ -325,7 +315,8 @@ impl Store {
             .path()
             .map(Path::new)
             .filter(|path| path.is_absolute())
-            .map(Path::to_owned);
+            .map(Path::to_owned)
+            .ok_or("Для збереження підказок потрібна бібліотека на диску.")?;
         let cache = HintCache {
             database,
             document_id: document.to_owned(),
@@ -549,46 +540,46 @@ fn run_prompt<T: Serialize + serde::de::DeserializeOwned>(
     cache: &HintCache,
     parse: impl Fn(&[u8]) -> Result<T>,
 ) -> Result<(T, bool)> {
-    job.run(|directory, should_yield| {
-        if let Some(result) = cache.load() {
-            return Ok((result, true));
-        }
-        let backend = backend()?;
-        let path = directory.join("model.gguf");
-        let timeout = Instant::now() + Duration::from_secs(20);
-        let check = || {
-            if should_yield() {
-                Err("Локальний аналіз перервано, щоб виконати переклад.".into())
-            } else if Instant::now() >= timeout {
-                Err("Qwen не завершив локальний аналіз вчасно.".into())
+    job.run_optional_with_cache(
+        || cache.load().map(|result| result.map(|hint| (hint, true))),
+        |directory, should_yield| {
+            let backend = backend()?;
+            let path = directory.join("model.gguf");
+            let timeout = Instant::now() + Duration::from_secs(20);
+            let check = || {
+                if should_yield() {
+                    Err("Локальний аналіз перервано, щоб виконати переклад.".into())
+                } else if Instant::now() >= timeout {
+                    Err("Qwen не завершив локальний аналіз вчасно.".into())
+                } else {
+                    Ok(())
+                }
+            };
+            let mut layers = if cfg!(target_vendor = "apple") && backend.supports_gpu_offload() {
+                99
             } else {
-                Ok(())
-            }
-        };
-        let mut layers = if cfg!(target_vendor = "apple") && backend.supports_gpu_offload() {
-            99
-        } else {
-            0
-        };
-        loop {
-            check()?;
-            match load_model(backend, &path, layers) {
-                Ok(model) => match model.new_context(backend, context_parameters()) {
-                    Ok(mut context) => {
-                        let output = generate(&model, &mut context, system, example, check)?;
-                        let result = parse(&output)?;
-                        cache.save(&result);
-                        return Ok((result, false));
-                    }
-                    Err(error) if layers == 0 => return Err(runtime_error(error)),
+                0
+            };
+            loop {
+                check()?;
+                match load_model(backend, &path, layers) {
+                    Ok(model) => match model.new_context(backend, context_parameters()) {
+                        Ok(mut context) => {
+                            let output = generate(&model, &mut context, system, example, check)?;
+                            let result = parse(&output)?;
+                            cache.save(&result)?;
+                            return Ok((result, false));
+                        }
+                        Err(error) if layers == 0 => return Err(runtime_error(error)),
+                        Err(_) => {}
+                    },
+                    Err(error) if layers == 0 => return Err(error),
                     Err(_) => {}
-                },
-                Err(error) if layers == 0 => return Err(error),
-                Err(_) => {}
+                }
+                layers = 0;
             }
-            layers = 0;
-        }
-    })
+        },
+    )
 }
 
 /// One short CPU decode verifies the staged GGUF and runtime without generating an explanation.

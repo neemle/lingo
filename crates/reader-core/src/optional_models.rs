@@ -291,6 +291,24 @@ impl OptionalModelJob {
         self.run_checked(inference, &|| permit.should_yield())
     }
 
+    pub(crate) fn run_optional_with_cache<T>(
+        self,
+        cached: impl Fn() -> Result<Option<T>>,
+        inference: impl FnOnce(&Path, &dyn Fn() -> bool) -> Result<T>,
+    ) -> Result<T> {
+        if let Some(result) = cached()? {
+            return Ok(result);
+        }
+        let permit = match RESOURCES.optional() {
+            Ok(permit) => permit,
+            Err(busy) => return cached()?.ok_or(busy),
+        };
+        if let Some(result) = cached()? {
+            return Ok(result);
+        }
+        self.run_checked(inference, &|| permit.should_yield())
+    }
+
     pub(crate) fn run_cached<T>(
         self,
         priority: InferencePriority,

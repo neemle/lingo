@@ -34,13 +34,20 @@ pub(super) fn read(db: &Connection, document_id: &str, key: &[u8]) -> Option<Val
     )
 }
 
-pub(crate) fn read_model_hint(db: &Connection, document_id: &str, key: &[u8]) -> Option<Value> {
-    read_value(
-        db,
-        "SELECT annotation_blob FROM model_hints WHERE document_id=?1 AND cache_key=?2",
-        document_id,
-        key,
-    )
+pub(crate) fn read_model_hint<T: serde::de::DeserializeOwned>(
+    db: &Connection,
+    document_id: &str,
+    key: &[u8],
+) -> Result<Option<T>> {
+    let body: Option<String> = db
+        .query_row(
+            "SELECT annotation_blob FROM model_hints WHERE document_id=?1 AND cache_key=?2",
+            params![document_id, key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| format!("Не вдалося прочитати кеш підказок. {error}"))?;
+    Ok(body.and_then(|body| serde_json::from_str(&body).ok()))
 }
 
 fn read_value(db: &Connection, query: &str, document_id: &str, key: &[u8]) -> Option<Value> {
@@ -62,14 +69,23 @@ pub(super) fn write(db: &Connection, document_id: &str, key: &[u8], annotation: 
     let _ = save(db, document_id, key, &body);
 }
 
-pub(crate) fn write_model_hint(db: &Connection, document_id: &str, key: &[u8], hint: &Value) {
-    let body = hint.to_string();
-    if body.len() <= MAX_ANNOTATION_BYTES {
-        let _ = db.execute(
-            "INSERT OR IGNORE INTO model_hints (document_id, cache_key, annotation_blob) VALUES (?1, ?2, ?3)",
-            params![document_id, key, body],
-        );
+pub(crate) fn write_model_hint(
+    db: &Connection,
+    document_id: &str,
+    key: &[u8],
+    hint: &impl serde::Serialize,
+) -> Result<()> {
+    let body = serde_json::to_string(hint).map_err(|error| error.to_string())?;
+    if body.len() > MAX_ANNOTATION_BYTES {
+        return Err("Підказка завелика для збереження.".into());
     }
+    db.execute(
+        "INSERT INTO model_hints (document_id, cache_key, annotation_blob) VALUES (?1, ?2, ?3)
+         ON CONFLICT(document_id, cache_key) DO UPDATE SET annotation_blob=excluded.annotation_blob",
+        params![document_id, key, body],
+    )
+    .map_err(|error| format!("Не вдалося зберегти підказку. {error}"))?;
+    Ok(())
 }
 
 fn save(db: &Connection, document_id: &str, key: &[u8], body: &str) -> rusqlite::Result<()> {
