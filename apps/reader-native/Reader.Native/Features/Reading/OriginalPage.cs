@@ -13,7 +13,7 @@ internal sealed class OriginalPage : ContentPage
     private readonly Button next = new() { Text = "→" };
     private readonly Button jump = new() { Text = "До сторінки…" };
     private readonly Button toggle = new();
-    private readonly Button readPage = new() { Text = "Читати сторінку" };
+    private readonly Button readPage = new() { Text = "Читати й перекладати" };
     private readonly Button wordCard = new() { Text = "Картка слова" };
     private readonly Func<int, Task<PhotoPreview>> loadPage;
     private readonly Func<TextSelection, Task> showWord;

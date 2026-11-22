@@ -12,6 +12,7 @@ public partial class ReadingPage : ContentPage
     private string? lastSourceLanguage;
     private bool choosingTarget;
     private bool jumpingSentence;
+    private bool openingOriginal;
     private bool narrowReader;
     private bool narrowPlayer;
     private ReaderLayout readingLayout;
@@ -579,10 +580,13 @@ public partial class ReadingPage : ContentPage
         return $"{position + 1}. {preview}";
     }
 
-    private async void ViewOriginalClicked(object? sender, EventArgs args)
+    private async void ViewOriginalClicked(object? sender, EventArgs args) => await ShowOriginalAsync();
+
+    internal async Task ShowOriginalAsync()
     {
         var session = AppState.Session;
-        if (!session.CanViewOriginal || session.Document is not { } document) return;
+        if (openingOriginal || !readingPageActive || !session.CanViewOriginal || session.Document is not { } document) return;
+        openingOriginal = true;
         try
         {
             var isPdf = document.Format == "pdf";
@@ -635,6 +639,7 @@ public partial class ReadingPage : ContentPage
                 }, recognizeWindow, showDetachedWord));
         }
         catch (Exception error) { await DisplayAlertAsync("Оригінал", error.Message, "Гаразд"); }
+        finally { openingOriginal = false; }
     }
 
     private async void PreviousClicked(object? sender, EventArgs args)
