@@ -44,6 +44,9 @@ pub enum Command {
         id: String,
     },
     ReaderPreferences,
+    MergeReaderPreferences {
+        preferences: reader_core::reader_preferences::ReaderPreferences,
+    },
     UpdateReaderPreference {
         change: reader_core::reader_preferences::ReaderPreferenceChange,
     },

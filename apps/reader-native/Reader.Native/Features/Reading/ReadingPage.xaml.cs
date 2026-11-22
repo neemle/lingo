@@ -14,7 +14,6 @@ public partial class ReadingPage : ContentPage
     private bool narrowReader;
     private ReaderLayout readingLayout;
     private bool TranslationVisible => readingLayout != ReaderLayout.Source;
-    private const string LayoutPreference = "reader.layout";
     private enum ReaderLayout { Automatic, Columns, Stacked, Source, Translation }
     private static readonly (ReaderLayout Mode, string Label, string Compact)[] Layouts =
     [
@@ -31,7 +30,6 @@ public partial class ReadingPage : ContentPage
     private TranslationReadiness? readiness;
     private string? readinessError;
     private int readinessRequest;
-    private const string TargetPreferencePrefix = "reader.translation.target.";
     private string? TargetCode
     {
         get
@@ -54,18 +52,17 @@ public partial class ReadingPage : ContentPage
     private SpeechResume? speechResume;
     private bool loadingSpeechPreferences;
     private bool speechPreferencesReady;
-    private const string RatePreference = "reader.speech.rate";
-    private const string ContinuousPreference = "reader.speech.continuous";
     public ReadingPage() => InitializeComponent();
 
     protected override void OnAppearing()
     {
         base.OnAppearing();
-        var storedLayout = (ReaderLayout)Preferences.Get(LayoutPreference, (int)ReaderLayout.Automatic);
-        readingLayout = Enum.IsDefined(storedLayout) ? storedLayout : ReaderLayout.Automatic;
+        LoadReaderPreferences();
+        readingLayout = Enum.TryParse<ReaderLayout>(readerPreferences.Layout, ignoreCase: true, out var storedLayout)
+            && Enum.IsDefined(storedLayout) ? storedLayout : ReaderLayout.Automatic;
         ArrangeReadingColumns();
         readingPageActive = true;
-        autoTranslate = Preferences.Get(AutoTranslatePreference, false);
+        autoTranslate = readerPreferences.AutoTranslate ?? false;
         lastAutoTranslation = null;
         lastPrefetchOrigin = null;
         UpdateAutoTranslateButton();
@@ -75,12 +72,12 @@ public partial class ReadingPage : ContentPage
         UpdateHighlight();
         _ = RestoreReadingWordAsync();
         readinessPair = null;
+        lastSourceLanguage = null;
         UpdateTranslation();
         loadingSpeechPreferences = true;
         try
         {
-            Rate.SelectedIndex = Math.Clamp(Preferences.Get(RatePreference, 1), 0, 2);
-            ContinueSpeech.IsChecked = Preferences.Get(ContinuousPreference, false);
+            ApplySpeechPreferences();
         }
         finally { loadingSpeechPreferences = false; }
         speechPreferencesReady = true;
@@ -195,7 +192,7 @@ public partial class ReadingPage : ContentPage
             var index = Array.FindIndex(Layouts, layout => layout.Label == choice);
             if (index < 0 || readingLayout == Layouts[index].Mode) return;
             readingLayout = Layouts[index].Mode;
-            Preferences.Set(LayoutPreference, (int)readingLayout);
+            SaveReaderPreference(ReaderPreferenceChange.Layout(LayoutName(readingLayout)));
             ArrangeReadingColumns();
             ScheduleAutoTranslation();
         }
@@ -226,7 +223,8 @@ public partial class ReadingPage : ContentPage
             {
                 availableTargets = DocumentLanguages.All.Where(language => language.Code != source).ToArray();
                 TargetLanguage.ItemsSource = availableTargets.Select(language => language.Name).ToArray();
-                var preferred = source is null ? previous : Preferences.Get(TargetPreferencePrefix + source, previous ?? "");
+                var preferred = source is not null && readerPreferences.TranslationTargets.TryGetValue(source, out var stored)
+                    ? stored : previous;
                 var preferredIndex = Array.FindIndex(availableTargets, language => language.Code == preferred);
                 var defaultIndex = Array.FindIndex(availableTargets, language => language.Code == (source == "uk" ? "fr" : "uk"));
                 TargetLanguage.SelectedIndex = preferredIndex >= 0 ? preferredIndex : defaultIndex;
@@ -336,7 +334,7 @@ public partial class ReadingPage : ContentPage
     {
         if (TranslationNotice is null || updatingTargets) return;
         if (AppState.Session.Document is { } document && TargetCode is { } target)
-            Preferences.Set(TargetPreferencePrefix + document.Language, target);
+            SaveReaderPreference(ReaderPreferenceChange.TranslationTarget(document.Language, target));
         UpdateTranslation();
     }
 
@@ -606,12 +604,12 @@ public partial class ReadingPage : ContentPage
     private void SpeechPreferencesChanged(object? sender, EventArgs args)
     {
         if (!speechPreferencesReady || loadingSpeechPreferences || Rate.SelectedIndex < 0) return;
-        Preferences.Set(RatePreference, Rate.SelectedIndex);
-        Preferences.Set(ContinuousPreference, ContinueSpeech.IsChecked);
+        SaveReaderPreference(ReaderPreferenceChange.SpeechPlayback(SpeechRatePercent, ContinueSpeech.IsChecked));
         if (!utteranceActive) RefreshSpeechResume();
     }
 
-    private int SpeechRatePercent => Rate.SelectedIndex switch { 0 => 75, 2 => 125, _ => 100 };
+    private int SpeechRatePercent => Rate.SelectedIndex >= 0 && Rate.SelectedIndex < speechRates.Length
+        ? speechRates[Rate.SelectedIndex] : 100;
 
     private void RefreshSpeechResume()
     {

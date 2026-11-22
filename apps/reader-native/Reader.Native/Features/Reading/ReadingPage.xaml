@@ -235,9 +235,7 @@
        <Button x:Name="PauseSpeech" Text="Пауза" Style="{StaticResource PlayerButton}" Margin="0,0,5,3"
         IsEnabled="False" Clicked="PauseClicked" />
        <Button Text="Стоп" Margin="0,0,5,3" Style="{StaticResource PlayerButton}" Clicked="StopClicked" />
-       <Picker x:Name="Rate" WidthRequest="74" Title="Темп" SelectedIndex="1" SelectedIndexChanged="SpeechPreferencesChanged">
-        <Picker.Items><x:String>0.75×</x:String><x:String>1×</x:String><x:String>1.25×</x:String></Picker.Items>
-       </Picker>
+       <Picker x:Name="Rate" WidthRequest="74" Title="Темп" SelectedIndexChanged="SpeechPreferencesChanged" />
        <Button Text="Вимова…" Margin="0,0,5,3" Style="{StaticResource PlayerButton}"
         Clicked="EditSpeechTextClicked" IsEnabled="{Binding CanBookmark}" SemanticProperties.Description="Редагувати вимову речення" />
       </HorizontalStackLayout>

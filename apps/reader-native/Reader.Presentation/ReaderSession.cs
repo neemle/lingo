@@ -30,6 +30,11 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public ReaderSession(string path) => client = new Client(path);
 
     public Task RefreshAsync() => RunAsync(Read);
+    public ReaderPreferences GetReaderPreferences() => client.ReaderPreferences();
+    public ReaderPreferences MergeReaderPreferences(ReaderPreferences preferences) =>
+        client.MergeReaderPreferences(preferences);
+    public ReaderPreferences UpdateReaderPreference(ReaderPreferenceChange change) =>
+        client.UpdateReaderPreference(change);
     public Task<ModelTransferPlan> ModelTransferStatusAsync(ModelTransferPackage package) =>
         Task.Run(() => client.ModelTransfer(package, "status"));
 

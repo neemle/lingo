@@ -37,6 +37,11 @@ pub enum ReaderPreferenceChange {
     AutoTranslate { value: bool },
     ContinuousSpeech { value: bool },
     SpeechRatePercent { value: u16 },
+    SpeechPlayback {
+        #[serde(rename = "ratePercent")]
+        rate_percent: u16,
+        continuous: bool,
+    },
     TranslationTarget { source: String, target: Option<String> },
     SpeechVoice {
         language: String,
@@ -85,6 +90,10 @@ impl ReaderPreferences {
             ReaderPreferenceChange::AutoTranslate { value } => self.auto_translate = Some(value),
             ReaderPreferenceChange::ContinuousSpeech { value } => self.continuous_speech = Some(value),
             ReaderPreferenceChange::SpeechRatePercent { value } => self.speech_rate_percent = Some(value),
+            ReaderPreferenceChange::SpeechPlayback { rate_percent, continuous } => {
+                self.speech_rate_percent = Some(rate_percent);
+                self.continuous_speech = Some(continuous);
+            }
             ReaderPreferenceChange::TranslationTarget { source, target } => {
                 self.translation_targets.insert(source, target);
             }
@@ -154,6 +163,15 @@ pub(crate) fn restore(db: &Connection, incoming: ReaderPreferences) -> Result<()
 impl Store {
     pub fn reader_preferences(&self) -> Result<ReaderPreferences> {
         read(&self.connection)
+    }
+
+    pub fn merge_reader_preferences(&mut self, incoming: ReaderPreferences) -> Result<ReaderPreferences> {
+        let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(database_error)?;
+        restore(&tx, incoming)?;
+        let merged = read(&tx)?;
+        tx.commit().map_err(database_error)?;
+        Ok(merged)
     }
 
     pub fn update_reader_preference(&mut self, change: ReaderPreferenceChange) -> Result<ReaderPreferences> {

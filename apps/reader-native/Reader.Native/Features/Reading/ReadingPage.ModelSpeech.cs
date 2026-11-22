@@ -22,8 +22,6 @@ public partial class ReadingPage
     private SpeechSource? activeSpeechSource;
     private Action? checkpointModelSpeech;
 
-    private static string VoicePreference(string language) => $"reader.speech.voice.{language}";
-
     private void RefreshVoices(bool force = false)
     {
         var language = AppState.Session.Document?.Language;
@@ -74,7 +72,8 @@ public partial class ReadingPage
             availableVoices = voices.ToArray();
             var automaticLabel = language == "uk" ? "Автоматично" : "Системний вибір";
             VoicePicker.ItemsSource = new[] { automaticLabel }.Concat(voices.Select(voice => voice.Label)).ToArray();
-            var saved = language is null ? "" : Preferences.Get(VoicePreference(language), "");
+            var saved = language is not null && readerPreferences.SpeechVoices.TryGetValue(language, out var stored)
+                ? stored : null;
             var chosen = Array.FindIndex(availableVoices, voice => voice.Id == saved);
             VoicePicker.SelectedIndex = chosen + 1;
             VoicePicker.IsEnabled = voices.Count > 0;
@@ -103,7 +102,7 @@ public partial class ReadingPage
     {
         if (loadingSpeechPreferences || voiceLanguage is null || VoicePicker.SelectedIndex < 0) return;
         if (utteranceActive) StopSpeech();
-        Preferences.Set(VoicePreference(voiceLanguage), PickedVoice()?.Id ?? "");
+        SaveReaderPreference(ReaderPreferenceChange.SpeechVoice(voiceLanguage, PickedVoice()?.Id));
         SetVoiceStatus(ModelVoiceStatus());
         RefreshSpeechResume();
     }

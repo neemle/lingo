@@ -48,6 +48,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::CompleteIntake { id, result } => value(store.complete_intake(&id, result)),
         Command::DiscardIntake { id } => value(store.discard_intake(&id)),
         Command::ReaderPreferences => value(store.reader_preferences()),
+        Command::MergeReaderPreferences { preferences } => value(store.merge_reader_preferences(preferences)),
         Command::UpdateReaderPreference { change } => value(store.update_reader_preference(change)),
         Command::RecentReadingSessions => value(store.recent_reading_sessions()),
         Command::CheckpointReading { session } => value(store.checkpoint_reading(session)),

@@ -8,7 +8,6 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage
 {
     private const int TranslationWindowLimit = 6;
-    private const string AutoTranslatePreference = "reader.translation.follow";
     private readonly List<TranslationWindow> translationWindows = [];
     private bool readingPageActive;
     private bool autoTranslate;
@@ -81,7 +80,7 @@ public partial class ReadingPage
     {
         autoTranslate = !autoTranslate;
         lastAutoTranslation = null;
-        Preferences.Set(AutoTranslatePreference, autoTranslate);
+        SaveReaderPreference(ReaderPreferenceChange.AutoTranslate(autoTranslate));
         UpdateAutoTranslateButton();
         ScheduleAutoTranslation();
     }

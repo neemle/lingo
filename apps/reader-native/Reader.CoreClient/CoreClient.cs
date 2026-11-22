@@ -22,6 +22,14 @@ public sealed class CoreClient : IDisposable
     }
 
     public Snapshot Snapshot() => Call<Snapshot>(new { version = 1, operation = "snapshot" });
+    public ReaderPreferences ReaderPreferences() =>
+        Call<ReaderPreferences>(new { version = 1, operation = "reader_preferences" });
+
+    public ReaderPreferences MergeReaderPreferences(ReaderPreferences preferences) =>
+        Call<ReaderPreferences>(new { version = 1, operation = "merge_reader_preferences", preferences });
+
+    public ReaderPreferences UpdateReaderPreference(ReaderPreferenceChange change) =>
+        Call<ReaderPreferences>(new { version = 1, operation = "update_reader_preference", change });
     public ModelTransferPlan ModelTransfer(ModelTransferPackage package, string operation) =>
         ModelTransfer(package, new { kind = operation });
 

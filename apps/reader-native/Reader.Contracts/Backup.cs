@@ -12,6 +12,7 @@ public sealed record Backup(
     public PracticeProgress? Practice { get; init; }
     public DictionarySource[] DictionarySources { get; init; } = [];
     public string[] DictionaryReviewOrigins { get; init; } = [];
+    public ReaderPreferences ReaderPreferences { get; init; } = new();
 }
 
 public sealed record BackupResource(string Kind, string Id, string Revision);
