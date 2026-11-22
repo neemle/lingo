@@ -475,6 +475,7 @@ public partial class ReadingPage
     {
         CancelDetachedSpeechTravel();
         if (loadingDetachedSentence || detachedAddress is not { } address || detachedSentence is null) return;
+        StopWordDetail();
         if (speakingDetachedSentence)
         {
             if (detachedPaused ? detachedSpeech.Resume() : detachedSpeech.Pause())

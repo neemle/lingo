@@ -433,6 +433,9 @@ public sealed class CoreClient : IDisposable
         CallIndependent<string>(new { version = 1, operation = "prepare_ukrainian_speech", text });
     public SpeechAudio SynthesizeSpeech(string id, string sentenceId, uint speaker, float rate, string engine = "piper-uk", int? page = null) =>
         CallIndependent<SpeechAudio>(new { version = 1, operation = "synthesize_speech", id, page, sentenceId, engine, speaker, rate });
+    public SpeechAudio SynthesizeSpeechText(string text, string language, uint speaker, float rate, string engine) =>
+        CallIndependent<SpeechAudio>(new { version = 1, operation = "synthesize_speech_text", text, language, engine, speaker, rate });
+
     public void PrefetchSpeech(string id, string sentenceId, uint speaker, float rate, string engine, int? page = null) =>
         CallIndependent<JsonElement>(new { version = 1, operation = "prefetch_speech", id, page, sentenceId, engine, speaker, rate });
 

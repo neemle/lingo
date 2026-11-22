@@ -65,6 +65,19 @@ impl Store {
             .ok_or_else(|| "Речення для озвучення не знайдено".into())
     }
 
+    pub fn prepare_speech_text(
+        &self, text: &str, language: &str, engine: ModelSpeechEngine, speaker: u32, rate: f32,
+    ) -> Result<PreparedSpeech> {
+        crate::valid_language(language)?;
+        if text.len() > 4096 || text.trim().is_empty() ||
+            text.chars().any(|ch| ch.is_control() && !matches!(ch, '\r' | '\n' | '\t'))
+        {
+            return Err("Текст для озвучення порожній, задовгий або містить керівні символи.".into());
+        }
+        let source = SpeechSource { language: language.to_owned(), text: text.trim().to_owned() };
+        self.prepare_speech_source(String::new(), source, engine, speaker, rate)
+    }
+
     pub fn prepare_speech_prefetch(
         &self, document_id: &str, current_sentence_id: &str,
         engine: ModelSpeechEngine, speaker: u32, rate: f32,

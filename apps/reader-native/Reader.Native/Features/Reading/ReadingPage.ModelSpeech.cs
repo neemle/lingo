@@ -31,7 +31,7 @@ public partial class ReadingPage
         loadingVoices = LoadVoicesAsync(language, ++voiceCatalogRevision);
     }
 
-    private async Task LoadVoicesAsync(string? language, int revision)
+    private static async Task<(VoiceChoice[] Voices, string? Error)> ReadVoicesAsync(string? language)
     {
         var voices = new List<VoiceChoice>();
         string? error = null;
@@ -64,12 +64,18 @@ public partial class ReadingPage
             }
             catch (Exception problem) { error ??= $"Не вдалося отримати локальні голоси. {problem.Message}"; }
         }
+        return (voices.ToArray(), error);
+    }
+
+    private async Task LoadVoicesAsync(string? language, int revision)
+    {
+        var (voices, error) = await ReadVoicesAsync(language);
         if (revision != voiceCatalogRevision) return;
 
         loadingSpeechPreferences = true;
         try
         {
-            availableVoices = voices.ToArray();
+            availableVoices = voices;
             const string automaticLabel = "Автоматично";
             VoicePicker.ItemsSource = DetachedVoicePicker.ItemsSource =
                 new[] { automaticLabel }.Concat(voices.Select(voice => voice.Label)).ToArray();
@@ -77,9 +83,9 @@ public partial class ReadingPage
                 ? stored : null;
             var chosen = Array.FindIndex(availableVoices, voice => voice.Id == saved);
             VoicePicker.SelectedIndex = DetachedVoicePicker.SelectedIndex = chosen + 1;
-            VoicePicker.IsEnabled = DetachedVoicePicker.IsEnabled = voices.Count > 0;
+            VoicePicker.IsEnabled = DetachedVoicePicker.IsEnabled = voices.Length > 0;
             SetVoiceStatus(error ?? (language is null ? ""
-                : voices.Count == 0 ? "Голос цієї мови відсутній. Локальні голоси можна завантажити в Налаштуваннях."
+                : voices.Length == 0 ? "Голос цієї мови відсутній. Локальні голоси можна завантажити в Налаштуваннях."
                 : chosen < 0 && !string.IsNullOrEmpty(saved) ? "Збережений голос недоступний. Використано автоматичний вибір."
                 : ModelVoiceStatus()));
         }
@@ -105,6 +111,7 @@ public partial class ReadingPage
         if (loadingSpeechPreferences || voiceLanguage is null || VoicePicker.SelectedIndex < 0) return;
         if (utteranceActive) StopSpeech();
         if (speakingDetachedSentence) ClearDetachedSpeech();
+        StopWordDetail();
         if (DetachedVoicePicker.SelectedIndex != VoicePicker.SelectedIndex)
             DetachedVoicePicker.SelectedIndex = VoicePicker.SelectedIndex;
         SaveReaderPreference(ReaderPreferenceChange.SpeechVoice(voiceLanguage, PickedVoice()?.Id));
@@ -130,9 +137,23 @@ public partial class ReadingPage
     private VoiceChoice? PickedVoice() => VoicePicker.SelectedIndex > 0 && VoicePicker.SelectedIndex <= availableVoices.Length
         ? availableVoices[VoicePicker.SelectedIndex - 1] : null;
 
-    private VoiceChoice? SelectedVoice() =>
-        PickedVoice() ?? availableVoices.FirstOrDefault(voice =>
-            voice.Engine == (voiceLanguage == "uk" ? "piper-uk" : "supertonic-3"));
+    private VoiceChoice? SelectedVoice() => PickedVoice() ?? AutomaticVoice(availableVoices, voiceLanguage);
+
+    private static VoiceChoice? AutomaticVoice(VoiceChoice[] choices, string? language) =>
+        (language == "uk" ? Array.Find(choices, voice => voice.Engine == "piper-uk") : null)
+        ?? Array.Find(choices, voice => voice.Engine == "supertonic-3");
+
+    private async Task<VoiceChoice?> WordDetailVoiceAsync(string language, CancellationToken token)
+    {
+        if (language == voiceLanguage)
+        {
+            await loadingVoices.WaitAsync(token);
+            if (language == voiceLanguage) return SelectedVoice();
+        }
+        var (voices, _) = await ReadVoicesAsync(language).WaitAsync(token);
+        var saved = readerPreferences.SpeechVoices.GetValueOrDefault(language);
+        return voices.FirstOrDefault(voice => voice.Id == saved) ?? AutomaticVoice(voices, language);
+    }
 
     private static int? ModelResumePosition(SpeechResume? resume, VoiceChoice? voice, string language, int ratePercent) =>
         resume?.Model is { } model && voice?.Revision is { } revision && model.Revision == revision &&

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Reader.Contracts;
 using Reader.Presentation;
 using Reader.Native.Controls;
 using Reader.Native.Services;
@@ -8,12 +9,13 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage
 {
     private readonly LocalSpeech wordPopupSpeech = new();
+    private CancellationTokenSource? wordDetailRun;
     private (VisualElement View, TextSelection Selection, Border Card, Point? PdfPoint)? wordPopup;
 
     private void ShowWordPopup(NativeReaderView view, TextSelection selected, Border card,
         (VisualElement View, Point Point)? pdfAnchor = null)
     {
-        wordPopupSpeech.Stop();
+        StopWordDetail();
         WordDetails.IsVisible = DetachedWordDetails.IsVisible = false;
         WordDetailsToggle.Text = DetachedWordDetailsToggle.Text = "Більше";
         wordPopup = (pdfAnchor?.View ?? view, selected, card, pdfAnchor?.Point);
@@ -29,13 +31,13 @@ public partial class ReadingPage
     {
         WordCard.IsVisible = DetachedWordCard.IsVisible = false;
         wordPopup = null;
-        wordPopupSpeech.Stop();
     }
 
     private void WordPopupVisibilityChanged(object? sender, PropertyChangedEventArgs args)
     {
         if (args.PropertyName != nameof(VisualElement.IsVisible)) return;
         WordOverlay.IsVisible = WordCard.IsVisible || DetachedWordCard.IsVisible;
+        if (!WordOverlay.IsVisible) StopWordDetail();
         UpdatePopupTranslationHighlights();
         UpdateInlinePdfHighlight();
     }
@@ -105,13 +107,14 @@ public partial class ReadingPage
     {
         if (DetachedWordCard.IsVisible)
         {
-            if (detachedSentence is { } current) await SpeakWordDetailAsync(current.Sentence.Text, current.Language);
+            if (detachedSentence is { } current)
+                await SpeakWordDetailAsync(current.SpeechText ?? current.NarrationText ?? current.Sentence.Text, current.Language);
         }
         else if (selection is { } selected && AppState.Session.Document is { } document)
         {
             var sentence = Array.Find(document.Sentences, item =>
                 item.StartUtf16 <= selected.StartUtf16 && item.EndUtf16 > selected.StartUtf16);
-            if (sentence is not null) await SpeakWordDetailAsync(sentence.Text, document.Language);
+            if (sentence is not null) await SpeakWordDetailAsync(EffectiveSpeechText(document, sentence), document.Language);
         }
     }
 
@@ -121,18 +124,57 @@ public partial class ReadingPage
         if (!string.IsNullOrWhiteSpace(text)) await SpeakWordDetailAsync(text, "uk");
     }
 
+    private void StopWordDetail()
+    {
+        wordDetailRun?.Cancel();
+        wordDetailRun = null;
+        wordPopupSpeech.Stop();
+    }
+
     private async Task SpeakWordDetailAsync(string text, string language)
     {
         if (string.IsNullOrWhiteSpace(text)) return;
         StopSpeech();
         if (speakingDetachedSentence) ClearDetachedSpeech();
-        wordPopupSpeech.Rate = SpeechRatePercent / 100f;
-        var status = await wordPopupSpeech.SpeakAsync(text, language);
-        if (status is not null && status != LocalSpeech.CompletedStatus)
+        StopWordDetail();
+        using var run = new CancellationTokenSource();
+        wordDetailRun = run;
+        var token = run.Token;
+        var rate = SpeechRatePercent / 100f;
+
+        string? status;
+        try
         {
-            var pages = Navigation.ModalStack;
-            await (pages.LastOrDefault() ?? this).DisplayAlertAsync("Озвучення", status, "Гаразд");
+            var voice = await WordDetailVoiceAsync(language, token);
+            token.ThrowIfCancellationRequested();
+            if (voice?.Engine is { } engine)
+            {
+                await modelInference.WaitAsync(token);
+                SpeechAudio clip;
+                try
+                {
+                    token.ThrowIfCancellationRequested();
+                    clip = await AppState.Session.SynthesizeSpeechTextAsync(text, language, voice.Speaker, rate, engine);
+                }
+                finally { modelInference.Release(); }
+                token.ThrowIfCancellationRequested();
+                status = await wordPopupSpeech.PlayWaveAsync(clip, 0, _ => { });
+            }
+            else
+            {
+                wordPopupSpeech.Rate = rate;
+                wordPopupSpeech.PreferredVoice = voice?.Id == SystemDefaultVoice ? null : voice?.Id;
+                status = await wordPopupSpeech.SpeakAsync(text, language);
+            }
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
+        catch (Exception error) { status = error.Message; }
+        finally
+        {
+            if (ReferenceEquals(wordDetailRun, run)) wordDetailRun = null;
+        }
+        if (!token.IsCancellationRequested && status is not null && status != LocalSpeech.CompletedStatus)
+            await (Navigation.ModalStack.LastOrDefault() ?? this).DisplayAlertAsync("Озвучення", status, "Гаразд");
     }
 
     private Grid WordDetailAudioRow(string text, string language, double fontSize)

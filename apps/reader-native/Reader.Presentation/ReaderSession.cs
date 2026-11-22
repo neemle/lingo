@@ -531,6 +531,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         return imported;
     }
     public Task<string> PrepareUkrainianSpeechAsync(string text) => Task.Run(() => client.PrepareUkrainianSpeech(text));
+    public Task<SpeechAudio> SynthesizeSpeechTextAsync(string text, string language, uint speaker, float rate, string engine) =>
+        Task.Run(() => client.SynthesizeSpeechText(text, language, speaker, rate, engine));
+
     public Task<SpeechAudio> SynthesizeSpeechAsync(string id, string sentenceId, uint speaker, float rate, string engine, int? page = null) =>
         Task.Run(() => client.SynthesizeSpeech(id, sentenceId, speaker, rate, engine, page));
 

@@ -102,7 +102,7 @@ public partial class ReadingPage : ContentPage
         CancelScheduledTranslation();
         EndReadingHistory(keepVisit: showingMeanings);
         StopSpeech();
-        wordPopupSpeech.Stop();
+        StopWordDetail();
         voiceCatalogRevision++;
         readinessRequest++;
         if (!showingMeanings)
@@ -793,6 +793,7 @@ public partial class ReadingPage : ContentPage
         CancelDetachedSpeechTravel();
         var session = AppState.Session;
         if (PdfPageNotice.IsVisible || session.Busy || session.Document is not { } initial || session.Sentence is not { } sentence) return;
+        StopWordDetail();
         var source = SpeechSourceFor(initial, sentence);
         CheckpointSpeechPosition();
         var request = ++speechRequest;
@@ -993,6 +994,7 @@ public partial class ReadingPage : ContentPage
 
     private void StopClicked(object? sender, EventArgs args)
     {
+        StopWordDetail();
         CancelDetachedSpeechTravel();
         if (speakingDetachedSentence) ClearDetachedSpeech();
         RecordReadingActivity();

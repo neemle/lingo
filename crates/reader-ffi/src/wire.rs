@@ -538,6 +538,13 @@ pub enum Command {
         speaker: u32,
         rate: f32,
     },
+    SynthesizeSpeechText {
+        text: String,
+        language: String,
+        engine: String,
+        speaker: u32,
+        rate: f32,
+    },
     PrefetchSpeech {
         id: String,
         page: Option<u16>,

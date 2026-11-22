@@ -72,7 +72,7 @@ public partial class ReadingPage
         page.Disappearing += (_, _) =>
         {
             showingMeanings = false;
-            wordPopupSpeech.Stop();
+            StopWordDetail();
         };
         showingMeanings = true;
         try { await Navigation.PushModalAsync(page); }
@@ -93,7 +93,7 @@ public partial class ReadingPage
         page.Disappearing += (_, _) =>
         {
             result.TrySetResult(null);
-            wordPopupSpeech.Stop();
+            StopWordDetail();
         };
         body.Children.Add(new Label { Text = surface, FontSize = 26, FontAttributes = FontAttributes.Bold });
         var manual = new Button { Text = "Зберегти без словникового значення", HorizontalOptions = LayoutOptions.Start };
