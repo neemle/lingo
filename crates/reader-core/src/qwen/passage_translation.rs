@@ -58,7 +58,7 @@ impl Store {
                 blocks: layout.blocks,
                 ..Document::default()
             };
-            let range = document.paragraph_utf8_range(sentence.start_utf8);
+            let range = document.paragraph_for_sentence(sentence);
             (
                 cached.language,
                 normalize_ocr_input(
@@ -74,9 +74,9 @@ impl Store {
                 .iter()
                 .find(|sentence| sentence.id == sentence_id)
                 .ok_or("Речення документа змінилося.")?;
-            let offset = sentence.start_utf8;
+            let sentence = sentence.clone();
             crate::document_layout::reflow_ocr_paragraphs(&mut document);
-            let range = document.paragraph_utf8_range(offset);
+            let range = document.paragraph_for_sentence(&sentence);
             let text = normalize_ocr_input(
                 &document,
                 &document.text[range.clone()],

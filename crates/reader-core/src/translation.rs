@@ -769,7 +769,7 @@ fn paragraph_plan(
     const CONTEXT_GROUP: usize = 3;
     const CONTEXT_BYTES: usize = 768;
     let sentences = &document.sentences;
-    let paragraph = document.paragraph_utf8_range(sentences[selected].start_utf8);
+    let paragraph = document.paragraph_for_sentence(&sentences[selected]);
     let mut first = sentences
         .partition_point(|sentence| sentence.end_utf8 <= paragraph.start)
         .min(selected);

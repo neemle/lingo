@@ -71,6 +71,13 @@ struct BlockRange {
 }
 
 impl Document {
+    pub(crate) fn paragraph_for_sentence(&self, sentence: &crate::Sentence) -> Range<usize> {
+        // French OCR can leave a closing quote from the previous block at the
+        // start of a sentence. Anchor the paragraph to the sentence itself.
+        let content = sentence.text.find(char::is_alphanumeric).unwrap_or(0);
+        self.paragraph_utf8_range(sentence.start_utf8 + content)
+    }
+
     /// Return the enclosing paragraph or heading in canonical UTF-8 offsets.
     pub fn paragraph_utf8_range(&self, source_byte_offset: usize) -> Range<usize> {
         let offset = source_byte_offset.min(self.text.len());
