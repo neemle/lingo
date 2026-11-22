@@ -13,6 +13,9 @@ public partial class ReadingPage
     private bool autoTranslate;
     private PendingTranslation? scheduledTranslation;
     private TranslationKey? lastAutoTranslation;
+    private readonly Queue<(TranslationKey Key, string? Pivot)> prefetchAttempts = new();
+    private TranslationKey? lastPrefetchOrigin;
+    private bool prefetching;
     private TranslationKey? translationScrollKey;
     private bool translationScrollPending;
     private bool translationScrollQueued;
@@ -20,7 +23,9 @@ public partial class ReadingPage
 
     private sealed record TranslationKey(string Document, string Sentence, string Source, string Target, string Text);
     private sealed record TranslationScope(string Document, string Source, string Target);
-    private sealed record PendingTranslation(TranslationKey Key, CancellationTokenSource Cancellation);
+    private sealed record PrefetchCandidate(int Position, TranslationKey Key, string? Pivot);
+    private sealed record AutoTranslationRequest(TranslationKey Active, PrefetchCandidate? Lookahead = null);
+    private sealed record PendingTranslation(AutoTranslationRequest Request, CancellationTokenSource Cancellation);
 
     private void TrackTranslationScroll(TranslationKey? key)
     {
@@ -90,29 +95,88 @@ public partial class ReadingPage
 
     private void ScheduleAutoTranslation()
     {
-        var key = PendingAutoTranslation();
-        if (key == lastAutoTranslation) key = null;
-        if (scheduledTranslation?.Key == key) return;
+        var request = NextTranslationRequest();
+        if (scheduledTranslation?.Request == request) return;
         CancelScheduledTranslation();
-        if (key is not null) _ = TranslateAfterNavigationAsync(key);
+        if (request is not null) _ = TranslateAfterNavigationAsync(request);
     }
 
-    private async Task TranslateAfterNavigationAsync(TranslationKey key)
+    private AutoTranslationRequest? NextTranslationRequest()
+    {
+        if (PendingAutoTranslation() is { } foreground && foreground != lastAutoTranslation) return new(foreground);
+        if (!readingPageActive || !autoTranslate || !TranslationVisible || translating || utteranceActive || prefetching ||
+            readiness is not { Ready: true } route || ActiveTranslationKey() is not { } active || active == lastPrefetchOrigin ||
+            readinessPair != (active.Source, active.Target)) return null;
+
+        var session = AppState.Session;
+        if (session.Busy || session.Document is not { } document ||
+            FindTranslationWindow(document, active.Target) is not { IsParagraph: true } ||
+            (ReviewedFor(document, active.Target, active.Sentence) is null && ActiveMachine(document, active.Target) is null))
+            return null;
+
+        for (var index = document.Position + 1; index < Math.Min(document.Sentences.Length, document.Position + 3); index++)
+        {
+            var sentence = document.Sentences[index];
+            if (ReviewedFor(document, active.Target, sentence.Id) is not null ||
+                MatchingTranslationWindows(document, active.Target, index).Any()) continue;
+
+            var key = active with { Sentence = sentence.Id, Text = sentence.Text };
+            return prefetchAttempts.Contains((key, route.PivotLanguage)) ? null
+                : new AutoTranslationRequest(active, new PrefetchCandidate(index, key, route.PivotLanguage));
+        }
+        return null;
+    }
+
+    private async Task TranslateAfterNavigationAsync(AutoTranslationRequest request)
     {
         using var cancellation = new CancellationTokenSource();
-        var pending = new PendingTranslation(key, cancellation);
+        var pending = new PendingTranslation(request, cancellation);
         scheduledTranslation = pending;
-        try { await Task.Delay(350, cancellation.Token); }
+        try { await Task.Delay(request.Lookahead is null ? 350 : 900, cancellation.Token); }
         catch (OperationCanceledException) { return; }
         if (!ReferenceEquals(scheduledTranslation, pending)) return;
         scheduledTranslation = null;
-        if (PendingAutoTranslation() != key)
+        if (NextTranslationRequest() != request)
         {
             ScheduleAutoTranslation();
             return;
         }
-        lastAutoTranslation = key;
+        if (request.Lookahead is { } lookahead)
+        {
+            await PrefetchTranslationAsync(request.Active, lookahead);
+            return;
+        }
+        lastAutoTranslation = request.Active;
         await TranslateOfflineAsync(useContext: true);
+    }
+
+    private async Task PrefetchTranslationAsync(TranslationKey origin, PrefetchCandidate candidate)
+    {
+        var session = AppState.Session;
+        if (session.Document is not { } before) return;
+        var key = candidate.Key;
+        prefetching = true;
+        lastPrefetchOrigin = origin;
+        if (prefetchAttempts.Count >= 2 * TranslationWindowLimit) prefetchAttempts.Dequeue();
+        prefetchAttempts.Enqueue((key, candidate.Pivot));
+        try
+        {
+            var result = await session.TranslateParagraphAsync(key.Document, key.Sentence, key.Target, background: true);
+            if (!readingPageActive || !autoTranslate || !TranslationVisible || TargetCode != key.Target ||
+                readiness is not { Ready: true } route || readinessPair != (key.Source, key.Target) ||
+                route.PivotLanguage != candidate.Pivot || result.PivotLanguage != candidate.Pivot ||
+                session.Document is not { } current || current.Id != key.Document || current.Language != key.Source ||
+                current.Text != before.Text || current.Sentences.ElementAtOrDefault(candidate.Position)?.Id != key.Sentence ||
+                MatchingTranslationWindows(current, key.Target, candidate.Position).Any()) return;
+
+            var scope = new TranslationScope(key.Document, key.Source, key.Target);
+            var window = BuildParagraphWindow(current with { Position = candidate.Position }, scope, result);
+            if (window.UnitFor(candidate.Position) is not { } next || MachineFor(current, window, next) is null) return;
+            RememberWindow(window, background: true);
+            if (!translating && window.UnitFor(current.Position) is not null) UpdateTranslation();
+        }
+        catch (Exception) { }
+        finally { prefetching = false; }
     }
 
     private sealed record AlignedUnit(int First, Sentence[] Sources, string? MachineText, bool JoinedLines,
@@ -137,12 +201,13 @@ public partial class ReadingPage
         public AlignedUnit? UnitFor(int position) => Array.Find(Units, unit => unit.Contains(position));
     }
 
-    private IEnumerable<TranslationWindow> MatchingTranslationWindows(Document document, string target)
+    private IEnumerable<TranslationWindow> MatchingTranslationWindows(Document document, string target, int? position = null)
     {
         if (readiness is not { Ready: true } || readinessPair != (document.Language, target)) return [];
         var scope = new TranslationScope(document.Id, document.Language, target);
+        var index = position ?? document.Position;
         return translationWindows.Where(window => window.Scope == scope && window.Pivot == readiness.PivotLanguage
-            && window.UnitFor(document.Position) is { } unit && unit.Matches(document));
+            && window.UnitFor(index) is { } unit && unit.Matches(document));
     }
 
     private TranslationWindow? FindTranslationWindow(Document document, string target)
@@ -181,11 +246,12 @@ public partial class ReadingPage
     private string? IndependentMachineText(Document document, string target) =>
         ActiveMachine(document, target) is { JoinedLines: false } machine ? machine.Text : null;
 
-    private void RememberWindow(TranslationWindow window)
+    private void RememberWindow(TranslationWindow window, bool background = false)
     {
         translationWindows.RemoveAll(previous => previous.Scope == window.Scope
             && previous.Anchor == window.Anchor && previous.IsParagraph == window.IsParagraph);
-        translationWindows.Insert(0, window);
+        var index = background ? Math.Min(translationWindows.Count, TranslationWindowLimit - 1) : 0;
+        translationWindows.Insert(index, window);
         if (translationWindows.Count > TranslationWindowLimit)
             translationWindows.RemoveAt(TranslationWindowLimit);
     }

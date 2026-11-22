@@ -132,8 +132,10 @@ public sealed class CoreClient : IDisposable
         Call<JsonElement>(new { version = 1, operation = "check_translation_download_space", source, target, stagingRoot, archiveDirectory });
     public void CheckTranslationArchiveSpace(string directory, long bytes) =>
         Call<JsonElement>(new { version = 1, operation = "check_translation_archive_space", directory, bytes });
-    public ParagraphTranslation TranslateParagraph(string id, string sentenceId, string target) =>
-        CallIndependent<ParagraphTranslation>(new { version = 1, operation = "translate_paragraph", id, sentenceId, target });
+    public ParagraphTranslation TranslateParagraph(string id, string sentenceId, string target, bool background = false) =>
+        background
+            ? CallIndependent<ParagraphTranslation>(new { version = 1, operation = "translate_paragraph", id, sentenceId, target, background })
+            : CallIndependent<ParagraphTranslation>(new { version = 1, operation = "translate_paragraph", id, sentenceId, target });
     public LexicalPackage[] LexicalPackages() =>
         Call<LexicalPackage[]>(new { version = 1, operation = "lexical_packages" });
     public LexicalPackage InstallLexicalPackage(string language, string path) =>

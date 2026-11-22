@@ -194,8 +194,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public Task CheckTranslationArchiveSpaceAsync(string directory, long bytes) =>
         Task.Run(() => client.CheckTranslationArchiveSpace(directory, bytes));
 
-    public Task<ParagraphTranslation> TranslateParagraphAsync(string id, string sentenceId, string target) =>
-        Task.Run(() => client.TranslateParagraph(id, sentenceId, target));
+    public Task<ParagraphTranslation> TranslateParagraphAsync(string id, string sentenceId, string target, bool background = false) =>
+        Task.Run(() => client.TranslateParagraph(id, sentenceId, target, background));
     public Task<LexicalPackage[]> LexicalPackagesAsync() => Task.Run(client.LexicalPackages);
     public Task<LexicalPackage> InstallLexicalPackageAsync(string language, string path) =>
         Task.Run(() => client.InstallLexicalPackage(language, path));

@@ -209,6 +209,8 @@ pub enum Command {
         #[serde(rename = "sentenceId")]
         sentence_id: String,
         target: String,
+        #[serde(default)]
+        background: bool,
     },
     TranslateSentence {
         id: String,

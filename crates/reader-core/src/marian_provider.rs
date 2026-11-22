@@ -15,8 +15,8 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     model_storage::{
-        activate_verified_package, copy_and_hash, lock_package, model_error, package_directory,
-        remove_package_directory,
+        activate_verified_package, copy_and_hash, copy_and_hash_checked, lock_package, model_error,
+        package_directory, remove_package_directory,
     },
     resources::RESOURCES,
     space::{ensure_capacity, PACKAGE_OVERHEAD},
@@ -93,6 +93,7 @@ pub struct TranslationAsset {
 
 struct MarianProvider<'a> {
     directory: &'a Path,
+    background: bool,
 }
 
 /// Owned settings for reading a document and updating its translation cache off the main store.
@@ -133,9 +134,10 @@ impl TranslationWorker {
         document_id: &str,
         sentence_id: &str,
         target: &str,
+        background: bool,
     ) -> Result<ParagraphTranslation> {
         self.open()?
-            .translate_installed_paragraph(document_id, sentence_id, target)
+            .translate_paragraph_with_priority(document_id, sentence_id, target, background)
     }
 }
 
@@ -196,9 +198,7 @@ impl Store {
     }
 
     pub fn translation_packages(&self) -> Vec<TranslationPackageStatus> {
-        let provider = MarianProvider {
-            directory: &self.model_directory,
-        };
+        let provider = MarianProvider::interactive(&self.model_directory);
         catalog::PACKAGES
             .iter()
             .map(|package| TranslationPackageStatus {
@@ -230,9 +230,7 @@ impl Store {
             .iter()
             .find(|package| package.source == source && package.target == target)
             .ok_or("Для цієї мовної пари немає пакета.")?;
-        let provider = MarianProvider {
-            directory: &self.model_directory,
-        };
+        let provider = MarianProvider::interactive(&self.model_directory);
         if !self.model_directory.is_dir() {
             return Ok(false);
         }
@@ -280,9 +278,7 @@ impl Store {
         if candidates.is_empty() {
             return Err("Версію мовного пакета не підтримано".into());
         }
-        let provider = MarianProvider {
-            directory: &self.model_directory,
-        };
+        let provider = MarianProvider::interactive(&self.model_directory);
         fs::create_dir_all(&self.model_directory).map_err(model_error)?;
         ensure_capacity([(
             &self.model_directory,
@@ -303,7 +299,9 @@ impl Store {
         let _lock = provider.lock(package, true)?;
         let active = provider.path(package);
         let previous = provider.previous_path(package);
-        if !package_directory(&active)? || verify_files(&active, package, &ASSETS).is_err() {
+        if !package_directory(&active)?
+            || verify_files(&active, package, &ASSETS, &|| Ok(())).is_err()
+        {
             activate_verified_package(
                 stage.path(),
                 &active,
@@ -344,6 +342,16 @@ impl Store {
         sentence_id: &str,
         target: &str,
     ) -> Result<ParagraphTranslation> {
+        self.translate_paragraph_with_priority(document_id, sentence_id, target, false)
+    }
+
+    fn translate_paragraph_with_priority(
+        &mut self,
+        document_id: &str,
+        sentence_id: &str,
+        target: &str,
+        background: bool,
+    ) -> Result<ParagraphTranslation> {
         let document = self.translation_document(document_id)?;
         let selected = document
             .sentences
@@ -355,6 +363,7 @@ impl Store {
             self,
             &mut MarianProvider {
                 directory: &directory,
+                background,
             },
             &document,
             selected,
@@ -379,9 +388,7 @@ impl Store {
         source: &str,
         target: &str,
     ) -> Result<TranslationReadiness> {
-        let provider = MarianProvider {
-            directory: &self.model_directory,
-        };
+        let provider = MarianProvider::interactive(&self.model_directory);
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
         route_readiness(&catalog, &provider.installed_models()?, source, target)
     }
@@ -401,9 +408,7 @@ impl Store {
             .ok_or("Речення для перекладу не знайдено")?;
         let (text, joined_lines) = input_for_sentence(&document, selected);
         self.translate_aligned(
-            &mut MarianProvider {
-                directory: package_dir,
-            },
+            &mut MarianProvider::interactive(package_dir),
             TranslationRequest {
                 source: &document.language,
                 target,
@@ -421,7 +426,14 @@ impl Store {
     }
 }
 
-impl MarianProvider<'_> {
+impl<'a> MarianProvider<'a> {
+    fn interactive(directory: &'a Path) -> Self {
+        Self {
+            directory,
+            background: false,
+        }
+    }
+
     fn files_present(&self, model: &Package) -> bool {
         let path = self.read_path(model);
         ASSETS.iter().zip(model.sizes).all(|(asset, expected)| {
@@ -486,10 +498,18 @@ impl TranslationProvider for MarianProvider<'_> {
                     && package.target == edge.target
             })
             .ok_or("Невідомий мовний пакет")?;
-        let _working = RESOURCES.interactive();
+        let _interactive = (!self.background).then(|| RESOURCES.interactive());
+        // A background job can wait for package management without owning the compute permit.
         let _lock = self.lock(package, false)?;
+        let optional = self.background.then(|| RESOURCES.optional()).transpose()?;
+        let checkpoint = || {
+            if optional.as_ref().is_some_and(|job| job.should_yield()) {
+                return Err("Фоновий переклад поступився активному запиту.".into());
+            }
+            Ok(())
+        };
         let directory = self.read_path(package);
-        verify_files(&directory, package, &ASSETS[..4])?;
+        verify_files(&directory, package, &ASSETS[..4], &checkpoint)?;
         let mut configuration: serde_json::Value =
             serde_json::from_slice(&fs::read(directory.join("config.json")).map_err(model_error)?)
                 .map_err(model_error)?;
@@ -515,10 +535,11 @@ impl TranslationProvider for MarianProvider<'_> {
         let output =
             SentencePieceProcessor::open(directory.join("target.spm")).map_err(model_error)?;
         let mut bytes = Vec::new();
-        let (_, digest) = copy_and_hash(
+        let (_, digest) = copy_and_hash_checked(
             File::open(directory.join("model.safetensors")).map_err(model_error)?,
             &mut bytes,
             asset_limit("model.safetensors"),
+            &checkpoint,
         )?;
         if digest != package.hashes[4] {
             return Err("Файл ваг мовного пакета пошкоджений".into());
@@ -538,6 +559,7 @@ impl TranslationProvider for MarianProvider<'_> {
         } else {
             weights
         };
+        checkpoint()?;
         let mut model = MTModel::new(&config, weights).map_err(model_error)?;
         let unknown = *vocabulary
             .get("<unk>")
@@ -561,12 +583,14 @@ impl TranslationProvider for MarianProvider<'_> {
         let mut results = Vec::with_capacity(segments.len());
         let mut clock_retry_budget = 2;
         for segment in segments {
+            checkpoint()?;
             let source_pieces = input
                 .encode(normalized_input(package.source, segment).as_ref())
                 .map_err(model_error)?;
             let mut start = 0;
             let mut translated_parts = Vec::new();
             loop {
+                checkpoint()?;
                 let mut end = source_pieces.len().min(start + capacity);
                 if end < source_pieces.len() {
                     end = end.min(start + 160);
@@ -607,14 +631,21 @@ impl TranslationProvider for MarianProvider<'_> {
                         .map(|text| text.trim().to_owned())
                         .map_err(model_error)
                 };
-                let mut decoded =
-                    decoder::candidates(&model, &encoded, &config, settings.beam_size, limit)?
-                        .into_iter();
+                let mut decoded = decoder::candidates(
+                    &model,
+                    &encoded,
+                    &config,
+                    settings.beam_size,
+                    limit,
+                    &checkpoint,
+                )?
+                .into_iter();
                 let best = decoded
                     .next()
                     .ok_or("Модель не завершила переклад речення")?;
                 let mut translated = decode_text(&best)?;
                 let mut reference = |text: &str, width| -> Result<String> {
+                    checkpoint()?;
                     let pieces = input
                         .encode(normalized_input(package.source, text).as_ref())
                         .map_err(model_error)?;
@@ -635,7 +666,14 @@ impl TranslationProvider for MarianProvider<'_> {
                         .and_then(|value| value.unsqueeze(0))
                         .map_err(model_error)?;
                     let encoded = model.encoder().forward(&tensor, 0).map_err(model_error)?;
-                    decode_text(&decoder::decode(&model, &encoded, &config, width, limit)?)
+                    decode_text(&decoder::decode(
+                        &model,
+                        &encoded,
+                        &config,
+                        width,
+                        limit,
+                        &checkpoint,
+                    )?)
                 };
                 let units: Vec<_> = segment
                     .unicode_sentences()
@@ -691,6 +729,8 @@ impl TranslationProvider for MarianProvider<'_> {
                         }
                     }
                 }
+                // Reranking/retry tolerate inference errors. A yield must not cache their fallback.
+                checkpoint()?;
                 translated_parts.push(translated);
                 if end == source_pieces.len() {
                     break;
@@ -719,10 +759,15 @@ fn asset_limit(asset: &str) -> u64 {
     }
 }
 
-fn verify_files(directory: &Path, package: &Package, assets: &[&str]) -> Result<()> {
+fn verify_files(
+    directory: &Path,
+    package: &Package,
+    assets: &[&str],
+    checkpoint: &impl Fn() -> Result<()>,
+) -> Result<()> {
     for (asset, expected) in assets.iter().zip(package.hashes) {
         let file = File::open(directory.join(asset)).map_err(model_error)?;
-        let (_, actual) = copy_and_hash(file, io::sink(), asset_limit(asset))?;
+        let (_, actual) = copy_and_hash_checked(file, io::sink(), asset_limit(asset), checkpoint)?;
         if actual != expected {
             return Err(format!("Файл мовного пакета пошкоджений: {asset}"));
         }

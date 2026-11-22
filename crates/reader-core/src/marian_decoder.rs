@@ -66,8 +66,9 @@ pub(super) fn decode(
     config: &Config,
     width: u8,
     limit: usize,
+    checkpoint: &impl Fn() -> Result<()>,
 ) -> Result<Vec<u32>> {
-    candidates(model, encoded, config, width, limit)?
+    candidates(model, encoded, config, width, limit, checkpoint)?
         .into_iter()
         .next()
         .ok_or_else(|| "Модель не завершила переклад речення".into())
@@ -79,6 +80,7 @@ pub(super) fn candidates(
     config: &Config,
     width: u8,
     limit: usize,
+    checkpoint: &impl Fn() -> Result<()>,
 ) -> Result<Vec<Vec<u32>>> {
     search_candidates(
         CandleState {
@@ -93,20 +95,25 @@ pub(super) fn candidates(
             width: usize::from(width),
             limit,
         },
+        checkpoint,
     )
     .map(|finished| finished.into_iter().map(|beam| beam.tokens).collect())
 }
 
 #[cfg(test)]
 fn search<S: DecoderState>(initial: S, options: Options) -> Result<Vec<u32>> {
-    search_candidates(initial, options)?
+    search_candidates(initial, options, &|| Ok(()))?
         .into_iter()
         .next()
         .map(|beam| beam.tokens)
         .ok_or_else(|| "Модель не завершила переклад речення".into())
 }
 
-fn search_candidates<S: DecoderState>(mut initial: S, options: Options) -> Result<Vec<Finished>> {
+fn search_candidates<S: DecoderState>(
+    mut initial: S,
+    options: Options,
+    checkpoint: &impl Fn() -> Result<()>,
+) -> Result<Vec<Finished>> {
     if !(1..=MAX_BEAMS).contains(&options.width) || !(1..=MAX_TOKENS).contains(&options.limit) {
         return Err("Некоректні межі декодування перекладу".into());
     }
@@ -114,6 +121,7 @@ fn search_candidates<S: DecoderState>(mut initial: S, options: Options) -> Resul
         let mut last = options.start;
         let mut output = Vec::new();
         for position in 0..options.limit {
+            checkpoint()?;
             last = initial
                 .logits(last, position)?
                 .into_iter()
@@ -143,6 +151,7 @@ fn search_candidates<S: DecoderState>(mut initial: S, options: Options) -> Resul
     for position in 0..options.limit {
         let mut candidates = Vec::with_capacity(2 * options.width * options.width);
         for (parent, beam) in active.iter_mut().enumerate() {
+            checkpoint()?;
             let logits = beam.state.logits(beam.last, position)?;
             for (token, score) in best_tokens(&logits, options.pad, 2 * options.width)? {
                 candidates.push(Candidate {

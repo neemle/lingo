@@ -178,7 +178,15 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             id,
             sentence_id,
             target,
-        } => value(store.translate_installed_paragraph(&id, &sentence_id, &target)),
+            background,
+        } => {
+            if background {
+                return Err(gateway::domain(
+                    "Фоновий переклад потребує файлової бібліотеки.".into(),
+                ));
+            }
+            value(store.translate_installed_paragraph(&id, &sentence_id, &target))
+        }
         Command::TranslateSentence {
             id,
             sentence_id,

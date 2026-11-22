@@ -58,6 +58,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             id,
             sentence_id,
             target,
+            ..
         }
         | Command::TranslateSentence {
             id,
@@ -68,8 +69,8 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .store(handle)?
                 .prepare_translation_worker();
             if let Some(worker) = worker {
-                return if matches!(&command, Command::TranslateParagraph { .. }) {
-                    encode_job(worker.translate_paragraph(id, sentence_id, target))
+                return if let Command::TranslateParagraph { background, .. } = &command {
+                    encode_job(worker.translate_paragraph(id, sentence_id, target, *background))
                 } else {
                     dispatch::sentence_translation(worker.translate_sentence(
                         id,

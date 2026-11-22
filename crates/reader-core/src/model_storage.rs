@@ -93,14 +93,24 @@ pub(crate) fn remove_package_directory(path: &Path) -> Result<bool> {
     }
 }
 pub(crate) fn copy_and_hash(
+    input: impl Read,
+    output: impl io::Write,
+    limit: u64,
+) -> Result<(u64, String)> {
+    copy_and_hash_checked(input, output, limit, &|| Ok(()))
+}
+
+pub(crate) fn copy_and_hash_checked(
     mut input: impl Read,
     mut output: impl io::Write,
     limit: u64,
+    checkpoint: &impl Fn() -> Result<()>,
 ) -> Result<(u64, String)> {
     let mut hash = Sha256::new();
     let mut buffer = [0; 64 * 1024];
     let mut size = 0;
     loop {
+        checkpoint()?;
         let count = input.read(&mut buffer).map_err(model_error)?;
         if count == 0 {
             break;
