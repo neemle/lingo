@@ -5,6 +5,8 @@ namespace Reader.Native.Features.Library;
 
 public partial class LibraryPage
 {
+    private bool pauseExternalBatch;
+
     private async Task RefreshShareInboxAsync()
     {
         try
@@ -26,9 +28,17 @@ public partial class LibraryPage
         {
             var items = await Task.Run(ShareInbox.List);
             if (items.Length == 0) return;
-            var choices = items.Select((item, index) => $"{index + 1}. {item.Label}").ToArray();
+            const string resumeAll = "Продовжити імпорт усіх";
+            var recoverable = items.Where(item => item.Kind != "damaged").ToArray();
+            var itemChoices = items.Select((item, index) => $"{index + 1}. {item.Label}").ToArray();
+            string[] choices = recoverable.Length > 1 ? [resumeAll, .. itemChoices] : itemChoices;
             var choice = await DisplayActionSheetAsync("Вхідні матеріали", "Закрити", null, choices);
-            var selected = Array.IndexOf(choices, choice);
+            if (choice == resumeAll)
+            {
+                await ImportExternalBatchAsync(recoverable);
+                return;
+            }
+            var selected = Array.IndexOf(itemChoices, choice);
             if (selected < 0) return;
             var item = items[selected];
             const string changeLanguage = "Змінити мову оригіналу";
@@ -55,22 +65,36 @@ public partial class LibraryPage
     {
         await loading;
         importing = true;
+        pauseExternalBatch = false;
+        PauseExternalBatch.IsEnabled = true;
         try
         {
             string? lastDocument = null;
-            foreach (var item in items)
+            for (var index = 0; index < items.Length && !pauseExternalBatch; index++)
             {
+                PauseExternalBatch.IsVisible = index + 1 < items.Length;
+                var item = items[index];
                 try { lastDocument = await ImportInboxItemAsync(item, chooseLanguage) ?? lastDocument; }
                 catch (Exception error) { await DisplayAlertAsync(item.Name, error.Message, "Гаразд"); }
             }
-            if (lastDocument is not null) await AppState.OpenAsync(lastDocument);
+            if (!pauseExternalBatch && lastDocument is not null) await AppState.OpenAsync(lastDocument);
         }
         finally
         {
+            PauseExternalBatch.IsVisible = false;
             importing = false;
-            ImportStatus.Text = "";
+            ImportStatus.Text = pauseExternalBatch
+                ? "Імпорт призупинено. Решта добірки доступна у вхідних матеріалах." : "";
             await RefreshShareInboxAsync();
         }
+    }
+
+    private void PauseExternalBatchClicked(object? sender, EventArgs args)
+    {
+        if (!importing || !PauseExternalBatch.IsVisible) return;
+        pauseExternalBatch = true;
+        PauseExternalBatch.IsEnabled = false;
+        ImportStatus.Text = "Імпорт призупиниться після поточного матеріалу.";
     }
 
     private async Task<string?> ImportInboxItemAsync(ShareInboxItem item, bool chooseLanguage = false)
