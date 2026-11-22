@@ -37,11 +37,13 @@ pub struct DocumentBlock {
     pub table_cell: Option<DocxTableCell>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocxList {
     pub id: u32,
     pub level: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

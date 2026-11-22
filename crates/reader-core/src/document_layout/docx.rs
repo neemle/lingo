@@ -11,7 +11,10 @@ use std::{
     io::{Cursor, Read},
 };
 
-pub(crate) const DOCX_LAYOUT_VERSION: u8 = 2;
+mod numbering;
+use numbering::Numbering;
+
+pub(crate) const DOCX_LAYOUT_VERSION: u8 = 3;
 
 #[derive(Clone, Default)]
 struct ParagraphProperties {
@@ -46,7 +49,11 @@ struct Styles {
 }
 
 impl Styles {
-    fn resolve(&self, direct: &ParagraphProperties) -> (Option<u8>, Option<DocxList>) {
+    fn resolve(
+        &self,
+        direct: &ParagraphProperties,
+        numbering: &Numbering,
+    ) -> (Option<u8>, Option<DocxList>) {
         let mut outline = direct.outline;
         let mut list_id = direct.list_id;
         let mut list_level = direct.list_level;
@@ -66,7 +73,18 @@ impl Styles {
             outline.filter(|level| *level < 9).map(|level| level + 1),
             list_id.filter(|id| *id != 0).map(|id| DocxList {
                 id,
-                level: list_level.unwrap_or(0),
+                level: direct
+                    .list_level
+                    .or_else(|| {
+                        direct
+                            .style
+                            .as_deref()
+                            .or(self.default.as_deref())
+                            .and_then(|style| numbering.level_for_style(id, style))
+                    })
+                    .or(list_level)
+                    .unwrap_or(0),
+                marker: None,
             }),
         )
     }
@@ -177,6 +195,7 @@ impl TableCursor {
 struct Paragraph {
     properties: ParagraphProperties,
     cell: Option<DocxTableCell>,
+    list_emitted: bool,
 }
 
 pub(super) fn parse(bytes: &[u8]) -> Result<Extracted> {
@@ -188,10 +207,15 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Extracted> {
         .unwrap_or_default();
     let xml =
         xml_part(&mut archive, "word/document.xml")?.ok_or("У DOCX немає текстового документа")?;
-    parse_body(&xml, &styles)
+    let numbering = xml_part(&mut archive, "word/numbering.xml")
+        .ok()
+        .flatten()
+        .and_then(|xml| Numbering::parse(&xml).ok())
+        .unwrap_or_default();
+    parse_body(&xml, &styles, numbering)
 }
 
-fn parse_body(xml: &str, styles: &Styles) -> Result<Extracted> {
+fn parse_body(xml: &str, styles: &Styles, mut numbering: Numbering) -> Result<Extracted> {
     let mut reader = NsReader::from_str(xml);
     let mut text = String::new();
     let mut ranges = Vec::new();
@@ -211,8 +235,13 @@ fn parse_body(xml: &str, styles: &Styles) -> Result<Extracted> {
             {
                 match event.local_name().as_ref() {
                     b"p" if !empty => {
-                        if let Some(paragraph) = paragraphs.last() {
-                            ranges.push(block(start..text.len(), paragraph, styles));
+                        if let Some(paragraph) = paragraphs.last_mut() {
+                            ranges.push(block(
+                                start..text.len(),
+                                paragraph,
+                                styles,
+                                &mut numbering,
+                            ));
                             start = text.len();
                         }
                         paragraphs.push(Paragraph {
@@ -273,8 +302,9 @@ fn parse_body(xml: &str, styles: &Styles) -> Result<Extracted> {
                     b"p" => {
                         ranges.push(block(
                             start..text.len(),
-                            &paragraphs.pop().unwrap_or_default(),
+                            &mut paragraphs.pop().unwrap_or_default(),
                             styles,
+                            &mut numbering,
                         ));
                         text.push('\n');
                         start = text.len();
@@ -334,8 +364,19 @@ fn parse_body(xml: &str, styles: &Styles) -> Result<Extracted> {
     })
 }
 
-fn block(offset: std::ops::Range<usize>, paragraph: &Paragraph, styles: &Styles) -> BlockRange {
-    let (heading, list) = styles.resolve(&paragraph.properties);
+fn block(
+    offset: std::ops::Range<usize>,
+    paragraph: &mut Paragraph,
+    styles: &Styles,
+    numbering: &mut Numbering,
+) -> BlockRange {
+    let (heading, mut list) = styles.resolve(&paragraph.properties, numbering);
+    if let Some(list) = &mut list {
+        if !paragraph.list_emitted {
+            list.marker = numbering.marker(list);
+            paragraph.list_emitted = true;
+        }
+    }
     BlockRange {
         offset,
         heading,

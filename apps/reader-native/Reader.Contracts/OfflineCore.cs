@@ -9,7 +9,10 @@ public sealed record DocumentBlock(string Kind, int StartUtf8, int EndUtf8,
     public DocxTableCell? TableCell { get; init; }
 }
 
-public sealed record DocxList(uint Id, int Level);
+public sealed record DocxList(uint Id, int Level)
+{
+    public string? Marker { get; init; }
+}
 public sealed record DocxTableCell(uint Table, uint Row, uint Column, uint ColumnSpan);
 
 public sealed record CachedTranslation(ParagraphTranslation Paragraph, MachineTranslation? Sentence);
