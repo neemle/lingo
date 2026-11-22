@@ -30,7 +30,7 @@
    <Setter Property="TextColor" Value="{StaticResource Sage}" />
   </Style>
  </ContentPage.Resources>
- <ScrollView>
+ <ScrollView x:Name="SettingsScroll" SizeChanged="TranslationLayoutChanged">
   <VerticalStackLayout Padding="40,34,40,42" Spacing="20" MaximumWidthRequest="1000" HorizontalOptions="Fill">
    <VerticalStackLayout Spacing="8" Margin="0,0,0,8">
     <Label Text="Мови та ресурси" Style="{StaticResource SerifTitle}" SemanticProperties.HeadingLevel="Level1" />
@@ -109,11 +109,14 @@
     </VerticalStackLayout>
    </Border>
 
-   <Border Style="{StaticResource ResourceCard}">
+   <Border x:Name="TranslationSection" Style="{StaticResource ResourceCard}" SizeChanged="TranslationLayoutChanged">
     <VerticalStackLayout Spacing="12">
      <Label Text="Офлайн-переклад" Style="{StaticResource ResourceTitle}" SemanticProperties.HeadingLevel="Level2" />
+     <Label x:Name="RequestedTranslation" Style="{StaticResource ResourceDetail}" IsVisible="False" />
      <Picker x:Name="ModelChoice" Title="Мовний пакет" HorizontalOptions="Start" MinimumWidthRequest="230" />
      <FlexLayout Wrap="Wrap" JustifyContent="Start">
+      <Button x:Name="DownloadRequested" Text="Завантажити всі потрібні пакети" Clicked="DownloadRequestedClicked"
+       IsVisible="False" Style="{StaticResource AccentButton}" Margin="0,0,8,8" />
       <Button x:Name="DownloadTranslation" Text="Завантажити пакет" Clicked="DownloadTranslationClicked"
        Style="{StaticResource AccentButton}" Margin="0,0,8,8" />
       <Button x:Name="CancelDownload" Text="Зупинити завантаження" Clicked="CancelDownloadClicked"

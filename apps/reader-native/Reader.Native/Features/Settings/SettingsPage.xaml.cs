@@ -15,6 +15,9 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
     private TranslationPair[] requestedPackages = [];
     private CancellationTokenSource? activeDownload;
     private bool changingTranslationFiles;
+    private bool settingsVisible;
+    private bool settingsLoaded;
+    private bool focusTranslationPending;
 
     public SettingsPage() { InitializeComponent(); BindingContext = AppState.Session; }
 
@@ -22,18 +25,44 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
     {
         if (query.TryGetValue("translationPackages", out var value) && value is TranslationPair[] packages)
         {
-            requestedPackages = packages;
+            requestedPackages = packages.Distinct().ToArray();
+            focusTranslationPending = requestedPackages.Length > 0;
             var index = RequestedPackageIndex();
             if (index >= 0) ModelChoice.SelectedIndex = index;
+            UpdateTranslationControls();
+            TranslationLayoutChanged(this, EventArgs.Empty);
         }
     }
 
     private int RequestedPackageIndex() => requestedPackages.Select(pair => Array.FindIndex(downloadChoices,
         package => package.Source == pair.Source && package.Target == pair.Target)).FirstOrDefault(index => index >= 0, -1);
 
+    private static TranslationPackageStatus[] RequestedMissingPackages(TranslationPair[] pairs,
+        TranslationPackageStatus[] inventory) => pairs.SelectMany(pair => inventory.Where(package =>
+            !package.FilesPresent && package.Source == pair.Source && package.Target == pair.Target)).ToArray();
+
+    private static string PackageKey(TranslationPackageStatus package) =>
+        package.Repository ?? $"{package.Source}-{package.Target}";
+
+    private void TranslationLayoutChanged(object? sender, EventArgs args)
+    {
+        if (!focusTranslationPending || !settingsVisible || !settingsLoaded ||
+            SettingsScroll.Width <= 0 || TranslationSection.Height <= 0)
+            return;
+        focusTranslationPending = false;
+        Dispatcher.Dispatch(async () =>
+        {
+            if (!settingsVisible) return;
+            try { await SettingsScroll.ScrollToAsync(TranslationSection, ScrollToPosition.Start, animated: false); }
+            catch (Exception error) { ModelStatus.Text = error.Message; }
+        });
+    }
+
     protected override async void OnAppearing()
     {
         base.OnAppearing();
+        settingsVisible = true;
+        settingsLoaded = false;
         nativeCapabilities = null;
         capabilityReport = null;
         ExportCapabilities.IsEnabled = false;
@@ -43,6 +72,15 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         await RefreshOptionalModelsAsync();
         nativeCapabilities = await NativeLanguageCapabilities.ReadAsync();
         UpdateCapabilityMatrix();
+        settingsLoaded = true;
+        TranslationLayoutChanged(this, EventArgs.Empty);
+    }
+
+    protected override void OnDisappearing()
+    {
+        settingsVisible = false;
+        focusTranslationPending = false;
+        base.OnDisappearing();
     }
 
     private async Task RefreshKnowledgePackagesAsync()
@@ -105,7 +143,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
                 ? downloadChoices[ModelChoice.SelectedIndex] : null;
             downloadChoices = packages.Where(package => !package.FilesPresent).ToArray();
             removablePackages = packages.Where(package => package.HasLocalFiles)
-                .GroupBy(package => package.Repository ?? $"{package.Source}-{package.Target}").ToArray();
+                .GroupBy(PackageKey).ToArray();
             ModelChoice.ItemsSource = downloadChoices.Select(package =>
                 $"{DocumentLanguages.Name(package.Source)} → {DocumentLanguages.Name(package.Target)} " +
                 $"({package.Assets.Sum(asset => asset.Bytes) / 1_000_000d:F0} МБ)").ToArray();
@@ -120,6 +158,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         {
             translationInventory = null;
             TranslationPackages.Text = error.Message;
+            UpdateTranslationControls();
             UpdateCapabilityMatrix();
         }
     }
@@ -127,6 +166,11 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
     private void UpdateTranslationControls()
     {
         var busy = activeDownload is not null || changingTranslationFiles;
+        var requested = RequestedMissingPackages(requestedPackages, translationInventory ?? []);
+        RequestedTranslation.IsVisible = requested.Length > 0;
+        RequestedTranslation.Text = requested.Length > 0 ? $"Потрібні пакети для напрямків {DescribeRoutes(requested)}." : "";
+        DownloadRequested.IsVisible = requested.DistinctBy(PackageKey).Count() > 1;
+        DownloadRequested.IsEnabled = !busy && DownloadRequested.IsVisible;
         ModelChoice.IsEnabled = InstallTranslation.IsEnabled = !busy;
         DownloadTranslation.IsEnabled = !busy && downloadChoices.Length > 0;
         RemoveTranslation.IsVisible = removablePackages.Length > 0;
@@ -205,6 +249,9 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         if (index >= 0 && index < downloadChoices.Length) await DownloadPackageAsync(downloadChoices[index]);
     }
 
+    private async void DownloadRequestedClicked(object? sender, EventArgs args) =>
+        await RunTranslationDownloadAsync(requestedPackages, single: null);
+
     private async void RepairTranslationClicked(object? sender, EventArgs args)
     {
         if (changingTranslationFiles || activeDownload is not null || removablePackages.Length == 0) return;
@@ -228,39 +275,35 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         if (selected is not null) await DownloadPackageAsync(selected);
     }
 
-    private async Task DownloadPackageAsync(TranslationPackageStatus package)
+    private Task DownloadPackageAsync(TranslationPackageStatus package) => RunTranslationDownloadAsync([], package);
+
+    private async Task RunTranslationDownloadAsync(TranslationPair[] pairs, TranslationPackageStatus? single)
     {
         if (changingTranslationFiles || activeDownload is not null) return;
         using var cancellation = new CancellationTokenSource();
         activeDownload = cancellation;
-
-        var root = Path.Combine(FileSystem.CacheDirectory, "translation-downloads");
-        var archive = Path.Combine(FileSystem.CacheDirectory, $"translation-{Guid.NewGuid():N}.zip");
-        var total = package.Assets.Sum(asset => asset.Bytes);
-        var progress = new Progress<long>(bytes =>
-        {
-            if (activeDownload == cancellation)
-                DownloadProgress.Progress = Math.Clamp((double)bytes / total, 0, 1);
-        });
-
         UpdateTranslationControls();
-        CancelDownload.IsVisible = DownloadProgress.IsVisible = true;
-        DownloadProgress.Progress = 0;
-        ModelStatus.Text = "Перевірка вільного місця…";
         try
         {
-            await AppState.Session.CheckTranslationDownloadSpaceAsync(package.Source, package.Target, root, FileSystem.CacheDirectory);
-            cancellation.Token.ThrowIfCancellationRequested();
-            ModelStatus.Text = "Завантаження пакета…";
-            await Task.Run(() => Downloader.FetchArchiveAsync(package, root, archive, progress, cancellation.Token),
-                cancellation.Token);
-            cancellation.Token.ThrowIfCancellationRequested();
-            CancelDownload.IsVisible = false;
-            ModelStatus.Text = "Перевірка й встановлення…";
-            var pair = await AppState.Session.InstallTranslationPackageAsync(archive);
-            ModelStatus.Text = $"Мовний пакет встановлено ({pair}).";
-            TryClean(() => ModelDownload.ClearStaging(package, root));
+            if (single is not null)
+            {
+                await InstallDownloadedPackageAsync(single, cancellation);
+                return;
+            }
+
+            var installed = new HashSet<string>(StringComparer.Ordinal);
             await RefreshTranslationPackagesAsync();
+            while (true)
+            {
+                cancellation.Token.ThrowIfCancellationRequested();
+                var inventory = translationInventory ?? throw new InvalidOperationException(TranslationPackages.Text);
+                var package = RequestedMissingPackages(pairs, inventory).FirstOrDefault();
+                if (package is null) break;
+                if (!installed.Add(PackageKey(package)))
+                    throw new InvalidDataException($"Встановлення пакета {DescribeRoutes([package])} не підтверджено.");
+                await InstallDownloadedPackageAsync(package, cancellation);
+            }
+            ModelStatus.Text = "Усі потрібні мовні пакети встановлено.";
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
@@ -272,8 +315,39 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
             activeDownload = null;
             CancelDownload.IsVisible = DownloadProgress.IsVisible = false;
             UpdateTranslationControls();
-            TryClean(() => File.Delete(archive));
         }
+    }
+
+    private async Task InstallDownloadedPackageAsync(TranslationPackageStatus package, CancellationTokenSource cancellation)
+    {
+        var root = Path.Combine(FileSystem.CacheDirectory, "translation-downloads");
+        var archive = Path.Combine(FileSystem.CacheDirectory, $"translation-{Guid.NewGuid():N}.zip");
+        var total = package.Assets.Sum(asset => asset.Bytes);
+        var progress = new Progress<long>(bytes =>
+        {
+            if (activeDownload == cancellation)
+                DownloadProgress.Progress = Math.Clamp((double)bytes / total, 0, 1);
+        });
+
+        CancelDownload.IsVisible = DownloadProgress.IsVisible = true;
+        DownloadProgress.Progress = 0;
+        ModelStatus.Text = "Перевірка вільного місця…";
+        try
+        {
+            await AppState.Session.CheckTranslationDownloadSpaceAsync(package.Source, package.Target, root, FileSystem.CacheDirectory);
+            cancellation.Token.ThrowIfCancellationRequested();
+            ModelStatus.Text = $"Завантаження пакета {DescribeRoutes([package])}…";
+            await Task.Run(() => Downloader.FetchArchiveAsync(package, root, archive, progress, cancellation.Token),
+                cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            CancelDownload.IsVisible = false;
+            ModelStatus.Text = "Перевірка й встановлення…";
+            var pair = await AppState.Session.InstallTranslationPackageAsync(archive);
+            ModelStatus.Text = $"Мовний пакет встановлено ({pair}).";
+            TryClean(() => ModelDownload.ClearStaging(package, root));
+            await RefreshTranslationPackagesAsync();
+        }
+        finally { TryClean(() => File.Delete(archive)); }
     }
 
     private void CancelDownloadClicked(object? sender, EventArgs args) => activeDownload?.Cancel();
