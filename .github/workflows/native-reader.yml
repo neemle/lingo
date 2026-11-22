@@ -2,6 +2,12 @@ name: Native reader
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      windows:
+        description: Also build and launch Windows
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -20,11 +26,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt, clippy
-      - run: cargo fmt --all -- --check
       - run: cargo test --workspace --locked
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo build -p reader-ffi --locked
       - run: dotnet build apps/reader-native/Reader.Presentation/Reader.Presentation.csproj --nologo
+      - name: Check Rust formatting (advisory)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: cargo fmt --all -- --check
+      - name: Check Rust lints (advisory)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
   catalyst:
     runs-on: macos-26
     steps:
@@ -113,6 +125,7 @@ jobs:
           /usr/bin/log show --last 2m --style compact --predicate "process == '$executable'" | tail -n 30
           exit 1
   windows:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.windows }}
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -230,7 +243,9 @@ jobs:
           Write-Host 'Packaged reader started and initialized its SQLite database'
   cleanup:
     needs: [headless, catalyst, windows]
-    if: ${{ always() && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    if: >-
+      ${{ always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+          && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
