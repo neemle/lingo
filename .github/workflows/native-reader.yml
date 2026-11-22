@@ -1,34 +1,17 @@
-name: Native reader
+name: Mac laptop transfer
 on:
   push:
-  pull_request:
+    branches: [work/lingo-mac-handoff-50e8b63]
 permissions:
   contents: read
-concurrency:
-  group: native-reader-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' && github.ref_name != github.event.repository.default_branch }}
 jobs:
-  headless:
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        env:
-          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
-        with:
-          dotnet-version: 10.0.x
-      - uses: dtolnay/rust-toolchain@1.95.0
-        with:
-          components: rustfmt, clippy
-      - run: cargo fmt --all -- --check
-      - run: cargo test --workspace --locked
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo build -p reader-ffi --locked
-      - run: dotnet build apps/reader-native/Reader.Presentation/Reader.Presentation.csproj --nologo
   catalyst:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: 50e8b6375842212da2caa9a4cd268359d9aadb0b
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
@@ -52,249 +35,31 @@ jobs:
       - run: >-
           dotnet build apps/reader-native/Reader.Native/Reader.Native.csproj
           -f net10.0-maccatalyst -c Release -p:RuntimeIdentifier=maccatalyst-arm64
-          -p:EnableCodeSigning=false -p:CreatePackage=false --nologo
-      - name: Install and launch the Catalyst package
+          -p:EnableCodeSigning=false -p:CreatePackage=false
+          -p:ApplicationId=dev.lingoreader.runtimecheck.50e8b63 --nologo
+      - name: Archive isolated app from exact main
         run: |
+          output="$RUNNER_TEMP/lingo-transfer"
+          mkdir "$output"
           app="$(find apps/reader-native/Reader.Native/bin/Release/net10.0-maccatalyst -type d -name '*.app' -print -quit)"
-          executable="$(plutil -extract CFBundleExecutable raw -o - "$app/Contents/Info.plist")"
-          bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist")"
-          package="$RUNNER_TEMP/lingo-catalyst.pkg"
-          bash apps/reader-native/package-macos.sh "$app" "$package"
-          sudo installer -pkg "$package" -target /
-          app="/Applications/Lingo.app"
-          stdout="$RUNNER_TEMP/lingo-startup.stdout"
-          stderr="$RUNNER_TEMP/lingo-startup.stderr"
-          touch "$stdout" "$stderr"
-          open -n --stdout "$stdout" --stderr "$stderr" "$app"
-          bundle_home="$HOME/Library/Containers/$bundle_id/Data"
-          for attempt in {1..30}; do
-            for library in "$bundle_home/Library" "$HOME/Library"; do
-              db="$library/reader-native.db"
-              if [[ -s "$db" && "$(head -c 15 "$db")" == 'SQLite format 3' ]] &&
-                ps -axo command= | awk -v exe="$app/Contents/MacOS/$executable" \
-                  '$0 == exe || index($0, exe " ") == 1 { found = 1 } END { exit !found }'; then
-                echo 'Packaged reader started and initialized its SQLite database'
-                exit 0
-              fi
-            done
-            sleep 1
-          done
-          echo 'The installed Catalyst app did not remain running with a valid SQLite database' >&2
-          ps -axo pid=,stat=,command= | awk -v app="$app/Contents/MacOS/" 'index($0, app) && !index($0, "awk")'
-          find "$HOME/Library" -maxdepth 5 -name reader-native.db -print 2>/dev/null || true
-          head -n 65 "$stdout" "$stderr"
-          tail -n 30 "$stdout" "$stderr"
-          python3 - "$executable" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          directory = Path.home() / "Library/Logs/DiagnosticReports"
-          reports = sorted(directory.glob(sys.argv[1] + "*.ips"),
-                           key=lambda path: path.stat().st_mtime, reverse=True)
-          for path in reports[:2]:
-              try:
-                  raw = path.read_text()
-                  header, end = json.JSONDecoder().raw_decode(raw)
-                  report = json.loads(raw[end:]) if raw[end:].strip() else header
-              except (OSError, ValueError) as error:
-                  print(f"Could not read {path.name}: {error}")
-                  continue
-              print(f"Crash report: {path.name}")
-              for key in ("exception", "termination", "asi"):
-                  if key in report:
-                      print(f"{key}: {json.dumps(report[key])[:4096]}")
-              images = report.get("usedImages", [])
-              for frame in report.get("lastExceptionBacktrace", [])[:24]:
-                  index = frame.get("imageIndex", -1)
-                  image = images[index].get("name", "") if 0 <= index < len(images) else ""
-                  print(f"{image} {frame.get('symbol', frame.get('imageOffset', ''))}")
-          PY
-          /usr/bin/log show --last 2m --style compact --predicate "process == '$executable'" | tail -n 30
-          exit 1
-  windows:
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        env:
-          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
+          test -n "$app"
+          picked="$(plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist")"
+          test "$picked" = dev.lingoreader.runtimecheck.50e8b63
+          entitlements="apps/reader-native/Reader.Native/Platforms/MacCatalyst/Entitlements.plist"
+          codesign --force --sign - --entitlements "$entitlements" "$app"
+          codesign --verify --deep --strict "$app"
+          ditto "$app" "$output/Lingo Preview.app"
+          ditto -c -k --keepParent "$output/Lingo Preview.app" "$output/lingo-app.zip"
+          git rev-parse HEAD > "$output/source-commit.txt"
+          cd "$output"
+          shasum -a 256 lingo-app.zip > SHA256SUMS
+      - uses: actions/upload-artifact@v4
         with:
-          dotnet-version: 10.0.x
-      - uses: dtolnay/rust-toolchain@1.95.0
-        with:
-          targets: x86_64-pc-windows-msvc
-      - run: dotnet workload install maui-windows
-      - run: cargo build -p reader-ffi --release --locked --target x86_64-pc-windows-msvc
-        env:
-          LIBCLANG_PATH: 'C:\Program Files\LLVM\bin'
-      - name: Build, install, and launch a signed x64 MSIX
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $project = 'apps/reader-native/Reader.Native/Reader.Native.csproj'
-          [xml]$source = Get-Content -Raw 'apps/reader-native/Reader.Native/Platforms/Windows/Package.appxmanifest'
-          $output = Join-Path $env:RUNNER_TEMP 'lingo-msix'
-          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject $source.Package.Identity.Publisher `
-            -CertStoreLocation 'Cert:\CurrentUser\My' -NotAfter (Get-Date).AddDays(1)
-          $publicCert = Join-Path $env:RUNNER_TEMP 'lingo-ci.cer'
-          Export-Certificate -Cert $cert -FilePath $publicCert | Out-Null
-          Import-Certificate -FilePath $publicCert -CertStoreLocation 'Cert:\LocalMachine\TrustedPeople' | Out-Null
-
-          # Windows App SDK appends the package folder name to AppxPackageDir.
-          dotnet publish $project -f net10.0-windows10.0.19041.0 -c Release `
-            -p:LingoMsix=true -p:RuntimeIdentifierOverride=win-x64 `
-            "-p:PackageCertificateThumbprint=$($cert.Thumbprint)" "-p:AppxPackageDir=$output/" --nologo
-          if ($LASTEXITCODE -ne 0) { throw "MSIX publish failed ($LASTEXITCODE)" }
-
-          $packages = @(Get-ChildItem $output -Recurse -File -Filter *.msix |
-            Where-Object { $_.DirectoryName -notmatch '\\Dependencies(\\|$)' })
-          if ($packages.Count -ne 1) { throw "Expected one app MSIX, found $($packages.Count)" }
-          $msix = $packages[0]
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $zip = [IO.Compression.ZipFile]::OpenRead($msix.FullName)
-          try {
-            $entries = @($zip.Entries.FullName)
-            foreach ($name in 'AppxManifest.xml', 'AppxSignature.p7x', 'Reader.Native.exe', 'reader_ffi.dll', 'onnxruntime.dll', 'onnxruntime_providers_shared.dll', 'coreclr.dll', 'Microsoft.UI.Xaml.dll', 'Microsoft.WindowsAppRuntime.dll') {
-              # Windows App SDK spells the WinUI payload Microsoft.ui.xaml.dll.
-              if ($entries -notcontains $name) { throw "Missing $name in $($msix.Name)" }
-            }
-            $manifestEntry = $zip.Entries | Where-Object FullName -eq 'AppxManifest.xml'
-            $manifestReader = [IO.StreamReader]::new($manifestEntry.Open())
-            try { [xml]$manifest = $manifestReader.ReadToEnd() }
-            finally { $manifestReader.Dispose() }
-            if ($manifest.Package.Identity.ProcessorArchitecture -ne 'x64') { throw 'MSIX is not x64' }
-          } finally { $zip.Dispose() }
-
-          $dependencyFolder = Join-Path $msix.DirectoryName 'Dependencies\x64'
-          $install = @{ Path = $msix.FullName }
-          if (Test-Path $dependencyFolder) {
-            $dependencies = @(Get-ChildItem $dependencyFolder -File |
-              Where-Object { $_.Extension -in '.appx', '.msix' } |
-              ForEach-Object FullName)
-            if ($dependencies.Count -gt 0) { $install.DependencyPath = $dependencies }
-          }
-          Add-AppxPackage @install
-          $installed = Get-AppxPackage -Name $source.Package.Identity.Name
-          if (-not $installed -or $installed.Publisher -ne $source.Package.Identity.Publisher) {
-            throw 'Installed MSIX identity did not match the manifest'
-          }
-          Write-Host "Installed $($installed.PackageFullName)"
-
-          Add-Type -TypeDefinition @'
-          using System;
-          using System.Runtime.InteropServices;
-
-          [ComImport, Guid("2E941141-7F97-4756-BA1D-9DECDE894A3D"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-          public interface IApplicationActivationManager
-          {
-              [PreserveSig]
-              int ActivateApplication([MarshalAs(UnmanagedType.LPWStr)] string id,
-                  [MarshalAs(UnmanagedType.LPWStr)] string args, uint options, out uint processId);
-          }
-
-          public static class PackagedApplication
-          {
-              public static uint Launch(string id)
-              {
-                  var type = Type.GetTypeFromCLSID(new Guid("45BA127D-10A8-46EA-8AB7-56EA9078943C"));
-                  var manager = (IApplicationActivationManager)Activator.CreateInstance(type);
-                  uint processId;
-                  Marshal.ThrowExceptionForHR(manager.ActivateApplication(id, null, 2, out processId));
-                  return processId;
-              }
-          }
-          '@
-          $appId = $manifest.Package.Applications.Application.Id
-          $readerProcessId = [PackagedApplication]::Launch("$($installed.PackageFamilyName)!$appId")
-          $database = Join-Path $env:LOCALAPPDATA "Packages\$($installed.PackageFamilyName)\LocalState\reader-native.db"
-          for ($i = 0; $i -lt 30; $i++) {
-            if (-not (Get-Process -Id $readerProcessId -ErrorAction SilentlyContinue)) {
-              throw 'Packaged reader exited before initializing its database'
-            }
-            if ((Test-Path $database -PathType Leaf) -and (Get-Item $database).Length -ge 16) { break }
-            Start-Sleep -Seconds 1
-          }
-          if (-not (Test-Path $database -PathType Leaf) -or
-              -not (Get-Process -Id $readerProcessId -ErrorAction SilentlyContinue)) {
-            throw 'Packaged reader did not initialize its local SQLite database'
-          }
-          $databaseStream = [IO.File]::Open($database, 'Open', 'Read', 'ReadWrite')
-          $databaseReader = [IO.BinaryReader]::new($databaseStream)
-          try {
-            $header = $databaseReader.ReadBytes(16)
-            if ($header.Length -ne 16 -or [Text.Encoding]::ASCII.GetString($header, 0, 15) -ne 'SQLite format 3') {
-              throw 'Packaged reader did not create a valid SQLite database'
-            }
-          } finally { $databaseReader.Dispose() }
-          Write-Host 'Packaged reader started and initialized its SQLite database'
-  cleanup:
-    needs: [headless, catalyst, windows]
-    if: ${{ always() && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    concurrency:
-      group: repository-actions-retention
-      cancel-in-progress: false
-    steps:
-      - name: Keep latest 20 runs and remove Actions artifacts
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const repo = context.repo;
-            const numericId = value => {
-              if (!Number.isSafeInteger(value) || value <= 0) {
-                throw new Error('Invalid Actions identifier');
-              }
-              return value;
-            };
-            const ignoreMissing = async operation => {
-              try {
-                await operation();
-              } catch (error) {
-                if (error.status !== 404) throw error;
-              }
-            };
-            // Snapshot all pages before deleting, so deletion cannot shift pagination.
-            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
-              ...repo, per_page: 100
-            });
-            for (const run of runs) {
-              numericId(run.id);
-              if (!Number.isFinite(Date.parse(run.created_at))) {
-                throw new Error('Invalid workflow creation date');
-              }
-            }
-            runs.sort((left, right) =>
-              Date.parse(right.created_at) - Date.parse(left.created_at) || right.id - left.id);
-            const preserved = new Set(runs.slice(0, 20).map(run => run.id));
-            preserved.add(numericId(context.runId));
-            let deletedRuns = 0;
-            for (const run of runs) {
-              if (preserved.has(run.id) || run.status !== 'completed') continue;
-              let current;
-              try {
-                ({ data: current } = await github.rest.actions.getWorkflowRun({
-                  ...repo, run_id: run.id
-                }));
-              } catch (error) {
-                if (error.status === 404) continue;
-                throw error;
-              }
-              if (current.status !== 'completed') continue;
-              await ignoreMissing(() => github.rest.actions.deleteWorkflowRun({
-                ...repo, run_id: run.id
-              }));
-              deletedRuns++;
-            }
-            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
-              ...repo, per_page: 100
-            });
-            for (const artifact of artifacts) numericId(artifact.id);
-            for (const artifact of artifacts) {
-              await ignoreMissing(() => github.rest.actions.deleteArtifact({
-                ...repo, artifact_id: artifact.id
-              }));
-            }
-            core.info(`Deleted ${deletedRuns} older completed runs and ${artifacts.length} artifacts; preserved the newest 20 runs and all active runs.`);
+          name: lingo-mac-50e8b63-transfer
+          path: |
+            ${{ runner.temp }}/lingo-transfer/lingo-app.zip
+            ${{ runner.temp }}/lingo-transfer/source-commit.txt
+            ${{ runner.temp }}/lingo-transfer/SHA256SUMS
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
