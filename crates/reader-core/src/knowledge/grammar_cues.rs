@@ -1,12 +1,15 @@
 use super::WordAnalysis;
 use std::collections::BTreeSet;
 
+pub(super) const FRENCH_SUBJECT_VERB_AGREEMENT: &str = "frenchSubjectVerbAgreement";
+
 #[derive(Clone, Copy)]
 pub(super) enum GrammarCue {
     FrenchDeterminerGender {
         gender: &'static str,
         tag: &'static str,
     },
+    FrenchThirdPersonVerb { number: &'static str },
     UkrainianGenitive,
     UkrainianInfinitive,
     EnglishDeterminerNoun,
@@ -29,6 +32,8 @@ impl GrammarCue {
                 gender: "Fem",
                 tag: "feminine",
             },
+            ("fr", "il" | "elle" | "on") => Self::FrenchThirdPersonVerb { number: "Sing" },
+            ("fr", "ils" | "elles") => Self::FrenchThirdPersonVerb { number: "Plur" },
             (
                 "uk",
                 "біля" | "без" | "від" | "для" | "до" | "після" | "поблизу" | "серед" | "щодо",
@@ -73,6 +78,12 @@ impl GrammarCue {
                     && has_feature(&analysis.features, "Gender", Some(gender))
                     && has_feature(&analysis.features, "Number", Some("Sing"))
             }
+            Self::FrenchThirdPersonVerb { number } => {
+                matches!(pos, "VERB" | "AUX")
+                    && has_feature(&analysis.features, "VerbForm", Some("Fin"))
+                    && has_feature(&analysis.features, "Person", Some("3"))
+                    && has_feature(&analysis.features, "Number", Some(number))
+            }
             Self::UkrainianGenitive => {
                 is_nominal(pos) && has_feature(&analysis.features, "Case", Some("Gen"))
             }
@@ -86,6 +97,7 @@ impl GrammarCue {
     fn code(self) -> &'static str {
         match self {
             Self::FrenchDeterminerGender { .. } => "frenchDeterminerGender",
+            Self::FrenchThirdPersonVerb { .. } => FRENCH_SUBJECT_VERB_AGREEMENT,
             Self::UkrainianGenitive => "ukrainianGenitivePreposition",
             Self::UkrainianInfinitive => "ukrainianInfinitiveComplement",
             Self::EnglishDeterminerNoun => "englishDeterminerNoun",

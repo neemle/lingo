@@ -497,6 +497,7 @@ public partial class ReadingPage : ContentPage
                 (analysis.GrammarEvidence switch
                 {
                     "frenchDeterminerGender" => " · рід узгоджується з артиклем",
+                    "frenchSubjectVerbAgreement" => " · форма дієслова узгоджується з підметом",
                     "ukrainianGenitivePreposition" => " · прийменник вимагає родового відмінка",
                     "ukrainianInfinitiveComplement" => " · інфінітив після дієслова «хотіти»",
                     "englishDeterminerNoun" => " · іменникове читання після артикля",

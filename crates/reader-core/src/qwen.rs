@@ -329,6 +329,7 @@ pub struct ExplainWordJob {
     work: HintWork<WordExplanation>,
     word: String,
     genitive_preposition: Option<String>,
+    finite_verb: bool,
     system: &'static str,
     dictionary: bool,
     glosses: Vec<DictionaryGloss>,
@@ -596,9 +597,16 @@ impl Store {
             None
         };
         let dictionary = self.has_dictionary(example.language);
-        if dictionary {
-            if let Some(start) = unambiguous_start {
-                if let Some((word, end, glosses, definitions)) = self.dictionary_example(&example, start)? {
+        let mut finite_verb = false;
+        if let Some(start) = unambiguous_start.filter(|_| dictionary || example.language == "fr") {
+            let context = WordContext::at(example.sentence, example.sentence[..start].encode_utf16().count());
+            let knowledge = self.lookup_word(example.language, &word, Some(&context))?;
+            finite_verb = knowledge.as_ref().is_some_and(|lookup| lookup.has_finite_verb_evidence());
+            if dictionary {
+                let meanings = knowledge.map_or_else(Vec::new, |lookup| lookup.into_meanings());
+                if let Some((word, end, glosses, definitions)) =
+                    self.dictionary_example(&example, start, &context, meanings, finite_verb)?
+                {
                     let selected = DictionaryExample {
                         before: &example.sentence[..start],
                         word: &word,
@@ -608,7 +616,7 @@ impl Store {
                     let encoded = serde_json::to_string(&selected).map_err(|error| error.to_string())?;
                     let work = self.prepare_hint_work(model, document, "qwen-dictionary-sense-v1",
                         DICTIONARY_SYSTEM, encoded, cached_only.into())?;
-                    return Ok(ExplainWordJob { work, word, genitive_preposition, system: DICTIONARY_SYSTEM,
+                    return Ok(ExplainWordJob { work, word, genitive_preposition, finite_verb, system: DICTIONARY_SYSTEM,
                         dictionary, glosses });
                 }
             }
@@ -640,6 +648,7 @@ impl Store {
             work,
             word,
             genitive_preposition,
+            finite_verb,
             system,
             dictionary,
             glosses: Vec::new(),
@@ -647,18 +656,13 @@ impl Store {
     }
 
     fn dictionary_example(
-        &self, example: &WordExample<'_>, start: usize,
+        &self, example: &WordExample<'_>, start: usize, context: &WordContext,
+        mut meanings: Vec<crate::knowledge::WordMeaning>, finite_verb: bool,
     ) -> Result<Option<(String, usize, Vec<DictionaryGloss>, Vec<String>)>> {
         let end = start + example.word.len();
-        let context = WordContext::at(example.sentence, example.sentence[..start].encode_utf16().count());
-        let lookup = |word: &str| {
-            self.lookup_word(example.language, word, Some(&context))
-                .map(|lookup| lookup.map_or_else(Vec::new, |found| found.into_meanings()))
-        };
         let mut word = example.word.to_owned();
         let mut end_of_word = end;
-        let mut meanings = lookup(&word)?;
-        if meanings.is_empty() {
+        if meanings.is_empty() && !finite_verb {
             // A PDF text layer can inject spaces inside a word, especially after a ligature.
             if let Some((gap, _, suffix)) = word_parts(&example.sentence[end..]).next() {
                 if gap > 0 && example.sentence[end..end + gap].chars().all(|ch| ch == ' ') &&
@@ -666,7 +670,8 @@ impl Store {
                 {
                     let joined = format!("{word}{suffix}");
                     if joined.chars().count() <= 80 {
-                        meanings = lookup(&joined)?;
+                        meanings = self.lookup_word(example.language, &joined, Some(context))?
+                            .map_or_else(Vec::new, |found| found.into_meanings());
                         if !meanings.is_empty() {
                             word = joined;
                             end_of_word = end + gap + suffix.len();
@@ -680,6 +685,9 @@ impl Store {
         let mut glosses: Vec<DictionaryGloss> = Vec::new();
         for entry in meanings {
             let (text, language, part) = entry.definition();
+            if finite_verb && !part.eq_ignore_ascii_case("verb") {
+                continue;
+            }
             if glosses.iter().any(|candidate| candidate.text == text && candidate.language == language) {
                 continue;
             }
@@ -781,15 +789,25 @@ impl ExplainWordJob {
             .map(|result| {
                 result.map(|(mut explanation, cached)| {
                     explanation.cached = cached;
-                    if let Some(preposition) = &self.genitive_preposition {
-                        let gloss = explanation.explanation.split_once(" У цьому реченні — ")
-                            .map_or(explanation.explanation.as_str(), |(gloss, _)| gloss);
-                        explanation.explanation = format!("{gloss} Після «{preposition}» потрібен родовий відмінок.");
-                    }
+                    explanation.explanation = supported_word_explanation(
+                        &explanation.explanation, self.genitive_preposition.as_deref(), self.finite_verb,
+                    );
                     explanation
                 })
             })
     }
+}
+
+fn supported_word_explanation(text: &str, genitive_preposition: Option<&str>, finite_verb: bool) -> String {
+    // Older cached Qwen results can contain an unsupported claim about the syntactic role.
+    let gloss = text.split_once(" У цьому реченні — ").map_or(text, |(gloss, _)| gloss);
+    if let Some(preposition) = genitive_preposition {
+        return format!("{gloss} Після «{preposition}» потрібен родовий відмінок.");
+    }
+    if finite_verb {
+        return format!("{gloss} У цьому реченні — присудок (за узгодженням із підметом).");
+    }
+    gloss.to_owned()
 }
 
 fn review_examples(
@@ -1277,6 +1295,14 @@ fn runtime_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn displayed_role_requires_local_grammar_evidence_even_for_cached_results() {
+        let cached = "«monte» · Словникове значення. У цьому реченні — прямий додаток.";
+        assert_eq!(supported_word_explanation(cached, None, false), "«monte» · Словникове значення.");
+        assert_eq!(supported_word_explanation(cached, None, true),
+            "«monte» · Словникове значення. У цьому реченні — присудок (за узгодженням із підметом).");
+    }
 
     #[test]
     fn generated_text_requires_a_short_gloss_and_a_known_role() {

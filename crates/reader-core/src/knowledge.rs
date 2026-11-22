@@ -210,6 +210,11 @@ impl WordLookup {
         self.meanings
     }
 
+    pub(crate) fn has_finite_verb_evidence(&self) -> bool {
+        self.analyses.iter().any(|analysis|
+            analysis.grammar_evidence == Some(grammar_cues::FRENCH_SUBJECT_VERB_AGREEMENT))
+    }
+
     pub(crate) fn bind_expression_tokens(&mut self, token_id: impl Fn(usize) -> String) {
         for expression in &mut self.expressions {
             expression.token_ids = expression
