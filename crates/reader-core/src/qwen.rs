@@ -7,6 +7,7 @@ use crate::{
     Document, Result, Sentence, Store,
 };
 use llama_cpp_2::{
+    context::LlamaContext,
     context::params::LlamaContextParams,
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
@@ -139,7 +140,7 @@ pub enum ReviewFocus {
     Expression { member_starts_utf16: Vec<usize> },
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SentenceReview {
     #[serde(deserialize_with = "review_note")]
@@ -765,27 +766,77 @@ fn extract_focused_review<'a>(
 
 impl ReviewSentenceJob {
     pub fn run(self) -> Result<Option<SentenceReviewResult>> {
+        let windows = self.0;
+        let read_cache = || -> Result<Option<Vec<SentenceReview>>> {
+            let notes = windows.iter().map(|window| match window {
+                HintWork::Cached(review) => Ok(review.clone()),
+                HintWork::Generate { cache, .. } => cache.load(),
+            }).collect::<Result<Vec<_>>>()?;
+            Ok(notes.into_iter().collect::<Option<Vec<SentenceReview>>>())
+        };
+        let model = windows.iter().find_map(|window| match window {
+            HintWork::Generate { model, .. } => Some(model),
+            HintWork::Cached(_) => None,
+        });
+        let Some(model) = model else {
+            return Ok(read_cache()?.map(|reviews| Self::merge(reviews, true)));
+        };
+        model.run_optional_with_cache(
+            || Ok(read_cache()?.map(|reviews| Some(Self::merge(reviews, true)))),
+            |directory, should_yield| {
+                let opening_deadline = Instant::now() + Duration::from_secs(20);
+                with_prompt_context(
+                    directory,
+                    || prompt_checkpoint(should_yield, opening_deadline),
+                    |model, context| {
+                        let mut reviews = Vec::with_capacity(windows.len());
+                        let mut cached = true;
+                        for window in &windows {
+                            let review = match window {
+                                HintWork::Cached(Some(review)) => review.clone(),
+                                HintWork::Cached(None) => return Ok(None),
+                                HintWork::Generate { example, cache, .. } => {
+                                    if let Some(review) = cache.load()? {
+                                        reviews.push(review);
+                                        continue;
+                                    }
+                                    let deadline = Instant::now() + Duration::from_secs(20);
+                                    let check = || prompt_checkpoint(should_yield, deadline);
+                                    check()?;
+                                    context.clear_kv_cache();
+                                    let output = generate(model, context, REVIEW_SYSTEM, example, REVIEW_GRAMMAR, check)?;
+                                    let review = parse_review(&output)?;
+                                    cache.save(&review)?;
+                                    cached = false;
+                                    review
+                                }
+                            };
+                            reviews.push(review);
+                        }
+                        Ok(Some(Self::merge(reviews, cached)))
+                    },
+                )
+            },
+        )
+    }
+
+    fn merge(reviews: Vec<SentenceReview>, cached: bool) -> SentenceReviewResult {
         let mut spelling = Vec::new();
         let mut syntax = Vec::new();
-        let mut cached = true;
-        for work in self.0 {
-            let Some((review, was_cached)) = work.run(REVIEW_SYSTEM, REVIEW_GRAMMAR, parse_review)? else {
-                return Ok(None);
-            };
+        for review in reviews {
             for (notes, note) in [(&mut spelling, review.spelling), (&mut syntax, review.syntax)] {
                 if let Some(note) = note.filter(|note| !notes.contains(note)) {
                     notes.push(note);
                 }
             }
-            cached &= was_cached;
         }
-        Ok(Some(SentenceReviewResult {
+        SentenceReviewResult {
             review: SentenceReview {
                 spelling: (!spelling.is_empty()).then(|| spelling.join("\n")),
                 syntax: (!syntax.is_empty()).then(|| syntax.join("\n")),
             },
             cached,
-        }))
+        }
     }
 }
 
@@ -816,44 +867,49 @@ fn run_prompt<T: Serialize + serde::de::DeserializeOwned>(
     job.run_optional_with_cache(
         || cache.load().map(|result| result.map(|hint| (hint, true))),
         |directory, should_yield| {
-            let backend = backend()?;
-            let path = directory.join("model.gguf");
-            let timeout = Instant::now() + Duration::from_secs(20);
-            let check = || {
-                if should_yield() {
-                    Err("Локальний аналіз перервано, щоб виконати переклад.".into())
-                } else if Instant::now() >= timeout {
-                    Err("Qwen не завершив локальний аналіз вчасно.".into())
-                } else {
-                    Ok(())
-                }
-            };
-            let mut layers = if cfg!(target_vendor = "apple") && backend.supports_gpu_offload() {
-                99
-            } else {
-                0
-            };
-            loop {
-                check()?;
-                match load_model(backend, &path, layers) {
-                    Ok(model) => match model.new_context(backend, context_parameters()) {
-                        Ok(mut context) => {
-                            let output =
-                                generate(&model, &mut context, system, example, grammar, check)?;
-                            let result = parse(&output)?;
-                            cache.save(&result)?;
-                            return Ok((result, false));
-                        }
-                        Err(error) if layers == 0 => return Err(runtime_error(error)),
-                        Err(_) => {}
-                    },
-                    Err(error) if layers == 0 => return Err(error),
-                    Err(_) => {}
-                }
-                layers = 0;
-            }
+            let deadline = Instant::now() + Duration::from_secs(20);
+            let check = || prompt_checkpoint(should_yield, deadline);
+            with_prompt_context(directory, check, |model, context| {
+                let output = generate(model, context, system, example, grammar, check)?;
+                let result = parse(&output)?;
+                cache.save(&result)?;
+                Ok((result, false))
+            })
         },
     )
+}
+
+fn prompt_checkpoint(should_yield: &dyn Fn() -> bool, deadline: Instant) -> Result<()> {
+    if should_yield() {
+        Err("Локальний аналіз перервано, щоб виконати переклад.".into())
+    } else if Instant::now() >= deadline {
+        Err("Qwen не завершив локальний аналіз вчасно.".into())
+    } else {
+        Ok(())
+    }
+}
+
+fn with_prompt_context<T>(
+    directory: &Path,
+    check: impl Fn() -> Result<()>,
+    run: impl FnOnce(&LlamaModel, &mut LlamaContext<'_>) -> Result<T>,
+) -> Result<T> {
+    let backend = backend()?;
+    let path = directory.join("model.gguf");
+    let mut layers = if cfg!(target_vendor = "apple") && backend.supports_gpu_offload() { 99 } else { 0 };
+    loop {
+        check()?;
+        match load_model(backend, &path, layers) {
+            Ok(model) => match model.new_context(backend, context_parameters()) {
+                Ok(mut context) => return run(&model, &mut context),
+                Err(error) if layers == 0 => return Err(runtime_error(error)),
+                Err(_) => {}
+            },
+            Err(error) if layers == 0 => return Err(error),
+            Err(_) => {}
+        }
+        layers = 0;
+    }
 }
 
 /// One short CPU decode verifies the staged GGUF and runtime without generating an explanation.

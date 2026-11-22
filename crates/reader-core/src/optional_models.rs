@@ -293,7 +293,7 @@ impl OptionalModelJob {
     }
 
     pub(crate) fn run_optional_with_cache<T>(
-        self,
+        &self,
         cached: impl Fn() -> Result<Option<T>>,
         inference: impl FnOnce(&Path, &dyn Fn() -> bool) -> Result<T>,
     ) -> Result<T> {
@@ -359,7 +359,7 @@ impl OptionalModelJob {
     }
 
     fn run_checked<T>(
-        self,
+        &self,
         inference: impl FnOnce(&Path, &dyn Fn() -> bool) -> Result<T>,
         requested_yield: &dyn Fn() -> bool,
     ) -> Result<T> {
