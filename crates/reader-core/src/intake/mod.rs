@@ -31,6 +31,7 @@ pub enum IntakeImport {
     },
     StagedArticle { language: Option<String> },
     Photo { lines: Vec<ocr::OcrLine>, language: Option<String> },
+    StagedPhoto { language: String },
     Pdf {
         #[serde(rename = "pageTexts")]
         page_texts: Vec<String>,

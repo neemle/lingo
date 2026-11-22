@@ -30,12 +30,16 @@ public partial class LibraryPage
             {
                 var language = await ChooseAsync(() => Task.FromResult<string?>(null));
                 if (language is null) return null;
-                var bytes = await session.ReadIntakeBytesAsync(item.Id);
-                ImportStatus.Text = "Розпізнавання тексту на пристрої…";
-                var lines = await PhotoOcr.RecognizeAsync(bytes, language);
-                if (lines.Length == 0) throw new InvalidDataException("На зображенні не знайдено тексту.");
+                if (await session.IntakePhotoOcrLanguageAsync(item.Id) != language)
+                {
+                    var bytes = await session.ReadIntakeBytesAsync(item.Id);
+                    ImportStatus.Text = "Розпізнавання тексту на пристрої…";
+                    var lines = await PhotoOcr.RecognizeAsync(bytes, language);
+                    if (lines.Length == 0) throw new InvalidDataException("На зображенні не знайдено тексту.");
+                    await session.SaveIntakePhotoOcrAsync(item.Id, language, lines);
+                }
                 await session.WaitUntilIdleAsync();
-                await session.CompletePhotoIntakeAsync(item.Id, language, lines);
+                await session.CompleteStagedPhotoIntakeAsync(item.Id, language);
                 break;
             }
             case "extractArticle":

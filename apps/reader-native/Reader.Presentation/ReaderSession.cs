@@ -168,6 +168,15 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task CompletePhotoIntakeAsync(string id, string language, OcrLine[] lines) =>
         CompleteIntakeAsync(() => client.CompletePhotoIntake(id, language, lines));
 
+    public Task<string?> IntakePhotoOcrLanguageAsync(string id) =>
+        Task.Run(() => client.IntakePhotoOcrLanguage(id));
+
+    public Task SaveIntakePhotoOcrAsync(string id, string language, OcrLine[] lines) =>
+        Task.Run(() => client.SaveIntakePhotoOcr(id, language, lines));
+
+    public Task CompleteStagedPhotoIntakeAsync(string id, string language) =>
+        CompleteIntakeAsync(() => client.CompleteStagedPhotoIntake(id, language));
+
     public Task<IntakeArticleDraft?> IntakeArticleAsync(string id) => Task.Run(() => client.IntakeArticle(id));
 
     public Task<IntakeArticleDraft> SaveIntakeArticleAsync(string id, IntakeArticleDraft draft) =>

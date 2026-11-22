@@ -117,6 +117,15 @@ public sealed class CoreClient : IDisposable
     public IntakeItem CompletePhotoIntake(string id, string language, OcrLine[] lines) =>
         CompleteIntake(id, new { kind = "photo", language, lines });
 
+    public string? IntakePhotoOcrLanguage(string id) =>
+        Call<string?>(new { version = 1, operation = "intake_photo_ocr_language", id });
+
+    public void SaveIntakePhotoOcr(string id, string language, OcrLine[] lines) =>
+        Call<JsonElement>(new { version = 1, operation = "save_intake_photo_ocr", id, language, lines });
+
+    public IntakeItem CompleteStagedPhotoIntake(string id, string language) =>
+        CompleteIntake(id, new { kind = "stagedPhoto", language });
+
     public IntakeItem CompleteArticleIntake(string id, string name, string text, string language, string sourceUrl) =>
         CompleteIntake(id, new { kind = "article", name, text, language, sourceUrl });
 

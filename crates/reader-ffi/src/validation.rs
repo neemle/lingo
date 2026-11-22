@@ -32,6 +32,8 @@ fn validate(command: &Command) -> Result<()> {
         | Command::IntakePayload { id }
         | Command::IntakeArticle { id }
         | Command::SaveIntakeArticle { id, .. }
+        | Command::IntakePhotoOcrLanguage { id }
+        | Command::SaveIntakePhotoOcr { id, .. }
         | Command::CompleteIntake { id, .. }
         | Command::DiscardIntake { id }
             if id.len() != 36 || !id.bytes().all(|byte| byte.is_ascii_hexdigit() || byte == b'-') =>

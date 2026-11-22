@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 
 pub(super) trait IntakeRepository {
     fn load_for_import(&self, id: &str) -> Result<StoredIntake>;
-    fn record_imported(&self, item: &IntakeItem) -> Result<()>;
+    fn load_photo_lines(&self, id: &str, language: &str) -> Result<Vec<ocr::OcrLine>>;
+    fn record_imported(&mut self, item: &IntakeItem) -> Result<()>;
 }
 
 pub(super) trait DocumentImporter {
@@ -66,6 +67,12 @@ pub(super) fn complete(
         (IntakeKind::Photo, IntakePayload::Bytes { bytes }, IntakeImport::Photo { lines, language }) => {
             ImportMaterial::Photo {
                 name: item.metadata.name.clone(), bytes, lines, language,
+            }
+        }
+        (IntakeKind::Photo, IntakePayload::Bytes { bytes }, IntakeImport::StagedPhoto { language }) => {
+            let lines = ports.load_photo_lines(id, &language)?;
+            ImportMaterial::Photo {
+                name: item.metadata.name.clone(), bytes, lines, language: Some(language),
             }
         }
         (IntakeKind::Pdf, IntakePayload::File { path }, IntakeImport::Pdf { page_texts, deferred_from, language }) => {

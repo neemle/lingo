@@ -47,6 +47,9 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::IntakePayload { id } => value(store.intake_payload(&id)),
         Command::IntakeArticle { id } => value(store.intake_article(&id)),
         Command::SaveIntakeArticle { id, draft } => value(store.save_intake_article(&id, draft)),
+        Command::IntakePhotoOcrLanguage { id } => value(store.intake_photo_ocr_language(&id)),
+        Command::SaveIntakePhotoOcr { id, language, lines } =>
+            value(store.save_intake_photo_ocr(&id, &language, &lines)),
         Command::CompleteIntake { id, result } => value(store.complete_intake(&id, result)),
         Command::DiscardIntake { id } => value(store.discard_intake(&id)),
         Command::ReaderPreferences => value(store.reader_preferences()),

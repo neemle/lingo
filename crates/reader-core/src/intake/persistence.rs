@@ -2,7 +2,7 @@ use super::{
     application::{validate_article_draft, validate_input, IntakeRepository, StoredIntake, ValidatedAsset},
     ArticleDraft, IntakeInput, IntakeItem, IntakeKind, IntakePayload, Metadata,
 };
-use crate::{file_originals, Result, Store};
+use crate::{file_originals, ocr, Result, Store};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use std::{fs, io::Read, path::{Path, PathBuf}};
 use tempfile::NamedTempFile;
@@ -95,6 +95,11 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
             metadata TEXT NOT NULL,
             payload BLOB,
             document_id TEXT REFERENCES documents(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS intake_photo_ocr (
+            intake_id TEXT PRIMARY KEY REFERENCES intake(id) ON DELETE CASCADE,
+            language TEXT NOT NULL,
+            lines BLOB NOT NULL
         );",
     ).map_err(intake_error)
 }
@@ -169,6 +174,32 @@ impl Store {
 
     pub fn intake_payload(&self, id: &str) -> Result<IntakePayload> {
         self.load_for_import(id)?.payload.ok_or_else(|| "Матеріал уже імпортовано.".into())
+    }
+
+    pub fn intake_photo_ocr_language(&self, id: &str) -> Result<Option<String>> {
+        self.connection.query_row(
+            "SELECT language FROM intake_photo_ocr WHERE intake_id=?1",
+            [id],
+            |row| row.get(0),
+        ).optional().map_err(intake_error)
+    }
+
+    pub fn save_intake_photo_ocr(&mut self, id: &str, language: &str, lines: &[ocr::OcrLine]) -> Result<()> {
+        crate::valid_language(language)?;
+        ocr::recognized_lines(lines, 1)?;
+        let body = serde_json::to_vec(lines).map_err(intake_error)?;
+        let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(intake_error)?;
+        let item = intake_item(&tx, id)?.ok_or("Вхідний матеріал не знайдено.")?;
+        if !matches!(item.metadata.kind, IntakeKind::Photo) || item.document_id.is_some() {
+            return Err("Розпізнавання можна зберегти лише для фотографії в черзі імпорту.".into());
+        }
+        tx.execute(
+            "INSERT INTO intake_photo_ocr (intake_id,language,lines) VALUES (?1,?2,?3)
+             ON CONFLICT(intake_id) DO UPDATE SET language=excluded.language,lines=excluded.lines",
+            params![id, language, body],
+        ).map_err(intake_error)?;
+        tx.commit().map_err(intake_error)
     }
 
     pub fn intake_item(&self, id: &str) -> Result<IntakeItem> {
@@ -272,12 +303,28 @@ impl IntakeRepository for Store {
         Ok(StoredIntake { item, payload, article })
     }
 
-    fn record_imported(&self, item: &IntakeItem) -> Result<()> {
+    fn load_photo_lines(&self, id: &str, language: &str) -> Result<Vec<ocr::OcrLine>> {
+        let body: Vec<u8> = self.connection.query_row(
+            "SELECT lines FROM intake_photo_ocr WHERE intake_id=?1 AND language=?2",
+            params![id, language],
+            |row| row.get(0),
+        ).optional().map_err(intake_error)?
+            .ok_or("Розпізнаний текст цією мовою відсутній.")?;
+        serde_json::from_slice(&body).map_err(intake_error)
+    }
+
+    fn record_imported(&mut self, item: &IntakeItem) -> Result<()> {
         let metadata = serde_json::to_string(&item.metadata).map_err(intake_error)?;
-        self.connection.execute(
+        let tx = self.connection.transaction().map_err(intake_error)?;
+        tx.execute(
             "UPDATE intake SET metadata=?2,document_id=?3,payload=NULL WHERE id=?1",
             params![item.id, metadata, item.document_id],
         ).map_err(intake_error)?;
+        if matches!(item.metadata.kind, IntakeKind::Photo) {
+            tx.execute("DELETE FROM intake_photo_ocr WHERE intake_id=?1", [&item.id])
+                .map_err(intake_error)?;
+        }
+        tx.commit().map_err(intake_error)?;
         if matches!(item.metadata.kind, IntakeKind::Pdf | IntakeKind::TextPdf | IntakeKind::ScannedPdf | IntakeKind::MixedPdf) {
             let uuid = Uuid::parse_str(&item.id).map_err(intake_error)?;
             let _ = fs::remove_file(pdf_path(&self.file_original_directory, uuid));

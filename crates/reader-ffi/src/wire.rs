@@ -43,6 +43,14 @@ pub enum Command {
         id: String,
         draft: reader_core::intake::ArticleDraft,
     },
+    IntakePhotoOcrLanguage {
+        id: String,
+    },
+    SaveIntakePhotoOcr {
+        id: String,
+        language: String,
+        lines: Vec<reader_core::ocr::OcrLine>,
+    },
     CompleteIntake {
         id: String,
         result: reader_core::intake::IntakeImport,
