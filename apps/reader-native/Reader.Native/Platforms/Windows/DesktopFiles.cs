@@ -2,6 +2,7 @@ using Windows.ApplicationModel.DataTransfer;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
 using Windows.Storage.Streams;
+using WindowsClipboard = Windows.ApplicationModel.DataTransfer.Clipboard;
 
 namespace Reader.Native.Services;
 
@@ -12,6 +13,13 @@ internal static class DesktopFiles
     internal static Task QueueFileAsync(StorageFile file) => DesktopFile.Supports(file.Name)
         ? DesktopImport.ReceiveAsync(file.Name, () => StageFileAsync(file))
         : Task.CompletedTask;
+
+    internal static async Task<ShareInboxItem?> StageClipboardImageAsync()
+    {
+        var data = WindowsClipboard.GetContent();
+        return data.Contains(StandardDataFormats.Bitmap)
+            ? await StageBitmapAsync(data, "Зображення з буфера") : null;
+    }
 
     private static async Task<ShareInboxItem> StageFileAsync(StorageFile file)
     {
@@ -43,7 +51,7 @@ internal static class DesktopFiles
             if (!handled && data.Contains(StandardDataFormats.Bitmap))
             {
                 handled = true;
-                try { items.Add(await StageBitmapAsync(data)); }
+                try { items.Add(await StageBitmapAsync(data, DroppedImageName)); }
                 catch (Exception error) { DesktopImport.ReportFailure(DroppedImageName, error); }
             }
             else if (!containsFiles)
@@ -59,7 +67,7 @@ internal static class DesktopFiles
         return handled;
     }
 
-    private static async Task<ShareInboxItem> StageBitmapAsync(DataPackageView data)
+    private static async Task<ShareInboxItem> StageBitmapAsync(DataPackageView data, string name)
     {
         var reference = await data.GetBitmapAsync();
         using var source = await reference.OpenReadAsync();
@@ -72,8 +80,8 @@ internal static class DesktopFiles
             throw new InvalidDataException("Непідтримуваний розмір зображення.");
 
         var codec = decoder.DecoderInformation.CodecId;
-        if (codec == BitmapDecoder.PngDecoderId) return await StageImageAsync(source, ".png");
-        if (codec == BitmapDecoder.JpegDecoderId) return await StageImageAsync(source, ".jpg");
+        if (codec == BitmapDecoder.PngDecoderId) return await StageImageAsync(source, name + ".png");
+        if (codec == BitmapDecoder.JpegDecoderId) return await StageImageAsync(source, name + ".jpg");
 
         // Convert formats such as BMP to a bounded PNG that the photo inbox can reopen.
         var scale = Math.Min(1.0, 2048.0 / Math.Max(decoder.PixelWidth, decoder.PixelHeight));
@@ -88,13 +96,13 @@ internal static class DesktopFiles
         var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, encoded);
         encoder.SetSoftwareBitmap(bitmap);
         await encoder.FlushAsync();
-        return await StageImageAsync(encoded, ".png");
+        return await StageImageAsync(encoded, name + ".png");
     }
 
-    private static async Task<ShareInboxItem> StageImageAsync(IRandomAccessStream source, string extension)
+    private static async Task<ShareInboxItem> StageImageAsync(IRandomAccessStream source, string name)
     {
         source.Seek(0);
         await using var stream = source.AsStreamForRead();
-        return await ShareInbox.StageAsync("file", DroppedImageName + extension, stream);
+        return await ShareInbox.StageAsync("file", name, stream);
     }
 }

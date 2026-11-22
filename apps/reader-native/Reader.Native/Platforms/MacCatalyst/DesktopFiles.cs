@@ -1,9 +1,14 @@
 using Foundation;
+using ImageIO;
+using UIKit;
 
 namespace Reader.Native.Services;
 
 internal static class DesktopFiles
 {
+    private const int MaxClipboardImageBytes = 96 * 1024 * 1024;
+    private const int MaxClipboardImagePixels = 24_000_000;
+
     private static readonly Dictionary<string, string> DocumentTypes = new(StringComparer.Ordinal)
     {
         ["public.plain-text"] = ".txt",
@@ -38,6 +43,58 @@ internal static class DesktopFiles
         {
             if (scoped) url.StopAccessingSecurityScopedResource();
         }
+    }
+
+    internal static async Task<ShareInboxItem?> StageClipboardImageAsync()
+    {
+        var pasteboard = UIPasteboard.General;
+        var types = pasteboard.Types ?? [];
+        var type = new[] { "public.png", "public.jpeg", "public.tiff" }
+            .FirstOrDefault(candidate => types.Contains(candidate, StringComparer.Ordinal));
+        if (type is null)
+        {
+            if (pasteboard.HasImages)
+                throw new InvalidDataException("Формат зображення з буфера не підтримується.");
+            return null;
+        }
+
+        using var data = pasteboard.DataForPasteboardType(type)
+            ?? throw new InvalidDataException("Не вдалося прочитати зображення з буфера.");
+        if (data.Length > MaxClipboardImageBytes)
+            throw new InvalidDataException("Зображення з буфера завелике.");
+
+        using var converted = await Task.Run(() => PrepareClipboardImage(data, type));
+        var image = converted ?? data;
+        if (image.Length > Reader.CoreClient.CoreClient.MaxImportBytes)
+            throw new InvalidDataException("Зображення з буфера перевищує 20 МБ.");
+
+        using var stream = image.AsStream();
+        var extension = type == "public.jpeg" ? ".jpg" : ".png";
+        return await ShareInbox.StageAsync("file", "Зображення з буфера" + extension, stream);
+    }
+
+    private static NSData? PrepareClipboardImage(NSData data, string type)
+    {
+        using var pool = new NSAutoreleasePool();
+        using var source = CGImageSource.FromData(data);
+        if (source is null || source.TypeIdentifier?.ToString() != type || source.GetStatus(0) != CGImageSourceStatus.Complete)
+            throw new InvalidDataException("macOS не може прочитати зображення з буфера.");
+
+        var properties = source.GetProperties(0, null);
+        var width = properties?.PixelWidth ?? 0;
+        var height = properties?.PixelHeight ?? 0;
+        if (width <= 0 || height <= 0 || (long)width * height > MaxClipboardImagePixels)
+            throw new InvalidDataException("Розмір зображення з буфера не підтримується.");
+        if (type != "public.tiff") return null;
+
+        using var image = source.CreateThumbnail(0, new CGImageThumbnailOptions
+        {
+            CreateThumbnailFromImageAlways = true,
+            CreateThumbnailWithTransform = true,
+            MaxPixelSize = 4096,
+        }) ?? throw new InvalidDataException("macOS не може прочитати зображення з буфера.");
+        using var png = UIImage.FromImage(image);
+        return png.AsPNG() ?? throw new InvalidDataException("Не вдалося підготувати фото з буфера.");
     }
 
     internal static async Task<bool> QueueDropAsync(DropEventArgs args)

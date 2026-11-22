@@ -16,6 +16,20 @@ public partial class LibraryPage
         await ImportPastedTextAsync(clipboard);
     }
 
+    private async void PasteImageClicked(object? sender, EventArgs args)
+    {
+        if (importing || changingLanguage || AppState.Session.Busy || !DesktopImport.Gate.Wait(0)) return;
+        try
+        {
+            if (await DesktopFiles.StageClipboardImageAsync() is { } item)
+                await ImportExternalAsync(item);
+            else
+                ImportStatus.Text = "У буфері обміну немає зображення.";
+        }
+        catch (Exception error) { await DisplayAlertAsync("Імпорт зображення", error.Message, "Гаразд"); }
+        finally { DesktopImport.Gate.Release(); }
+    }
+
     private async Task ImportPastedTextAsync(string? initial)
     {
         if (importing || changingLanguage || AppState.Session.Busy || !DesktopImport.Gate.Wait(0)) return;

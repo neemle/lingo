@@ -33,6 +33,8 @@
     <Button x:Name="PausePdf" Text="Призупинити OCR" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
      Clicked="PausePdfClicked" IsVisible="False" />
     <Button Text="Вставити текст" Margin="0,0,8,6" Style="{StaticResource OutlineButton}" Clicked="PasteTextClicked" IsEnabled="{Binding CanInteract}" />
+    <Button Text="Вставити зображення" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
+     Clicked="PasteImageClicked" IsEnabled="{Binding CanInteract}" />
     <Button Text="Додати статтю" Margin="0,0,8,6" Style="{StaticResource OutlineButton}" Clicked="ImportArticleClicked" IsEnabled="{Binding CanInteract}" />
     <Button Text="Додати документи" Margin="0,0,0,6" Style="{StaticResource AccentButton}" Clicked="ImportClicked" IsEnabled="{Binding CanInteract}" />
    </FlexLayout>
