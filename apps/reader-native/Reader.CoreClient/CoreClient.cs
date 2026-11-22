@@ -179,6 +179,8 @@ public sealed class CoreClient : IDisposable
         Call<Vocabulary>(new { version = 1, operation = "save_word", entry });
     public Vocabulary SetVocabularyVariants(string id, string[] acceptedTranslations, string? translation = null) =>
         Call<Vocabulary>(new { version = 1, operation = "set_vocabulary_variants", id, acceptedTranslations, translation });
+    public bool DeleteVocabularyCard(string id) =>
+        Call<bool>(new { version = 1, operation = "delete_vocabulary_card", id });
     public ReviewEvent[] VocabularyReviewHistory(string id) =>
         Call<ReviewEvent[]>(new { version = 1, operation = "vocabulary_review_history", id });
     public void Review(string id, string direction, byte grade) =>

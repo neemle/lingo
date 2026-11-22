@@ -262,6 +262,7 @@ public partial class VocabularyPage : ContentPage
         };
         SemanticProperties.SetDescription(editor, "Підтверджені варіанти перекладу");
         var save = new Button { Text = "Зберегти" };
+        var delete = new Button { Text = "Видалити картку", Style = (Style)Application.Current!.Resources["OutlineButton"] };
         var cancel = new Button { Text = "Скасувати" };
         var body = new VerticalStackLayout { Padding = 24, Spacing = 12 };
         body.Children.Add(new Label { Text = card.Word, FontSize = 24 });
@@ -289,6 +290,7 @@ public partial class VocabularyPage : ContentPage
         body.Children.Add(editor);
         body.Children.Add(save);
         body.Children.Add(cancel);
+        body.Children.Add(delete);
         var page = new ContentPage { Title = "Редагувати переклад", Content = new ScrollView { Content = body } };
         cancel.Clicked += async (_, _) =>
         {
@@ -319,6 +321,29 @@ public partial class VocabularyPage : ContentPage
                     await Navigation.PopModalAsync();
                 await RefreshCollectionsAsync(appearance);
             }
+            finally { body.IsEnabled = true; }
+        };
+        delete.Clicked += async (_, _) =>
+        {
+            if (!body.IsEnabled || Navigation.ModalStack.LastOrDefault() != page) return;
+            body.IsEnabled = false;
+            try
+            {
+                if (!await page.DisplayAlertAsync("Видалити картку?",
+                    $"«{card.Word}» і її історію повторень буде видалено зі словника.",
+                    "Видалити", "Скасувати")) return;
+                var session = AppState.Session;
+                await session.DeleteVocabularyCardAsync(card.Id);
+                if (session.Error.Length > 0)
+                {
+                    await page.DisplayAlertAsync("Видалення картки", session.Error, "Гаразд");
+                    return;
+                }
+                if (Navigation.ModalStack.LastOrDefault() == page)
+                    await Navigation.PopModalAsync();
+                await RefreshCollectionsAsync(appearance);
+            }
+            catch (Exception error) { ShowArchiveStatus(error.Message); }
             finally { body.IsEnabled = true; }
         };
         page.Disappearing += (_, _) => editingCard = false;

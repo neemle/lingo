@@ -265,6 +265,12 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         return Read();
     });
 
+    public Task DeleteVocabularyCardAsync(string id) => RunAsync(() =>
+    {
+        client.DeleteVocabularyCard(id);
+        return Read();
+    });
+
     public Task<ReviewEvent[]> VocabularyReviewHistoryAsync(string id) =>
         Task.Run(() => client.VocabularyReviewHistory(id));
 
