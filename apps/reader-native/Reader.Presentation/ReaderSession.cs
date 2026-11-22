@@ -214,6 +214,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         Task.Run(() => client.TranslateParagraph(id, sentenceId, target, background));
     public Task<CachedTranslation> ReadCachedTranslationAsync(string id, string sentenceId, string target) =>
         Task.Run(() => client.ReadCachedTranslation(id, sentenceId, target));
+    public Task<TranslationFindPage> FindTranslationPageAsync(string id, string target, string query, int start,
+        CancellationToken cancellationToken) =>
+        Task.Run(() => client.FindTranslationPage(id, target, query, start), cancellationToken);
     public Task<LexicalPackage[]> LexicalPackagesAsync() => Task.Run(client.LexicalPackages);
     public Task<LexicalPackage> InstallLexicalPackageAsync(string language, string path) =>
         Task.Run(() => client.InstallLexicalPackage(language, path));

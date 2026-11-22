@@ -15,7 +15,7 @@ public partial class ReadingPage
         findingInDocument = true;
         try
         {
-            if (await ShowDocumentFindAsync(document) is not { } position) return;
+            if (await ShowDocumentFindAsync(session, document, TargetCode) is not { } position) return;
             await session.WaitUntilIdleAsync();
             if (!readingPageActive || session.Document is not { } current || current.Id != document.Id ||
                 current.CurrentRevisionId != document.CurrentRevisionId ||
@@ -29,13 +29,20 @@ public partial class ReadingPage
         finally { findingInDocument = false; }
     }
 
-    private async Task<int?> ShowDocumentFindAsync(Document document)
+    private async Task<int?> ShowDocumentFindAsync(ReaderSession session, Document document, string? target)
     {
         var resources = Application.Current!.Resources;
         var outline = (Style)resources["OutlineButton"];
         var entry = new Entry { Placeholder = "Слово або фраза", ReturnType = ReturnType.Search, MaxLength = 256 };
         SemanticProperties.SetDescription(entry, "Текст для пошуку");
         var search = new Button { Text = "Знайти", Style = (Style)resources["AccentButton"] };
+        var scope = new Picker
+        {
+            ItemsSource = new[] { "Оригінал", $"Збережений переклад · {DocumentLanguages.Name(target ?? "")}" },
+            SelectedIndex = 0,
+            IsVisible = target is not null,
+        };
+        SemanticProperties.SetDescription(scope, "Де шукати");
         var previous = new Button { Text = "Попередні", Style = outline, IsVisible = false };
         var next = new Button { Text = "Наступні", Style = outline, IsVisible = false };
         var close = new Button { Text = "Закрити", Style = outline };
@@ -43,9 +50,16 @@ public partial class ReadingPage
         var results = new VerticalStackLayout { Spacing = 6 };
         var resultsScroll = new ScrollView { Content = results };
 
-        var header = new Grid { ColumnDefinitions = [new(GridLength.Star), new(GridLength.Auto)], ColumnSpacing = 8 };
+        var header = new Grid
+        {
+            ColumnDefinitions = [new(GridLength.Star), new(GridLength.Auto)],
+            RowDefinitions = [new(GridLength.Auto), new(GridLength.Auto)],
+            ColumnSpacing = 8,
+        };
         header.Add(entry);
         header.Add(search, 1);
+        header.Add(scope, 0, 1);
+        Grid.SetColumnSpan(scope, 2);
         var actions = new HorizontalStackLayout { Spacing = 8, Children = { previous, next, close } };
         var form = new Grid
         {
@@ -67,6 +81,7 @@ public partial class ReadingPage
         using var cancellation = new CancellationTokenSource();
         var earlierPages = new Stack<int>();
         var query = "";
+        var inTranslation = false;
         var currentStart = 0;
         int? nextStart = null;
         var searching = false;
@@ -74,6 +89,7 @@ public partial class ReadingPage
         page.Loaded += (_, _) => page.Dispatcher.Dispatch(() => entry.Focus());
         search.Clicked += async (_, _) => await StartSearchAsync();
         entry.Completed += async (_, _) => await StartSearchAsync();
+        scope.SelectedIndexChanged += async (_, _) => await StartSearchAsync();
         previous.Clicked += async (_, _) =>
         {
             if (!searching && earlierPages.TryPop(out var start)) await ShowResultsAsync(start);
@@ -96,6 +112,7 @@ public partial class ReadingPage
         {
             if (searching) return;
             query = entry.Text?.Trim() ?? "";
+            inTranslation = target is not null && scope.SelectedIndex == 1;
             earlierPages.Clear();
             await ShowResultsAsync(0);
         }
@@ -103,7 +120,7 @@ public partial class ReadingPage
         async Task ShowResultsAsync(int start)
         {
             searching = true;
-            search.IsEnabled = previous.IsEnabled = next.IsEnabled = false;
+            search.IsEnabled = scope.IsEnabled = previous.IsEnabled = next.IsEnabled = false;
             results.Children.Clear();
             nextStart = null;
             currentStart = start;
@@ -117,16 +134,20 @@ public partial class ReadingPage
                 }
 
                 status.Text = "Шукаємо…";
-                var matches = await Task.Run(() => DocumentFind.FindPage(document.Sentences, query, start, token), token);
+                var page = inTranslation && target is not null
+                    ? await FindTranslatedAsync(target, start, token)
+                    : await FindOriginalAsync(start, token);
                 if (token.IsCancellationRequested || closed.Task.IsCompleted) return;
-                nextStart = matches.NextStart;
-                status.Text = matches.Positions.Length == 0 ? "Збігів не знайдено."
-                    : $"Збіги · сторінка {earlierPages.Count + 1}";
-                foreach (var position in matches.Positions)
+                nextStart = page.NextStart;
+                status.Text = page.Matches.Length > 0 ? $"Збіги · сторінка {earlierPages.Count + 1}"
+                    : inTranslation ? "Збігів у збереженому перекладі немає." : "Збігів не знайдено.";
+                foreach (var match in page.Matches)
                 {
-                    var result = new Button { Text = BookmarkLabel(position, document.Sentences[position].Text),
+                    if (match.Position < 0 || match.Position >= document.Sentences.Length) continue;
+                    var text = inTranslation ? DocumentFind.MatchingExcerpt(match.Text, query) : match.Text;
+                    var result = new Button { Text = BookmarkLabel(match.Position, text),
                         Style = outline, HorizontalOptions = LayoutOptions.Fill };
-                    result.Clicked += (_, _) => closed.TrySetResult(position);
+                    result.Clicked += (_, _) => closed.TrySetResult(match.Position);
                     results.Children.Add(result);
                 }
                 await resultsScroll.ScrollToAsync(0, 0, animated: false);
@@ -138,10 +159,30 @@ public partial class ReadingPage
                 searching = false;
                 if (!closed.Task.IsCompleted)
                 {
-                    search.IsEnabled = true;
+                    search.IsEnabled = scope.IsEnabled = true;
                     previous.IsVisible = previous.IsEnabled = earlierPages.Count > 0;
                     next.IsVisible = next.IsEnabled = nextStart.HasValue;
                 }
+            }
+        }
+
+        async Task<TranslationFindPage> FindOriginalAsync(int start, CancellationToken token)
+        {
+            var found = await Task.Run(() => DocumentFind.FindPage(document.Sentences, query, start, token), token);
+            return new(found.Positions.Select(position => new TranslationFindHit(position, document.Sentences[position].Text))
+                .ToArray(), found.NextStart);
+        }
+
+        async Task<TranslationFindPage> FindTranslatedAsync(string language, int start, CancellationToken token)
+        {
+            while (true)
+            {
+                token.ThrowIfCancellationRequested();
+                var found = await session.FindTranslationPageAsync(document.Id, language, query, start, token);
+                if (found.Matches.Length > 0 || found.NextStart is not int nextPosition ||
+                    nextPosition <= start || nextPosition >= document.Sentences.Length)
+                    return found;
+                start = nextPosition;
             }
         }
     }
