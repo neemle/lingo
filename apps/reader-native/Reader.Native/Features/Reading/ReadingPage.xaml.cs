@@ -274,8 +274,8 @@ public partial class ReadingPage : ContentPage
         var active = session.Sentence is not null && TargetCode is not null;
         var text = TargetCode is { } target ? session.ReviewedTranslation(target) : null;
         var key = ActiveTranslationKey();
-        if (key is { } current && readinessPair != (current.Source, current.Target))
-            RefreshReadiness((current.Source, current.Target));
+        if (source is not null && TargetCode is { } routeTarget && readinessPair != (source, routeTarget))
+            RefreshReadiness((source, routeTarget));
         var document = session.Document;
         var window = active && document is not null && TargetCode is { } targetCode
             ? FindTranslationWindow(document, targetCode) : null;
@@ -309,6 +309,7 @@ public partial class ReadingPage : ContentPage
                 || document is not null && HasUntranslatedUnits(document, window));
         TranslateSentence.IsEnabled = active && !session.Busy && !translating && readiness?.Ready == true && text is null;
         OpenTranslationPackages.IsVisible = active && readiness is { Missing.Length: > 0 };
+        if (DetachedPdfReader.IsVisible) UpdateDetachedControls();
         TargetLanguage.IsEnabled = (active || DetachedPdfReader.IsVisible) && !session.Busy;
         UpdateSourceLocation(document, session.Sentence);
         UpdateParagraphPreview(document, window, unit);
@@ -358,7 +359,11 @@ public partial class ReadingPage : ContentPage
             await Shell.Current.GoToAsync(AppShell.SettingsRoute,
                 new ShellNavigationQueryParameters { ["translationPackages"] = state.Missing });
         }
-        catch (Exception error) { TranslationNotice.Text = error.Message; }
+        catch (Exception error)
+        {
+            if (DetachedPdfReader.IsVisible) ShowDetachedTranslation(error.Message);
+            else TranslationNotice.Text = error.Message;
+        }
     }
 
     private TranslationKey? ActiveTranslationKey()

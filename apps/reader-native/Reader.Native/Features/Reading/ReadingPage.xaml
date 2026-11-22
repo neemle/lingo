@@ -174,13 +174,15 @@
     <Grid Grid.Row="2" x:Name="PdfPageNotice" IsVisible="False">
      <Label x:Name="PdfPageMessage" Margin="18" Style="{StaticResource ReaderMeta}"
       HorizontalTextAlignment="Center" VerticalOptions="Center" />
-     <Grid x:Name="DetachedPdfReader" IsVisible="False" RowDefinitions="*,Auto,Auto" RowSpacing="4">
+     <Grid x:Name="DetachedPdfReader" IsVisible="False" RowDefinitions="*,Auto,Auto,Auto" RowSpacing="4">
       <controls:NativeReaderView x:Name="DetachedPdfText" BackgroundColor="{StaticResource Panel}"
        SourceSelected="DetachedPdfSelected" SemanticProperties.Description="Текст поточної сторінки PDF" />
       <ScrollView Grid.Row="1" MaximumHeightRequest="120" Margin="14,0" x:Name="DetachedTranslationPane" IsVisible="False">
        <Label x:Name="DetachedTranslation" FontFamily="Georgia" FontSize="19" LineHeight="1.4" />
       </ScrollView>
-      <FlexLayout Grid.Row="2" Padding="8,5" Wrap="Wrap" AlignItems="Center">
+      <Label Grid.Row="2" x:Name="DetachedReadiness" IsVisible="False" Margin="14,0"
+       Style="{StaticResource ReaderMeta}" LineBreakMode="WordWrap" />
+      <FlexLayout Grid.Row="3" Padding="8,5" Wrap="Wrap" AlignItems="Center">
        <Button x:Name="DetachedPrevious" Text="‹" Clicked="PreviousDetachedSentenceClicked" Style="{StaticResource PlayerButton}"
         SemanticProperties.Description="Попереднє речення сторінки" />
        <Button x:Name="DetachedSpeak" Text="▶" Clicked="DetachedSpeakClicked" Style="{StaticResource PlayerButton}"
@@ -189,6 +191,8 @@
         SemanticProperties.Description="Наступне речення сторінки" />
        <Button x:Name="DetachedTranslate" Text="Перекласти" Clicked="DetachedTranslateClicked"
         Margin="5,0" Style="{StaticResource PlayerButton}" />
+       <Button x:Name="DetachedOpenTranslationPackages" Text="Мовні пакети" IsVisible="False"
+        Clicked="OpenTranslationPackagesClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedEditTranslation" Text="Свій переклад…" Clicked="DetachedEditTranslationClicked"
         Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedShareTranslation" Text="Поширити пару" IsVisible="False"

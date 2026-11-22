@@ -8,11 +8,11 @@ use std::{
 };
 use unicode_normalization::UnicodeNormalization;
 
-use super::{contains_book_term, probe_input, Package, TranslationPackageValidationResult, ASSETS};
+use super::{contains_book_term, Package, TranslationPackageValidationResult, ASSETS};
 use crate::model_storage::{model_error, package_directory};
 use crate::Result;
 
-const FILE_NAME: &str = ".probe-validation.json";
+const LEGACY_FILE_NAME: &str = ".probe-validation.json";
 const VERSION: u32 = 2;
 const MAX_BYTES: u64 = 8192;
 const MAX_OUTPUT_BYTES: usize = 1000;
@@ -123,7 +123,12 @@ pub(super) fn read(
     if !package_directory(directory).ok()? {
         return None;
     }
-    let file = open_evidence(&directory.join(FILE_NAME)).ok()?;
+    let file = match open_evidence(&directory.join(evidence_file_name(package.source, package.target))) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            open_evidence(&directory.join(LEGACY_FILE_NAME))
+        }
+        result => result,
+    }.ok()?;
     let meta = file.metadata().ok()?;
     if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > MAX_BYTES {
         return None;
@@ -142,12 +147,11 @@ pub(super) fn read(
         return None;
     }
     let quality = match evidence.version {
-        1 if probe_input(package.source).is_some()
+        1 if matches!(package.source, "en" | "fr" | "uk")
+            && matches!(package.target, "en" | "fr" | "uk")
             && contains_book_term(package.target, &evidence.output) => None,
         VERSION => {
-            if probe_input(package.target).is_some()
-                && !contains_book_term(package.target, &evidence.output)
-            {
+            if !contains_book_term(package.target, &evidence.output) {
                 return None;
             }
             let outputs = std::iter::once(evidence.output.clone())
@@ -190,9 +194,13 @@ pub(super) fn write(
     stage.write_all(&bytes).map_err(model_error)?;
     stage.as_file().sync_all().map_err(model_error)?;
     stage
-        .persist(directory.join(FILE_NAME))
+        .persist(directory.join(evidence_file_name(validation.source, validation.target)))
         .map_err(model_error)?;
     Ok(())
+}
+
+fn evidence_file_name(source: &str, target: &str) -> String {
+    format!(".probe-validation-{source}-{target}.json")
 }
 
 #[cfg(unix)]

@@ -298,7 +298,10 @@ public partial class ReadingPage
                 address.Document, address.Page, current.Sentence.Id, target);
             if (run != detachedTranslationRun) return;
             if (translated is null)
-                ShowDetachedTranslation("Для цього напрямку потрібен пакет офлайн-перекладу.");
+            {
+                ShowDetachedTranslation("");
+                RefreshReadiness((current.Language, target));
+            }
             else
                 ShowDetachedMachineTranslation(translated, current.Language, target);
         }
@@ -439,8 +442,14 @@ public partial class ReadingPage
         DetachedSaveWord.IsVisible = DetachedAnalyzeSelection.IsVisible;
         DetachedSaveWord.IsEnabled = DetachedSaveWord.IsVisible && !savingDetachedWord
             && !AppState.Session.Busy && TargetCode is not null;
-        DetachedTranslate.IsEnabled = available && !translatingDetachedSentence && TargetCode is not null
-            && ReviewedDetachedTranslation() is null;
+        var routeSelected = detachedSentence is { } loaded && TargetCode is { } target
+            && readinessPair == (loaded.Language, target);
+        DetachedTranslate.IsEnabled = available && !translatingDetachedSentence && routeSelected
+            && readiness?.Ready == true && ReviewedDetachedTranslation() is null;
+        DetachedReadiness.IsVisible = available && routeSelected && !translatingDetachedSentence
+            && CurrentDetachedTranslation() is null;
+        if (DetachedReadiness.IsVisible) DetachedReadiness.Text = ReadinessMessage();
+        DetachedOpenTranslationPackages.IsVisible = DetachedReadiness.IsVisible && readiness is { Missing.Length: > 0 };
         DetachedEditTranslation.IsEnabled = available && !changingDetachedAnnotation && TargetCode is not null;
         DetachedEditTranslation.Text = ReviewedDetachedTranslation() is null ? "Свій переклад…" : "Редагувати переклад…";
         DetachedShareTranslation.IsVisible = available && !translatingDetachedSentence && CurrentDetachedTranslation() is not null;

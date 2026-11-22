@@ -182,7 +182,7 @@ impl TranslationPackageValidation {
             .ok_or("Модель повернула неповний або завеликий пробний переклад.")?;
         let mut outputs = outputs.into_iter();
         let output = outputs.next().ok_or("Модель не повернула пробний переклад.")?;
-        if probe_input(self.package.target).is_some() && !contains_book_term(self.package.target, &output) {
+        if !contains_book_term(self.package.target, &output) {
             return Err("У пробному перекладі немає очікуваного слова цільовою мовою.".into());
         }
 
@@ -209,15 +209,6 @@ impl TranslationPackageValidation {
     }
 }
 
-fn probe_input(language: &str) -> Option<&'static str> {
-    match language {
-        "en" => Some("I am reading a book."),
-        "fr" => Some("Je lis un livre."),
-        "uk" => Some("Я читаю книжку."),
-        _ => None,
-    }
-}
-
 fn contains_book_term(language: &str, output: &str) -> bool {
     output.unicode_words().any(|word| {
         let word = word.to_lowercase();
@@ -225,6 +216,15 @@ fn contains_book_term(language: &str, output: &str) -> bool {
             "en" => matches!(word.as_str(), "book" | "books"),
             "fr" => matches!(word.as_str(), "livre" | "livres" | "bouquin" | "bouquins"),
             "uk" => word.starts_with("книг") || word.starts_with("книж"),
+            "de" => matches!(word.as_str(), "buch" | "bücher" | "büchern"),
+            "es" => matches!(word.as_str(), "libro" | "libros"),
+            "it" => matches!(word.as_str(), "libro" | "libri" | "volume" | "volumi"),
+            "pt" => matches!(word.as_str(), "livro" | "livros"),
+            "pl" => word.starts_with("książ") || word.starts_with("księg"),
+            "nl" => matches!(word.as_str(), "boek" | "boeken"),
+            "cs" => word.starts_with("knih") || word.starts_with("kníž"),
+            "ro" => matches!(word.as_str(), "carte" | "cartea" | "cărți" | "cărţile" | "cărțile"),
+            "sv" => matches!(word.as_str(), "bok" | "boken" | "böcker" | "böckerna"),
             _ => false,
         }
     })
