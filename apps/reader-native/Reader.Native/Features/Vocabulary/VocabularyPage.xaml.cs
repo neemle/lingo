@@ -186,7 +186,7 @@ public partial class VocabularyPage : ContentPage
     {
         var ready = !transferring && !loadingCollection;
         CollectionPicker.IsEnabled = !transferring && choices.Length > 1;
-        ImportDictionary.IsEnabled = !transferring;
+        AddCard.IsEnabled = ImportDictionary.IsEnabled = !transferring;
         ExportDictionary.IsEnabled = ShareDictionary.IsEnabled = ExportDictionaryCsv.IsEnabled = ready && entries.Length > 0;
         ExportDictionary.Text = ActiveCollection.DocumentId is null ? "Зберегти словник" : "Зберегти добірку";
         ShareDictionary.Text = ActiveCollection.DocumentId is null ? "Поширити словник" : "Поширити добірку";

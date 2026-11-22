@@ -248,6 +248,14 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public Task<MachineTranslation?> TranslateSentenceAsync(string id, string sentenceId, string target) =>
         Task.Run(() => client.TranslateSentence(id, sentenceId, target));
 
+    public Task SaveManualVocabularyCardAsync(string word, string translation, string sourceLanguage,
+        string targetLanguage) => RunAsync(() =>
+    {
+        client.SaveWord(new Vocabulary("", word, translation, sourceLanguage, targetLanguage, "", "",
+            new ReviewState(), new ReviewState()));
+        return Read();
+    });
+
     public Task SaveWordAsync(TextSelection selection, string translation, LemmaSnapshot? analysis = null,
         ExpressionSnapshot? expression = null, SenseSnapshot? sense = null) => RunAsync(() =>
     {
