@@ -13,7 +13,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     translation::{
-        AlignedTranslation, ModelEdge, TranslationProvider, TranslationRequest, TranslationSettings,
+        input_for_sentence, AlignedTranslation, ModelEdge, TranslationProvider, TranslationRequest,
+        TranslationSettings,
     },
     Result, Store,
 };
@@ -160,11 +161,12 @@ impl Store {
             .map_err(|error| error.to_string())?;
         let document: crate::Document =
             serde_json::from_str(&body).map_err(|error| error.to_string())?;
-        let sentence = document
+        let selected = document
             .sentences
-            .into_iter()
-            .find(|sentence| sentence.id == sentence_id)
+            .iter()
+            .position(|sentence| sentence.id == sentence_id)
             .ok_or("Речення для перекладу не знайдено")?;
+        let (text, joined_lines) = input_for_sentence(&document, selected);
         self.translate_aligned(
             &mut MarianProvider {
                 directory: package_dir,
@@ -172,11 +174,17 @@ impl Store {
             TranslationRequest {
                 source: &document.language,
                 target,
-                segments: &[sentence.text],
+                segments: &[text],
                 context: None,
                 settings: TranslationSettings { beam_size: 1 },
             },
         )
+        .map(|translation| {
+            translation.map(|mut translation| {
+                translation.joined_lines = joined_lines;
+                translation
+            })
+        })
     }
 }
 

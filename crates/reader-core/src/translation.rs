@@ -111,6 +111,107 @@ pub struct AlignedTranslation {
     pub route: Route,
     /// Each entry stays paired to its source. A target entry may contain several sentences.
     pub segments: Vec<String>,
+    pub joined_lines: bool,
+}
+
+pub(crate) fn input_for_sentence(document: &crate::Document, selected: usize) -> (String, bool) {
+    const MAX_JOINED_BYTES: usize = 1024;
+    const MAX_FRAGMENTS: usize = 12;
+    let active = &document.sentences[selected];
+    if document.format != "pdf" && document.ocr_lines.is_none() {
+        return (active.text.clone(), false);
+    }
+    let soft_wrap = |left: usize, right: usize| {
+        let previous = &document.sentences[left];
+        let next = &document.sentences[right];
+        let Some(gap) = document.text.get(previous.end_utf8..next.start_utf8) else {
+            return false;
+        };
+        if gap.bytes().filter(|&byte| byte == b'\n').count() != 1
+            || gap
+                .chars()
+                .any(|ch| !matches!(ch, ' ' | '\t' | '\r' | '\n' | '\u{a0}'))
+        {
+            return false;
+        }
+        let previous_end = previous.text.trim_end_matches(|ch: char| {
+            ch.is_whitespace() || matches!(ch, '"' | '\'' | '’' | '”' | '»' | ')' | ']')
+        });
+        !previous_end.ends_with(['.', '!', '?', ':', ';', '…', '。', '！', '？'])
+            && next.text.starts_with(char::is_lowercase)
+    };
+    let within_budget = |left: usize, right: usize| {
+        right - left < MAX_FRAGMENTS
+            && document.sentences[right]
+                .end_utf8
+                .saturating_sub(document.sentences[left].start_utf8)
+                <= MAX_JOINED_BYTES
+    };
+    let mut start = selected;
+    let mut end = selected;
+    while start > 0 && within_budget(start - 1, end) && soft_wrap(start - 1, start) {
+        start -= 1;
+    }
+    while end + 1 < document.sentences.len()
+        && within_budget(start, end + 1)
+        && soft_wrap(end, end + 1)
+    {
+        end += 1;
+    }
+    if start == end {
+        return (active.text.clone(), false);
+    }
+    let span =
+        &document.text[document.sentences[start].start_utf8..document.sentences[end].end_utf8];
+    (span.split_whitespace().collect::<Vec<_>>().join(" "), true)
+}
+
+#[cfg(test)]
+mod reflow_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn pdf_reflow_joins_only_continuing_lines_and_keeps_stored_fragments() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let text = "Заголовок\n\n😀 Млинці готують із \r\nрідкого тіста. Їх подають\nіз медом.\nВам знадобиться:\n• борошно\n• молоко\n\nокремий рядок.";
+        let mut document = store.import("story.txt", text.as_bytes(), "uk").unwrap();
+        let index = |doc: &crate::Document, fragment: &str| {
+            doc.sentences
+                .iter()
+                .position(|s| s.text == fragment)
+                .unwrap()
+        };
+        let wrapped = index(&document, "😀 Млинці готують із");
+        assert_eq!(
+            input_for_sentence(&document, wrapped),
+            ("😀 Млинці готують із".into(), false)
+        );
+        document.format = "pdf".into();
+        for fragment in ["😀 Млинці готують із", "рідкого тіста."] {
+            assert_eq!(
+                input_for_sentence(&document, index(&document, fragment)),
+                ("😀 Млинці готують із рідкого тіста.".into(), true)
+            );
+        }
+        assert_eq!(
+            input_for_sentence(&document, index(&document, "Їх подають")),
+            ("Їх подають із медом.".into(), true)
+        );
+        for fragment in [
+            "Заголовок",
+            "Вам знадобиться:",
+            "• борошно",
+            "• молоко",
+            "окремий рядок.",
+        ] {
+            assert_eq!(
+                input_for_sentence(&document, index(&document, fragment)),
+                (fragment.into(), false)
+            );
+        }
+        assert_eq!(document.text, text);
+    }
 }
 
 /// Settings are part of the cache identity. Providers must honor them.
@@ -174,7 +275,11 @@ impl Store {
             .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
             .filter(|value| value.len() == segments.len() && valid_segments(value))
         {
-            return Ok(Some(AlignedTranslation { route, segments }));
+            return Ok(Some(AlignedTranslation {
+                route,
+                segments,
+                joined_lines: false,
+            }));
         }
 
         let result = match &route {
@@ -214,6 +319,7 @@ impl Store {
         Ok(Some(AlignedTranslation {
             route,
             segments: result,
+            joined_lines: false,
         }))
     }
 }

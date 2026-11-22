@@ -120,6 +120,8 @@ On Windows, select the five files and compress them to ZIP. In the app, open **�
 installing the package. Open the reader, select the target language and choose **Перекласти офлайн**.
 With French → English and English → Ukrainian installed, the reader can also translate French → Ukrainian
 through English. The translation panel marks that route. Installing French → Ukrainian enables the direct route.
+Translation can join consecutive wrapped lines in a PDF or OCR transcript. The pane marks joined input,
+and the source text, bookmarks, and current reading position remain intact.
 
 ## Offline word analysis
 

@@ -101,6 +101,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
                         serde_json::json!({
                             "text": result.segments[0],
                             "pivotLanguage": result.route.pivot_language(),
+                            "joinedLines": result.joined_lines,
                         })
                     })
                 }),

@@ -138,10 +138,12 @@ public partial class ReadingPage : ContentPage
         var text = TargetCode is { } target ? session.ReviewedTranslation(target) : null;
         var key = ActiveTranslationKey();
         var machine = key is not null && key == machineKey ? machineTranslation : null;
+        var machineLabel = machine?.JoinedLines == true
+            ? "Машинний переклад об’єднаних рядків" : "Машинний переклад";
         TranslationNotice.Text = !active ? "Відкрийте документ для читання."
             : text is not null ? "Ваш переклад активного речення"
-            : machine?.PivotLanguage is { } pivot ? $"Машинний переклад через {pivot}"
-            : machine is not null ? "Машинний переклад"
+            : machine?.PivotLanguage is { } pivot ? $"{machineLabel} через {pivot}"
+            : machine is not null ? machineLabel
             : key == machineKey && machineStatus is not null ? machineStatus
             : "Перекладу ще немає.";
         SegmentTranslation.Text = text ?? machine?.Text ?? "";
@@ -197,7 +199,8 @@ public partial class ReadingPage : ContentPage
         var text = await DisplayPromptAsync("Переклад речення",
             existing is null ? sentence.Text : "Очистьте поле, щоб видалити цей переклад.",
             accept: "Зберегти", cancel: "Скасувати", maxLength: 4000,
-            initialValue: existing ?? (ActiveTranslationKey() == machineKey ? machineTranslation?.Text : null) ?? "");
+            initialValue: existing ?? (ActiveTranslationKey() == machineKey && machineTranslation is { JoinedLines: false }
+                ? machineTranslation.Text : null) ?? "");
         if (text is not null && session.Document?.Id == document.Id && session.Sentence?.Id == sentence.Id
             && TargetCode == target && !session.Busy)
             await session.SetReviewedTranslationAsync(document.Id, sentence.Id, target, text);
