@@ -115,7 +115,8 @@
        <Button Grid.Column="1" x:Name="AutoTranslate" Text="Автопереклад"
         Style="{StaticResource PlayerButton}" Clicked="AutoTranslateClicked" />
       </Grid>
-      <ScrollView Grid.Row="1">
+      <ScrollView Grid.Row="1" x:Name="TranslationViewport" SizeChanged="TranslationViewportReady"
+       Loaded="TranslationViewportReady">
        <VerticalStackLayout Spacing="10" Padding="16,12">
         <Label x:Name="TranslationNotice" Style="{StaticResource ReaderMeta}" />
         <Border x:Name="ActiveTranslationCard" BackgroundColor="#F6F4EB" StrokeThickness="0"

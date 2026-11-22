@@ -13,9 +13,51 @@ public partial class ReadingPage
     private bool autoTranslate;
     private CancellationTokenSource? scheduledTranslation;
     private TranslationKey? lastAutoTranslation;
+    private TranslationKey? translationScrollKey;
+    private bool translationScrollPending;
+    private bool translationScrollQueued;
+    private bool selectingPreviewRow;
 
     private sealed record TranslationKey(string Document, string Sentence, string Source, string Target, string Text);
     private sealed record TranslationScope(string Document, string Source, string Target);
+
+    private void TrackTranslationScroll(TranslationKey? key)
+    {
+        if (translationScrollKey != key)
+        {
+            translationScrollKey = key;
+            RequestTranslationScroll();
+        }
+        else QueueTranslationScroll();
+    }
+
+    private void RequestTranslationScroll()
+    {
+        translationScrollPending = true;
+        QueueTranslationScroll();
+    }
+
+    private void TranslationViewportReady(object? sender, EventArgs args) => QueueTranslationScroll();
+
+    private bool CanScrollTranslation() => readingPageActive && TranslationVisible &&
+        TranslationViewport.Handler is not null && TranslationViewport.Width > 0 && TranslationViewport.Height > 0;
+
+    private void QueueTranslationScroll()
+    {
+        if (!translationScrollPending || translationScrollQueued || !CanScrollTranslation()) return;
+        translationScrollQueued = true;
+        if (!Dispatcher.Dispatch(ScrollTranslationToTop)) translationScrollQueued = false;
+    }
+
+    private async void ScrollTranslationToTop()
+    {
+        translationScrollQueued = false;
+        if (!translationScrollPending || !CanScrollTranslation()) return;
+        translationScrollPending = false;
+        if (TranslationViewport.ScrollY <= 0) return;
+        try { await TranslationViewport.ScrollToAsync(0, 0, animated: false); }
+        catch (Exception error) when (error is InvalidOperationException or OperationCanceledException) { }
+    }
 
     private void UpdateAutoTranslateButton()
     {
@@ -289,20 +331,27 @@ public partial class ReadingPage
         var positionLabel = count == 1 ? $"Речення {position + 1}" : $"Речення {position + 1}–{position + count}";
         if (reviewed) positionLabel += " · ваш переклад";
         var button = new Button { Text = positionLabel, FontSize = 13, HorizontalOptions = LayoutOptions.Start };
-        button.Clicked += async (_, _) =>
+        var label = new Label { Text = text, FontFamily = "Georgia", FontSize = Math.Max(16, SourceText.ReadingFontSize - 4),
+            LineHeight = 1.4, TextColor = Color.FromArgb("#655F4D") };
+        var tap = new TapGestureRecognizer();
+        button.Clicked += SelectRow;
+        tap.Tapped += SelectRow;
+        label.GestureRecognizers.Add(tap);
+        ParagraphPreview.Children.Add(new VerticalStackLayout { Spacing = 3, Children = { button, label } });
+
+        async void SelectRow(object? sender, EventArgs args)
         {
+            if (selectingPreviewRow || !readingPageActive || !TranslationVisible) return;
             var session = AppState.Session;
             if (session.Busy || session.Document is not { } current || current.Id != documentId
-                || current.Sentences.ElementAtOrDefault(position)?.Id != sentenceId) return;
-            StopSpeech();
-            await session.SelectSentenceAsync(position);
-        };
-        ParagraphPreview.Children.Add(new VerticalStackLayout
-        {
-            Spacing = 3,
-            Children = { button, new Label { Text = text, FontFamily = "Georgia",
-                FontSize = Math.Max(16, SourceText.ReadingFontSize - 4), LineHeight = 1.4,
-                TextColor = Color.FromArgb("#655F4D") } },
-        });
+                || current.Position == position || current.Sentences.ElementAtOrDefault(position)?.Id != sentenceId) return;
+            selectingPreviewRow = true;
+            try
+            {
+                StopSpeech();
+                await session.SelectSentenceAsync(position);
+            }
+            finally { selectingPreviewRow = false; }
+        }
     }
 }

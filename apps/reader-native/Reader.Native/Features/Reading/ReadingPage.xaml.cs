@@ -154,6 +154,7 @@ public partial class ReadingPage : ContentPage
 
     private void ArrangeReadingColumns()
     {
+        var revealTranslation = !TranslationPane.IsVisible && TranslationVisible;
         var sourceVisible = readingLayout != ReaderLayout.Translation;
         var split = sourceVisible && TranslationVisible;
         var stacked = split && (readingLayout == ReaderLayout.Stacked
@@ -170,6 +171,7 @@ public partial class ReadingPage : ContentPage
         var layout = Layouts.First(item => item.Mode == readingLayout);
         ReaderLayoutButton.Text = layout.Compact;
         SemanticProperties.SetDescription(ReaderLayoutButton, $"Розкладка читання · {layout.Label}. Змінити розкладку");
+        if (revealTranslation) RequestTranslationScroll();
     }
 
     private async void ReaderLayoutClicked(object? sender, EventArgs args)
@@ -258,6 +260,7 @@ public partial class ReadingPage : ContentPage
         TargetLanguage.IsEnabled = active && !session.Busy;
         UpdateSourceLocation(document, session.Sentence);
         UpdateParagraphPreview(document, window, unit);
+        TrackTranslationScroll(key);
         ScheduleAutoTranslation();
     }
 
