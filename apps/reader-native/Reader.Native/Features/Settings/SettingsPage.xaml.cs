@@ -475,10 +475,9 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
             cancellation.Token.ThrowIfCancellationRequested();
             CancelDownload.IsVisible = false;
             ModelStatus.Text = "Перевірка й встановлення…";
-            var pair = await AppState.Session.InstallTranslationPackageAsync(archive);
+            var pair = await InstallTranslationAndRefreshAsync(archive);
             ModelStatus.Text = $"Мовний пакет встановлено ({pair}).";
             TryClean(() => ModelDownload.ClearStaging(package, root));
-            await RefreshTranslationPackagesAsync();
         }
         finally { TryClean(() => File.Delete(archive)); }
     }
@@ -549,9 +548,8 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
                     await output.WriteAsync(buffer.AsMemory(0, count));
                 }
             }
-            var pair = await AppState.Session.InstallTranslationPackageAsync(path);
+            var pair = await InstallTranslationAndRefreshAsync(path);
             Status.Text = $"Мовний пакет встановлено ({pair}).";
-            await RefreshTranslationPackagesAsync();
         }
         catch (Exception error) { Status.Text = error.Message; }
         finally
@@ -565,6 +563,12 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
                 UpdateTranslationControls();
             }
         }
+    }
+
+    private async Task<string> InstallTranslationAndRefreshAsync(string archive)
+    {
+        try { return await AppState.Session.InstallTranslationPackageAsync(archive); }
+        finally { await RefreshTranslationPackagesAsync(); }
     }
 
     private async void ProbeClicked(object? sender, EventArgs args) =>
