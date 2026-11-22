@@ -5,6 +5,8 @@ namespace Reader.Native.Services;
 public static class NativeFiles
 {
     private static readonly SemaphoreSlim ExportDialog = new(1, 1);
+    private static readonly TimeSpan SharedExportLifetime = TimeSpan.FromDays(7);
+    private static string ExportRoot => Path.Combine(FileSystem.CacheDirectory, "exports");
 
     public static async Task<byte[]> ReadBoundedAsync(FileResult file, int maximum)
     {
@@ -42,8 +44,7 @@ public static class NativeFiles
         var keepForShare = false;
         try
         {
-            var root = Path.Combine(FileSystem.CacheDirectory, "exports");
-            staging = Directory.CreateDirectory(Path.Combine(root, Guid.NewGuid().ToString("N")));
+            staging = Directory.CreateDirectory(Path.Combine(ExportRoot, Guid.NewGuid().ToString("N")));
             var path = Path.Combine(staging.FullName, Path.GetFileName(name));
             await write(path);
             if (share)
@@ -62,6 +63,32 @@ public static class NativeFiles
                 if (!keepForShare) staging?.Delete(recursive: true);
             }
             finally { ExportDialog.Release(); }
+        }
+    }
+
+    internal static void PruneExpiredExports()
+    {
+        if (!ExportDialog.Wait(0)) return;
+        DirectoryInfo[] expired;
+        try
+        {
+            var root = new DirectoryInfo(ExportRoot);
+            if (!root.Exists || root.Attributes.HasFlag(FileAttributes.ReparsePoint)) return;
+
+            // Share receivers can open the staged file after the system dialog returns.
+            var cutoff = DateTime.UtcNow - SharedExportLifetime;
+            expired = root.EnumerateDirectories().Where(directory =>
+                Guid.TryParseExact(directory.Name, "N", out _) &&
+                !directory.Attributes.HasFlag(FileAttributes.ReparsePoint) && directory.LastWriteTimeUtc < cutoff)
+                .ToArray();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return; }
+        finally { ExportDialog.Release(); }
+
+        foreach (var directory in expired)
+        {
+            try { directory.Delete(recursive: true); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
         }
     }
 

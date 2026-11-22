@@ -17,7 +17,11 @@ public partial class LibraryPage : ContentPage
     private Snapshot? displayedSnapshot;
     private bool openingCard;
 
-    public LibraryPage() => InitializeComponent();
+    public LibraryPage()
+    {
+        InitializeComponent();
+        _ = Task.Run(NativeFiles.PruneExpiredExports);
+    }
 
     protected override void OnAppearing()
     {
