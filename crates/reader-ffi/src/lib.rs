@@ -260,9 +260,9 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
-        Command::TranslateWithModel { id, page, sentence_id, target } => {
+        Command::TranslateWithModel { id, page, sentence_id, target, regenerate } => {
             let job = registry::lock()?.store(handle)?
-                .prepare_passage_translation(id, *page, sentence_id, target).map_err(gateway::domain)?;
+                .prepare_passage_translation(id, *page, sentence_id, target, *regenerate).map_err(gateway::domain)?;
             return encode_job(job.run());
         }
         Command::ReviewSentence { model, document, page, sentence, focus, revision_id, cached_only } => {

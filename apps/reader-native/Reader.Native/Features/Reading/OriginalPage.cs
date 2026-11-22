@@ -314,7 +314,7 @@ internal sealed class OriginalPage : ContentPage
     private static bool Overlaps(OcrSpan? span, (int Start, int End)? focus) =>
         span is { } source && focus is { } range && source.StartUtf16 < range.End && source.EndUtf16 > range.Start;
 
-    private static RectF AspectFit(RectF area, int width, int height)
+    internal static RectF AspectFit(RectF area, int width, int height)
     {
         if (width <= 0 || height <= 0 || area.Width <= 0 || area.Height <= 0) return default;
         var scale = Math.Min(area.Width / width, area.Height / height);

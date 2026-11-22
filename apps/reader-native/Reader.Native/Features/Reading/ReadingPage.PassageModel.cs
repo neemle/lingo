@@ -7,6 +7,8 @@ public partial class ReadingPage
     private sealed record ModelPassage(string Document, int? Page, string Sentence, string Target);
     private ModelPassage? runningPassage;
     private (ModelPassage Address, string Text)? modelPassageResult;
+    private ModelPassage? attemptedModelPassage;
+    private (ModelPassage Address, string Text)? modelPassageError;
 
     private ModelPassage? CurrentModelPassage()
     {
@@ -23,18 +25,20 @@ public partial class ReadingPage
     {
         if (runningPassage is not null || CurrentModelPassage() is not { } address) return;
         var session = AppState.Session;
+        var regenerate = attemptedModelPassage == address;
+        attemptedModelPassage = address;
+        modelPassageError = null;
         runningPassage = address;
-        modelPassageResult = null;
         UpdateModelTranslation();
         try
         {
-            var result = await session.TranslateWithModelAsync(address.Document, address.Page, address.Sentence, address.Target);
+            var result = await session.TranslateWithModelAsync(address.Document, address.Page, address.Sentence, address.Target, regenerate);
             var label = result.Cached ? "Збережений переклад Qwen" : "Переклад Qwen 2B";
             modelPassageResult = (address, $"{label}{Environment.NewLine}{result.Text}");
         }
         catch (Exception error)
         {
-            modelPassageResult = (address, error.Message);
+            modelPassageError = (address, error.Message);
         }
         finally
         {
@@ -50,9 +54,13 @@ public partial class ReadingPage
         var enabled = address is not null && runningPassage is null && !AppState.Session.Busy;
         TranslateWithModel.IsEnabled = enabled && !detached;
         DetachedTranslateWithModel.IsEnabled = enabled && detached;
+        TranslateWithModel.Text = DetachedTranslateWithModel.Text = address is not null && attemptedModelPassage == address
+            ? "Перегенерувати" : "Перекласти моделлю";
 
         var running = address is not null && runningPassage == address;
         var result = modelPassageResult is { } saved && saved.Address == address ? saved.Text : null;
+        if (modelPassageError is { } failure && failure.Address == address)
+            result = result is null ? failure.Text : $"{result}{Environment.NewLine}{failure.Text}";
         ModelTranslationBusy.IsRunning = ModelTranslationBusy.IsVisible = running && !detached;
         DetachedModelTranslationBusy.IsRunning = DetachedModelTranslationBusy.IsVisible = running && detached;
         ModelTranslationResult.IsVisible = !detached && (running || result is not null);

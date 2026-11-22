@@ -6,14 +6,17 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage
 {
-    private (NativeReaderView View, TextSelection Selection, Border Card)? wordPopup;
+    private (VisualElement View, TextSelection Selection, Border Card, Point? PdfPoint)? wordPopup;
 
-    private void ShowWordPopup(NativeReaderView view, TextSelection selected, Border card)
+    private void ShowWordPopup(NativeReaderView view, TextSelection selected, Border card,
+        (VisualElement View, Point Point)? pdfAnchor = null)
     {
-        wordPopup = (view, selected, card);
+        wordPopup = (pdfAnchor?.View ?? view, selected, card, pdfAnchor?.Point);
         WordCard.IsVisible = card == WordCard;
         DetachedWordCard.IsVisible = card == DetachedWordCard;
         PositionWordPopup();
+        UpdateInlinePdfHighlight();
+        _ = LoadPopupTranslationAsync(card == DetachedWordCard);
     }
 
     private void CloseWordPopupClicked(object? sender, EventArgs args)
@@ -24,8 +27,10 @@ public partial class ReadingPage
 
     private void WordPopupVisibilityChanged(object? sender, PropertyChangedEventArgs args)
     {
-        if (args.PropertyName == nameof(VisualElement.IsVisible))
-            WordOverlay.IsVisible = WordCard.IsVisible || DetachedWordCard.IsVisible;
+        if (args.PropertyName != nameof(VisualElement.IsVisible)) return;
+        WordOverlay.IsVisible = WordCard.IsVisible || DetachedWordCard.IsVisible;
+        UpdatePopupTranslationHighlights();
+        UpdateInlinePdfHighlight();
     }
 
     private void WordPopupResized(object? sender, EventArgs args) => PositionWordPopup();
@@ -39,7 +44,8 @@ public partial class ReadingPage
         for (Element? element = popup.View; element is not null && element != ReaderRoot; element = element.Parent)
             if (element is VisualElement visual) origin = new Point(origin.X + visual.X, origin.Y + visual.Y);
 
-        var word = popup.View.SelectionAnchor?.Invoke(popup.Selection.StartUtf16, popup.Selection.LengthUtf16);
+        var word = popup.PdfPoint ?? (popup.View as NativeReaderView)?.SelectionAnchor?.Invoke(
+            popup.Selection.StartUtf16, popup.Selection.LengthUtf16);
         const double margin = 12;
         const double arrow = 8;
         var width = Math.Max(1, Math.Min(430, ReaderRoot.Width - margin * 2));

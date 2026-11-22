@@ -53,6 +53,12 @@ public partial class ReadingPage : ContentPage
         InitializeComponent();
         WordCard.PropertyChanged += WordPopupVisibilityChanged;
         DetachedWordCard.PropertyChanged += WordPopupVisibilityChanged;
+        SourceText.PropertyChanged += InlinePdfWordChanged;
+        DetachedPdfText.PropertyChanged += InlinePdfWordChanged;
+        SegmentTranslation.PropertyChanged += PopupTranslationTextChanged;
+        ModelTranslationText.PropertyChanged += PopupTranslationTextChanged;
+        DetachedTranslation.PropertyChanged += PopupTranslationTextChanged;
+        DetachedModelTranslationText.PropertyChanged += PopupTranslationTextChanged;
     }
 
     protected override void OnAppearing()
@@ -145,6 +151,7 @@ public partial class ReadingPage : ContentPage
         var word = document is not null && sentence is not null ? ReadingWord(document, sentence) : null;
         SourceText.HighlightStart = word?.Start ?? sentence?.StartUtf16 ?? 0;
         SourceText.HighlightLength = word?.Length ?? (sentence is null ? 0 : sentence.EndUtf16 - sentence.StartUtf16);
+        UpdateInlinePdfHighlight();
         if (documentId == AppState.Session.Document?.Id) return;
         documentId = AppState.Session.Document?.Id;
         selection = null;
@@ -418,7 +425,7 @@ public partial class ReadingPage : ContentPage
 
     private async void SourceSelected(object? sender, TextSelection selected) => await ShowWordAsync(selected);
 
-    private async Task ShowWordAsync(TextSelection selected)
+    private async Task ShowWordAsync(TextSelection selected, (VisualElement View, Point Point)? pdfAnchor = null)
     {
         var session = AppState.Session;
         if (session.Document is not { } doc) return;
@@ -440,7 +447,7 @@ public partial class ReadingPage : ContentPage
         OpenSpelling.IsVisible = !selected.Text.Any(char.IsWhiteSpace);
         ShowExpressionOptions(null, selected);
         KnowledgeAnalysis.Text = "Пошук у мовному пакеті…";
-        ShowWordPopup(SourceText, selected, WordCard);
+        ShowWordPopup(SourceText, selected, WordCard, pdfAnchor);
         var index = Array.FindIndex(doc.Sentences, sentence => selected.StartUtf16 >= sentence.StartUtf16
             && selected.StartUtf16 < sentence.EndUtf16);
         try

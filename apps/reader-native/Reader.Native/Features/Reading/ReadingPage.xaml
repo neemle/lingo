@@ -149,7 +149,12 @@
        </controls:NativeReaderView.Triggers>
       </controls:NativeReaderView>
       <Image Grid.Row="1" x:Name="InlinePdfImage" IsVisible="False" Aspect="AspectFit"
-       SemanticProperties.Description="Оригінальна сторінка PDF" />
+       SemanticProperties.Description="Оригінальна сторінка PDF">
+       <Image.GestureRecognizers>
+        <TapGestureRecognizer Tapped="InlinePdfTapped" />
+       </Image.GestureRecognizers>
+      </Image>
+      <GraphicsView Grid.Row="1" x:Name="InlinePdfHighlight" IsVisible="False" InputTransparent="True" />
      </Grid>
 
      <Grid Grid.Column="1" x:Name="TranslationPane" RowDefinitions="Auto,*,Auto" BackgroundColor="{StaticResource Panel}">
@@ -168,12 +173,15 @@
           <BoxView Color="{StaticResource Accent}" />
           <Label Grid.Column="1" x:Name="SegmentTranslation" Margin="9,6,9,8" FontFamily="Georgia"
            FontSize="20" LineHeight="1.4" TextColor="#655F4D" />
+         <Label Grid.Column="1" x:Name="SegmentTranslationHighlighted" IsVisible="False" Margin="9,6,9,8" FontFamily="Georgia"
+           FontSize="20" LineHeight="1.4" TextColor="#655F4D" />
          </Grid>
         </Border>
         <Grid x:Name="ModelTranslationResult" ColumnDefinitions="Auto,*" ColumnSpacing="9" IsVisible="False">
          <ActivityIndicator x:Name="ModelTranslationBusy" IsVisible="False" Color="{StaticResource Sage}"
           WidthRequest="20" HeightRequest="20" VerticalOptions="Start" />
          <Label Grid.Column="1" x:Name="ModelTranslationText" FontFamily="Georgia" FontSize="19" />
+         <Label Grid.Column="1" x:Name="ModelTranslationTextHighlighted" IsVisible="False" FontFamily="Georgia" FontSize="19" />
         </Grid>
         <VerticalStackLayout x:Name="ParagraphPreview" Spacing="8" IsVisible="False" />
        </VerticalStackLayout>
@@ -196,15 +204,25 @@
      </Grid>
     </Grid>
     <Grid Grid.Row="2" x:Name="PdfPageNotice" IsVisible="False">
+     <Image x:Name="PendingInlinePdfImage" IsVisible="False" Aspect="AspectFit"
+      SemanticProperties.Description="Оригінальна сторінка PDF" />
      <Label x:Name="PdfPageMessage" Margin="18" Style="{StaticResource ReaderMeta}"
       HorizontalTextAlignment="Center" VerticalOptions="Center" />
      <Grid x:Name="DetachedPdfReader" IsVisible="False" RowDefinitions="*,Auto,Auto,Auto" RowSpacing="4">
       <controls:NativeReaderView x:Name="DetachedPdfText" BackgroundColor="{StaticResource Panel}"
        SourceSelected="DetachedPdfSelected" SemanticProperties.Description="Текст поточної сторінки PDF" />
       <Image x:Name="DetachedInlinePdfImage" IsVisible="False" Aspect="AspectFit"
-       SemanticProperties.Description="Оригінальна сторінка PDF" />
+       SemanticProperties.Description="Оригінальна сторінка PDF">
+       <Image.GestureRecognizers>
+        <TapGestureRecognizer Tapped="InlinePdfTapped" />
+       </Image.GestureRecognizers>
+      </Image>
+      <GraphicsView x:Name="DetachedInlinePdfHighlight" IsVisible="False" InputTransparent="True" />
       <ScrollView Grid.Row="1" MaximumHeightRequest="120" Margin="14,0" x:Name="DetachedTranslationPane" IsVisible="False">
-       <Label x:Name="DetachedTranslation" FontFamily="Georgia" FontSize="19" LineHeight="1.4" />
+       <Grid>
+        <Label x:Name="DetachedTranslation" FontFamily="Georgia" FontSize="19" LineHeight="1.4" />
+        <Label x:Name="DetachedTranslationHighlighted" IsVisible="False" FontFamily="Georgia" FontSize="19" LineHeight="1.4" />
+       </Grid>
       </ScrollView>
       <VerticalStackLayout Grid.Row="2" Margin="14,0">
        <Label x:Name="DetachedReadiness" IsVisible="False" Style="{StaticResource ReaderMeta}" LineBreakMode="WordWrap" />
@@ -212,7 +230,10 @@
         <ActivityIndicator x:Name="DetachedModelTranslationBusy" IsVisible="False" Color="{StaticResource Sage}"
          WidthRequest="20" HeightRequest="20" VerticalOptions="Start" />
         <ScrollView Grid.Column="1" MaximumHeightRequest="180">
-         <Label x:Name="DetachedModelTranslationText" FontFamily="Georgia" FontSize="18" />
+         <Grid>
+        <Label x:Name="DetachedModelTranslationText" FontFamily="Georgia" FontSize="18" />
+        <Label x:Name="DetachedModelTranslationTextHighlighted" IsVisible="False" FontFamily="Georgia" FontSize="18" />
+       </Grid>
         </ScrollView>
        </Grid>
       </VerticalStackLayout>
@@ -348,6 +369,8 @@
       <Button Grid.Column="1" Text="×" Style="{StaticResource PlayerButton}" Clicked="CloseWordPopupClicked"
        SemanticProperties.Description="Закрити пояснення слова" />
      </Grid>
+     <Label x:Name="WordTranslationGloss" BackgroundColor="#FFF0AA" FontAttributes="Bold"
+      Padding="6,2" LineBreakMode="WordWrap" IsVisible="False" />
      <Label x:Name="KnowledgeAnalysis" Style="{StaticResource ReaderMeta}" />
      <FlexLayout Wrap="Wrap" AlignItems="Center">
       <Button x:Name="OpenMeanings" Text="Словникові значення" Style="{StaticResource PlayerButton}"
@@ -395,12 +418,14 @@
       <Button Grid.Column="1" Text="×" Style="{StaticResource PlayerButton}" Clicked="CloseWordPopupClicked"
        SemanticProperties.Description="Закрити пояснення слова" />
      </Grid>
+     <Label x:Name="DetachedWordTranslationGloss" BackgroundColor="#FFF0AA" FontAttributes="Bold"
+      Padding="6,2" LineBreakMode="WordWrap" IsVisible="False" />
      <FlexLayout Wrap="Wrap" AlignItems="Center">
        <Button x:Name="DetachedAnalyzeSelection" Text="Аналіз виділення" IsVisible="False"
         Clicked="DetachedAnalyzeSelectionClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedExplainWord" Text="Пояснити з Qwen" IsVisible="False"
         Clicked="DetachedExplainWordClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
-       <Button x:Name="DetachedSaveWord" Text="Словникова картка…" IsVisible="False" Clicked="DetachedSaveWordClicked"
+       <Button x:Name="DetachedSaveWord" Text="До словника…" IsVisible="False" Clicked="DetachedSaveWordClicked"
         Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedTranslateSelection" Text="Перекласти виділення…" IsVisible="False"
         Clicked="TranslateDetachedSelectionClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />

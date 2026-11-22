@@ -997,8 +997,15 @@ pub(crate) fn normalize_ocr_input(
                     || line_breaks == 2
                         && adjacent_pdf_page(document, word_end_utf16, tail_start_utf16))
         });
+        let drop_cap = line_breaks == 1
+            && word.chars().count() == 1
+            && word.starts_with(char::is_uppercase)
+            && tail.starts_with(char::is_alphabetic)
+            && split_ocr_drop_cap(document, offset, word_end_utf16, tail_start_utf16);
         if let Some(prefix) = continued {
             normalized.push_str(prefix);
+        } else if drop_cap {
+            normalized.push_str(word);
         } else {
             normalized.push_str(word);
             if !tail.is_empty() {
@@ -1009,6 +1016,25 @@ pub(crate) fn normalize_ocr_input(
         offset = tail_start_utf16;
     }
     normalized
+}
+
+fn split_ocr_drop_cap(document: &Document, start: usize, end: usize, tail: usize) -> bool {
+    document.ocr_lines.as_ref().is_some_and(|lines| {
+        lines.windows(2).any(|pair| {
+            let [cap, body] = pair else { return false };
+            let (Some(cap_span), Some(body_span)) = (cap.source_span, body.source_span) else {
+                return false;
+            };
+            let gap = body.x - (cap.x + cap.width);
+            cap.page == body.page
+                && cap_span.start_utf16 == start
+                && cap_span.end_utf16 == end
+                && body_span.start_utf16 == tail
+                && (1.35 * body.height..=5.0 * body.height).contains(&cap.height)
+                && (-0.15 * body.height..=0.55 * body.height).contains(&gap)
+                && (cap.y - 0.20 * body.height..=cap.y + 0.85 * body.height).contains(&body.y)
+        })
+    })
 }
 
 pub(crate) fn word_hyphen(word: &str) -> Option<&str> {

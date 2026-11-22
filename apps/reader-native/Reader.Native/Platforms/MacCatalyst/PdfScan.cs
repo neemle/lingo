@@ -132,6 +132,43 @@ internal static class PdfScan
         return Render(document, page, 1800);
     });
 
+    internal static Task<(PhotoPreview Image, string Text, OcrLine[] Boxes)> ReadingPreviewAsync(
+        string path, int index, bool textGeometry) => Task.Run(() =>
+    {
+        using var pool = new NSAutoreleasePool();
+        using var document = Open(path);
+        var image = Render(document, index, 1800);
+        if (!textGeometry) return (image, "", []);
+        using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
+        var raw = page.Text ?? "";
+        var text = raw.Trim();
+        var crop = page.GetBoundsForBox(PdfDisplayBox.Crop);
+        if (text.Length == 0 || crop.Width <= 0 || crop.Height <= 0) return (image, text, []);
+        var offset = raw.Length - raw.TrimStart().Length;
+        var boxes = new List<OcrLine>();
+        foreach (System.Text.RegularExpressions.Match word in System.Text.RegularExpressions.Regex.Matches(text, @"\S+"))
+        {
+            using var selection = page.GetSelection(new NSRange(offset + word.Index, word.Length));
+            if (selection is null) continue;
+            var box = selection.GetBoundsForPage(page);
+            if (box.Width <= 0 || box.Height <= 0) continue;
+            var x = (double)((box.X - crop.X) / crop.Width);
+            var y = (double)((box.Y - crop.Y) / crop.Height);
+            var width = (double)(box.Width / crop.Width);
+            var height = (double)(box.Height / crop.Height);
+            (x, y, width, height) = ((page.Rotation % 360 + 360) % 360) switch
+            {
+                90 => (y, x, height, width),
+                180 => (1 - x - width, y, width, height),
+                270 => (1 - y - height, 1 - x - width, height, width),
+                _ => (x, 1 - y - height, width, height),
+            };
+            boxes.Add(new(word.Value, x, y, width, height, null, index,
+                SourceSpan: new(0, 0, word.Index, word.Index + word.Length)));
+        }
+        return (image, text, boxes.ToArray());
+    });
+
     internal static Task RecognizeAsync(byte[] bytes, string language, int expectedPages, int[] pendingPages,
         Action<int, OcrLine[]> pageCompleted, CancellationToken cancellation) =>
         Task.Run(() =>

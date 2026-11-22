@@ -6,60 +6,112 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage
 {
-    private bool translatingSelection;
+    private int popupTranslationRequest;
     private (string Document, string Revision, TextSelection Selection, string Target, string Text, string Source)? wordTranslation;
     private (string Target, string Text, string Source)? detachedWordTranslation;
 
-    private async void TranslateSelectionClicked(object? sender, EventArgs args)
-    {
-        if (selection is not { } currentSelection || TargetCode is not { } target ||
-            AppState.Session.Document is not { CurrentRevisionId: { } revision } document) return;
-        await ShowSelectionTranslationAsync(document.Id, document.Language, revision, target, currentSelection, null,
-            () => readingPageActive && selection == currentSelection && TargetCode == target &&
-                  AppState.Session.Document is { } active && active.Id == document.Id && active.CurrentRevisionId == revision,
-            result =>
-            {
-                Translation.Text = result.Text;
-                wordTranslation = (document.Id, revision, currentSelection, target, result.Text,
-                    result.SourceText ?? currentSelection.Text.Trim());
-            });
-    }
+    private async void TranslateSelectionClicked(object? sender, EventArgs args) =>
+        await LoadPopupTranslationAsync(detached: false);
 
-    private async void TranslateDetachedSelectionClicked(object? sender, EventArgs args)
-    {
-        if (detachedAddress is not { } address || detachedSentence?.RevisionId is not { } revision ||
-            detachedSelection is not { } currentSelection || TargetCode is not { } target) return;
-        await ShowSelectionTranslationAsync(address.Document, address.Language, revision, target, currentSelection, address.Page,
-            () => readingPageActive && ReferenceEquals(detachedAddress, address) && detachedSelection == currentSelection &&
-                  detachedSentence?.RevisionId == revision && TargetCode == target,
-            result => detachedWordTranslation = (target, result.Text, result.SourceText ?? currentSelection.Text.Trim()));
-    }
+    private async void TranslateDetachedSelectionClicked(object? sender, EventArgs args) =>
+        await LoadPopupTranslationAsync(detached: true);
 
-    private async Task ShowSelectionTranslationAsync(string id, string source, string revision, string target,
-        TextSelection selected, int? page, Func<bool> current, Action<MachineTranslation> setDraft)
+    private async Task LoadPopupTranslationAsync(bool detached)
     {
-        if (translatingSelection || AppState.Session.Busy) return;
-        translatingSelection = true;
+        var request = ++popupTranslationRequest;
+        var session = AppState.Session;
+        var label = detached ? DetachedWordTranslationGloss : WordTranslationGloss;
+        var card = detached ? DetachedWordCard : WordCard;
+        var selected = detached ? detachedSelection : selection;
+        var document = session.Document;
+        var address = detachedAddress;
+        var revision = detached ? detachedSentence?.RevisionId : document?.CurrentRevisionId;
+        var target = TargetCode;
+        var source = detached ? address?.Language : document?.Language;
+        label.IsVisible = false;
+        if (!detached) wordTranslation = null;
+        else detachedWordTranslation = null;
+        UpdatePopupTranslationHighlights();
+        if (selected is null || document is null || revision is null || target is null || target == source) return;
+
+        bool Current() => request == popupTranslationRequest && readingPageActive && card.IsVisible &&
+            TargetCode == target && session.Document?.Id == document.Id &&
+            (detached
+                ? ReferenceEquals(detachedAddress, address) && detachedSelection == selected && detachedSentence?.RevisionId == revision
+                : selection == selected && session.Document?.CurrentRevisionId == revision);
+
+        label.Text = "Перекладаємо виділене…";
+        label.IsVisible = true;
         try
         {
-            var result = await AppState.Session.TranslateSelectionAsync(id, target, revision, selected, page);
-            if (!current()) return;
+            await Task.Delay(120);
+            if (!Current()) return;
+            var result = await session.TranslateSelectionAsync(document.Id, target, revision, selected,
+                detached ? address?.Page : null);
+            if (!Current()) return;
             if (result is null)
             {
-                await DisplayAlertAsync("Офлайн-переклад", "Для цієї мовної пари потрібні мовні пакети.", "Гаразд");
+                label.Text = "Для перекладу потрібні мовні пакети.";
                 return;
             }
-            var route = result.PivotLanguage is { } pivot
-                ? DocumentLanguages.PivotRoute(source, pivot, target)
-                : DocumentLanguages.Name(target);
-            if (await DisplayAlertAsync("Машинний переклад", $"«{result.SourceText ?? selected.Text}»{Environment.NewLine}{result.Text}{Environment.NewLine}{route}",
-                "Використати як чернетку", "Закрити") && current())
-                setDraft(result);
+
+            var original = result.SourceText ?? selected.Text.Trim();
+            label.Text = result.Text;
+            if (detached) detachedWordTranslation = (target, result.Text, original);
+            else
+            {
+                wordTranslation = (document.Id, revision, selected, target, result.Text, original);
+                if (string.IsNullOrWhiteSpace(Translation.Text)) Translation.Text = result.Text;
+            }
+            UpdatePopupTranslationHighlights();
         }
         catch (Exception error)
         {
-            if (current()) await DisplayAlertAsync("Офлайн-переклад", error.Message, "Гаразд");
+            if (Current()) label.Text = error.Message;
         }
-        finally { translatingSelection = false; }
+    }
+
+    private void PopupTranslationTextChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName == nameof(Label.Text)) UpdatePopupTranslationHighlights();
+    }
+
+    private void UpdatePopupTranslationHighlights()
+    {
+        var target = TargetCode;
+        var canonicalGloss = WordCard.IsVisible && wordTranslation is { } word && word.Target == target ? word.Text : null;
+        var detachedGloss = DetachedWordCard.IsVisible && detachedWordTranslation is { } detached && detached.Target == target
+            ? detached.Text : null;
+        HighlightTranslation(SegmentTranslation, SegmentTranslationHighlighted, canonicalGloss);
+        HighlightTranslation(ModelTranslationText, ModelTranslationTextHighlighted, canonicalGloss);
+        HighlightTranslation(DetachedTranslation, DetachedTranslationHighlighted, detachedGloss);
+        HighlightTranslation(DetachedModelTranslationText, DetachedModelTranslationTextHighlighted, detachedGloss);
+    }
+
+    private static void HighlightTranslation(Label original, Label highlighted, string? gloss)
+    {
+        var text = original.Text ?? "";
+        var formatted = new FormattedString();
+        var start = 0;
+        if (!string.IsNullOrWhiteSpace(gloss))
+        {
+            var search = 0;
+            while (search <= text.Length - gloss.Length)
+            {
+                var match = text.IndexOf(gloss, search, StringComparison.OrdinalIgnoreCase);
+                if (match < 0) break;
+                var end = match + gloss.Length;
+                search = end;
+                if ((match > 0 && char.IsLetterOrDigit(text[match - 1])) ||
+                    (end < text.Length && char.IsLetterOrDigit(text[end]))) continue;
+                if (match > start) formatted.Spans.Add(new Span { Text = text[start..match] });
+                formatted.Spans.Add(new Span { Text = text[match..end], BackgroundColor = Color.FromArgb("#FFE48B") });
+                start = end;
+            }
+        }
+        if (start > 0 && start < text.Length) formatted.Spans.Add(new Span { Text = text[start..] });
+        highlighted.FormattedText = start > 0 ? formatted : null;
+        original.IsVisible = start == 0;
+        highlighted.IsVisible = start > 0;
     }
 }

@@ -74,8 +74,11 @@ impl Document {
     pub(crate) fn paragraph_for_sentence(&self, sentence: &crate::Sentence) -> Range<usize> {
         // French OCR can leave a closing quote from the previous block at the
         // start of a sentence. Anchor the paragraph to the sentence itself.
-        let content = sentence.text.find(char::is_alphanumeric).unwrap_or(0);
-        self.paragraph_utf8_range(sentence.start_utf8 + content)
+        let first = sentence.text.find(char::is_alphanumeric).unwrap_or(0);
+        let last = sentence.text.rfind(char::is_alphanumeric).unwrap_or(first);
+        let start = self.paragraph_utf8_range(sentence.start_utf8 + first).start;
+        let end = self.paragraph_utf8_range(sentence.start_utf8 + last).end;
+        start..end.max(sentence.end_utf8)
     }
 
     /// Return the enclosing paragraph or heading in canonical UTF-8 offsets.

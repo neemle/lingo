@@ -72,6 +72,7 @@ public partial class ReadingPage
             var sentence = current.Sentence;
             DetachedPdfText.HighlightStart = sentence.StartUtf16;
             DetachedPdfText.HighlightLength = sentence.EndUtf16 - sentence.StartUtf16;
+            UpdateInlinePdfHighlight();
             DetachedPdfText.RevealOffset(sentence.StartUtf16);
             DetachedSentenceStatus.Text = $"Речення {current.Position + 1} із {current.Total}";
         }
@@ -103,13 +104,15 @@ public partial class ReadingPage
         return next >= 0 && next < current.Total ? LoadDetachedSentenceAsync(address, next) : Task.CompletedTask;
     }
 
-    private void DetachedPdfSelected(object? sender, TextSelection selected)
+    private void DetachedPdfSelected(object? sender, TextSelection selected) => ShowDetachedWord(selected);
+
+    private void ShowDetachedWord(TextSelection selected, (VisualElement View, Point Point)? pdfAnchor = null)
     {
         if (detachedAddress is null || loadingDetachedSentence) return;
         SetDetachedSelection(selected);
         UpdateDetachedControls();
         DetachedSelectedWord.Text = selected.Text;
-        ShowWordPopup(DetachedPdfText, selected, DetachedWordCard);
+        ShowWordPopup(DetachedPdfText, selected, DetachedWordCard, pdfAnchor);
     }
 
     private void SetDetachedSelection(TextSelection? selected)

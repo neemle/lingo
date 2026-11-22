@@ -363,6 +363,7 @@ public partial class ReadingPage
         if (page is { State: "detached" } && pdfSnapshot is { } document)
             ShowDetachedPdfPage(document, page);
         UpdatePdfPageButtons();
+        if (inlinePdf) _ = ShowInlinePdfAsync();
     }
 
     private void ShowPdfPageNotice(string? message, string? detachedText = null)

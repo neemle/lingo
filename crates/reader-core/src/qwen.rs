@@ -222,6 +222,19 @@ pub struct SentenceReviewResult {
 
 pub struct ReviewSentenceJob(Vec<HintWork<SentenceReview>>);
 
+#[derive(Clone, Copy)]
+enum HintCacheMode {
+    ReadOnly,
+    PreferCached,
+    Refresh,
+}
+
+impl From<bool> for HintCacheMode {
+    fn from(cached_only: bool) -> Self {
+        if cached_only { Self::ReadOnly } else { Self::PreferCached }
+    }
+}
+
 enum HintWork<T> {
     Cached(Option<T>),
     Generate {
@@ -393,7 +406,7 @@ impl Store {
             next.as_deref(),
         )?;
         let work = examples.into_iter().map(|example| self.prepare_hint_work(
-            model, document, "qwen-sentence-review-v1", REVIEW_SYSTEM, example, cached_only,
+            model, document, "qwen-sentence-review-v1", REVIEW_SYSTEM, example, cached_only.into(),
         )).collect::<Result<Vec<_>>>()?;
         Ok(ReviewSentenceJob(work))
     }
@@ -405,16 +418,18 @@ impl Store {
         version: &str,
         prompt: &str,
         example: String,
-        cached_only: bool,
+        cache_mode: HintCacheMode,
     ) -> Result<HintWork<T>> {
         let package = self.prepare_optional_model(model)?;
         let identity =
             serde_json::to_vec(&(version, model, package.revision(), prompt, END, &example))
                 .map_err(|error| error.to_string())?;
         let key: [u8; 32] = Sha256::digest(identity).into();
-        let cached = annotation_cache::read_model_hint(&self.connection, document, &key)?;
-        if cached_only || cached.is_some() {
-            return Ok(HintWork::Cached(cached));
+        if !matches!(cache_mode, HintCacheMode::Refresh) {
+            let cached = annotation_cache::read_model_hint(&self.connection, document, &key)?;
+            if matches!(cache_mode, HintCacheMode::ReadOnly) || cached.is_some() {
+                return Ok(HintWork::Cached(cached));
+            }
         }
         let database = self
             .connection
@@ -592,7 +607,7 @@ impl Store {
                     };
                     let encoded = serde_json::to_string(&selected).map_err(|error| error.to_string())?;
                     let work = self.prepare_hint_work(model, document, "qwen-dictionary-sense-v1",
-                        DICTIONARY_SYSTEM, encoded, cached_only)?;
+                        DICTIONARY_SYSTEM, encoded, cached_only.into())?;
                     return Ok(ExplainWordJob { work, word, genitive_preposition, system: DICTIONARY_SYSTEM,
                         dictionary, glosses });
                 }
@@ -620,7 +635,7 @@ impl Store {
         let example = encoded.map_err(|error| error.to_string())?;
         let version = if dictionary { "qwen-unmatched-dictionary-v1" } else { version };
         let work =
-            self.prepare_hint_work(model, document, version, system, example, cached_only)?;
+            self.prepare_hint_work(model, document, version, system, example, cached_only.into())?;
         Ok(ExplainWordJob {
             work,
             word,
@@ -1097,6 +1112,11 @@ fn context_parameters(gpu: bool) -> LlamaContextParams {
         .with_n_threads_batch(threads)
 }
 
+enum GenerationMode {
+    Hint,
+    Passage { regenerate: bool },
+}
+
 fn generate(
     model: &LlamaModel,
     context: &mut llama_cpp_2::context::LlamaContext<'_>,
@@ -1105,12 +1125,36 @@ fn generate(
     grammar: &str,
     check: impl Fn() -> Result<()>,
 ) -> Result<Vec<u8>> {
+    generate_in_mode(
+        model,
+        context,
+        system,
+        example,
+        grammar,
+        GenerationMode::Hint,
+        check,
+    )
+}
+
+fn generate_in_mode(
+    model: &LlamaModel,
+    context: &mut llama_cpp_2::context::LlamaContext<'_>,
+    system: &str,
+    example: &str,
+    grammar: &str,
+    mode: GenerationMode,
+    check: impl Fn() -> Result<()>,
+) -> Result<Vec<u8>> {
+    let response_tokens = match mode {
+        GenerationMode::Hint => RESPONSE_TOKENS,
+        GenerationMode::Passage { .. } => 224,
+    };
     let vocab = model.vocab();
     let mut tokens = vocab.tokenize(system.as_bytes(), false, true);
     // The selected text is tokenized independently without interpreting role markers.
     tokens.extend(vocab.tokenize(example.as_bytes(), false, false));
     tokens.extend(vocab.tokenize(END.as_bytes(), false, true));
-    if tokens.len() + RESPONSE_TOKENS > CONTEXT_TOKENS as usize {
+    if tokens.len() + response_tokens > CONTEXT_TOKENS as usize {
         return Err("Речення задовге для локального пояснення.".into());
     }
     let mut batch = LlamaBatch::new(BATCH, 1);
@@ -1126,9 +1170,23 @@ fn generate(
         context.decode(&mut batch).map_err(runtime_error)?;
     }
     let grammar = LlamaSampler::grammar(model, grammar, "root").map_err(runtime_error)?;
-    let mut sampler = LlamaSampler::chain_simple([grammar, LlamaSampler::greedy()]);
+    let mut sampler = match mode {
+        GenerationMode::Hint => LlamaSampler::chain_simple([grammar, LlamaSampler::greedy()]),
+        GenerationMode::Passage { regenerate: true } => LlamaSampler::chain_simple([
+            grammar,
+            LlamaSampler::penalties(model.n_vocab() as i32, 64, 1.15, 0.18, 0.0),
+            LlamaSampler::top_k(25),
+            LlamaSampler::temp(0.45),
+            LlamaSampler::dist(u32::MAX),
+        ]),
+        GenerationMode::Passage { regenerate: false } => LlamaSampler::chain_simple([
+            grammar,
+            LlamaSampler::penalties(model.n_vocab() as i32, 64, 1.15, 0.18, 0.0),
+            LlamaSampler::greedy(),
+        ]),
+    };
     let mut output = Vec::new();
-    for position in tokens.len()..tokens.len() + RESPONSE_TOKENS {
+    for position in tokens.len()..tokens.len() + response_tokens {
         check()?;
         let token = sampler.sample(context, -1);
         if vocab.is_eog(token) {

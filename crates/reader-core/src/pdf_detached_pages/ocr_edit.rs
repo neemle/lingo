@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 #[serde(rename_all = "camelCase")]
 pub struct DetachedPdfOcrPage {
     revision: String,
-    lines: Vec<ocr::OcrLine>,
+    pub(crate) lines: Vec<ocr::OcrLine>,
 }
 
 impl Store {
