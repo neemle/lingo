@@ -4,6 +4,29 @@ namespace Reader.Presentation;
 
 public static class SourceRanges
 {
+    public static (string Text, Action<int, int>? Boundary) PrepareSpeech(string source, Action<int, int>? boundary)
+    {
+        // AVSpeechSynthesizer can report offsets in composed text even when its input is decomposed.
+        var spoken = source.Normalize();
+        if (boundary is null || spoken == source) return (spoken, boundary);
+
+        var originalStarts = StringInfo.ParseCombiningCharacters(source);
+        var spokenStarts = StringInfo.ParseCombiningCharacters(spoken);
+        if (originalStarts.Length != spokenStarts.Length) return (spoken, null);
+
+        return (spoken, (start, length) =>
+        {
+            if (start < 0 || length <= 0 || start > spoken.Length - length) return;
+            var first = Array.BinarySearch(spokenStarts, start);
+            if (first < 0) first = ~first - 1;
+            var after = Array.BinarySearch(spokenStarts, start + length);
+            if (after < 0) after = ~after;
+            var originalStart = originalStarts[first];
+            var originalEnd = after < originalStarts.Length ? originalStarts[after] : source.Length;
+            boundary(originalStart, originalEnd - originalStart);
+        });
+    }
+
     public static TextSelection? Selection(string source, int start, int length)
     {
         if (start < 0 || length <= 0 || start > source.Length - length) return null;

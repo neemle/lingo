@@ -22,7 +22,8 @@ public sealed class LocalSpeech : IDisposable
         var voice = PreferredVoice;
         return playback.PlayAsync(async token =>
         {
-            await speech.SpeakAsync(text, language, voice, rate, boundary, token);
+            var input = SourceRanges.PrepareSpeech(text, boundary);
+            await speech.SpeakAsync(input.Text, language, voice, rate, input.Boundary, token);
             return CompletedStatus;
         });
     }

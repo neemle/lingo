@@ -9,12 +9,14 @@
   <controls:NativeReaderView Grid.Row="1" x:Name="ProbeText" SourceSelected="Selected" />
   <Editor Grid.Row="2" x:Name="Result" HeightRequest="150" IsReadOnly="True"
    Text="Подій ще немає. Цей екран самостійно не оголошує перевірку успішною." />
-  <HorizontalStackLayout Grid.Row="3" Spacing="12">
-   <Button Text="Голос EN / повторити" Clicked="SpeakClicked" />
-   <Button Text="Стоп" Clicked="StopClicked" />
-   <Slider x:Name="Rate" Minimum="0.5" Maximum="1.5" Value="1" WidthRequest="180"
+  <FlexLayout Grid.Row="3" Wrap="Wrap" AlignItems="Center">
+   <Picker x:Name="VoicePicker" Title="Голос EN" WidthRequest="180" Margin="0,0,12,4"
+    SemanticProperties.Description="Системний голос для перевірки меж слів" />
+   <Button x:Name="PlaySpeech" Text="Озвучити" Clicked="SpeakClicked" Margin="0,0,12,4" />
+   <Button Text="Стоп" Clicked="StopClicked" Margin="0,0,12,4" />
+   <Slider x:Name="Rate" Minimum="0.5" Maximum="1.5" Value="1" WidthRequest="180" Margin="0,0,0,4"
     SemanticProperties.Description="Темп голосу" />
-  </HorizontalStackLayout>
-  <Label Grid.Row="4" x:Name="SpeechResult" Text="Нативний запуск і офлайн-голос потребують перевірки на кожній ОС." />
+  </FlexLayout>
+  <Label Grid.Row="4" x:Name="SpeechResult" Text="Озвучте приклад, щоб побачити межі слів системного голосу." />
  </Grid>
 </ContentPage>
