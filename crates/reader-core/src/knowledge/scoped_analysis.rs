@@ -115,6 +115,66 @@ struct SyntaxCandidate {
     observations: u32,
 }
 
+struct BoundaryAnalysis {
+    text: String,
+    visible_start: usize,
+    projected: BTreeMap<usize, (usize, std::ops::Range<usize>)>,
+    original: BTreeMap<usize, usize>,
+}
+
+impl BoundaryAnalysis {
+    fn read(
+        store: &Store, id: &str, page: u16, sentences: &[Sentence], sentence: &Sentence,
+    ) -> Result<Option<Self>> {
+        use crate::pdf_detached_pages::word_break;
+        let (previous, next) = word_break::neighboring_fragments(
+            store, id, page, None, sentences.first().filter(|first| first.id == sentence.id),
+            sentences.last().filter(|last| last.id == sentence.id),
+        )?;
+        let Some(joined) = word_break::join_fragments(&sentence.text, previous.as_deref(), next.as_deref()) else {
+            return Ok(None);
+        };
+        let mut projected = BTreeMap::new();
+        let mut original = BTreeMap::new();
+        let mut joined_words = word_parts(&joined.text).peekable();
+        for (byte, offset, _) in word_parts(&sentence.text) {
+            let position = joined.center.start + byte;
+            while joined_words.peek().is_some_and(|&(start, _, word)| start + word.len() <= position) {
+                joined_words.next();
+            }
+            if let Some(&(start, projected_offset, word)) = joined_words.peek().filter(|&&(start, _, _)| start <= position) {
+                projected.insert(offset, (projected_offset, start..start + word.len()));
+                original.insert(projected_offset, offset);
+            }
+        }
+        drop(joined_words);
+        Ok(Some(Self { text: joined.text, visible_start: joined.center.start, projected, original }))
+    }
+
+    fn project_word(&self, offset: usize) -> Option<(usize, &str)> {
+        self.projected.get(&offset).map(|(offset, span)| (*offset, &self.text[span.clone()]))
+    }
+
+    fn original_offset(&self, offset: usize) -> Option<usize> {
+        self.original.get(&offset).copied()
+    }
+
+    fn localize_lookup(&self, lookup: &mut WordLookup) {
+        lookup.expressions.retain_mut(|expression| {
+            let Some(starts) = expression.part_starts_utf16.iter()
+                .map(|&offset| self.original_offset(offset)).collect::<Option<Vec<_>>>()
+            else { return false; };
+            expression.part_starts_utf16 = starts;
+            true
+        });
+        lookup.syntax_evidence.retain_mut(|edge| {
+            let Some(offset) = self.original_offset(edge.other_start_utf16) else { return false; };
+            edge.other_start_utf16 = offset;
+            true
+        });
+    }
+}
+
 impl Store {
     pub fn analyze_linguistics(
         &self,
@@ -127,7 +187,7 @@ impl Store {
         let sentence = analysis_sentence(&document, sentence_id, expected_revision)?;
         let index = self.open_knowledge_index(&document.language)?;
         self.analyze_scope(
-            &document.language, sentence, expected_revision, &scope, versioned_index(&index)?,
+            &document.language, sentence, expected_revision, &scope, versioned_index(&index)?, None,
         )
     }
 
@@ -144,7 +204,7 @@ impl Store {
         let index = self.open_knowledge_index(language)?;
         let lexical = lexicon::index_identity(&self.knowledge_directory, language);
         self.cached_scope(
-            (&document.id, language), sentence, expected_revision, &scope, versioned_index(&index)?, lexical,
+            (&document.id, language), sentence, expected_revision, &scope, versioned_index(&index)?, lexical, None,
         )
     }
 
@@ -171,9 +231,10 @@ impl Store {
         };
         let index = self.open_knowledge_index(&cached.language)?;
         let lexical = lexicon::index_identity(&self.knowledge_directory, &cached.language);
+        let boundary = BoundaryAnalysis::read(self, document_id, page, &cached.sentences, sentence)?;
         self.cached_scope(
             (document_id, &cached.language), sentence, &cached.revision, &scope,
-            versioned_index(&index)?, lexical,
+            versioned_index(&index)?, lexical, boundary.as_ref(),
         )
     }
 
@@ -183,8 +244,20 @@ impl Store {
         let cached = self.detached_pdf_sentences(document_id, page)?
             .ok_or("Текст сторінки PDF недоступний.")?;
         let (sentence, scope) = resolve_text_selection(&cached.sentences, start_utf16, selected)?;
+        let boundary = BoundaryAnalysis::read(self, document_id, page, &cached.sentences, sentence)?;
         let (word, offset) = match scope {
             AnalysisScope::Word { start_utf16 } => {
+                if let Some(boundary) = &boundary {
+                    if let Some((offset, word)) = boundary.project_word(start_utf16) {
+                        let context = WordContext::new(boundary.text.clone(), offset);
+                        let mut lookup = self.lookup_word(&cached.language, word, Some(&context))?;
+                        if let Some(lookup) = &mut lookup {
+                            boundary.localize_lookup(lookup);
+                            lookup.bind_expression_tokens(|start| token_id(&cached.revision, &sentence.id, start));
+                        }
+                        return Ok(lookup);
+                    }
+                }
                 let (_, _, word) = word_parts(&sentence.text).find(|(_, offset, _)| *offset == start_utf16)
                     .ok_or("Слово не знайдено у виділенні PDF.")?;
                 (word, start_utf16)
@@ -213,17 +286,13 @@ impl Store {
             return Err("Текст сторінки PDF змінився. Виділіть фрагмент знову.".into());
         }
         let (sentence, _) = resolve_text_selection(&cached.sentences, input.start_utf16, &input.selected_text)?;
-        let word = if let Some(expected) = input.reconstructed_text.as_deref() {
-            let (text, _) = crate::pdf_detached_pages::word_break::project_selection(
-                self, (document_id, page), &cached.sentences, sentence, input.start_utf16, &input.selected_text,
-            )?;
-            if text != expected {
-                return Err("Текст сусідньої сторінки змінився. Перекладіть виділення знову.".into());
-            }
-            text.into_owned()
-        } else {
-            input.selected_text
-        };
+        let (word, _) = crate::pdf_detached_pages::word_break::project_selection(
+            self, (document_id, page), &cached.sentences, sentence, input.start_utf16, &input.selected_text,
+        )?;
+        if input.reconstructed_text.as_deref().is_some_and(|expected| word != expected) {
+            return Err("Текст сусідньої сторінки змінився. Перекладіть виділення знову.".into());
+        }
+        let word = word.into_owned();
         let anchor = crate::dictionary_transfer::DictionarySentenceAnchor {
             sentence_id: sentence.id.clone(),
             revision_id: cached.revision,
@@ -286,9 +355,11 @@ impl Store {
         let lookup_index = versioned_index(&index)?;
         let lexical = lexicon::index_identity(&self.knowledge_directory, language);
         if lookup_index.is_some() || lexical.is_some() {
+            let boundary = page.map(|page| BoundaryAnalysis::read(self, document_id, page, &sentences, sentence))
+                .transpose()?.flatten();
             self.cached_scope(
                 (document_id, language), sentence, expected_revision, &AnalysisScope::Sentence { start: 0 },
-                lookup_index, lexical,
+                lookup_index, lexical, boundary.as_ref(),
             )?;
         }
         Ok(())
@@ -302,6 +373,7 @@ impl Store {
         scope: &AnalysisScope,
         lookup_index: Option<(&Pack, &Connection, u32)>,
         lexical: Option<(&str, u32)>,
+        boundary: Option<&BoundaryAnalysis>,
     ) -> Result<Value> {
         let (document_id, language) = source;
         let grammar = lookup_index.map(|(pack, _, version)| (pack.sha256, version));
@@ -309,16 +381,20 @@ impl Store {
             AnalysisScope::Sentence { .. } => SENTENCE_ANNOTATION_VERSION,
             _ => SELECTION_ANNOTATION_VERSION,
         };
-        let address = serde_json::to_vec(&(
+        let mut address = serde_json::to_vec(&(
             version, revision, &sentence.id, language, grammar, lexical, scope,
         ))
         .map_err(|error| error.to_string())?;
+        if let Some(boundary) = boundary {
+            address.extend_from_slice(&(boundary.visible_start as u64).to_le_bytes());
+            address.extend_from_slice(boundary.text.as_bytes());
+        }
         let key = Sha256::digest(address);
         if let Some(annotation) = annotation_cache::read(&self.connection, document_id, key.as_ref()) {
             return Ok(annotation);
         }
         let analysis =
-            self.analyze_scope(language, sentence, revision, scope, lookup_index)?;
+            self.analyze_scope(language, sentence, revision, scope, lookup_index, boundary)?;
         let annotation = serde_json::to_value(analysis).map_err(|error| error.to_string())?;
         if lexicon::index_identity(&self.knowledge_directory, language) == lexical {
             annotation_cache::write(&self.connection, document_id, key.as_ref(), &annotation);
@@ -333,6 +409,7 @@ impl Store {
         revision: &str,
         scope: &AnalysisScope,
         lookup_index: Option<(&Pack, &Connection, u32)>,
+        boundary: Option<&BoundaryAnalysis>,
     ) -> Result<LinguisticAnalysis> {
         let (selected, next_start) = select_words(&sentence.text, scope)?;
         let sentence_id = sentence.id.as_str();
@@ -340,16 +417,26 @@ impl Store {
             pack.describe(lookup_index.map_or(0, |(_, _, version)| version))
         });
         let id_at = |offset| token_id(revision, sentence_id, offset);
-        let syntax_parse = match (scope, lookup_index) {
-            (AnalysisScope::Sentence { start: 0 }, Some((_, db, version))) if version >= 5 => {
-                Some(syntax_parse::analyze(db, &sentence.text, id_at)?)
+        let analysis_text = boundary.map_or(sentence.text.as_str(), |boundary| boundary.text.as_str());
+        let analysis_id_at = |offset| {
+            if let Some(boundary) = boundary {
+                boundary.original_offset(offset).map_or_else(
+                    || format!("{revision}:{sentence_id}:context:{offset}"),
+                    id_at,
+                )
+            } else {
+                id_at(offset)
             }
-            (AnalysisScope::Word { .. } | AnalysisScope::Expression { .. }, Some((_, db, version)))
+        };
+        let syntax_parse = match (scope, lookup_index) {
+            (AnalysisScope::Sentence { start: 0 } | AnalysisScope::Word { .. } | AnalysisScope::Expression { .. }, Some((_, db, version)))
                 if version >= 5 =>
             {
-                let mut parse = syntax_parse::analyze(db, &sentence.text, id_at)?;
-                let selected_ids: Vec<_> = selected.iter().map(|&(_, offset, _)| id_at(offset)).collect();
-                parse.retain_scope(&selected_ids);
+                let mut parse = syntax_parse::analyze(db, analysis_text, analysis_id_at)?;
+                if boundary.is_some() || !matches!(scope, AnalysisScope::Sentence { .. }) {
+                    let selected_ids: Vec<_> = selected.iter().map(|&(_, offset, _)| id_at(offset)).collect();
+                    parse.retain_scope(&selected_ids);
+                }
                 Some(parse)
             }
             _ => None,
@@ -361,9 +448,11 @@ impl Store {
         let mut words = Vec::with_capacity(selected.len());
         let mut expressions = BTreeMap::new();
         let mut dependencies = BTreeMap::new();
-        let mut context = WordContext::new(sentence.text.clone(), 0);
-        for (byte, offset, text) in selected {
-            context.start_utf16 = offset;
+        let mut context = WordContext::new(analysis_text.to_owned(), 0);
+        for (byte, offset, visible_text) in selected {
+            let (analysis_offset, text) = boundary.and_then(|boundary| boundary.project_word(offset))
+                .unwrap_or((offset, visible_text));
+            context.start_utf16 = analysis_offset;
             let alphabetic = text.chars().any(char::is_alphabetic);
             let mut spelling_status = if alphabetic {
                 SpellingStatus::Unavailable
@@ -376,6 +465,9 @@ impl Store {
                 if let Some(mut lookup) =
                     self.lookup_word_with_index(language, text, Some(&context), lookup_index)?
                 {
+                    if let Some(boundary) = boundary {
+                        boundary.localize_lookup(&mut lookup);
+                    }
                     lookup.bind_expression_tokens(id_at);
                     spelling_status = if !lookup.analyses.is_empty() || !lookup.meanings.is_empty() {
                         SpellingStatus::Attested
@@ -424,9 +516,9 @@ impl Store {
                 text: text.to_owned(),
                 span: OcrSpan {
                     start_utf8: sentence.start_utf8 + byte,
-                    end_utf8: sentence.start_utf8 + byte + text.len(),
+                    end_utf8: sentence.start_utf8 + byte + visible_text.len(),
                     start_utf16: sentence.start_utf16 + offset,
-                    end_utf16: sentence.start_utf16 + offset + text.encode_utf16().count(),
+                    end_utf16: sentence.start_utf16 + offset + visible_text.encode_utf16().count(),
                 },
                 sentence_start_utf16: offset,
                 morphology,
