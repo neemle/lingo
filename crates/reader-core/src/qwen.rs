@@ -26,9 +26,10 @@ use std::{
 
 pub(crate) const HINT_GENERATION_MODEL: &str = "qwen-2b";
 
-// CPU maps the 1.2 GiB quantized model. Metal needs additional unified memory for offload.
+// The CPU uses reclaimable file-backed weights. Budget its anonymous context and
+// scratch buffers separately from Metal's unified-memory buffers.
 pub(crate) const CPU_BUDGET: ModelBudget = ModelBudget {
-    working_mib: 1536,
+    working_mib: 1024,
     minimum_total_mib: 6144,
 };
 const METAL_BUDGET: ModelBudget = ModelBudget {
@@ -957,7 +958,7 @@ fn backend() -> Result<&'static LlamaBackend> {
 }
 
 fn load_model(backend: &LlamaBackend, path: &Path, layers: u32) -> Result<LlamaModel> {
-    let params = LlamaModelParams::default().with_n_gpu_layers(layers);
+    let params = LlamaModelParams::default().with_use_mmap(true).with_n_gpu_layers(layers);
     LlamaModel::load_from_file(backend, path, &params).map_err(runtime_error)
 }
 
