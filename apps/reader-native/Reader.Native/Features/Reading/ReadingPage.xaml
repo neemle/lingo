@@ -243,7 +243,7 @@
        Clicked="OpenMeaningsClicked" IsVisible="False" Margin="0,0,7,0" />
       <Button x:Name="OpenSyntax" Text="Синтаксис" Style="{StaticResource PlayerButton}"
        Clicked="OpenSyntaxClicked" IsVisible="False" Margin="0,0,7,0" />
-      <Button x:Name="OpenSpelling" Text="Правопис" Style="{StaticResource PlayerButton}"
+      <Button x:Name="OpenSpelling" Text="Перевірка слова…" Style="{StaticResource PlayerButton}"
        Clicked="OpenSpellingClicked" IsVisible="False" Margin="0,0,7,0" />
       <Button x:Name="OpenExpressionAnalysis" Text="Аналіз виразу" Style="{StaticResource PlayerButton}"
        Clicked="OpenExpressionAnalysisClicked" IsVisible="False" Margin="0,0,7,0" />

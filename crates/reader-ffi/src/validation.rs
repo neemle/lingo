@@ -183,8 +183,10 @@ fn validate(command: &Command) -> Result<()> {
         {
             Err(Error::new("invalid_argument", "Invalid reading address"))
         }
-        Command::ReviewSentence { model, document, sentence, .. }
-            if model.len() > 32 || !valid_token_address(document, sentence) =>
+        Command::ReviewSentence { model, document, sentence, focus, revision_id, .. }
+            if model.len() > 32 || !valid_token_address(document, sentence.as_deref().unwrap_or("selection"))
+                || revision_id.as_ref().is_some_and(|id| id.len() != 64 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+                || (sentence.is_none() && !matches!(focus, Some(reader_core::qwen::ReviewFocus::Selection { .. }))) =>
         {
             Err(Error::new("invalid_argument", "Invalid local sentence review request"))
         }

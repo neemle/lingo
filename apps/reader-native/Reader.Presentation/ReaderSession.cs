@@ -307,6 +307,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<WordLookup?> LookupSentenceTokenAsync(string id, string sentenceId, string revisionId, int startUtf16) =>
         Task.Run(() => client.LookupSentenceToken(id, sentenceId, revisionId, startUtf16));
 
+    public Task<LinguisticAnalysis> AnalyzeWordAsync(string id, string sentenceId, string revisionId, int startUtf16) =>
+        Task.Run(() => client.AnalyzeWord(id, sentenceId, revisionId, startUtf16));
+
     public Task<LinguisticAnalysis> AnalyzeSentenceAsync(string id, string sentenceId, string revisionId, int start) =>
         Task.Run(() => client.AnalyzeSentence(id, sentenceId, revisionId, start));
 
@@ -389,8 +392,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         return Read();
     });
 
-    public Task<SentenceReview> ReviewSentenceAsync(string model, string document, int? page, string sentence) =>
-        Task.Run(() => client.ReviewSentence(model, document, page, sentence));
+    public Task<SentenceReview> ReviewSentenceAsync(string model, string document, int? page, string? sentence,
+        object? focus = null, string? revisionId = null) =>
+        Task.Run(() => client.ReviewSentence(model, document, page, sentence, focus, revisionId));
 
     public Task<WordExplanation> ExplainWordAsync(string model, string document, string sentence, string word) =>
         Task.Run(() => client.ExplainWord(model, document, sentence, word));

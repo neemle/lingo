@@ -118,8 +118,10 @@ public partial class ReadingPage
     {
         if (!DetachedAnalyzeSelection.IsEnabled || detachedAddress is not { } address || detachedSelection is not { } selected) return;
         var session = AppState.Session;
-        await ShowAnalysisPageAsync("Аналіз виділення", selected.Text,
-            _ => session.AnalyzeDetachedPdfSelectionAsync(address.Document, address.Page, selected));
+        await ShowAnalysisPageAsync("Перевірка виділення", selected.Text,
+            _ => session.AnalyzeDetachedPdfSelectionAsync(address.Document, address.Page, selected),
+            model => session.ReviewSentenceAsync(model, address.Document, address.Page, null,
+                new { kind = "selection", startUtf16 = selected.StartUtf16, text = selected.Text }));
     }
 
     private async void DetachedSaveWordClicked(object? sender, EventArgs args)

@@ -421,7 +421,7 @@ public partial class ReadingPage : ContentPage
         SelectedWord.Text = selected.Text;
         ShowMeanings(null);
         ShowLocalSyntax(null);
-        ShowSpelling(null);
+        OpenSpelling.IsVisible = !selected.Text.Any(char.IsWhiteSpace);
         ShowExpressionOptions(null, selected);
         KnowledgeAnalysis.Text = "Пошук у мовному пакеті…";
         WordCard.IsVisible = true;
@@ -458,7 +458,6 @@ public partial class ReadingPage : ContentPage
                 || !WordCard.IsVisible) return;
             ShowMeanings(lookup);
             ShowLocalSyntax(lookup);
-            ShowSpelling(lookup);
             ShowExpressionOptions(lookup, selected);
             if (lookup is null)
             {

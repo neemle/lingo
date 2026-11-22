@@ -340,7 +340,10 @@ pub enum Command {
         model: String,
         document: String,
         page: Option<u16>,
-        sentence: String,
+        sentence: Option<String>,
+        focus: Option<reader_core::qwen::ReviewFocus>,
+        #[serde(rename = "revisionId")]
+        revision_id: Option<String>,
     },
     ExplainWord {
         model: String,

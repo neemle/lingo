@@ -19,6 +19,7 @@ mod scoped_analysis;
 mod syntax;
 mod syntax_parse;
 
+pub(crate) use scoped_analysis::{detached_selection, select_words};
 pub use scoped_analysis::{AnalysisScope, DetachedPageAnalysis, DetachedVocabularyInput, LinguisticAnalysis};
 
 pub use lexicon::{LexicalPackage, LexicalPackageInstall, WordMeaning};

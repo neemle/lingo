@@ -389,7 +389,7 @@ impl Store {
     }
 }
 
-fn detached_selection<'a>(
+pub(crate) fn detached_selection<'a>(
     sentences: &'a [Sentence], start_utf16: usize, selected: &str,
 ) -> Result<(&'a Sentence, AnalysisScope)> {
     const MAX_SELECTION_BYTES: usize = 4096;
@@ -442,9 +442,9 @@ fn analysis_sentence<'a>(
     find_sentence(document, sentence_id)
 }
 
-type WordPart<'a> = (usize, usize, &'a str);
+pub(crate) type WordPart<'a> = (usize, usize, &'a str);
 
-fn select_words<'a>(
+pub(crate) fn select_words<'a>(
     sentence: &'a str, scope: &AnalysisScope,
 ) -> Result<(Vec<WordPart<'a>>, Option<usize>)> {
     if let AnalysisScope::Sentence { start } = scope {

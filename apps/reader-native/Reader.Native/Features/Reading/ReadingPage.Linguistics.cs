@@ -86,7 +86,7 @@ public partial class ReadingPage
             || session.Sentence is not { } sentence) return;
         await ShowAnalysisPageAsync("Перевірка речення", sentence.Text,
             start => session.AnalyzeSentenceAsync(document.Id, sentence.Id, revision, start),
-            model => session.ReviewSentenceAsync(model, document.Id, null, sentence.Id));
+            model => session.ReviewSentenceAsync(model, document.Id, null, sentence.Id, revisionId: revision));
     }
 
     private async void OpenExpressionAnalysisClicked(object? sender, EventArgs args)
@@ -120,8 +120,10 @@ public partial class ReadingPage
                 if (index < 0 || !AnalysisScopeIsCurrent(document, sentence, selected)) return;
                 choice = choices[index];
             }
-            await ShowAnalysisPageAsync("Аналіз виразу", choice.Text,
-                _ => session.AnalyzeExpressionAsync(document.Id, sentence.Id, revision, choice.Members));
+            await ShowAnalysisPageAsync("Перевірка виразу", choice.Text,
+                _ => session.AnalyzeExpressionAsync(document.Id, sentence.Id, revision, choice.Members),
+                model => session.ReviewSentenceAsync(model, document.Id, null, sentence.Id,
+                    new { kind = "expression", memberStartsUtf16 = choice.Members }, revision));
         }
         catch (Exception error)
         {
@@ -169,7 +171,7 @@ public partial class ReadingPage
             stack.Children.Add(close);
             if (review is not null)
             {
-                var check = new Button { Text = "Перевірити речення з Qwen", HorizontalOptions = LayoutOptions.Start };
+                var check = new Button { Text = "Перевірити з Qwen", HorizontalOptions = LayoutOptions.Start };
                 var hints = new Label { IsVisible = false };
                 check.Clicked += async (_, _) => await ReviewLocallyAsync(review, check, hints);
                 stack.Children.Add(check);
@@ -201,7 +203,7 @@ public partial class ReadingPage
                         : "Для встановлених моделей Qwen зараз бракує пам’яті.";
                     return;
                 }
-                hints.Text = $"{model.Name} перевіряє речення…";
+                hints.Text = $"{model.Name} перевіряє текст…";
                 var result = await review(model.Id);
                 var notes = new List<string> { $"Підказки {model.Name}" };
                 if (result.Spelling is { } spelling) notes.Add($"Правопис · {spelling}");
@@ -275,7 +277,10 @@ public partial class ReadingPage
                 + (reading.Features.Length == 0 ? "" : $" · {reading.Features.Replace("|", ", ")}"));
             var spell = word.SpellingStatus switch
             {
-                "suggested" => "Можливий правопис · " + string.Join(", ", word.SpellingSuggestions.Select(entry => entry.Replacement)),
+                "suggested" => string.Join(Environment.NewLine, word.SpellingSuggestions.Select(entry =>
+                    $"«{entry.Replacement}» · {(entry.HighConfidence ? "Висока впевненість" : "Можливий варіант")}" +
+                    $"{Environment.NewLine}У корпусі · {entry.Observations}, з попереднім словом · {entry.PreviousObservations}, " +
+                    $"з наступним словом · {entry.NextObservations}")),
                 "unattested" => "Словоформа відсутня в доступному корпусі",
                 _ => "",
             };

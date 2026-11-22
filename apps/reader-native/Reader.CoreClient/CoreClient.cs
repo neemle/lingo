@@ -251,6 +251,9 @@ public sealed class CoreClient : IDisposable
     public SentenceTokenPage SentenceTokens(string id, string sentenceId, int start) =>
         Call<SentenceTokenPage>(new { version = 1, operation = "sentence_tokens", id, sentenceId, start });
 
+    public LinguisticAnalysis AnalyzeWord(string id, string sentenceId, string revisionId, int startUtf16) =>
+        AnalyzeLinguistics(id, sentenceId, revisionId, new { kind = "word", startUtf16 });
+
     public LinguisticAnalysis AnalyzeSentence(string id, string sentenceId, string revisionId, int start) =>
         AnalyzeLinguistics(id, sentenceId, revisionId, new { kind = "sentence", start });
 
@@ -294,8 +297,9 @@ public sealed class CoreClient : IDisposable
         Call<JsonElement>(new { version = 1, operation = "set_speech_text", id, sentenceId, text });
     public void SetReviewedTranslation(string id, string sentenceId, string target, string text) =>
         Call<JsonElement>(new { version = 1, operation = "set_reviewed_translation", id, sentenceId, target, text });
-    public SentenceReview ReviewSentence(string model, string document, int? page, string sentence) =>
-        CallIndependent<SentenceReview>(new { version = 1, operation = "review_sentence", model, document, page, sentence });
+    public SentenceReview ReviewSentence(string model, string document, int? page, string? sentence,
+        object? focus = null, string? revisionId = null) =>
+        CallIndependent<SentenceReview>(new { version = 1, operation = "review_sentence", model, document, page, sentence, focus, revisionId });
 
     public WordExplanation ExplainWord(string model, string document, string sentence, string word) =>
         CallIndependent<WordExplanation>(new { version = 1, operation = "explain_word", model, document, sentence, word });
