@@ -443,6 +443,12 @@ public sealed class CoreClient : IDisposable
 
     public MachineTranslation? TranslateSentence(string id, string sentenceId, string target) =>
         CallIndependent<MachineTranslation?>(new { version = 1, operation = "translate_sentence", id, sentenceId, target });
+    public MachineTranslation? TranslateSelection(string id, string target, string revisionId, int startUtf16, string text,
+        int? page = null) => CallIndependent<MachineTranslation?>(new
+        {
+            version = 1, operation = "translate_selection", id, target,
+            selection = new { revisionId, startUtf16, text, page },
+        });
     public WordLookup? LookupDetachedPdfWord(string id, int page, int startUtf16, string text) =>
         CallIndependent<WordLookup?>(new { version = 1, operation = "lookup_detached_pdf_word", id, page, startUtf16, text });
 

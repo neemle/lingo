@@ -544,6 +544,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
 
     public Task<MachineTranslation?> TranslateSentenceAsync(string id, string sentenceId, string target) =>
         Task.Run(() => client.TranslateSentence(id, sentenceId, target));
+    public Task<MachineTranslation?> TranslateSelectionAsync(string id, string target, string revisionId,
+        TextSelection selection, int? page = null) =>
+        Task.Run(() => client.TranslateSelection(id, target, revisionId, selection.StartUtf16, selection.Text, page));
 
     public Task SaveManualVocabularyCardAsync(string word, string translation, string sourceLanguage,
         string targetLanguage) => RunAsync(() =>

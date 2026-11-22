@@ -309,6 +309,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             sentence_id,
             target,
         } => sentence_translation(store.translate_installed_sentence(&id, &sentence_id, &target)),
+        Command::TranslateSelection { id, target, selection } =>
+            sentence_translation(store.translate_selected_text(&id, &target, &selection)),
         Command::ScheduleTranslationWindow { id, sentence_id, revision_id, target } => {
             value(store.schedule_translation_window(&id, &sentence_id, &revision_id, &target))
         }

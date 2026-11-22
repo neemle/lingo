@@ -112,6 +112,7 @@ public partial class ReadingPage
 
     private void SetDetachedSelection(TextSelection? selected)
     {
+        if (detachedSelection != selected) detachedWordTranslation = null;
         detachedSelection = selected;
         DetachedWordExplanationText.IsVisible = false;
     }
@@ -171,7 +172,8 @@ public partial class ReadingPage
                 : $"«{selected.Text}» · {sense.Gloss}{Environment.NewLine}Переклад · {DocumentLanguages.Name(target)}";
             var translation = await DisplayPromptAsync("Додати до словника", description,
                 accept: "Далі", cancel: "Скасувати", placeholder: "Переклад",
-                initialValue: sense is { } chosenSense && chosenSense.GlossLanguage == target ? chosenSense.Gloss : null,
+                initialValue: sense is { } chosenSense && chosenSense.GlossLanguage == target ? chosenSense.Gloss
+                    : detachedWordTranslation is { } draft && draft.Target == target ? draft.Text : null,
                 maxLength: 2000);
             if (string.IsNullOrWhiteSpace(translation) || !SelectionDocumentCurrent()) return;
 
@@ -682,6 +684,7 @@ public partial class ReadingPage
         DetachedNote.Text = detachedSentence?.Note is null ? "Нотатка…" : "Редагувати нотатку…";
         DetachedAnalyzeSelection.IsVisible = DetachedAnalyzeSelection.IsEnabled =
             !loadingDetachedSentence && detachedSelection is not null;
+        DetachedTranslateSelection.IsVisible = DetachedAnalyzeSelection.IsVisible && TargetCode is not null;
         UpdateDetachedExplainButton();
         DetachedSaveWord.IsVisible = DetachedAnalyzeSelection.IsVisible;
         DetachedSaveWord.IsEnabled = DetachedSaveWord.IsVisible && !savingDetachedWord

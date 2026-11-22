@@ -24,7 +24,7 @@ use crate::{
         cached_translation, route_readiness, search_cached_translation, sentence_translation_input,
         translate_paragraph, AlignedTranslation, CachedTranslation, ModelEdge,
         ParagraphTranslation, TranslationProvider, TranslationReadiness, TranslationRequest,
-        TranslationRouteStatus, TranslationSearchPage, TranslationSettings,
+        TranslationRouteStatus, TranslationSearchPage, TranslationSelection, TranslationSettings,
     },
     Result, Store,
 };
@@ -449,6 +449,12 @@ impl StoreWorker {
             .translate_installed_sentence(document_id, sentence_id, target)
     }
 
+    pub fn translate_selection(
+        self, id: &str, target: &str, selection: &TranslationSelection,
+    ) -> Result<Option<AlignedTranslation>> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?.translate_selected_text(id, target, selection)
+    }
+
     pub fn lookup_detached_pdf_word(
         self, id: &str, page: u16, start_utf16: usize, text: &str,
     ) -> Result<Option<crate::knowledge::WordLookup>> {
@@ -782,6 +788,45 @@ impl Store {
         let provider = MarianProvider::interactive(&self.model_directory);
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
         route_readiness(&catalog, &provider.installed_models()?, source, target)
+    }
+
+    pub fn translate_selected_text(
+        &mut self, id: &str, target: &str, selection: &TranslationSelection,
+    ) -> Result<Option<AlignedTranslation>> {
+        let (language, sentences, revision) = if let Some(page) = selection.page {
+            let cached = self.detached_pdf_sentences(id, page)?
+                .ok_or("Текст сторінки PDF недоступний.")?;
+            (cached.language, cached.sentences, Some(cached.revision))
+        } else {
+            let document = self.translation_document(id)?;
+            (document.language, document.sentences, document.current_revision_id)
+        };
+        if revision.as_deref() != Some(&selection.revision_id) {
+            return Err("Текст змінився. Виділіть фрагмент знову.".into());
+        }
+        let (sentence, _) = crate::knowledge::resolve_text_selection(
+            &sentences, selection.start_utf16, &selection.text,
+        )?;
+        let source = selection.text.trim();
+        let context = (sentence.text != source && sentence.text.len() <= 768)
+            .then_some(sentence.text.as_str());
+        let input = [source.to_owned()];
+        let directory = self.model_directory.clone();
+        let result = self.translate_aligned(
+            &mut MarianProvider::interactive(&directory),
+            TranslationRequest {
+                source: &language,
+                target,
+                segments: &input,
+                context,
+                settings: TranslationSettings::default(),
+            },
+        )?;
+        if result.is_some() {
+            return Ok(result);
+        }
+        self.translation_cache_routes(&language, target)?
+            .cached_contextual_selection(self, source, context, target)
     }
 
     pub fn translation_routes(&self) -> Result<Vec<TranslationRouteStatus>> {

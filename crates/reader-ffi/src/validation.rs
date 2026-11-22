@@ -267,6 +267,7 @@ fn validate(command: &Command) -> Result<()> {
         | Command::DetachedPdfSentence { id, .. }
         | Command::FindDetachedPdfText { id, .. }
         | Command::LookupDetachedPdfWord { id, .. }
+        | Command::TranslateSelection { id, .. }
         | Command::SaveDetachedPdfWord { id, .. }
         | Command::DetachedPdfOcr { id, .. }
         | Command::CorrectDetachedPdfOcr { id, .. }

@@ -221,6 +221,15 @@ pub struct TranslationRouteStatus {
     pub pivot_language: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TranslationSelection {
+    pub(crate) page: Option<u16>,
+    pub(crate) revision_id: String,
+    pub(crate) start_utf16: usize,
+    pub(crate) text: String,
+}
+
 pub(crate) fn route_readiness(
     catalog: &[ModelEdge],
     installed: &[ModelEdge],
@@ -498,11 +507,18 @@ impl CacheRoutes {
         text: &str,
         target: &str,
     ) -> Result<Option<AlignedTranslation>> {
+        self.cached_contextual_selection(store, text, None, target)
+    }
+
+    pub(crate) fn cached_contextual_selection(
+        &self, store: &Store, text: &str, context: Option<&str>, target: &str,
+    ) -> Result<Option<AlignedTranslation>> {
         if text.len() > MAX_BATCH_BYTES {
             return Ok(None);
         }
         for route in &self.candidates {
-            if let Some(segments) = store.cached_segments(&unit_cache_key(route, text)?, 1, target)? {
+            let key = cache_key(route, &[text], context, TranslationSettings::default())?;
+            if let Some(segments) = store.cached_segments(&key, 1, target)? {
                 return Ok(Some(AlignedTranslation {
                     route: route.clone(),
                     segments,

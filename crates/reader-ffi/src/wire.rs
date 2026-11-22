@@ -569,6 +569,11 @@ pub enum Command {
         sentence_id: String,
         target: String,
     },
+    TranslateSelection {
+        id: String,
+        target: String,
+        selection: reader_core::translation::TranslationSelection,
+    },
     LookupDetachedPdfWord {
         id: String,
         page: u16,

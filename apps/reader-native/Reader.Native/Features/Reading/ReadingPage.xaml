@@ -217,6 +217,8 @@
         Clicked="DetachedExplainWordClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedSaveWord" Text="Словникова картка…" IsVisible="False" Clicked="DetachedSaveWordClicked"
         Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
+       <Button x:Name="DetachedTranslateSelection" Text="Перекласти виділення…" IsVisible="False"
+        Clicked="TranslateDetachedSelectionClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedBookmark" Text="Закладка" Clicked="DetachedBookmarkClicked"
         Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedNote" Text="Нотатка…" Clicked="DetachedNoteClicked"
@@ -254,6 +256,7 @@
       <Button Text="Поширити виділене" Style="{StaticResource PlayerButton}" Clicked="ShareSelectionClicked"
        Margin="0,0,7,0" SemanticProperties.Description="Поширити виділений уривок оригіналу" />
       <Button x:Name="ExplainWord" Text="Пояснити з Qwen" Style="{StaticResource PlayerButton}" Clicked="ExplainWordClicked" />
+      <Button Text="Перекласти виділення…" Style="{StaticResource PlayerButton}" Clicked="TranslateSelectionClicked" />
      </FlexLayout>
      <Grid x:Name="SelectedSenseRow" ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="False">
       <Label x:Name="SelectedSense" Style="{StaticResource ReaderMeta}" LineBreakMode="WordWrap"

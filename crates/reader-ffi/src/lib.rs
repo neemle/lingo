@@ -180,6 +180,12 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 );
             }
         }
+        Command::TranslateSelection { id, target, selection } => {
+            let worker = registry::lock()?.store(handle)?.prepare_translation_worker();
+            if let Some(worker) = worker {
+                return dispatch::sentence_translation(worker.translate_selection(id, target, selection));
+            }
+        }
         Command::TranslateParagraph {
             id,
             sentence_id,
