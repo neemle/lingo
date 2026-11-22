@@ -739,6 +739,10 @@ impl TranslationProvider for MarianProvider<'_> {
             .collect())
     }
 
+    fn allow_alternative_routes(&self) -> bool {
+        !self.background
+    }
+
     fn translate(
         &mut self,
         edge: &ModelEdge,

@@ -4,6 +4,7 @@ use crate::{valid_language, Result, Store};
 use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::cmp::Ordering;
 use unicode_normalization::UnicodeNormalization;
 
 const MAX_BATCH_BYTES: usize = 64 * 1024;
@@ -53,6 +54,10 @@ impl Route {
 }
 
 pub fn resolve_route(installed: &[ModelEdge], source: &str, target: &str) -> Result<Option<Route>> {
+    Ok(ranked_routes(installed, source, target)?.into_iter().next())
+}
+
+fn ranked_routes(installed: &[ModelEdge], source: &str, target: &str) -> Result<Vec<Route>> {
     valid_language(source)?;
     valid_language(target)?;
     if source == target {
@@ -69,45 +74,33 @@ pub fn resolve_route(installed: &[ModelEdge], source: &str, target: &str) -> Res
         }
     }
 
-    if let Some(edge) = installed
-        .iter()
-        .filter(|edge| edge.source == source && edge.target == target)
-        .max_by(|left, right| {
-            left.quality
-                .cmp(&right.quality)
-                .then_with(|| right.revision.cmp(&left.revision))
-        })
-    {
-        return Ok(Some(Route::Direct(edge.clone())));
-    }
+    let mut routes: Vec<_> = catalog_routes(installed, source, target).collect();
+    routes.sort_by(|left, right| compare_routes(right, left));
+    Ok(routes)
+}
 
-    let best = installed
-        .iter()
-        .filter(|edge| edge.source == source)
-        .flat_map(|first| {
-            installed
-                .iter()
-                .filter(move |second| second.source == first.target && second.target == target)
-                .map(move |second| (first, second))
-        })
-        .max_by(|(left_first, left_second), (right_first, right_second)| {
-            // Prefer fully evaluated routes, then the stronger weakest edge.
+fn compare_routes(left: &Route, right: &Route) -> Ordering {
+    match (left, right) {
+        (Route::Direct(left), Route::Direct(right)) => left
+            .quality
+            .cmp(&right.quality)
+            .then_with(|| right.revision.cmp(&left.revision)),
+        (Route::Direct(_), Route::Pivot { .. }) => Ordering::Greater,
+        (Route::Pivot { .. }, Route::Direct(_)) => Ordering::Less,
+        (
+            Route::Pivot { first: left_first, second: left_second },
+            Route::Pivot { first: right_first, second: right_second },
+        ) => {
             let rank = |first: &ModelEdge, second: &ModelEdge| {
-                (
-                    first.quality.zip(second.quality).map(|(a, b)| a.min(b)),
-                    first.target == "en",
-                )
+                (first.quality.zip(second.quality).map(|(a, b)| a.min(b)), first.target == "en")
             };
             rank(left_first, left_second)
                 .cmp(&rank(right_first, right_second))
                 .then_with(|| right_first.target.cmp(&left_first.target))
                 .then_with(|| right_first.revision.cmp(&left_first.revision))
                 .then_with(|| right_second.revision.cmp(&left_second.revision))
-        });
-    Ok(best.map(|(first, second)| Route::Pivot {
-        first: first.clone(),
-        second: second.clone(),
-    }))
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -189,6 +182,11 @@ pub(crate) fn route_readiness(
 pub trait TranslationProvider {
     /// Inspect the local inventory without downloading or loading models for inference.
     fn installed_models(&self) -> Result<Vec<ModelEdge>>;
+
+    /// Low-priority jobs can yield after the first attempt.
+    fn allow_alternative_routes(&self) -> bool {
+        true
+    }
 
     /// Return one target string per source segment, preserving the segment order.
     /// Providers receive context in the input language of this model edge.
@@ -360,16 +358,13 @@ impl CacheRoutes {
         source: &str,
         target: &str,
     ) -> Result<Self> {
-        let preferred = resolve_route(installed, source, target)?;
-        let preferred_identity = preferred.as_ref().map(Route::without_quality);
-        let candidates = preferred
-            .iter()
-            .cloned()
-            .chain(
-                catalog_routes(catalog, source, target)
-                    .filter(|route| Some(route) != preferred_identity.as_ref()),
-            )
-            .collect();
+        let mut candidates = ranked_routes(installed, source, target)?;
+        let preferred = candidates.first().cloned();
+        let installed_identities: Vec<_> = candidates.iter().map(Route::without_quality).collect();
+        candidates.extend(
+            catalog_routes(catalog, source, target)
+                .filter(|route| !installed_identities.contains(route)),
+        );
         Ok(Self {
             preferred,
             candidates,
@@ -1152,6 +1147,17 @@ pub struct TranslationRequest<'a> {
     pub settings: TranslationSettings,
 }
 
+enum RouteAttemptError {
+    Storage(String),
+    Inference(String),
+}
+
+impl From<String> for RouteAttemptError {
+    fn from(error: String) -> Self {
+        Self::Storage(error)
+    }
+}
+
 impl Store {
     pub fn translate_aligned(
         &mut self,
@@ -1172,43 +1178,15 @@ impl Store {
             return Err("Некоректні параметри перекладу".into());
         }
         let context = context.filter(|text| !text.trim().is_empty());
-        // Resolve the installed route before looking at the cache: a removed model invalidates its results.
-        let Some(route) = resolve_route(&provider.installed_models()?, source, target)? else {
-            return Ok(None);
-        };
-        let key = cache_key(&route, segments, context, settings)?;
-        if let Some(segments) = self.cached_segments(&key, segments.len(), target)? {
-            return Ok(Some(AlignedTranslation {
-                route,
-                segments,
-                joined_lines: false,
-                alignment: None,
-            }));
-        }
-
-        let result = match &route {
-            Route::Direct(model) => {
-                checked_inference(provider, model, segments, context, settings)?
+        self.translate_using_routes(provider, source, target, |store, provider, route| {
+            let key = cache_key(route, segments, context, settings)?;
+            if let Some(segments) = store.cached_segments(&key, segments.len(), target)? {
+                return Ok(segments);
             }
-            Route::Pivot { first, second } => {
-                let pivot = checked_inference(provider, first, segments, context, settings)?;
-                let pivot_context = match context {
-                    Some(text) => Some(
-                        checked_inference(provider, first, &[text.to_owned()], None, settings)?
-                            .remove(0),
-                    ),
-                    None => None,
-                };
-                checked_inference(provider, second, &pivot, pivot_context.as_deref(), settings)?
-            }
-        };
-        self.save_cached_segments([(key, result.as_slice())])?;
-        Ok(Some(AlignedTranslation {
-            route,
-            segments: result,
-            joined_lines: false,
-            alignment: None,
-        }))
+            let output = infer_route(provider, route, segments, context, settings)?;
+            store.save_cached_segments([(key, output.as_slice())])?;
+            Ok(output)
+        })
     }
 
     fn translate_units(
@@ -1218,45 +1196,65 @@ impl Store {
         target: &str,
         input: &[String],
     ) -> Result<Option<AlignedTranslation>> {
-        let Some(route) = resolve_route(&provider.installed_models()?, source, target)? else {
-            return Ok(None);
-        };
-        let settings = TranslationSettings::default();
-        let mut uncached = Vec::new();
-        let mut output = vec![String::new(); input.len()];
-        for (index, text) in input.iter().enumerate() {
-            let key = unit_cache_key(&route, text)?;
-            if let Some(mut value) = self.cached_segments(&key, 1, target)? {
-                output[index] = value.remove(0);
-            } else {
-                uncached.push((index, key, text.clone()));
-            }
-        }
-        if !uncached.is_empty() {
-            let batch: Vec<_> = uncached.iter().map(|(_, _, text)| text.clone()).collect();
-            let translated = match &route {
-                Route::Direct(model) => checked_inference(provider, model, &batch, None, settings)?,
-                Route::Pivot { first, second } => {
-                    let intermediate = checked_inference(provider, first, &batch, None, settings)?;
-                    checked_inference(provider, second, &intermediate, None, settings)?
+        self.translate_using_routes(provider, source, target, |store, provider, route| {
+            let mut uncached = Vec::new();
+            let mut output = vec![String::new(); input.len()];
+            for (index, text) in input.iter().enumerate() {
+                let key = unit_cache_key(route, text)?;
+                if let Some(mut value) = store.cached_segments(&key, 1, target)? {
+                    output[index] = value.remove(0);
+                } else {
+                    uncached.push((index, key, text));
                 }
-            };
-            let mut rows = Vec::with_capacity(translated.len());
-            for ((index, key, _), text) in uncached.into_iter().zip(translated) {
-                output[index] = text;
-                rows.push((key, index));
             }
-            self.save_cached_segments(
-                rows.into_iter()
-                    .map(|(key, index)| (key, std::slice::from_ref(&output[index]))),
-            )?;
+            if !uncached.is_empty() {
+                let batch: Vec<_> = uncached.iter().map(|(_, _, text)| (*text).clone()).collect();
+                let translated =
+                    infer_route(provider, route, &batch, None, TranslationSettings::default())?;
+                let mut rows = Vec::with_capacity(translated.len());
+                for ((index, key, _), text) in uncached.into_iter().zip(translated) {
+                    output[index] = text;
+                    rows.push((key, index));
+                }
+                store.save_cached_segments(
+                    rows.into_iter()
+                        .map(|(key, index)| (key, std::slice::from_ref(&output[index]))),
+                )?;
+            }
+            Ok(output)
+        })
+    }
+
+    fn translate_using_routes<P: TranslationProvider>(
+        &mut self,
+        provider: &mut P,
+        source: &str,
+        target: &str,
+        mut attempt: impl FnMut(&mut Self, &mut P, &Route)
+            -> std::result::Result<Vec<String>, RouteAttemptError>,
+    ) -> Result<Option<AlignedTranslation>> {
+        let mut routes = ranked_routes(&provider.installed_models()?, source, target)?;
+        if !provider.allow_alternative_routes() {
+            routes.truncate(1);
         }
-        Ok(Some(AlignedTranslation {
-            route,
-            segments: output,
-            joined_lines: false,
-            alignment: None,
-        }))
+        let mut first_failure = None;
+        for route in routes {
+            match attempt(self, provider, &route) {
+                Ok(segments) => {
+                    return Ok(Some(AlignedTranslation {
+                        route,
+                        segments,
+                        joined_lines: false,
+                        alignment: None,
+                    }));
+                }
+                Err(RouteAttemptError::Inference(error)) => {
+                    first_failure.get_or_insert(error);
+                }
+                Err(RouteAttemptError::Storage(error)) => return Err(error),
+            }
+        }
+        first_failure.map_or(Ok(None), Err)
     }
 
     fn cached_segments(
@@ -1316,6 +1314,33 @@ impl Store {
         )
         .map_err(|error| error.to_string())?;
         tx.commit().map_err(|error| error.to_string())
+    }
+}
+
+fn infer_route(
+    provider: &mut impl TranslationProvider,
+    route: &Route,
+    segments: &[String],
+    context: Option<&str>,
+    settings: TranslationSettings,
+) -> std::result::Result<Vec<String>, RouteAttemptError> {
+    let mut infer = |edge: &ModelEdge, input: &[String], context: Option<&str>| {
+        checked_inference(provider, edge, input, context, settings)
+            .map_err(RouteAttemptError::Inference)
+    };
+    match route {
+        Route::Direct(edge) => infer(edge, segments, context),
+        Route::Pivot { first, second } => {
+            let translated = infer(first, segments, context)?;
+            let pivot_context = match context {
+                Some(text) => {
+                    let input = [text.to_owned()];
+                    Some(infer(first, &input, None)?.remove(0))
+                }
+                None => None,
+            };
+            infer(second, &translated, pivot_context.as_deref())
+        }
     }
 }
 
