@@ -150,10 +150,10 @@ internal static class DesktopFiles
     private static Task<ShareInboxItem?> StageFileItemAsync(NSItemProvider provider)
     {
         var completion = new TaskCompletionSource<ShareInboxItem?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        provider.LoadItem("public.file-url", null, (value, error) =>
+        provider.LoadObject<NSUrl>((url, error) =>
         {
             if (error is not null) completion.TrySetException(new IOException(error.LocalizedDescription));
-            else if (value is NSUrl url && FileName(url) is { } name) StageInCallback(completion, url, name);
+            else if (url is not null && FileName(url) is { } name) StageInCallback(completion, url, name);
             else completion.TrySetResult(null);
         });
         return completion.Task;
@@ -164,8 +164,8 @@ internal static class DesktopFiles
         if (!provider.HasItemConformingTo("public.url")) return Task.FromResult<Uri?>(null);
 
         var completion = new TaskCompletionSource<Uri?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        provider.LoadItem("public.url", null, (value, error) =>
-            completion.TrySetResult(error is null && value is NSUrl url ? WebArticles.Address(url.AbsoluteString) : null));
+        provider.LoadObject<NSUrl>((url, error) =>
+            completion.TrySetResult(error is null && url is not null ? WebArticles.Address(url.AbsoluteString) : null));
         return completion.Task;
     }
 
@@ -175,13 +175,23 @@ internal static class DesktopFiles
         if (!provider.HasItemConformingTo(type)) return Task.FromResult<string?>(null);
 
         var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        provider.LoadItem(type, null, (value, error) => completion.TrySetResult(error is null ? value switch
+        void LoadUtf8() => provider.LoadDataRepresentation(type, (data, error) =>
         {
-            NSString nativeText => nativeText.ToString(),
-            NSData data when data.Length <= Reader.CoreClient.CoreClient.MaxImportBytes =>
-                Encoding.UTF8.GetString(data.ToArray()),
-            _ => null,
-        } : null));
+            completion.TrySetResult(error is null && data is not null &&
+                data.Length <= Reader.CoreClient.CoreClient.MaxImportBytes
+                ? Encoding.UTF8.GetString(data.ToArray()) : null);
+        });
+        if (provider.CanLoadObject(typeof(NSString)))
+        {
+            provider.LoadObject<NSString>((value, error) =>
+            {
+                if (error is null && value is not null)
+                    completion.TrySetResult(value.ToString());
+                else
+                    LoadUtf8();
+            });
+        }
+        else LoadUtf8();
         return completion.Task;
     }
 
