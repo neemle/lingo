@@ -158,6 +158,19 @@ fn validate(command: &Command) -> Result<()> {
         {
             Err(Error::new("invalid_argument", "Invalid detached PDF sentence address"))
         }
+        Command::AnalyzeDetachedPdf {
+            id,
+            request: reader_core::knowledge::DetachedPageAnalysis::Expression {
+                sentence_id, revision_id, member_starts_utf16,
+            },
+            ..
+        } if !valid_token_address(id, sentence_id)
+            || revision_id.len() != 64
+            || !revision_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !(2..=8).contains(&member_starts_utf16.len()) =>
+        {
+            Err(Error::new("invalid_argument", "Invalid detached PDF expression address"))
+        }
         Command::SentenceTokens { id, sentence_id, limit, .. }
             if !valid_token_address(id, sentence_id)
                 || limit.is_some_and(|limit| !(1..=reader_core::document_tokens::MAX_TOKEN_PAGE_SIZE).contains(&limit)) =>

@@ -17,6 +17,29 @@ pub(super) struct SyntaxParse {
     unassigned_token_ids: Vec<String>,
 }
 
+impl SyntaxParse {
+    pub(super) fn retain_scope(&mut self, selected: &[String]) {
+        if matches!(self.status, ParseStatus::TooLong) {
+            return;
+        }
+        self.links.retain(|link| {
+            selected.contains(&link.head_token_id) || selected.contains(&link.dependent_token_id)
+        });
+        self.unassigned_token_ids.retain(|id| selected.contains(id));
+        if self.root_token_id.as_ref().is_some_and(|id| !selected.contains(id)) {
+            self.root_token_id = None;
+            self.root_text = None;
+        }
+        self.status = if self.links.is_empty() && self.root_token_id.is_none() {
+            ParseStatus::NoEvidence
+        } else if self.unassigned_token_ids.is_empty() {
+            ParseStatus::Complete
+        } else {
+            ParseStatus::Partial
+        };
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum ParseStatus {

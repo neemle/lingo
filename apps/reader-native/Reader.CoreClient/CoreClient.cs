@@ -269,6 +269,10 @@ public sealed class CoreClient : IDisposable
     public LinguisticAnalysis AnalyzeDetachedPdfSelection(string id, int page, int startUtf16, string text) =>
         AnalyzeDetachedPdf(id, page, new { kind = "selection", startUtf16, text });
 
+    public LinguisticAnalysis AnalyzeDetachedPdfExpression(string id, int page, string sentenceId,
+        string revisionId, IReadOnlyList<int> memberStartsUtf16) =>
+        AnalyzeDetachedPdf(id, page, new { kind = "expression", sentenceId, revisionId, memberStartsUtf16 });
+
     private LinguisticAnalysis AnalyzeDetachedPdf(string id, int page, object request) =>
         CallIndependent<LinguisticAnalysis>(new { version = 1, operation = "analyze_detached_pdf", id, page, request });
 

@@ -17,7 +17,8 @@ const SENTENCE_PAGE_SIZE: usize = 24;
 const MAX_READINGS: usize = 8;
 const MAX_PREFETCH_SENTENCE_BYTES: usize = 4096;
 // Bump when generated annotations or their serialized representation changes.
-const ANNOTATION_VERSION: u32 = 1;
+const SENTENCE_ANNOTATION_VERSION: u32 = 1;
+const SELECTION_ANNOTATION_VERSION: u32 = 2;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
@@ -45,6 +46,11 @@ pub enum DetachedPageAnalysis {
         start: usize,
     },
     Selection { start_utf16: usize, text: String },
+    Expression {
+        sentence_id: String,
+        revision_id: String,
+        member_starts_utf16: Vec<usize>,
+    },
 }
 
 #[derive(Deserialize)]
@@ -145,14 +151,21 @@ impl Store {
     ) -> Result<Value> {
         let cached = self.detached_pdf_sentences(document_id, page)?
             .ok_or("Текст сторінки PDF недоступний.")?;
+        let sentence_at = |id: &str| {
+            cached.sentences.iter().find(|sentence| sentence.id == id)
+                .ok_or("Речення сторінки PDF змінилося.")
+        };
         let (sentence, scope) = match request {
-            DetachedPageAnalysis::Sentence { sentence_id, start } => {
-                let sentence = cached.sentences.iter().find(|sentence| sentence.id == sentence_id)
-                    .ok_or("Речення сторінки PDF змінилося.")?;
-                (sentence, AnalysisScope::Sentence { start })
-            }
+            DetachedPageAnalysis::Sentence { sentence_id, start } =>
+                (sentence_at(&sentence_id)?, AnalysisScope::Sentence { start }),
             DetachedPageAnalysis::Selection { start_utf16, text } =>
                 detached_selection(&cached.sentences, start_utf16, &text)?,
+            DetachedPageAnalysis::Expression { sentence_id, revision_id, member_starts_utf16 } => {
+                if cached.revision != revision_id {
+                    return Err("Текст сторінки PDF змінився. Виберіть вираз знову.".into());
+                }
+                (sentence_at(&sentence_id)?, AnalysisScope::Expression { member_starts_utf16 })
+            }
         };
         let index = self.open_knowledge_index(&cached.language)?;
         let lexical = lexicon::index_identity(&self.knowledge_directory, &cached.language);
@@ -258,8 +271,12 @@ impl Store {
     ) -> Result<Value> {
         let (document_id, language) = source;
         let grammar = lookup_index.map(|(pack, _, version)| (pack.sha256, version));
+        let version = match scope {
+            AnalysisScope::Sentence { .. } => SENTENCE_ANNOTATION_VERSION,
+            _ => SELECTION_ANNOTATION_VERSION,
+        };
         let address = serde_json::to_vec(&(
-            ANNOTATION_VERSION, revision, &sentence.id, language, grammar, lexical, scope,
+            version, revision, &sentence.id, language, grammar, lexical, scope,
         ))
         .map_err(|error| error.to_string())?;
         let key = Sha256::digest(address);
@@ -292,6 +309,14 @@ impl Store {
         let syntax_parse = match (scope, lookup_index) {
             (AnalysisScope::Sentence { start: 0 }, Some((_, db, version))) if version >= 5 => {
                 Some(syntax_parse::analyze(db, &sentence.text, id_at)?)
+            }
+            (AnalysisScope::Word { .. } | AnalysisScope::Expression { .. }, Some((_, db, version)))
+                if version >= 5 =>
+            {
+                let mut parse = syntax_parse::analyze(db, &sentence.text, id_at)?;
+                let selected_ids: Vec<_> = selected.iter().map(|&(_, offset, _)| id_at(offset)).collect();
+                parse.retain_scope(&selected_ids);
+                Some(parse)
             }
             _ => None,
         };

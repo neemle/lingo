@@ -323,6 +323,10 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<LinguisticAnalysis> AnalyzeDetachedPdfSelectionAsync(string id, int page, TextSelection selection) =>
         Task.Run(() => client.AnalyzeDetachedPdfSelection(id, page, selection.StartUtf16, selection.Text));
 
+    public Task<LinguisticAnalysis> AnalyzeDetachedPdfExpressionAsync(string id, int page, string sentenceId,
+        string revisionId, IReadOnlyList<int> memberStartsUtf16) =>
+        Task.Run(() => client.AnalyzeDetachedPdfExpression(id, page, sentenceId, revisionId, memberStartsUtf16));
+
     public Task<LinguisticAnalysis> AnalyzeExpressionAsync(
         string id, string sentenceId, string revisionId, int[] memberStartsUtf16) =>
         Task.Run(() => client.AnalyzeExpression(id, sentenceId, revisionId, memberStartsUtf16));
