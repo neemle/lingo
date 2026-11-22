@@ -114,6 +114,12 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         return Read();
     });
 
+    public Task RenameDocumentAsync(string id, string title) => RunAsync(() =>
+    {
+        client.RenameDocument(id, title);
+        return Read();
+    });
+
     public SpeechResume? GetSpeechResume(string id) => client.SpeechResume(id);
 
     public void SetSpeechResume(string id, string sentenceId, string textHash, int? offsetUtf16) =>

@@ -9,10 +9,12 @@ namespace Reader.Native.Features.Library;
 
 public partial class LibraryPage : ContentPage
 {
+    private const int MaxDocumentTitleLength = 240;
     private static readonly HashSet<string> ImageExtensions =
         new([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"], StringComparer.OrdinalIgnoreCase);
     private bool importing;
     private bool changingLanguage;
+    private bool renamingDocument;
     private Task loading = Task.CompletedTask;
     private ReaderSession? observedSession;
     private Snapshot? displayedSnapshot;
@@ -289,6 +291,33 @@ public partial class LibraryPage : ContentPage
         }
     }
 
+    private async void RenameDocumentClicked(object? sender, EventArgs args)
+    {
+        var session = AppState.Session;
+        if (openingCard || session.Busy || sender is not Button { CommandParameter: Document card }
+            || !DesktopImport.Gate.Wait(0))
+            return;
+
+        renamingDocument = true;
+        try
+        {
+            var document = session.Snapshot.Documents.FirstOrDefault(item => item.Id == card.Id);
+            if (document is null) return;
+
+            var initial = document.Title.Length <= MaxDocumentTitleLength ? document.Title : "";
+            var title = await DisplayPromptAsync("Перейменувати документ", "Введіть нову назву для бібліотеки.",
+                "Зберегти", "Скасувати", placeholder: "Назва документа", maxLength: MaxDocumentTitleLength,
+                initialValue: initial);
+            if (title is not null && title.Trim() != document.Title)
+                await session.RenameDocumentAsync(document.Id, title);
+        }
+        finally
+        {
+            renamingDocument = false;
+            DesktopImport.Gate.Release();
+        }
+    }
+
     private async void DocumentSelected(object? sender, SelectionChangedEventArgs args)
     {
         if (args.CurrentSelection.FirstOrDefault() is not LibraryCard card) return;
@@ -303,7 +332,7 @@ public partial class LibraryPage : ContentPage
 
     private async Task OpenCardAsync(LibraryCard card)
     {
-        if (openingCard || importing || changingLanguage || AppState.Session.Busy) return;
+        if (openingCard || importing || changingLanguage || renamingDocument || AppState.Session.Busy) return;
         openingCard = true;
         try
         {

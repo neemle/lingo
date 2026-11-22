@@ -94,6 +94,9 @@
           <Button Grid.Column="1" Text="Мова" Style="{StaticResource OutlineButton}" Clicked="ChangeLanguageClicked"
            CommandParameter="{Binding Document}" SemanticProperties.Description="Змінити мову джерела" />
          </Grid>
+         <Button Text="Перейменувати" Style="{StaticResource OutlineButton}" HorizontalOptions="Start"
+          Clicked="RenameDocumentClicked" CommandParameter="{Binding Document}"
+          SemanticProperties.Description="{Binding Title, StringFormat='Перейменувати {0}'}" />
         </VerticalStackLayout>
        </Grid>
       </Border>
