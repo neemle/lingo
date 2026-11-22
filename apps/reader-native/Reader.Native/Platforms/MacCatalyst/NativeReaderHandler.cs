@@ -143,7 +143,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
                 if (newLayout)
                 {
                     handler.projection = new ReaderTextProjection(source, blocks, view.ReflowPdf);
-                    using var paragraph = new NSMutableParagraphStyle { LineSpacing = 6 };
+                    using var paragraph = new NSMutableParagraphStyle { LineSpacing = 6, ParagraphSpacing = view.ReflowPdf ? 8 : 0 };
                     using var text = new NSAttributedString(handler.projection.Text, new UIStringAttributes
                     {
                         Font = font,

@@ -63,13 +63,9 @@ impl Store {
                 .iter()
                 .find(|sentence| sentence.id == sentence_id)
                 .ok_or("Речення сторінки змінилося.")?;
-            let layout = crate::document_layout::from_transcript(cached.text, None);
-            let document = Document {
-                text: layout.text,
-                blocks: layout.blocks,
-                ocr_lines: self.detached_pdf_ocr(id, page)?.map(|cached| cached.lines),
-                ..Document::default()
-            };
+            let document = crate::document_layout::detached_pdf_document(
+                cached.text, self.detached_pdf_ocr(id, page)?.map(|cached| cached.lines),
+            );
             let range = document.paragraph_for_sentence(sentence);
             (cached.language, normalize_passage(&document, range))
         } else {

@@ -30,6 +30,7 @@ public partial class ReadingPage
     private void ShowDetachedPdfPage(Document document, PdfReadPage page)
     {
         TargetLanguage.IsEnabled = !AppState.Session.Busy;
+        DetachedPdfText.Blocks = page.Blocks ?? [];
         var address = new DetachedAddress(document.Id, page.Page, page.Text, document.Language);
         if (detachedAddress == address) return;
 

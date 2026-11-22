@@ -209,7 +209,7 @@
      <Label x:Name="PdfPageMessage" Margin="18" Style="{StaticResource ReaderMeta}"
       HorizontalTextAlignment="Center" VerticalOptions="Center" />
      <Grid x:Name="DetachedPdfReader" IsVisible="False" RowDefinitions="*,Auto,Auto,Auto" RowSpacing="4">
-      <controls:NativeReaderView x:Name="DetachedPdfText" BackgroundColor="{StaticResource Panel}"
+      <controls:NativeReaderView x:Name="DetachedPdfText" ReflowPdf="True" BackgroundColor="{StaticResource Panel}"
        SourceSelected="DetachedPdfSelected" SemanticProperties.Description="Текст поточної сторінки PDF" />
       <Image x:Name="DetachedInlinePdfImage" IsVisible="False" Aspect="AspectFit"
        SemanticProperties.Description="Оригінальна сторінка PDF">

@@ -30,6 +30,8 @@ pub struct PdfReadPage {
     pub text: String,
     pub span: Option<ocr::OcrSpan>,
     pub refresh_pending: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<document_layout::DocumentBlock>,
 }
 
 #[derive(Debug, Serialize)]
@@ -264,7 +266,10 @@ impl Store {
             let mut result = reading_page(&document, starts, &completed, page, file_backed)?;
             if file_backed && result.span.is_none() {
                 if let Some((text, language)) = pdf_detached_pages::read(&self.connection, id, result.page)? {
-                    result.text = text;
+                    let detached = document_layout::detached_pdf_document(text,
+                        self.detached_pdf_ocr(id, result.page)?.map(|cached| cached.lines));
+                    result.text = detached.text;
+                    result.blocks = detached.blocks;
                     result.state = PdfReadPageState::Detached;
                     result.refresh_pending = language.is_some_and(|language| language != document.language.as_str())
                         && !pdf_detached_pages::has_local_edits(&self.connection, id, result.page)?;
@@ -783,6 +788,7 @@ fn reading_page(
         state: PdfReadPageState::Unavailable,
         text: String::new(),
         span: None,
+        blocks: Vec::new(),
         refresh_pending: file_backed && should_refresh(document, page),
     };
     let Some(start_utf16) = starts[index] else {

@@ -143,9 +143,10 @@ pub(crate) fn from_transcript(text: String, page_starts: Option<Vec<Option<usize
     let mut ranges = Vec::new();
     visit_page_ranges(&text, page_starts.as_deref(), |range, page| {
         ranges.extend(
-            paragraph_ranges(&text, range, false).map(|offset| BlockRange {
+            transcript_ranges(&text, range, page.is_some()).into_iter().map(|(offset, heading)| BlockRange {
                 offset,
                 page,
+                heading,
                 ..BlockRange::default()
             }),
         );
@@ -158,9 +159,113 @@ pub(crate) fn from_transcript(text: String, page_starts: Option<Vec<Option<usize
     }
 }
 
+fn transcript_ranges(text: &str, range: Range<usize>, pdf: bool) -> Vec<(Range<usize>, Option<u8>)> {
+    if !pdf {
+        return paragraph_ranges(text, range, false).map(|range| (range, None)).collect();
+    }
+
+    let page = &text[range.clone()];
+    let mut widths: Vec<_> = page.lines().map(|line| line.trim().chars().count())
+        .filter(|&width| width >= 30).collect();
+    widths.sort_unstable();
+    let typical_width = widths.get(widths.len() / 2).copied().unwrap_or(0);
+    let mut result = Vec::new();
+    let mut start = range.start;
+    let mut offset = start;
+    let mut previous = "";
+    for line in page.split_inclusive('\n') {
+        let content = line.trim();
+        let heading = standalone_heading(content);
+        let footnote = footnote_start(content) && (offset == start || ends_sentence(previous));
+        let new_prose = content.starts_with(char::is_uppercase)
+            && (previous.ends_with(['»', '”'])
+                || ends_sentence(previous) && previous.chars().count() * 2 < typical_width);
+        if content.is_empty() || starts_dialogue(content, previous) || new_prose || heading || footnote {
+            if let Some(part) = trimmed_range(text, start..offset) {
+                result.push((part, None));
+            }
+            start = offset;
+        }
+        offset += line.len();
+        if heading {
+            result.push((trimmed_range(text, start..offset).expect("nonempty heading"), Some(1)));
+            start = offset;
+        } else if content.is_empty() {
+            start = offset;
+        }
+        previous = content;
+    }
+    if let Some(part) = trimmed_range(text, start..range.end) {
+        result.push((part, None));
+    }
+    result
+}
+
+fn standalone_heading(text: &str) -> bool {
+    let letters = text.chars().filter(|ch| ch.is_alphabetic()).count();
+    (4..=30).contains(&letters)
+        && text.chars().all(|ch| ch.is_uppercase() || ch.is_ascii_digit() || ch.is_whitespace())
+}
+
+fn footnote_start(text: &str) -> bool {
+    let remainder = text.trim_start_matches(|ch: char| ch.is_ascii_digit());
+    if remainder.len() == text.len() || !remainder.starts_with(char::is_whitespace) {
+        return false;
+    }
+    remainder.trim_start().split_once(':').is_some_and(|(term, gloss)| {
+        (1..=3).contains(&term.split_whitespace().count())
+            && term.trim_start().starts_with(char::is_alphabetic)
+            && gloss.trim_start().starts_with(char::is_alphabetic)
+    })
+}
+
+fn ends_sentence(text: &str) -> bool {
+    text.trim_end_matches(['»', '”', '"', ')']).trim_end()
+        .ends_with(['.', '!', '?', ':', '…'])
+}
+
+fn starts_dialogue(line: &str, previous: &str) -> bool {
+    if let Some(rest) = line.strip_prefix(['—', '–', '-']) {
+        return (rest.starts_with(char::is_whitespace) || !line.starts_with('-'))
+            && rest.trim_start().starts_with(char::is_alphabetic);
+    }
+    (previous.is_empty() || ends_sentence(previous))
+        && line.strip_prefix(['«', '“', '„', '"'])
+            .is_some_and(|rest| rest.trim_start().starts_with(char::is_alphabetic))
+}
+
+pub(crate) fn detached_pdf_document(text: String, ocr_lines: Option<Vec<crate::ocr::OcrLine>>) -> Document {
+    let layout = from_transcript(text, Some(vec![Some(0)]));
+    let mut document = Document {
+        text: layout.text,
+        blocks: layout.blocks,
+        format: "pdf".into(),
+        ocr_lines,
+        ..Document::default()
+    };
+    // Cached OCR keeps the physical page number, but its spans are page-relative.
+    if let Some(page) = document.ocr_lines.as_ref().and_then(|lines| lines.first()).map(|line| usize::from(line.page)) {
+        for block in &mut document.blocks {
+            block.page = Some(page);
+        }
+    }
+    reflow_ocr_paragraphs(&mut document);
+    document
+}
+
 /// Recover paragraph ranges from OCR geometry without changing the recognized text or its offsets.
 pub(crate) fn reflow_ocr_paragraphs(document: &mut Document) {
-    let Some(lines) = document.ocr_lines.as_deref().filter(|lines| document.format == "pdf" && !lines.is_empty())
+    if document.format != "pdf" { return; }
+    if let Some(starts) = document.pdf_page_starts.as_deref() {
+        let mut ranges = Vec::new();
+        visit_page_ranges(&document.text, Some(starts), |range, page| {
+            ranges.extend(transcript_ranges(&document.text, range, true).into_iter().map(|(offset, heading)| BlockRange {
+                offset, page, heading, ..BlockRange::default()
+            }));
+        });
+        document.blocks = materialize_blocks(&document.text, ranges);
+    }
+    let Some(lines) = document.ocr_lines.as_deref().filter(|lines| !lines.is_empty())
     else { return; };
     let mut starts = std::collections::BTreeSet::new();
     let mut ranges = Vec::new();
@@ -181,8 +286,13 @@ pub(crate) fn reflow_ocr_paragraphs(document: &mut Document) {
             let indented = next.x >= body_left + 0.027 && next.x >= previous.x + 0.025 &&
                 previous.reading_text().trim_end_matches(['»', '”', '"', ')']).trim_end()
                     .ends_with(['.', '!', '?', ':', '…']);
-            let footer = next.y >= 0.90 && next.reading_text().chars().all(|ch| ch.is_ascii_digit() || ch.is_whitespace() || ch == '-');
-            if close_lines && !indented && !footer { continue; }
+            let previous_text = previous.reading_text().trim();
+            let next_text = next.reading_text().trim_start();
+            let dialogue_break = starts_dialogue(next_text, previous_text)
+                || (previous_text.ends_with(['»', '”']) && next_text.starts_with(char::is_uppercase));
+            let heading = standalone_heading(previous_text) || standalone_heading(next_text);
+            let footer = next.y >= 0.90 && next_text.chars().all(|ch| ch.is_ascii_digit() || ch.is_whitespace() || ch == '-');
+            if close_lines && !indented && !footer && !dialogue_break && !heading { continue; }
             let end = previous.source_span.expect("verified OCR span").end_utf8;
             ranges.push(BlockRange { offset: begin..end, page: Some(page_number), ..BlockRange::default() });
             begin = next.source_span.expect("verified OCR span").start_utf8;
