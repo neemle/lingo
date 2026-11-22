@@ -15,6 +15,7 @@ fn sentence_translation_body(result: reader_core::translation::AlignedTranslatio
         "text": result.segments[0],
         "pivotLanguage": result.route.pivot_language(),
         "joinedLines": result.joined_lines,
+        "alignment": result.alignment,
     })
 }
 

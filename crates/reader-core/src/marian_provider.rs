@@ -21,7 +21,7 @@ use crate::{
     resources::RESOURCES,
     space::{ensure_capacity, PACKAGE_OVERHEAD},
     translation::{
-        cached_translation, input_for_sentence, route_readiness, search_cached_translation,
+        cached_translation, route_readiness, search_cached_translation, sentence_translation_input,
         translate_paragraph, AlignedTranslation, CachedTranslation, ModelEdge,
         ParagraphTranslation, TranslationProvider, TranslationReadiness, TranslationRequest,
         TranslationSearchPage, TranslationSettings,
@@ -647,7 +647,7 @@ impl Store {
         target: &str,
     ) -> Result<Option<AlignedTranslation>> {
         let (document, selected) = self.translation_selection(document_id, sentence_id)?;
-        let (text, joined_lines) = input_for_sentence(&document, selected);
+        let (text, sentence_ids) = sentence_translation_input(&document, selected);
         self.translate_aligned(
             &mut MarianProvider::interactive(package_dir),
             TranslationRequest {
@@ -660,7 +660,7 @@ impl Store {
         )
         .map(|translation| {
             translation.map(|mut translation| {
-                translation.joined_lines = joined_lines;
+                translation.attach_source_sentences(sentence_ids);
                 translation
             })
         })

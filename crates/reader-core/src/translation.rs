@@ -189,6 +189,65 @@ pub struct AlignedTranslation {
     /// Each entry stays paired to its source. A target entry may contain several sentences.
     pub segments: Vec<String>,
     pub joined_lines: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<TranslationAlignment>,
+}
+
+impl AlignedTranslation {
+    pub(crate) fn attach_source_sentences(&mut self, sentence_ids: Vec<String>) {
+        self.joined_lines = sentence_ids.len() > 1;
+        self.alignment = self
+            .segments
+            .first()
+            .map(|text| TranslationAlignment::from_text(&sentence_ids, text));
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum AlignmentKind {
+    #[serde(rename = "1:1")]
+    OneToOne,
+    #[serde(rename = "1:N")]
+    OneToMany,
+    #[serde(rename = "N:1")]
+    ManyToOne,
+    #[serde(rename = "N:M")]
+    ManyToMany,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationAlignment {
+    pub kind: AlignmentKind,
+    /// The source sentences submitted together, in document order.
+    pub source_sentence_ids: Vec<String>,
+    /// Spans in the returned target text, ordered by appearance.
+    pub target_sentences: Vec<crate::ocr::OcrSpan>,
+}
+
+impl TranslationAlignment {
+    fn from_text(source_ids: &[String], text: &str) -> Self {
+        let target_sentences: Vec<_> = crate::segment(text, "target")
+            .into_iter()
+            .map(|sentence| crate::ocr::OcrSpan {
+                start_utf8: sentence.start_utf8,
+                end_utf8: sentence.end_utf8,
+                start_utf16: sentence.start_utf16,
+                end_utf16: sentence.end_utf16,
+            })
+            .collect();
+        let kind = match (source_ids.len(), target_sentences.len()) {
+            (1, 1) => AlignmentKind::OneToOne,
+            (1, _) => AlignmentKind::OneToMany,
+            (_, 1) => AlignmentKind::ManyToOne,
+            _ => AlignmentKind::ManyToMany,
+        };
+        Self {
+            kind,
+            source_sentence_ids: source_ids.to_vec(),
+            target_sentences,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -206,6 +265,15 @@ pub struct ParagraphUnit {
     pub sentence_ids: Vec<String>,
     pub translation: Option<String>,
     pub reviewed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<TranslationAlignment>,
+}
+
+impl ParagraphUnit {
+    fn set_translation(&mut self, text: String) {
+        self.alignment = Some(TranslationAlignment::from_text(&self.sentence_ids, &text));
+        self.translation = Some(text);
+    }
 }
 
 pub struct CachedTranslation {
@@ -236,7 +304,7 @@ pub(crate) fn translate_paragraph(
         {
             result.pivot_language = aligned.route.pivot_language().map(str::to_owned);
             for (index, text) in indices.into_iter().zip(aligned.segments) {
-                result.units[index].translation = Some(text);
+                result.units[index].set_translation(text);
             }
         }
     }
@@ -319,7 +387,7 @@ fn cached_translation_with_routes(
         .units
         .iter()
         .any(|unit| unit.reviewed && unit.sentence_ids.contains(active_id));
-    let standalone = (!active_reviewed).then(|| input_for_sentence(document, selected));
+    let standalone = (!active_reviewed).then(|| sentence_translation_input(document, selected));
     let mut best = None;
     for route in &routes.candidates {
         let mut units = Vec::new();
@@ -339,18 +407,21 @@ fn cached_translation_with_routes(
 
         let mut sentence = None;
         if !active_hit {
-            if let Some((text, joined_lines)) = standalone
+            if let Some((text, sentence_ids)) = standalone
                 .as_ref()
                 .filter(|(text, _)| text.len() <= MAX_BATCH_BYTES)
             {
                 if let Some(segments) =
                     store.cached_segments(&unit_cache_key(route, text)?, 1, target)?
                 {
-                    sentence = Some(AlignedTranslation {
+                    let mut translated = AlignedTranslation {
                         route: route.clone(),
                         segments,
-                        joined_lines: *joined_lines,
-                    });
+                        joined_lines: false,
+                        alignment: None,
+                    };
+                    translated.attach_source_sentences(sentence_ids.clone());
+                    sentence = Some(translated);
                 }
             }
         }
@@ -369,7 +440,7 @@ fn cached_translation_with_routes(
     if let Some((route, units, active_sentence)) = best {
         paragraph.pivot_language = route.pivot_language().map(str::to_owned);
         for (index, translation) in units {
-            paragraph.units[index].translation = Some(translation);
+            paragraph.units[index].set_translation(translation);
         }
         sentence = active_sentence;
     }
@@ -581,14 +652,19 @@ fn paragraph_plan(
                 .ok_or("Межі абзацу пошкоджені.")?;
             pending.push((units.len(), input));
         }
-        units.push(ParagraphUnit {
+        let mut unit = ParagraphUnit {
             sentence_ids: sentences[index..next]
                 .iter()
                 .map(|sentence| sentence.id.clone())
                 .collect(),
             reviewed: review.is_some(),
-            translation: review,
-        });
+            translation: None,
+            alignment: None,
+        };
+        if let Some(text) = review {
+            unit.set_translation(text);
+        }
+        units.push(unit);
         index = next;
     }
     let mut budget = MAX_BATCH_BYTES;
@@ -612,12 +688,21 @@ fn paragraph_plan(
     })
 }
 
-pub(crate) fn input_for_sentence(document: &crate::Document, selected: usize) -> (String, bool) {
+#[cfg(test)]
+fn input_for_sentence(document: &crate::Document, selected: usize) -> (String, bool) {
+    let (text, sentence_ids) = sentence_translation_input(document, selected);
+    (text, sentence_ids.len() > 1)
+}
+
+pub(crate) fn sentence_translation_input(
+    document: &crate::Document,
+    selected: usize,
+) -> (String, Vec<String>) {
     const MAX_JOINED_BYTES: usize = 1024;
     const MAX_FRAGMENTS: usize = 12;
     let active = &document.sentences[selected];
     if document.format != "pdf" && document.ocr_lines.is_none() {
-        return (active.text.clone(), false);
+        return (active.text.clone(), vec![active.id.clone()]);
     }
     let within_budget = |left: usize, right: usize| {
         right - left < MAX_FRAGMENTS
@@ -637,8 +722,15 @@ pub(crate) fn input_for_sentence(document: &crate::Document, selected: usize) ->
     {
         end += 1;
     }
-    let input = inference_span(document, start, end).unwrap_or_else(|| active.text.clone());
-    (input, start != end)
+    if let Some(input) = inference_span(document, start, end) {
+        let ids = document.sentences[start..=end]
+            .iter()
+            .map(|sentence| sentence.id.clone())
+            .collect();
+        (input, ids)
+    } else {
+        (active.text.clone(), vec![active.id.clone()])
+    }
 }
 
 fn inference_span(document: &crate::Document, first: usize, last: usize) -> Option<String> {
@@ -1071,6 +1163,7 @@ impl Store {
                 route,
                 segments,
                 joined_lines: false,
+                alignment: None,
             }));
         }
 
@@ -1095,6 +1188,7 @@ impl Store {
             route,
             segments: result,
             joined_lines: false,
+            alignment: None,
         }))
     }
 
@@ -1142,6 +1236,7 @@ impl Store {
             route,
             segments: output,
             joined_lines: false,
+            alignment: None,
         }))
     }
 
