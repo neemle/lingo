@@ -13,7 +13,7 @@ public partial class LibraryPage
 
         Task<string?> ChooseAsync(Func<Task<string?>> detect) => source is not null
             ? ResolveImportLanguageAsync(source, chooseLanguage, detect)
-            : ChooseStagedLanguageAsync(item.Name, detect);
+            : DetectOrChooseStagedLanguageAsync(item.Name, detect);
 
         switch (item.NextAction)
         {
@@ -28,11 +28,23 @@ public partial class LibraryPage
             }
             case "recognizePhoto":
             {
-                var language = await ChooseAsync(() => Task.FromResult<string?>(null));
-                if (language is null) return null;
-                if (await session.IntakePhotoOcrLanguageAsync(item.Id) != language)
+                var cachedLanguage = await session.IntakePhotoOcrLanguageAsync(item.Id);
+                byte[]? bytes = null;
+                var language = await ChooseAsync(async () =>
                 {
-                    var bytes = await session.ReadIntakeBytesAsync(item.Id);
+                    if (cachedLanguage is not null) return cachedLanguage;
+#if MACCATALYST
+                    bytes = await session.ReadIntakeBytesAsync(item.Id);
+                    ImportStatus.Text = "Визначаємо мову зображення…";
+                    return await session.DetectLanguageAsync(await PhotoOcr.ReadLanguageSampleAsync(bytes));
+#else
+                    return null;
+#endif
+                });
+                if (language is null) return null;
+                if (cachedLanguage != language)
+                {
+                    bytes ??= await session.ReadIntakeBytesAsync(item.Id);
                     ImportStatus.Text = "Розпізнавання тексту на пристрої…";
                     var lines = await PhotoOcr.RecognizeAsync(bytes, language);
                     if (lines.Length == 0) throw new InvalidDataException("На зображенні не знайдено тексту.");
@@ -64,16 +76,25 @@ public partial class LibraryPage
 #if MACCATALYST
             case "readPdfPages":
             {
+                string? path = null;
                 var excerpt = await session.IntakePdfTextSampleAsync(item.Id);
                 if (excerpt is null)
                 {
-                    var original = await session.IntakeFileAsync(item.Id);
+                    path = (await session.IntakeFileAsync(item.Id)).Path;
                     ImportStatus.Text = "Читаємо текстовий шар PDF…";
-                    var (pageTexts, deferredFrom) = await PdfScan.ReadTextForIntakeAsync(original.Path);
+                    var (pageTexts, deferredFrom) = await PdfScan.ReadTextForIntakeAsync(path);
                     excerpt = await session.SaveIntakePdfTextAsync(item.Id, pageTexts, deferredFrom);
                 }
-                var language = await ChooseAsync(() => source?.ScanPdf == true || excerpt.Length == 0
-                    ? Task.FromResult<string?>(null) : session.DetectLanguageAsync(excerpt));
+                var language = await ChooseAsync(async () =>
+                {
+                    var detected = await session.DetectLanguageAsync(excerpt);
+                    if (detected is not null) return detected;
+
+                    ImportStatus.Text = "Визначаємо мову за першими сторінками PDF…";
+                    path ??= (await session.IntakeFileAsync(item.Id)).Path;
+                    var sample = await PdfScan.ReadLanguageSampleAsync(path);
+                    return await session.DetectLanguageAsync(sample);
+                });
                 if (language is null) return null;
                 ImportStatus.Text = "Зберігаємо документ…";
                 await session.WaitUntilIdleAsync();
@@ -88,6 +109,6 @@ public partial class LibraryPage
         return session.Document?.Id;
     }
 
-    private async Task<string?> ChooseStagedLanguageAsync(string name, Func<Task<string?>> detect) =>
-        await ChooseLanguageAsync($"Мова оригіналу · {name}", await detect());
+    private async Task<string?> DetectOrChooseStagedLanguageAsync(string name, Func<Task<string?>> detect) =>
+        SupportedLanguage(await detect()) ?? await ChooseLanguageAsync("Мова оригіналу", name);
 }

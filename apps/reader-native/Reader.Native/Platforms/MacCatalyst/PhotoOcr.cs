@@ -28,6 +28,21 @@ internal static class PhotoOcr
         return new PhotoPreview(data.ToArray(), (int)image.Width, (int)image.Height);
     });
 
+    internal static Task<string> ReadLanguageSampleAsync(byte[] bytes) =>
+        Task.Run(() => ReadLanguageSample(bytes));
+
+    internal static string ReadLanguageSample(byte[] bytes)
+    {
+        using var pool = new NSAutoreleasePool();
+        using var image = Decode(bytes, 1800);
+        using var request = CreateRecognitionRequest();
+        request.AutomaticallyDetectsLanguage = true;
+        using var handler = new VNImageRequestHandler(image, new VNImageOptions());
+        if (!handler.Perform([request], out _)) return "";
+        return string.Join("\n", (request.Results ?? []).Select(observation =>
+            observation.TopCandidates(1).FirstOrDefault()?.String));
+    }
+
     private static CGImage Decode(byte[] bytes, int limit)
     {
         using var data = NSData.FromArray(bytes);

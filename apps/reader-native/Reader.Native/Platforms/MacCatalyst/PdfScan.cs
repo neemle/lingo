@@ -103,6 +103,20 @@ internal static class PdfScan
             return page.Text?.Trim() ?? "";
         }, cancellation);
 
+    internal static Task<string> ReadLanguageSampleAsync(string path) => Task.Run(() =>
+    {
+        using var pool = new NSAutoreleasePool();
+        using var document = Open(path);
+        var pageCount = Math.Min(checked((int)document.PageCount), 2);
+        var sample = new StringBuilder();
+        for (var index = 0; index < pageCount; index++)
+        {
+            using var pagePool = new NSAutoreleasePool();
+            sample.AppendLine(PhotoOcr.ReadLanguageSample(Render(document, index, 1800).Bytes));
+        }
+        return sample.ToString();
+    });
+
     internal static Task<PhotoPreview> PreviewAsync(string path, int page) => Task.Run(() =>
     {
         using var pool = new NSAutoreleasePool();

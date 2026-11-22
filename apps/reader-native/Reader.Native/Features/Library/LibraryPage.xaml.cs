@@ -125,7 +125,8 @@ public partial class LibraryPage : ContentPage
         choosingImportSource = true;
         try
         {
-            choice = await DisplayActionSheetAsync("Додати документ", "Скасувати", null, files, scan, text, image, article);
+            choice = await ChooseLibraryOptionAsync("Додати документ", null,
+                new[] { files, scan, text, image, article }.Select(label => (label, label)));
         }
         finally
         {
@@ -273,24 +274,23 @@ public partial class LibraryPage : ContentPage
     private async Task<string?> ResolveImportLanguageAsync(ShareInboxItem item, bool chooseLanguage,
         Func<Task<string?>> detectLanguage)
     {
-        var saved = DocumentLanguages.All.Any(language => language.Code == item.SourceLanguage)
-            ? item.SourceLanguage : null;
-        if (!chooseLanguage && saved is not null) return saved;
-        var suggestion = saved is null ? await detectLanguage() : null;
-        var selected = await ChooseLanguageAsync($"Мова оригіналу · {item.Name}", suggestion);
-        if (selected is not null && item.SourceLanguage != selected)
-            await Task.Run(() => ShareInbox.SaveSourceLanguage(item, selected));
-        return selected;
+        var saved = SupportedLanguage(item.SourceLanguage);
+        var language = saved ?? SupportedLanguage(await detectLanguage());
+        if (chooseLanguage || language is null)
+            language = await ChooseLanguageAsync("Мова оригіналу", item.Name, language);
+        if (language is not null && item.SourceLanguage != language)
+            await Task.Run(() => ShareInbox.SaveSourceLanguage(item, language));
+        return language;
     }
 
-    private async Task<string?> ChooseLanguageAsync(string title, string? suggested = null)
-    {
-        var choices = DocumentLanguages.All.OrderByDescending(language => language.Code == suggested)
-            .Select(language => (Label: language.Code == suggested ? $"{language.Name} · визначено за текстом" : language.Name,
-                language.Code)).ToArray();
-        var selected = await DisplayActionSheetAsync(title, "Скасувати", null, choices.Select(choice => choice.Label).ToArray());
-        return choices.FirstOrDefault(choice => choice.Label == selected).Code;
-    }
+    private static string? SupportedLanguage(string? code) =>
+        DocumentLanguages.All.Any(language => language.Code == code) ? code : null;
+
+    private Task<string?> ChooseLanguageAsync(string title, string document, string? selected = null) =>
+        ChooseLibraryOptionAsync(title, document,
+            DocumentLanguages.All.OrderBy(language => language.Name, StringComparer.Create(
+                CultureInfo.GetCultureInfo("uk-UA"), ignoreCase: true))
+                .Select(language => (language.Code, language.Name)), selected);
 
     private async void ChangeLanguageClicked(object? sender, EventArgs args)
     {
@@ -301,7 +301,7 @@ public partial class LibraryPage : ContentPage
         changingLanguage = true;
         try
         {
-            var language = await ChooseLanguageAsync($"Мова джерела · {document.Title}");
+            var language = await ChooseLanguageAsync("Мова оригіналу", document.Title, document.Language);
             if (language is not null && language != document.Language)
                 await session.SetDocumentLanguageAsync(document.Id, language);
         }
