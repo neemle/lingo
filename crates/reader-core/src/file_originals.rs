@@ -239,21 +239,28 @@ pub(crate) fn pdf_name(name: &str) -> Result<&str> {
     Ok(name)
 }
 
-pub(crate) fn copy_pdf(mut input: impl Read, mut output: impl Write) -> Result<(u64, String)> {
-    let mut buffer = vec![0; 64 * 1024];
+fn copy_pdf(input: impl Read, output: impl Write) -> Result<(u64, String)> {
     let mut digest = Sha256::new();
+    let size = stream_pdf(input, output, |chunk| digest.update(chunk))?;
+    Ok((size, format!("{:x}", digest.finalize())))
+}
+
+pub(crate) fn stream_pdf(
+    mut input: impl Read, mut output: impl Write, mut observe: impl FnMut(&[u8]),
+) -> Result<u64> {
+    let mut buffer = vec![0; 64 * 1024];
     let mut size = 0;
     loop {
         let count = input.read(&mut buffer).map_err(storage_error)?;
         if count == 0 {
-            return Ok((size, format!("{:x}", digest.finalize())));
+            return Ok(size);
         }
         let chunk = &buffer[..count];
         size += count as u64;
         if size > MAX_PDF_BYTES {
             return Err("Файл PDF перевищує 4 ГіБ".into());
         }
-        digest.update(chunk);
+        observe(chunk);
         output.write_all(chunk).map_err(storage_error)?;
     }
 }

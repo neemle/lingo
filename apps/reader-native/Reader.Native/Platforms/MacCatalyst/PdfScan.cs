@@ -41,9 +41,12 @@ internal static class PdfScan
         var pages = new string[count];
         const int openingWindowPages = 3;
         const int openingWindowBytes = 1024 * 1024;
+        // Streamed imports only need the first page and its immediate neighbor.
+        var pageLimit = allowDeferred && new FileInfo(path).Length > Client.MaxImportBytes
+            ? Math.Min(count, 2) : count;
         long totalBytes = 0;
         var openingPages = 0;
-        for (var index = 0; index < count; index++)
+        for (var index = 0; index < pageLimit; index++)
         {
             cancellation.ThrowIfCancellationRequested();
             using var pagePool = new NSAutoreleasePool();
@@ -60,7 +63,9 @@ internal static class PdfScan
             if (index < openingWindowPages && totalBytes <= openingWindowBytes)
                 openingPages = index + 1;
         }
-        return (pages, null);
+        if (pageLimit == count) return (pages, null);
+        Array.Fill(pages, "", pageLimit, count - pageLimit);
+        return (pages, pageLimit);
     }
 
     internal static Task<string> ReadPageTextAsync(string path, int index, int expectedPages, CancellationToken cancellation) =>

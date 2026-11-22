@@ -83,7 +83,7 @@ fn stage_pdf_file(
 fn stage_pdf(root: &Path, source: impl Read) -> Result<(NamedTempFile, u64)> {
     file_originals::ensure_root(root)?;
     let mut file = file_originals::stage_original(root)?;
-    let (bytes, _) = file_originals::copy_pdf(source, file.as_file_mut())?;
+    let bytes = file_originals::stream_pdf(source, file.as_file_mut(), |_| {})?;
     file.as_file().sync_all().map_err(intake_error)?;
     Ok((file, bytes))
 }

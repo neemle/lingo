@@ -185,6 +185,8 @@ public partial class ReadingPage
                 nextStart = page.Next;
                 status.Text = page.Matches.Length > 0 ? $"Збіги · сторінка {earlierPages.Count + 1}"
                     : inTranslation ? "Збігів у збереженому перекладі немає." : "Збігів не знайдено.";
+                if (!inTranslation && document.PdfPendingTextPages.Length > 0)
+                    status.Text += " Пошук охоплює сторінки з доступним текстом.";
                 foreach (var match in page.Matches)
                 {
                     var selection = match.Selection;
