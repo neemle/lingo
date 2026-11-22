@@ -6,7 +6,11 @@ public sealed record TranslationReadiness(bool Ready, string? PivotLanguage, Tra
 
 public sealed record TranslationPackageStatus(
     string Source, string Target, bool FilesPresent, string Revision, TranslationAsset[] Assets,
-    bool HasLocalFiles = false, string? Repository = null, string? License = null);
+    bool HasLocalFiles = false, string? Repository = null, string? License = null,
+    TranslationPackageValidation? Validation = null)
+{
+    public bool HasValidatedTranslation => FilesPresent && Validation?.Matches(this) == true;
+}
 
 public sealed record TranslationPackageValidation(
     string Source, string Target, string Repository, string Revision, string Input, string Output)

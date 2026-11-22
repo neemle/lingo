@@ -19,7 +19,7 @@ public partial class SettingsPage
         var profiles = LanguageCapabilities.Build(translationInventory, knowledgeInventory,
             lexicalInventoryRead ? lexicalPackages : null,
             optionalInventoryRead ? optionalModels : null,
-            native.Voices, native.VoiceError, native.Recognition, translationValidations);
+            native.Voices, native.VoiceError, native.Recognition);
         capabilityReport = new LanguageCapabilityReport(1, DeviceInfo.Platform.ToString(), profiles);
         BindableLayout.SetItemsSource(CapabilityRows, profiles);
         ExportCapabilities.IsEnabled = true;

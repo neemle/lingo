@@ -43,14 +43,13 @@ public static class LanguageCapabilities
     public static LanguageCapabilityProfile[] Build(
         TranslationPackageStatus[]? translation, KnowledgePackage[]? knowledge, LexicalPackage[]? lexical,
         OptionalModel[]? models, SpeechVoice[] systemVoices, string? voiceError,
-        NativeRecognitionInventory recognition, IReadOnlyCollection<TranslationPackageValidation>? validations = null)
+        NativeRecognitionInventory recognition)
     {
         var catalog = translation?.Select(item => (item.Source, item.Target)).ToHashSet() ?? [];
         var installed = translation?.Where(item => item.FilesPresent).Select(item => (item.Source, item.Target))
             .ToHashSet() ?? [];
-        var verified = (translation ?? []).Where(package => package.FilesPresent)
-            .SelectMany(package => (validations ?? []).Where(validation => validation.Matches(package)))
-            .ToLookup(validation => (validation.Source, validation.Target));
+        var verified = (translation ?? []).Where(package => package.HasValidatedTranslation)
+            .ToLookup(package => (package.Source, package.Target));
         var routes = new List<CapabilityRoute>();
         foreach (var (from, _) in DocumentLanguages.All)
         foreach (var (to, _) in DocumentLanguages.All)
@@ -59,7 +58,7 @@ public static class LanguageCapabilities
             var present = FindRoute(installed, from, to, CapabilityLevel.Installed);
             var route = present ?? FindRoute(catalog, from, to, CapabilityLevel.Available);
             if (route is null) continue;
-            if (route.PivotLanguage is null && verified[(from, to)].FirstOrDefault() is { } evidence)
+            if (route.PivotLanguage is null && verified[(from, to)].FirstOrDefault()?.Validation is { } evidence)
                 route = route with { Level = CapabilityLevel.Validated, Validation = evidence };
             routes.Add(route);
         }
@@ -67,12 +66,7 @@ public static class LanguageCapabilities
         return DocumentLanguages.All.Select(language =>
         {
             var code = language.Code;
-            var ocrTags = recognition.LanguageTags.Where(tag => SpeechVoice.MatchesLanguage(tag, code)).ToArray();
-            var ocr = ocrTags.Length > 0
-                ? new LanguageCapability(recognition.Level, $"{recognition.Source} · {string.Join(", ", ocrTags)}", ocrTags)
-                : recognition.FallbackLanguages?.Contains(code) == true
-                    ? new LanguageCapability(CapabilityLevel.Installed, "Tesseract · локальний резервний OCR", [code])
-                    : new LanguageCapability(CapabilityLevel.Unavailable, recognition.Detail, []);
+            var ocr = RecognitionCapability(recognition, code);
             var voice = SpeechCapability(models, systemVoices, voiceError, code);
             var outgoing = routes.Where(route => route.Source == code).ToArray();
             var incoming = routes.Where(route => route.Target == code).ToArray();
@@ -125,6 +119,22 @@ public static class LanguageCapabilities
         return new LanguageCapability(routes.Max(route => route.Level), detail,
             routes.Select(route => route.PivotLanguage is null
                 ? $"{route.Source}→{route.Target}" : $"{route.Source}→{route.PivotLanguage}→{route.Target}").ToArray());
+    }
+
+    private static LanguageCapability RecognitionCapability(NativeRecognitionInventory inventory, string language)
+    {
+        var tags = inventory.LanguageTags.Where(tag => SpeechVoice.MatchesLanguage(tag, language)).ToArray();
+        var fallback = inventory.FallbackLanguages?.Contains(language) == true;
+        var fallbackDescription = "Tesseract · локальний резервний OCR";
+        if (tags.Length == 0)
+            return fallback ? new LanguageCapability(CapabilityLevel.Installed, fallbackDescription, [language])
+                : Unavailable(inventory.Detail);
+
+        var detail = $"{inventory.Source} · {string.Join(", ", tags)}";
+        return fallback
+            ? new LanguageCapability(inventory.Level == CapabilityLevel.Validated ? CapabilityLevel.Validated : CapabilityLevel.Installed,
+                $"{detail}{Environment.NewLine}{fallbackDescription}", tags.Append(language).Distinct().ToArray())
+            : new LanguageCapability(inventory.Level, detail, tags);
     }
 
     private static LanguageCapability SpeechCapability(OptionalModel[]? models, SpeechVoice[] voices,
