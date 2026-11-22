@@ -284,7 +284,10 @@ impl Store {
             if !lines.is_empty() || !empty_pages.is_empty() {
                 let incoming_pages: Vec<String> = serde_json::from_str(&page_text).map_err(storage_error)?;
                 let merged = crate::pdf_page_ocr::merge_cached_pages(
-                    &tx, &hash, &language, &lines, &incoming_pages, &empty_pages, &Default::default(),
+                    &tx, &hash, &language, crate::pdf_page_ocr::PdfPageCache {
+                        pages: &incoming_pages, lines: &lines, completed: &empty_pages,
+                        stale: &Default::default(), pending: None,
+                    },
                 )?;
                 if needs_cache_merge && !merged {
                     return Err("Наявна копія PDF несумісна з результатами OCR. Чернетку збережено.".into());

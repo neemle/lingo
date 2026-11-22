@@ -465,28 +465,36 @@ fn update_focused_page(db: &Connection, document: &mut Document, page: u16, page
     Ok(())
 }
 
-/// Bring in previously unseen OCR pages for the same file-backed PDF.
+/// Cached page results from the same PDF original.
+pub(crate) struct PdfPageCache<'a> {
+    pub pages: &'a [String],
+    pub lines: &'a [ocr::OcrLine],
+    pub completed: &'a [u16],
+    pub stale: &'a BTreeSet<u16>,
+    /// Only native ZIP backups can carry deferred text-layer identities.
+    pub pending: Option<&'a BTreeSet<u16>>,
+}
+
 pub(crate) fn merge_backup_cache(
     db: &Connection,
     incoming: &Document,
     incoming_pages: &[String],
     completed: &[u16],
 ) -> Result<()> {
-    merge_cached_pages(
-        db, &incoming.source_hash, &incoming.language,
-        incoming.ocr_lines.as_deref().unwrap_or_default(), incoming_pages, completed,
-        &incoming.pdf_ocr_refresh_pages,
-    ).map(|_| ())
+    merge_cached_pages(db, &incoming.source_hash, &incoming.language, PdfPageCache {
+        pages: incoming_pages,
+        lines: incoming.ocr_lines.as_deref().unwrap_or_default(),
+        completed,
+        stale: &incoming.pdf_ocr_refresh_pages,
+        pending: Some(&incoming.pdf_pending_text_pages),
+    }).map(|_| ())
 }
 
 pub(crate) fn merge_cached_pages(
     db: &Connection,
     hash: &str,
     language: &str,
-    lines: &[ocr::OcrLine],
-    incoming_pages: &[String],
-    completed: &[u16],
-    stale: &BTreeSet<u16>,
+    cache: PdfPageCache<'_>,
 ) -> Result<bool> {
     let matched: Option<(String, String)> = db
         .query_row(
@@ -502,43 +510,107 @@ pub(crate) fn merge_cached_pages(
         return Ok(false);
     };
     let mut local: Document = serde_json::from_str(&body).map_err(database_error)?;
-    let pages: Vec<String> = serde_json::from_str(&page_text).map_err(database_error)?;
-    if local.language != language || pages.as_slice() != incoming_pages {
+    let mut pages: Vec<String> = serde_json::from_str(&page_text).map_err(database_error)?;
+    if local.language != language || pages.len() != cache.pages.len() {
         return Ok(false);
     }
 
-    let local_completed = completed_pages(db, &local.id)?;
+    let mut available = crate::MAX_IMPORT.saturating_sub(local.text.len());
     let mut adopted_pages = BTreeSet::new();
-    for &page in completed {
+    let mut obsolete_requests = BTreeSet::new();
+    let mut layers_changed = false;
+    for (index, (local_text, incoming_text)) in pages.iter_mut().zip(cache.pages).enumerate() {
+        let page = u16::try_from(index).map_err(database_error)?;
+        if cache.pending.is_some_and(|pending| pending.contains(&page)) {
+            continue;
+        }
+        if !local.pdf_pending_text_pages.contains(&page) {
+            // Legacy checkpoint transfers must retain the exact layer mapping.
+            if cache.pending.is_none() && local_text.as_str() != incoming_text.as_str() {
+                return Ok(false);
+            }
+            continue;
+        }
+
+        if !incoming_text.is_empty() {
+            let bytes = incoming_text.trim().len() + 2;
+            if bytes > available {
+                if cache.pending.is_none() {
+                    return Ok(false);
+                }
+                continue;
+            }
+            available -= bytes;
+            local_text.clone_from(incoming_text);
+            layers_changed = true;
+            obsolete_requests.insert(page);
+        }
+        adopted_pages.insert(page);
+    }
+
+    let mut added_lines = Vec::new();
+    let mut unadopted_results = BTreeSet::new();
+    for lines in cache.lines.chunk_by(|a, b| a.page == b.page) {
+        let page = lines[0].page;
+        if !pages.get(usize::from(page)).is_some_and(|text| text.trim().is_empty())
+            || has_ocr_lines(&local, page)
+        {
+            continue;
+        }
+        let bytes = 1 + lines.iter().map(|line| line.reading_text().len() + 1).sum::<usize>();
+        if bytes > available {
+            if cache.pending.is_none() {
+                return Ok(false);
+            }
+            unadopted_results.insert(page);
+            continue;
+        }
+        available -= bytes;
+        obsolete_requests.insert(page);
+        adopted_pages.insert(page);
+        added_lines.extend_from_slice(lines);
+    }
+
+    for page in obsolete_requests {
+        remove_request(db, &local.id, page)?;
+    }
+    let local_completed = completed_pages(db, &local.id)?;
+    for &page in cache.completed {
+        if unadopted_results.contains(&page)
+            || !pages.get(usize::from(page)).is_some_and(|text| text.trim().is_empty())
+        {
+            continue;
+        }
         if local_completed.binary_search(&page).is_err() && !has_ocr_lines(&local, page) {
             adopted_pages.insert(page);
         }
         mark_completed(db, &local.id, page)?;
-    }
-    let added: Vec<_> = lines
-        .iter()
-        .filter(|line| !has_ocr_lines(&local, line.page))
-        .cloned()
-        .collect();
-    for page in added.iter().map(|line| line.page).collect::<BTreeSet<_>>() {
-        remove_request(db, &local.id, page)?;
-        adopted_pages.insert(page);
     }
     if adopted_pages.is_empty() {
         return Ok(true);
     }
     for page in adopted_pages {
         local.pdf_pending_text_pages.remove(&page);
-        if stale.contains(&page) {
+        if cache.stale.contains(&page) {
             local.pdf_ocr_refresh_pages.insert(page);
         } else {
             local.pdf_ocr_refresh_pages.remove(&page);
         }
     }
-    if !added.is_empty() {
+    if layers_changed {
+        let page_text = serde_json::to_string(&pages).map_err(database_error)?;
+        db.execute(
+            "UPDATE file_originals SET pdf_page_text=?2 WHERE document_id=?1",
+            params![local.id, page_text],
+        ).map_err(database_error)?;
+    }
+    let has_added_ocr = !added_lines.is_empty();
+    if has_added_ocr {
         let lines = local.ocr_lines.get_or_insert_with(Vec::new);
-        lines.extend(added);
+        lines.extend(added_lines);
         lines.sort_by_key(|line| line.page);
+    }
+    if layers_changed || has_added_ocr {
         reflow_pdf_document(db, &mut local, pages)?;
     }
     let body = serde_json::to_string(&local).map_err(database_error)?;
