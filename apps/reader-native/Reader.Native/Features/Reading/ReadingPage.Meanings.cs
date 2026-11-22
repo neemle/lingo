@@ -48,30 +48,7 @@ public partial class ReadingPage
         close.Clicked += async (_, _) => await DismissAsync();
         foreach (var meaning in selected)
         {
-            var part = new VerticalStackLayout { Spacing = 4 };
-            part.Children.Add(new Label { Text = $"{meaning.Lemma} · {meaning.PartOfSpeech}", FontAttributes = FontAttributes.Bold });
-            part.Children.Add(new Label { Text = $"{meaning.Gloss} · {DocumentLanguages.Name(meaning.GlossLanguage)}" });
-            var match = meaning.ContextMatches > 0
-                ? $"Збіги з контекстом · {meaning.ContextMatches}"
-                : "Можливе значення";
-            part.Children.Add(new Label { Text = match, FontSize = 12 });
-            foreach (var example in meaning.Examples)
-            {
-                var text = example.Translation is { Length: > 0 } ? $"{example.Text}\n{example.Translation}" : example.Text;
-                part.Children.Add(new Label { Text = text, FontSize = 14 });
-            }
-            if (Uri.TryCreate(meaning.SourceUrl, UriKind.Absolute, out var source) &&
-                source.Scheme == Uri.UriSchemeHttps && (source.Host == "kaikki.org" || source.Host == "en.wiktionary.org"))
-            {
-                var link = new Button { Text = $"{meaning.SourceName} · {meaning.SourceLicense}", HorizontalOptions = LayoutOptions.Start };
-                link.Clicked += async (_, _) =>
-                {
-                    try { await Launcher.Default.OpenAsync(source); }
-                    catch (Exception error) { await DisplayAlertAsync("Джерело", error.Message, "Гаразд"); }
-                };
-                part.Children.Add(link);
-            }
-            else part.Children.Add(new Label { Text = $"{meaning.SourceName} · {meaning.SourceLicense}", FontSize = 12 });
+            var part = MeaningDetails(meaning);
             var pick = new Button
             {
                 Text = selectedSense?.Id == meaning.Id ? "Вибране значення" : "Вибрати значення",
@@ -82,9 +59,7 @@ public partial class ReadingPage
                 if (!body.IsEnabled) return;
                 if (selection == word && AppState.Session.Document?.Id == document.Id)
                 {
-                    SetSelectedSense(new SenseSnapshot(meaning.Id, meaning.Lemma, word.Text,
-                        meaning.PartOfSpeech, meaning.Gloss, meaning.GlossLanguage,
-                        meaning.SourceName, meaning.SourceUrl, meaning.SourceLicense, meaning.SourceRevision));
+                    SetSelectedSense(MeaningSnapshot(word.Text, meaning));
                     if (VocabularyReading.SelectedIndex > 0 &&
                         vocabularyReadings.ElementAtOrDefault(VocabularyReading.SelectedIndex - 1)?.Expression is not null)
                         VocabularyReading.SelectedIndex = 0;
@@ -102,5 +77,70 @@ public partial class ReadingPage
             showingMeanings = false;
             await DisplayAlertAsync("Словникові значення", error.Message, "Гаразд");
         }
+    }
+
+    private sealed record DetachedMeaningChoice(SenseSnapshot? Sense);
+
+    private async Task<DetachedMeaningChoice?> ChooseDetachedMeaningAsync(string surface, WordMeaning[] meanings)
+    {
+        var result = new TaskCompletionSource<DetachedMeaningChoice?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var body = new VerticalStackLayout { Padding = 24, Spacing = 12 };
+        var page = new ContentPage { Title = "Словникова картка", Content = new ScrollView { Content = body } };
+        page.Disappearing += (_, _) => result.TrySetResult(null);
+        body.Children.Add(new Label { Text = surface, FontSize = 26, FontAttributes = FontAttributes.Bold });
+        var manual = new Button { Text = "Зберегти без словникового значення", HorizontalOptions = LayoutOptions.Start };
+        var cancel = new Button { Text = "Скасувати", HorizontalOptions = LayoutOptions.Start };
+        manual.Clicked += (_, _) => result.TrySetResult(new DetachedMeaningChoice(null));
+        cancel.Clicked += (_, _) => result.TrySetResult(null);
+        body.Children.Add(new HorizontalStackLayout { Spacing = 8, Children = { manual, cancel } });
+        foreach (var meaning in meanings)
+        {
+            var part = MeaningDetails(meaning);
+            var pick = new Button { Text = "Вибрати значення", HorizontalOptions = LayoutOptions.Start };
+            pick.Clicked += (_, _) => result.TrySetResult(new DetachedMeaningChoice(MeaningSnapshot(surface, meaning)));
+            part.Children.Add(pick);
+            body.Children.Add(part);
+        }
+
+        await Navigation.PushModalAsync(page);
+        var selected = await result.Task;
+        if (Navigation.ModalStack.LastOrDefault() == page) await Navigation.PopModalAsync();
+        return selected;
+    }
+
+    private static SenseSnapshot MeaningSnapshot(string surface, WordMeaning meaning) =>
+        new(meaning.Id, meaning.Lemma, surface, meaning.PartOfSpeech, meaning.Gloss, meaning.GlossLanguage,
+            meaning.SourceName, meaning.SourceUrl, meaning.SourceLicense, meaning.SourceRevision);
+
+    private VerticalStackLayout MeaningDetails(WordMeaning meaning)
+    {
+        var part = new VerticalStackLayout { Spacing = 4 };
+        part.Children.Add(new Label { Text = $"{meaning.Lemma} · {meaning.PartOfSpeech}", FontAttributes = FontAttributes.Bold });
+        part.Children.Add(new Label { Text = $"{meaning.Gloss} · {DocumentLanguages.Name(meaning.GlossLanguage)}" });
+        var evidence = meaning.Confidence switch
+        {
+            "contextual" => $"Підтримане контекстом · {meaning.ContextMatches}",
+            "dictionary" => "Словникове значення",
+            _ => "Можливе значення",
+        };
+        part.Children.Add(new Label { Text = evidence, FontSize = 12 });
+        foreach (var example in meaning.Examples)
+        {
+            var text = example.Translation is { Length: > 0 } ? $"{example.Text}\n{example.Translation}" : example.Text;
+            part.Children.Add(new Label { Text = text, FontSize = 14 });
+        }
+        if (Uri.TryCreate(meaning.SourceUrl, UriKind.Absolute, out var source) &&
+            source.Scheme == Uri.UriSchemeHttps && (source.Host == "kaikki.org" || source.Host == "en.wiktionary.org"))
+        {
+            var link = new Button { Text = $"{meaning.SourceName} · {meaning.SourceLicense}", HorizontalOptions = LayoutOptions.Start };
+            link.Clicked += async (_, _) =>
+            {
+                try { await Launcher.Default.OpenAsync(source); }
+                catch (Exception error) { await DisplayAlertAsync("Джерело", error.Message, "Гаразд"); }
+            };
+            part.Children.Add(link);
+        }
+        else part.Children.Add(new Label { Text = $"{meaning.SourceName} · {meaning.SourceLicense}", FontSize = 12 });
+        return part;
     }
 }

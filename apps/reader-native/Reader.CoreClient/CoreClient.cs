@@ -380,12 +380,15 @@ public sealed class CoreClient : IDisposable
 
     public MachineTranslation? TranslateSentence(string id, string sentenceId, string target) =>
         CallIndependent<MachineTranslation?>(new { version = 1, operation = "translate_sentence", id, sentenceId, target });
+    public WordLookup? LookupDetachedPdfWord(string id, int page, int startUtf16, string text) =>
+        CallIndependent<WordLookup?>(new { version = 1, operation = "lookup_detached_pdf_word", id, page, startUtf16, text });
+
     public Vocabulary SaveDetachedPdfWord(string id, int page, int startUtf16, string selectedText,
-        string translation, string target, LemmaSnapshot? analysis, ExpressionSnapshot? expression) =>
+        string translation, string target, LemmaSnapshot? analysis, ExpressionSnapshot? expression, SenseSnapshot? sense = null) =>
         Call<Vocabulary>(new
         {
             version = 1, operation = "save_detached_pdf_word", id, page,
-            input = new { startUtf16, selectedText, translation, target, analysis, expression },
+            input = new { startUtf16, selectedText, translation, target, analysis, expression, sense },
         });
 
     public Vocabulary SaveWord(Vocabulary entry) =>

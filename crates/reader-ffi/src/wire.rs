@@ -500,6 +500,13 @@ pub enum Command {
         sentence_id: String,
         target: String,
     },
+    LookupDetachedPdfWord {
+        id: String,
+        page: u16,
+        #[serde(rename = "startUtf16")]
+        start_utf16: usize,
+        text: String,
+    },
     SaveDetachedPdfWord {
         id: String,
         page: u16,

@@ -449,6 +449,12 @@ impl StoreWorker {
             .translate_installed_sentence(document_id, sentence_id, target)
     }
 
+    pub fn lookup_detached_pdf_word(
+        self, id: &str, page: u16, start_utf16: usize, text: &str,
+    ) -> Result<Option<crate::knowledge::WordLookup>> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_ONLY)?.lookup_detached_pdf_word(id, page, start_utf16, text)
+    }
+
     pub fn find_detached_pdf_text(
         self, id: &str, query: &str, start: crate::DetachedPdfFindCursor, limit: usize, target: Option<&str>,
     ) -> Result<crate::DetachedPdfFindPage> {

@@ -1,6 +1,6 @@
 use super::{
     annotation_cache, expressions::ExpressionMatch, lexicon, ocr_suggestions::SpellingSuggestion,
-    syntax_parse, versioned_index, KnowledgePackage, Pack, WordAnalysis, WordContext, PACKS,
+    syntax_parse, versioned_index, KnowledgePackage, Pack, WordAnalysis, WordContext, WordLookup, PACKS,
 };
 use crate::{
     document_tokens::{find_sentence, revision_id, token_id, word_parts},
@@ -56,6 +56,7 @@ pub struct DetachedVocabularyInput {
     target: String,
     analysis: Option<Box<crate::LemmaSnapshot>>,
     expression: Option<Box<crate::ExpressionSnapshot>>,
+    sense: Option<Box<crate::SenseSnapshot>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -161,6 +162,33 @@ impl Store {
         )
     }
 
+    pub fn lookup_detached_pdf_word(
+        &self, document_id: &str, page: u16, start_utf16: usize, selected: &str,
+    ) -> Result<Option<WordLookup>> {
+        let cached = self.detached_pdf_sentences(document_id, page)?
+            .ok_or("Текст сторінки PDF недоступний.")?;
+        let (sentence, scope) = detached_selection(&cached.sentences, start_utf16, selected)?;
+        let (word, offset) = match scope {
+            AnalysisScope::Word { start_utf16 } => {
+                let (_, _, word) = word_parts(&sentence.text).find(|(_, offset, _)| *offset == start_utf16)
+                    .ok_or("Слово не знайдено у виділенні PDF.")?;
+                (word, start_utf16)
+            }
+            AnalysisScope::Expression { .. } => {
+                let trimmed = selected.trim_start();
+                let leading = selected[..selected.len() - trimmed.len()].encode_utf16().count();
+                (trimmed.trim_end(), start_utf16 + leading - sentence.start_utf16)
+            }
+            AnalysisScope::Sentence { .. } => return Ok(None),
+        };
+        let context = WordContext { sentence: sentence.text.clone(), start_utf16: offset };
+        let mut lookup = self.lookup_word(&cached.language, word, Some(&context))?;
+        if let Some(lookup) = &mut lookup {
+            lookup.bind_expression_tokens(|start| token_id(&cached.revision, &sentence.id, start));
+        }
+        Ok(lookup)
+    }
+
     pub fn save_detached_pdf_word(
         &mut self, document_id: &str, page: u16, input: DetachedVocabularyInput,
     ) -> Result<crate::Vocabulary> {
@@ -179,7 +207,7 @@ impl Store {
             reverse: Default::default(),
             analysis: input.analysis,
             expression: input.expression,
-            sense: None,
+            sense: input.sense,
             accepted_translations: Vec::new(),
         }, true)
     }

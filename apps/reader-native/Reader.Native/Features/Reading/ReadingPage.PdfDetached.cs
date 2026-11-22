@@ -131,36 +131,57 @@ public partial class ReadingPage
         UpdateDetachedControls();
         try
         {
-            var translation = await DisplayPromptAsync("Додати до словника",
-                $"«{selected.Text}» · {DocumentLanguages.Name(target)}", accept: "Далі", cancel: "Скасувати",
-                placeholder: "Переклад", maxLength: 2000);
-            if (string.IsNullOrWhiteSpace(translation) || detachedAddress != address || TargetCode != target) return;
+            WordLookup? lookup = null;
+            try { lookup = await session.LookupDetachedPdfWordAsync(address.Document, address.Page, selected); }
+            catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
+            if (detachedAddress != address || detachedSelection != selected || TargetCode != target) return;
+
+            SenseSnapshot? sense = null;
+            if (lookup?.Meanings is { Length: > 0 } meanings)
+            {
+                var choice = await ChooseDetachedMeaningAsync(selected.Text, meanings);
+                if (choice is null || !SelectionDocumentCurrent()) return;
+                sense = choice.Sense;
+            }
+
+            var description = sense is null ? $"«{selected.Text}» · {DocumentLanguages.Name(target)}"
+                : $"«{selected.Text}» · {sense.Gloss}{Environment.NewLine}Переклад · {DocumentLanguages.Name(target)}";
+            var translation = await DisplayPromptAsync("Додати до словника", description,
+                accept: "Далі", cancel: "Скасувати", placeholder: "Переклад",
+                initialValue: sense is { } chosenSense && chosenSense.GlossLanguage == target ? chosenSense.Gloss : null,
+                maxLength: 2000);
+            if (string.IsNullOrWhiteSpace(translation) || !SelectionDocumentCurrent()) return;
 
             var reading = new VocabularyReadingOption("Як у тексті");
-            LinguisticAnalysis? details = null;
-            try { details = await session.AnalyzeDetachedPdfSelectionAsync(address.Document, address.Page, selected); }
-            catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
-            if (detachedAddress != address || TargetCode != target) return;
-            var options = DetachedVocabularyReadings(details, selected, reading);
-            if (options.Length > 1)
+            if (sense is null)
             {
-                var labels = options.Select((option, index) => $"{index + 1}. {option.Label}").ToArray();
-                var choice = await DisplayActionSheetAsync("Як зберегти картку", "Скасувати", null, labels);
-                var index = Array.IndexOf(labels, choice);
-                if (index < 0 || detachedAddress != address || TargetCode != target) return;
-                reading = options[index];
+                LinguisticAnalysis? details = null;
+                try { details = await session.AnalyzeDetachedPdfSelectionAsync(address.Document, address.Page, selected); }
+                catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
+                if (!SelectionDocumentCurrent()) return;
+
+                var options = DetachedVocabularyReadings(details, selected, reading);
+                if (options.Length > 1)
+                {
+                    var labels = options.Select((option, index) => $"{index + 1}. {option.Label}").ToArray();
+                    var choice = await DisplayActionSheetAsync("Як зберегти картку", "Скасувати", null, labels);
+                    var index = Array.IndexOf(labels, choice);
+                    if (index < 0 || !SelectionDocumentCurrent()) return;
+                    reading = options[index];
+                }
             }
 
             await session.WaitUntilIdleAsync();
-            if (session.Document?.Id != address.Document || detachedAddress != address) return;
+            if (!SelectionDocumentCurrent()) return;
             await session.SaveDetachedPdfWordAsync(address.Document, address.Page, selected, translation,
-                target, reading.Lemma, reading.Expression);
+                target, reading.Lemma, reading.Expression, sense);
             if (session.Error.Length > 0)
             {
                 await DisplayAlertAsync("Словник", session.Error, "Гаразд");
                 return;
             }
-            if (detachedAddress == address) DetachedSentenceStatus.Text = "Картку збережено в словнику.";
+            if (detachedAddress is { } visible && visible.Document == address.Document && visible.Page == address.Page)
+                DetachedSentenceStatus.Text = "Картку збережено в словнику.";
         }
         catch (Exception error) { await DisplayAlertAsync("Словник", error.Message, "Гаразд"); }
         finally
@@ -168,6 +189,10 @@ public partial class ReadingPage
             savingDetachedWord = false;
             UpdateDetachedControls();
         }
+
+        bool SelectionDocumentCurrent() =>
+            readingPageActive && session.Document is { } document && document.Id == address.Document &&
+            document.Language == address.Language && TargetCode == target;
     }
 
     private static VocabularyReadingOption[] DetachedVocabularyReadings(

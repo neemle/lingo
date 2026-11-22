@@ -314,6 +314,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             sentence_id,
             target,
         } => cached_translation(store.cached_installed_translation(&id, &sentence_id, &target)),
+        Command::LookupDetachedPdfWord { id, page, start_utf16, text } =>
+            value(store.lookup_detached_pdf_word(&id, page, start_utf16, &text)),
         Command::SaveDetachedPdfWord { id, page, input } =>
             value(store.save_detached_pdf_word(&id, page, input)),
         Command::SaveWord { entry } => value(store.save_word(entry)),

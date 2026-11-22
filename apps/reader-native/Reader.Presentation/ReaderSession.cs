@@ -482,10 +482,13 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         return Read();
     });
 
+    public Task<WordLookup?> LookupDetachedPdfWordAsync(string id, int page, TextSelection selection) =>
+        Task.Run(() => client.LookupDetachedPdfWord(id, page, selection.StartUtf16, selection.Text));
+
     public Task SaveDetachedPdfWordAsync(string id, int page, TextSelection selection, string translation,
-        string target, LemmaSnapshot? analysis, ExpressionSnapshot? expression) => RunAsync(() =>
+        string target, LemmaSnapshot? analysis, ExpressionSnapshot? expression, SenseSnapshot? sense = null) => RunAsync(() =>
     {
-        client.SaveDetachedPdfWord(id, page, selection.StartUtf16, selection.Text, translation, target, analysis, expression);
+        client.SaveDetachedPdfWord(id, page, selection.StartUtf16, selection.Text, translation, target, analysis, expression, sense);
         return Read();
     });
 

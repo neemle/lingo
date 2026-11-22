@@ -153,6 +153,12 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 return encode_job(worker.discard_intake(id));
             }
         }
+        Command::LookupDetachedPdfWord { id, page, start_utf16, text } => {
+            let worker = registry::lock()?.store(handle)?.prepare_store_worker();
+            if let Some(worker) = worker {
+                return encode_job(worker.lookup_detached_pdf_word(id, *page, *start_utf16, text));
+            }
+        }
         Command::FindDetachedPdfText { id, query, start, limit, target } => {
             let worker = registry::lock()?.store(handle)?.prepare_store_worker();
             if let Some(worker) = worker {
