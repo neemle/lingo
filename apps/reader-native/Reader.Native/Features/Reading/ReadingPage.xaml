@@ -97,14 +97,18 @@
     <Button Text="Озвучити / повторити" Margin="0,0,8,6" Clicked="SpeakClicked" IsEnabled="{Binding CanInteract}" />
     <Button x:Name="PauseSpeech" Text="Пауза" Margin="0,0,8,6" IsEnabled="False" Clicked="PauseClicked" />
     <Button Text="Стоп" Margin="0,0,8,6" Clicked="StopClicked" />
-    <Picker x:Name="Rate" WidthRequest="95" Title="Темп" SelectedIndex="1">
+    <Picker x:Name="Rate" WidthRequest="95" Title="Темп" SelectedIndex="1" SelectedIndexChanged="SpeechPreferencesChanged">
      <Picker.Items><x:String>0.75×</x:String><x:String>1×</x:String><x:String>1.25×</x:String></Picker.Items>
     </Picker>
    </FlexLayout>
-   <HorizontalStackLayout Spacing="6">
-    <CheckBox x:Name="ContinueSpeech" SemanticProperties.Description="Автоматично озвучувати наступні речення" />
+   <FlexLayout Wrap="Wrap" AlignItems="Center" JustifyContent="Start">
+    <Picker x:Name="VoicePicker" Title="Голос" WidthRequest="240" Margin="0,0,12,0"
+     SelectedIndexChanged="VoiceChanged" SemanticProperties.Description="Системний голос для цієї мови" />
+    <CheckBox x:Name="ContinueSpeech" CheckedChanged="SpeechPreferencesChanged"
+     SemanticProperties.Description="Автоматично озвучувати наступні речення" />
     <Label Text="Озвучувати наступні речення" VerticalOptions="Center" />
-   </HorizontalStackLayout>
+   </FlexLayout>
+   <Label x:Name="VoiceStatus" FontSize="12" TextColor="#63725C" IsVisible="False" />
    <Label x:Name="SpeechStatus" FontSize="12" TextColor="#63725C" />
   </VerticalStackLayout>
  </Grid>

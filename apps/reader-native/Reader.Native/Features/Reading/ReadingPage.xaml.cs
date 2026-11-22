@@ -34,6 +34,12 @@ public partial class ReadingPage : ContentPage
     private int speechRequest;
     private bool speechPaused;
     private bool utteranceActive;
+    private bool loadingSpeechPreferences;
+    private bool speechPreferencesReady;
+    private const string RatePreference = "reader.speech.rate";
+    private const string ContinuousPreference = "reader.speech.continuous";
+    private SpeechVoice[] availableVoices = [];
+    private string? voiceLanguage;
     public ReadingPage() => InitializeComponent();
 
     protected override void OnAppearing()
@@ -43,6 +49,15 @@ public partial class ReadingPage : ContentPage
         AppState.Session.PropertyChanged += SessionChanged;
         UpdateHighlight();
         UpdateTranslation();
+        loadingSpeechPreferences = true;
+        try
+        {
+            Rate.SelectedIndex = Math.Clamp(Preferences.Get(RatePreference, 1), 0, 2);
+            ContinueSpeech.IsChecked = Preferences.Get(ContinuousPreference, false);
+        }
+        finally { loadingSpeechPreferences = false; }
+        speechPreferencesReady = true;
+        RefreshVoices(force: true);
     }
 
     protected override void OnDisappearing()
@@ -62,6 +77,7 @@ public partial class ReadingPage : ContentPage
         {
             UpdateHighlight();
             UpdateTranslation();
+            RefreshVoices();
         }
         if (args.PropertyName == nameof(ReaderSession.Error) && AppState.Session.Error.Length > 0)
             SemanticScreenReader.Default.Announce(AppState.Session.Error);
@@ -262,6 +278,61 @@ public partial class ReadingPage : ContentPage
         StopSpeech(); await AppState.Session.SelectSentenceAsync(SentencePicker.SelectedIndex);
     }
 
+    private static string VoicePreference(string language) => $"reader.speech.voice.{language}";
+
+    private void RefreshVoices(bool force = false)
+    {
+        var language = AppState.Session.Document?.Language;
+        if (!force && voiceLanguage == language) return;
+        voiceLanguage = language;
+        loadingSpeechPreferences = true;
+        try
+        {
+            availableVoices = language is null ? [] : LocalSpeech.VoicesForLanguage(language);
+            VoicePicker.ItemsSource = new[] { "Системний вибір" }.Concat(availableVoices.Select(voice =>
+                $"{voice.Name} ({voice.Language})")).ToArray();
+            var saved = language is null ? "" : Preferences.Get(VoicePreference(language), "");
+            var chosen = Array.FindIndex(availableVoices, voice => voice.Id == saved);
+            VoicePicker.SelectedIndex = chosen + 1;
+            VoicePicker.IsEnabled = availableVoices.Length > 0;
+            var status = language is null ? ""
+                : availableVoices.Length == 0 ? "Для цієї мови немає встановленого голосу."
+                : chosen < 0 && saved.Length > 0 ? "Збережений голос недоступний. Використано системний вибір." : "";
+            SetVoiceStatus(status);
+        }
+        catch (Exception error)
+        {
+            availableVoices = [];
+            VoicePicker.ItemsSource = Array.Empty<string>();
+            VoicePicker.IsEnabled = false;
+            SetVoiceStatus($"Не вдалося отримати список голосів: {error.Message}");
+        }
+        finally { loadingSpeechPreferences = false; }
+    }
+
+    private void SetVoiceStatus(string status)
+    {
+        VoiceStatus.Text = status;
+        VoiceStatus.IsVisible = status.Length > 0;
+    }
+
+    private void VoiceChanged(object? sender, EventArgs args)
+    {
+        if (loadingSpeechPreferences || voiceLanguage is null || VoicePicker.SelectedIndex < 0) return;
+        Preferences.Set(VoicePreference(voiceLanguage), SelectedVoiceId() ?? "");
+        SetVoiceStatus("");
+    }
+
+    private string? SelectedVoiceId() => VoicePicker.SelectedIndex > 0 && VoicePicker.SelectedIndex <= availableVoices.Length
+        ? availableVoices[VoicePicker.SelectedIndex - 1].Id : null;
+
+    private void SpeechPreferencesChanged(object? sender, EventArgs args)
+    {
+        if (!speechPreferencesReady || loadingSpeechPreferences || Rate.SelectedIndex < 0) return;
+        Preferences.Set(RatePreference, Rate.SelectedIndex);
+        Preferences.Set(ContinuousPreference, ContinueSpeech.IsChecked);
+    }
+
     private async void SpeakClicked(object? sender, EventArgs args)
     {
         var session = AppState.Session;
@@ -269,6 +340,8 @@ public partial class ReadingPage : ContentPage
         var request = ++speechRequest;
         var receivedCue = false;
         var status = LocalSpeech.CompletedStatus;
+        RefreshVoices(force: true);
+        speech.PreferredVoice = SelectedVoiceId();
         speech.Rate = Rate.SelectedIndex switch { 0 => .75f, 2 => 1.25f, _ => 1f };
 
         while (request == speechRequest && session.Document is { } doc && doc.Id == initial.Id &&

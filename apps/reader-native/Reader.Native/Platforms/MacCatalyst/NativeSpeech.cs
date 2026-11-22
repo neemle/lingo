@@ -1,4 +1,5 @@
 using AVFoundation;
+using Reader.Presentation;
 
 namespace Reader.Native.Services;
 
@@ -9,12 +10,19 @@ internal sealed class NativeSpeech
     internal bool Pause() => active?.PauseSpeaking(AVSpeechBoundary.Immediate) == true;
     internal bool Resume() => active?.ContinueSpeaking() == true;
 
-    internal async Task SpeakAsync(string text, string language, float rate, Action<int, int>? boundary,
-        CancellationToken token)
+    internal static SpeechVoice[] InstalledVoices() => AVSpeechSynthesisVoice.GetSpeechVoices()
+        .Select(ToVoice).ToArray();
+
+    private static SpeechVoice ToVoice(AVSpeechSynthesisVoice voice) =>
+        new(voice.Identifier, voice.Name, voice.Language);
+
+    internal async Task SpeakAsync(string text, string language, string? preferredVoice, float rate,
+        Action<int, int>? boundary, CancellationToken token)
     {
-        var voice = AVSpeechSynthesisVoice.GetSpeechVoices().FirstOrDefault(item =>
-            item.Language.Equals(language, StringComparison.OrdinalIgnoreCase) ||
-            item.Language.StartsWith(language + "-", StringComparison.OrdinalIgnoreCase))
+        var voices = AVSpeechSynthesisVoice.GetSpeechVoices();
+        using var systemVoice = AVSpeechSynthesisVoice.FromLanguage(language);
+        var selected = SpeechVoice.ResolveId(voices.Select(ToVoice), language, preferredVoice, systemVoice?.Identifier);
+        var voice = voices.FirstOrDefault(item => item.Identifier == selected)
             ?? throw new InvalidOperationException("Голос цієї мови не встановлено в системі.");
 
         using var utterance = new AVSpeechUtterance(text)

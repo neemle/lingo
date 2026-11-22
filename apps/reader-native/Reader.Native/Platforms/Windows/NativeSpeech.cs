@@ -1,3 +1,4 @@
+using Reader.Presentation;
 using Windows.Foundation.Collections;
 using Windows.Media.Core;
 using Windows.Media.Playback;
@@ -23,12 +24,18 @@ internal sealed class NativeSpeech
         return true;
     }
 
-    internal async Task SpeakAsync(string text, string language, float rate, Action<int, int>? boundary,
-        CancellationToken token)
+    internal static SpeechVoice[] InstalledVoices() => SpeechSynthesizer.AllVoices.Select(ToVoice).ToArray();
+
+    private static SpeechVoice ToVoice(VoiceInformation voice) =>
+        new(voice.Id, voice.DisplayName, voice.Language);
+
+    internal async Task SpeakAsync(string text, string language, string? preferredVoice, float rate,
+        Action<int, int>? boundary, CancellationToken token)
     {
-        var voice = SpeechSynthesizer.AllVoices.FirstOrDefault(item =>
-            item.Language.Equals(language, StringComparison.OrdinalIgnoreCase) ||
-            item.Language.StartsWith(language + "-", StringComparison.OrdinalIgnoreCase))
+        var voices = SpeechSynthesizer.AllVoices;
+        var selected = SpeechVoice.ResolveId(voices.Select(ToVoice), language, preferredVoice,
+            SpeechSynthesizer.DefaultVoice?.Id);
+        var voice = voices.FirstOrDefault(item => item.Id == selected)
             ?? throw new InvalidOperationException("Голос цієї мови не встановлено в системі.");
         using var engine = new SpeechSynthesizer { Voice = voice };
         engine.Options.SpeakingRate = rate;
