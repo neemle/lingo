@@ -18,7 +18,7 @@ public partial class SettingsPage
             if (missing.Length == 0) return;
             Status.Text += "\nПотрібні ресурси з архіву:\n" + string.Join("\n", missing.Take(32));
             if (missing.Length > 32) Status.Text += $"\nЩе ресурсів: {missing.Length - 32}.";
-            Status.Text += "\nВстановіть їх у відповідному розділі налаштувань.";
+            Status.Text += "\nВстановіть їх з локальних файлів або завантажте у відповідному розділі налаштувань.";
         }
         catch (Exception error)
         {

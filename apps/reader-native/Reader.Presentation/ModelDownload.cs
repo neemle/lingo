@@ -64,6 +64,60 @@ public sealed class ModelDownload(HttpClient http)
         }
     }
 
+    public static async Task StageOptionalModelFilesAsync(OptionalModel model, string stagingRoot,
+        IReadOnlyCollection<(string Name, Func<Task<Stream>> Open)> files,
+        IProgress<long>? progress, CancellationToken cancellationToken)
+    {
+        ValidateOptionalModel(model);
+        var selected = new Dictionary<string, Func<Task<Stream>>>(StringComparer.Ordinal);
+        foreach (var (name, open) in files)
+        {
+            var asset = model.Assets.FirstOrDefault(asset =>
+                string.Equals(name, asset.Name, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, OptionalDownloadName(asset), StringComparison.OrdinalIgnoreCase));
+            if (asset is null)
+                throw new InvalidDataException($"Файл «{name}» не належить до цього пакета.");
+            if (!selected.TryAdd(asset.Name, open))
+                throw new InvalidDataException($"Файл «{asset.Name}» вибрано двічі.");
+        }
+        var missing = model.Assets.Where(asset => !selected.ContainsKey(asset.Name))
+            .Select(OptionalDownloadName).ToArray();
+        if (missing.Length > 0)
+            throw new InvalidDataException("Бракує файлів: " + string.Join(", ", missing));
+
+        var directory = Path.Combine(stagingRoot, model.Revision);
+        Directory.CreateDirectory(directory);
+        var buffer = new byte[64 * 1024];
+        long completed = 0;
+        long reported = 0;
+        foreach (var asset in model.Assets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await using var input = await selected[asset.Name]().ConfigureAwait(false);
+            await using var output = new FileStream(Path.Combine(directory, asset.Name),
+                FileMode.CreateNew, FileAccess.Write, FileShare.None, buffer.Length, FileOptions.Asynchronous);
+            long copied = 0;
+            int count;
+            while ((count = await input.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) != 0)
+            {
+                copied += count;
+                if (copied > asset.Bytes) break;
+                await output.WriteAsync(buffer.AsMemory(0, count), cancellationToken).ConfigureAwait(false);
+                if (completed + copied - reported < 1024 * 1024) continue;
+                reported = completed + copied;
+                progress?.Report(reported);
+            }
+            if (copied != asset.Bytes)
+                throw new InvalidDataException($"Розмір файлу «{asset.Name}» не відповідає каталогу.");
+            completed += copied;
+            progress?.Report(completed);
+            reported = completed;
+        }
+    }
+
+    private static string OptionalDownloadName(OptionalModelAsset asset) =>
+        Path.GetFileName(Uri.UnescapeDataString(new Uri(asset.DownloadUrl).AbsolutePath));
+
     public static void ClearOptionalStaging(OptionalModel model, string stagingRoot)
     {
         ValidateOptionalModel(model);

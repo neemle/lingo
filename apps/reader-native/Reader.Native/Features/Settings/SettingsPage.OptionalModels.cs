@@ -63,6 +63,7 @@ public partial class SettingsPage
         };
         OptionalModelChoice.IsEnabled = !optionalModelBusy;
         DownloadOptionalModel.IsEnabled = RemoveOptionalModel.IsEnabled = !optionalModelBusy && selected is not null;
+        OpenOptionalModel.IsEnabled = !optionalModelBusy && optionalInventoryRead && selected is not null;
         VerifyOptionalModel.IsEnabled = !optionalModelBusy && selected is { HasLocalFiles: true };
         RollbackOptionalModel.IsEnabled = !optionalModelBusy && selected is { HasRecoveryCopy: true };
         RepairOptionalModel.IsEnabled = !optionalModelBusy && selected is not null
@@ -85,6 +86,7 @@ public partial class SettingsPage
                 $"{model.Name} · {bytes / 1_000_000d:F0} МБ. Файли буде завантажено з Hugging Face.", "Завантажити", "Скасувати")) return;
             using var cancellation = new CancellationTokenSource();
             optionalDownload = cancellation;
+            StopOptionalModel.Text = "Зупинити завантаження";
             StopOptionalModel.IsVisible = OptionalProgress.IsVisible = true;
             OptionalProgress.Progress = 0;
             OptionalModelStatus.Text = "Перевірка вільного місця…";
@@ -118,6 +120,63 @@ public partial class SettingsPage
             optionalModelBusy = false;
             StopOptionalModel.IsVisible = OptionalProgress.IsVisible = false;
             UpdateOptionalModelControls();
+        }
+    }
+
+    private async void OpenOptionalModelClicked(object? sender, EventArgs args)
+    {
+        if (optionalModelBusy || SelectedOptionalModel is not { } model) return;
+        optionalModelBusy = true;
+        UpdateOptionalModelControls();
+        var staging = Path.Combine(FileSystem.CacheDirectory, $"optional-model-import-{Guid.NewGuid():N}");
+        try
+        {
+            var files = (await FilePicker.Default.PickMultipleAsync(new PickOptions
+            {
+                PickerTitle = $"Виберіть усі файли для «{model.Name}»",
+            })).OfType<FileResult>().ToArray();
+            if (files.Length == 0) return;
+
+            using var cancellation = new CancellationTokenSource();
+            optionalDownload = cancellation;
+            StopOptionalModel.Text = "Зупинити копіювання";
+            StopOptionalModel.IsVisible = OptionalProgress.IsVisible = true;
+            OptionalProgress.Progress = 0;
+            OptionalModelStatus.Text = "Перевірка вільного місця…";
+            var session = AppState.Session;
+            await session.CheckOptionalModelSpaceAsync(model.Id, staging);
+            var sources = files.Select(file => (file.FileName, (Func<Task<Stream>>)file.OpenReadAsync)).ToArray();
+            var total = model.Assets.Sum(asset => asset.Bytes);
+            var progress = new Progress<long>(bytes =>
+            {
+                if (ReferenceEquals(optionalDownload, cancellation)) OptionalProgress.Progress = (double)bytes / total;
+            });
+            OptionalModelStatus.Text = $"Копіюємо локальні файли {model.Name}…";
+            await ModelDownload.StageOptionalModelFilesAsync(model, staging, sources, progress, cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+
+            StopOptionalModel.IsVisible = false;
+            OptionalModelStatus.Text = "Перевірка файлів і контрольний запуск…";
+            await session.InstallOptionalModelAsync(model.Id, staging);
+            OptionalModelStatus.Text = $"Локальні файли {model.Name} перевірено й встановлено.";
+        }
+        catch (OperationCanceledException) when (optionalDownload?.IsCancellationRequested == true)
+        {
+            OptionalModelStatus.Text = "Копіювання зупинено.";
+        }
+        catch (Exception error) { OptionalModelStatus.Text = error.Message; }
+        finally
+        {
+            optionalDownload = null;
+            StopOptionalModel.IsVisible = OptionalProgress.IsVisible = false;
+            await RefreshOptionalModelsAsync();
+            optionalModelBusy = false;
+            UpdateOptionalModelControls();
+            try { if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                OptionalModelStatus.Text += "\nНе вдалося видалити тимчасові копії файлів.";
+            }
         }
     }
 
