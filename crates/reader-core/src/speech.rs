@@ -1,4 +1,4 @@
-use crate::{resources::InferencePriority, tts::SpeechAudio, Document, Result, Store};
+use crate::{pdf_reading_position, resources::InferencePriority, tts::SpeechAudio, Document, Result, Sentence, Store};
 use rusqlite::OptionalExtension;
 use serde::Serialize;
 
@@ -87,7 +87,12 @@ impl Store {
         engine: ModelSpeechEngine, speaker: u32, rate: f32, next: bool,
     ) -> Result<Option<PreparedSpeech>> {
         let (page, sentence_id) = address;
-        let Some((sentence_id, source)) = self.detached_pdf_speech_source(document_id, page, sentence_id, next)? else {
+        let request = self.detached_pdf_speech_source(document_id, page, sentence_id, next)?;
+        let request = match (request, next, page.checked_add(1)) {
+            (None, true, Some(next_page)) => self.first_speech_on_pdf_page(document_id, next_page, None)?,
+            (request, _, _) => request,
+        };
+        let Some((sentence_id, source)) = request else {
             return Ok(None);
         };
         self.prepare_speech_source(sentence_id, source, engine, speaker, rate).map(Some)
@@ -106,18 +111,68 @@ impl Store {
     pub(crate) fn speech_source(
         &self, document_id: &str, sentence_id: &str, next: bool,
     ) -> Result<Option<(String, SpeechSource)>> {
+        let document = self.speech_document(document_id)?;
+        let index = document.sentences.iter().position(|sentence| sentence.id == sentence_id)
+            .ok_or("Речення для озвучення не знайдено")?;
+        let candidate = document.sentences.get(index + usize::from(next));
+        if next && document.format == "pdf" {
+            let sentence = &document.sentences[index];
+            let page = self.pdf_reading_page(document_id)?
+                .filter(|&page| pdf_reading_position::page_bounds(&document, page)
+                    .is_some_and(|(start, end)| sentence.start_utf16 < end && sentence.end_utf16 > start))
+                .or_else(|| {
+                    document.pdf_page_starts.as_ref()?.iter().enumerate().rev()
+                        .find(|(_, start)| start.is_some_and(|start| start <= sentence.start_utf16))
+                        .and_then(|(page, _)| u16::try_from(page).ok())
+                });
+            if let Some((page, (_, end))) = page.and_then(|page|
+                pdf_reading_position::page_bounds(&document, page).map(|bounds| (page, bounds)))
+            {
+                if candidate.is_none_or(|candidate| candidate.start_utf16 >= end) {
+                    let Some(next_page) = page.checked_add(1) else { return Ok(None); };
+                    return self.first_speech_on_pdf_page(document_id, next_page, Some((&document, index + 1)));
+                }
+            }
+        }
+        Ok(candidate.map(|sentence| canonical_speech(&document, sentence)))
+    }
+
+    fn first_speech_on_pdf_page(
+        &self, document_id: &str, page: u16, canonical: Option<(&Document, usize)>,
+    ) -> Result<Option<(String, SpeechSource)>> {
+        if let Some((document, start)) = canonical {
+            if pdf_reading_position::page_bounds(document, page).is_some() {
+                return Ok(first_canonical_on_page(document, page, start));
+            }
+        }
+        let detached = self.first_detached_pdf_speech_source(document_id, page)?;
+        if detached.is_some() || canonical.is_some() {
+            return Ok(detached);
+        }
+        let document = self.speech_document(document_id)?;
+        Ok(first_canonical_on_page(&document, page, 0))
+    }
+
+    fn speech_document(&self, document_id: &str) -> Result<Document> {
         let body: String = self.connection.query_row(
             "SELECT body FROM documents WHERE id=?1", [document_id], |row| row.get(0),
         ).optional().map_err(|error| error.to_string())?
             .ok_or("Документ для озвучення не знайдено")?;
-        let document: Document = serde_json::from_str(&body).map_err(|error| error.to_string())?;
-        let index = document.sentences.iter().position(|sentence| sentence.id == sentence_id)
-            .ok_or("Речення для озвучення не знайдено")?;
-        Ok(document.sentences.get(index + usize::from(next)).map(|sentence| {
-            (sentence.id.clone(), SpeechSource {
-                language: document.language.clone(),
-                text: document.speech_text(sentence).to_owned(),
-            })
-        }))
+        serde_json::from_str(&body).map_err(|error| error.to_string())
     }
+}
+
+fn first_canonical_on_page(document: &Document, page: u16, start: usize) -> Option<(String, SpeechSource)> {
+    let (left, right) = pdf_reading_position::page_bounds(document, page)?;
+    let sentences = &document.sentences[start..];
+    let index = sentences.partition_point(|sentence| sentence.end_utf16 <= left);
+    let sentence = sentences.get(index).filter(|sentence| sentence.start_utf16 < right)?;
+    Some(canonical_speech(document, sentence))
+}
+
+fn canonical_speech(document: &Document, sentence: &Sentence) -> (String, SpeechSource) {
+    (sentence.id.clone(), SpeechSource {
+        language: document.language.clone(),
+        text: document.speech_text(sentence).to_owned(),
+    })
 }

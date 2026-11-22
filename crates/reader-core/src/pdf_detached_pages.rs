@@ -114,9 +114,26 @@ impl Store {
             return Err("Позиція читання сторінки PDF змінилася.".into());
         }
         let Some(sentence) = sentences.into_iter().nth(position + usize::from(next)) else { return Ok(None); };
+        self.speech_on_detached_page(id, page, language, sentence).map(Some)
+    }
+
+    pub(crate) fn first_detached_pdf_speech_source(
+        &self, id: &str, page: u16,
+    ) -> Result<Option<(String, crate::speech::SpeechSource)>> {
+        let Some(CachedSentences { language, sentences, .. }) = self.detached_pdf_sentences(id, page)? else {
+            return Ok(None);
+        };
+        sentences.into_iter().next()
+            .map(|sentence| self.speech_on_detached_page(id, page, language, sentence))
+            .transpose()
+    }
+
+    fn speech_on_detached_page(
+        &self, id: &str, page: u16, language: String, sentence: Sentence,
+    ) -> Result<(String, crate::speech::SpeechSource)> {
         let text = annotations::speech_text(&self.connection, id, page, sentence.start_utf16)?
             .unwrap_or(sentence.text);
-        Ok(Some((sentence.id, crate::speech::SpeechSource { language, text })))
+        Ok((sentence.id, crate::speech::SpeechSource { language, text }))
     }
 
     pub(crate) fn detached_pdf_sentences(&self, id: &str, page: u16) -> Result<Option<CachedSentences>> {
