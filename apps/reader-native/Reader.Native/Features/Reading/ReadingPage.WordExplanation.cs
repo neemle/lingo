@@ -20,21 +20,43 @@ public partial class ReadingPage
             current.Id == document.Id && current.Language == document.Language &&
             current.CurrentRevisionId == revision && WordCard.IsVisible;
 
+        await ExplainSelectionAsync(WordExplanationText, CurrentSelection,
+            (model, cachedOnly) => session.ExplainWordAsync(model, document.Id, sentence.Id, word.Text,
+                cachedOnly: cachedOnly, startUtf16: word.StartUtf16, revisionId: revision));
+    }
+
+    private async void DetachedExplainWordClicked(object? sender, EventArgs args)
+    {
+        if (explainingWord || loadingDetachedSentence || detachedAddress is not { } address ||
+            detachedSelection is not { } word || detachedSentence is not { RevisionId: { } revision }) return;
+
+        bool CurrentSelection() => DetachedPdfReader.IsVisible &&
+            ReferenceEquals(detachedAddress, address) && ReferenceEquals(detachedSelection, word) &&
+            detachedSentence?.RevisionId == revision;
+
+        var session = AppState.Session;
+        await ExplainSelectionAsync(DetachedWordExplanationText, CurrentSelection,
+            (model, cachedOnly) => session.ExplainDetachedWordAsync(model, address.Document, address.Page, word,
+                revisionId: revision, cachedOnly: cachedOnly));
+    }
+
+    private async Task ExplainSelectionAsync(Label result, Func<bool> isCurrent,
+        Func<string, bool, Task<WordExplanation?>> explain)
+    {
         explainingWord = true;
-        ExplainWord.IsEnabled = false;
+        ExplainWord.IsEnabled = DetachedExplainWord.IsEnabled = false;
         try
         {
-            var models = (await session.OptionalModelsAsync())
+            var models = (await AppState.Session.OptionalModelsAsync())
                 .Where(model => model.Id is "qwen-0.8b" or "qwen-2b").ToArray();
-            if (!CurrentSelection()) return;
+            if (!isCurrent()) return;
             foreach (var model in models)
             {
-                var saved = await session.ExplainWordAsync(model.Id, document.Id, sentence.Id, word.Text,
-                    cachedOnly: true, startUtf16: word.StartUtf16, revisionId: revision);
-                if (!CurrentSelection()) return;
+                var saved = await explain(model.Id, true);
+                if (!isCurrent()) return;
                 if (saved is not null)
                 {
-                    ShowExplanation(model.Name, saved);
+                    ShowExplanation(result, model.Name, saved);
                     return;
                 }
             }
@@ -43,7 +65,7 @@ public partial class ReadingPage
             {
                 if (await DisplayAlertAsync("Локальне пояснення",
                     "Для пояснень встановіть одну з моделей Qwen у налаштуваннях.",
-                    "Налаштування", "Закрити"))
+                    "Налаштування", "Закрити") && isCurrent())
                     await Shell.Current.GoToAsync(AppShell.SettingsRoute);
                 return;
             }
@@ -56,32 +78,39 @@ public partial class ReadingPage
                 var choice = await DisplayActionSheetAsync("Модель пояснення", "Скасувати", null, names.Keys.ToArray());
                 selected = choice is null ? null : names.GetValueOrDefault(choice);
             }
-            if (selected is null || !CurrentSelection()) return;
-            WordExplanationText.IsVisible = true;
-            WordExplanationText.Text = $"{selected.Name} готує пояснення…";
-            var explanation = await session.ExplainWordAsync(selected.Id, document.Id, sentence.Id, word.Text,
-                startUtf16: word.StartUtf16, revisionId: revision);
-            if (CurrentSelection() && explanation is not null) ShowExplanation(selected.Name, explanation);
+            if (selected is null || !isCurrent()) return;
+            result.IsVisible = true;
+            result.Text = $"{selected.Name} готує пояснення…";
+            var explanation = await explain(selected.Id, false);
+            if (isCurrent() && explanation is not null) ShowExplanation(result, selected.Name, explanation);
         }
         catch (Exception error)
         {
-            if (CurrentSelection())
+            if (isCurrent())
             {
-                WordExplanationText.IsVisible = true;
-                WordExplanationText.Text = error.Message;
+                result.IsVisible = true;
+                result.Text = error.Message;
             }
         }
         finally
         {
             explainingWord = false;
             ExplainWord.IsEnabled = true;
+            UpdateDetachedExplainButton();
         }
     }
 
-    private void ShowExplanation(string model, WordExplanation explanation)
+    private void UpdateDetachedExplainButton()
     {
-        WordExplanationText.IsVisible = true;
+        DetachedExplainWord.IsVisible = !loadingDetachedSentence &&
+            detachedSentence?.RevisionId is not null && detachedSelection is not null;
+        DetachedExplainWord.IsEnabled = DetachedExplainWord.IsVisible && !explainingWord;
+    }
+
+    private static void ShowExplanation(Label result, string model, WordExplanation explanation)
+    {
+        result.IsVisible = true;
         var label = explanation.Cached ? "Збережене пояснення" : "Припущення";
-        WordExplanationText.Text = $"{label} {model} · {explanation.Explanation}";
+        result.Text = $"{label} {model} · {explanation.Explanation}";
     }
 }

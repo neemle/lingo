@@ -44,7 +44,8 @@ public partial class ReadingPage
         if (detachedAddress is null) return;
         detachedAddress = null;
         detachedSentence = null;
-        detachedSelection = null;
+        SetDetachedSelection(null);
+        UpdateDetachedExplainButton();
         loadingDetachedSentence = false;
         ClearDetachedSpeech();
         ResetDetachedTranslation();
@@ -56,7 +57,8 @@ public partial class ReadingPage
         if (!automatic) CancelDetachedSpeechTravel();
         var request = ++detachedSentenceRequest;
         loadingDetachedSentence = true;
-        detachedSelection = null;
+        SetDetachedSelection(null);
+        UpdateDetachedExplainButton();
         if (!automatic) ClearDetachedSpeech();
         ResetDetachedTranslation();
         try
@@ -101,8 +103,14 @@ public partial class ReadingPage
     private void DetachedPdfSelected(object? sender, TextSelection selected)
     {
         if (detachedAddress is null || loadingDetachedSentence) return;
-        detachedSelection = selected;
+        SetDetachedSelection(selected);
         UpdateDetachedControls();
+    }
+
+    private void SetDetachedSelection(TextSelection? selected)
+    {
+        detachedSelection = selected;
+        DetachedWordExplanationText.IsVisible = false;
     }
 
     private async void DetachedAnalyzeClicked(object? sender, EventArgs args)
@@ -111,17 +119,20 @@ public partial class ReadingPage
         var session = AppState.Session;
         await ShowAnalysisPageAsync("Перевірка речення", current.Sentence.Text,
             start => session.AnalyzeDetachedPdfSentenceAsync(address.Document, address.Page, current.Sentence.Id, start),
-            (model, cachedOnly) => session.ReviewSentenceAsync(model, address.Document, address.Page, current.Sentence.Id, cachedOnly: cachedOnly));
+            (model, cachedOnly) => session.ReviewSentenceAsync(model, address.Document, address.Page, current.Sentence.Id,
+                revisionId: current.RevisionId, cachedOnly: cachedOnly));
     }
 
     private async void DetachedAnalyzeSelectionClicked(object? sender, EventArgs args)
     {
-        if (!DetachedAnalyzeSelection.IsEnabled || detachedAddress is not { } address || detachedSelection is not { } selected) return;
+        if (!DetachedAnalyzeSelection.IsEnabled || detachedAddress is not { } address ||
+            detachedSelection is not { } selected || detachedSentence is not { } current) return;
         var session = AppState.Session;
         await ShowAnalysisPageAsync("Перевірка виділення", selected.Text,
             _ => session.AnalyzeDetachedPdfSelectionAsync(address.Document, address.Page, selected),
             (model, cachedOnly) => session.ReviewSentenceAsync(model, address.Document, address.Page, null,
-                new { kind = "selection", startUtf16 = selected.StartUtf16, text = selected.Text }, cachedOnly: cachedOnly));
+                new { kind = "selection", startUtf16 = selected.StartUtf16, text = selected.Text },
+                revisionId: current.RevisionId, cachedOnly: cachedOnly));
     }
 
     private async void DetachedSaveWordClicked(object? sender, EventArgs args)
@@ -667,6 +678,7 @@ public partial class ReadingPage
         DetachedNote.Text = detachedSentence?.Note is null ? "Нотатка…" : "Редагувати нотатку…";
         DetachedAnalyzeSelection.IsVisible = DetachedAnalyzeSelection.IsEnabled =
             !loadingDetachedSentence && detachedSelection is not null;
+        UpdateDetachedExplainButton();
         DetachedSaveWord.IsVisible = DetachedAnalyzeSelection.IsVisible;
         DetachedSaveWord.IsEnabled = DetachedSaveWord.IsVisible && !savingDetachedWord
             && !AppState.Session.Busy && TargetCode is not null;

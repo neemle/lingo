@@ -52,6 +52,7 @@ pub struct DetachedPdfSentence {
     pub position: usize,
     pub total: usize,
     pub language: String,
+    pub revision_id: String,
     pub bookmarked: bool,
     pub note: Option<String>,
     pub reviewed_translations: std::collections::BTreeMap<String, String>,
@@ -79,7 +80,7 @@ impl Store {
     pub fn select_detached_pdf_sentence(
         &self, id: &str, page: u16, requested: Option<usize>, expected: Option<&str>,
     ) -> Result<Option<DetachedPdfSentence>> {
-        let Some(CachedSentences { language, saved, sentences, .. }) = self.detached_pdf_sentences(id, page)? else {
+        let Some(CachedSentences { language, saved, sentences, revision, .. }) = self.detached_pdf_sentences(id, page)? else {
             return Ok(None);
         };
         let total = sentences.len();
@@ -98,7 +99,10 @@ impl Store {
         }
         let (bookmarked, note) = annotations::read(&self.connection, id, page, sentence.start_utf16)?;
         let reviewed_translations = annotations::reviewed(&self.connection, id, page, sentence.start_utf16)?;
-        Ok(Some(DetachedPdfSentence { sentence, position, total, language, bookmarked, note, reviewed_translations, speech_resume, speech_text }))
+        Ok(Some(DetachedPdfSentence {
+            sentence, position, total, language, revision_id: revision, bookmarked, note,
+            reviewed_translations, speech_resume, speech_text,
+        }))
     }
     pub(crate) fn detached_pdf_speech_source(
         &self, id: &str, page: u16, sentence_id: &str, next: bool,

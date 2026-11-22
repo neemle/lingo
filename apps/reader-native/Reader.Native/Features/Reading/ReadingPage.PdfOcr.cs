@@ -220,7 +220,7 @@ public partial class ReadingPage
             selected.StartUtf16 > address.Text.Length - selected.LengthUtf16 ||
             !address.Text.AsSpan(selected.StartUtf16, selected.LengthUtf16).SequenceEqual(selected.Text) ||
             TargetCode is not { } target) return;
-        detachedSelection = selected;
+        SetDetachedSelection(selected);
         UpdateDetachedControls();
         await SaveDetachedWordAsync(address, selected, target);
     }
