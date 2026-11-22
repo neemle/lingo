@@ -1,4 +1,3 @@
-using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
@@ -13,55 +12,104 @@ public sealed class ModelDownload(HttpClient http)
     private static readonly string[] AssetNames =
         ["config.json", "source.spm", "target.spm", "vocab.json", "model.safetensors"];
 
-    public async Task FetchArchiveAsync(
-        TranslationPackageStatus package, string stagingRoot, string archivePath,
+    public async Task FetchModelAsync(IModelTransferPort port, ModelTransferPackage package, string transportDirectory,
+        string legacyDirectory,
         IProgress<long>? progress, CancellationToken cancellationToken)
     {
-        Validate(package);
-        var directory = Path.Combine(stagingRoot, package.Revision);
-        Directory.CreateDirectory(directory);
-        using var gate = OpenGate(stagingRoot, package.Revision);
-
-        long completed = 0;
-        foreach (var asset in package.Assets)
-        {
-            var path = Path.Combine(directory, asset.Name);
-            var repository = package.Repository ?? $"{package.Source}-{package.Target}";
-            var url = new Uri($"https://huggingface.co/Helsinki-NLP/opus-mt-{repository}" +
-                $"/resolve/{package.Revision}/{asset.Name}");
-            await FetchAssetAsync(url, asset, path, completed, progress, cancellationToken);
-            completed += asset.Bytes;
-            progress?.Report(completed);
-        }
-
-        await using var output = new FileStream(archivePath, FileMode.CreateNew, FileAccess.Write);
-        using var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true);
-        foreach (var asset in package.Assets)
+        Directory.CreateDirectory(transportDirectory);
+        try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var entry = archive.CreateEntry(asset.Name, CompressionLevel.NoCompression);
-            await using var input = File.OpenRead(Path.Combine(directory, asset.Name));
-            await using var destination = entry.Open();
-            await input.CopyToAsync(destination, cancellationToken);
+            var plan = await port.ResumeModelTransferAsync(package).ConfigureAwait(false);
+            progress?.Report(plan.ReceivedBytes);
+            var checkedLegacyAssets = new HashSet<string>(StringComparer.Ordinal);
+            while (plan.NextRange is { } range)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (range.From == 0 && checkedLegacyAssets.Add(range.Asset))
+                {
+                    var existing = Path.Combine(legacyDirectory, plan.Revision, range.Asset);
+                    if (File.Exists(existing))
+                    {
+                        plan = await port.AdoptModelPrefixAsync(package, range.Asset, existing).ConfigureAwait(false);
+                        progress?.Report(plan.ReceivedBytes);
+                        continue;
+                    }
+                }
+                var temporary = Path.Combine(transportDirectory, $"range-{Guid.NewGuid():N}.tmp");
+                try
+                {
+                    var code = await FetchRangeAsync(plan.Revision, range, temporary, cancellationToken).ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    plan = await port.AcceptModelRangeAsync(package, range, code, temporary).ConfigureAwait(false);
+                    progress?.Report(plan.ReceivedBytes);
+                }
+                finally
+                {
+                    try { File.Delete(temporary); }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
+                }
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (plan.Status != "readyToInstall")
+                throw new InvalidDataException("Основні файли моделі ще не завантажені.");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await port.PauseModelTransferAsync(package).ConfigureAwait(false);
+            throw;
         }
     }
 
-    public async Task FetchOptionalModelAsync(OptionalModel model, string stagingRoot,
-        IProgress<long>? progress, CancellationToken cancellationToken)
+    private async Task<int> FetchRangeAsync(string revision, ModelTransferRange range, string path,
+        CancellationToken cancellationToken)
     {
-        ValidateOptionalModel(model);
-        var directory = Path.Combine(stagingRoot, model.Revision);
-        Directory.CreateDirectory(directory);
-        using var gate = OpenGate(stagingRoot, model.Revision);
-        long completed = 0;
-        foreach (var asset in model.Assets)
+        if (!Hex(revision, 40) || !Uri.TryCreate(range.Url, UriKind.Absolute, out var url)
+            || url.Scheme != Uri.UriSchemeHttps || url.Host != "huggingface.co"
+            || !url.AbsolutePath.Contains($"/resolve/{revision}/", StringComparison.Ordinal)
+            || range.From < 0 || range.To < range.From || range.To >= range.Total
+            || range.To - range.From >= 16 * 1024 * 1024)
+            throw new InvalidDataException("Некоректний запит на діапазон файлу моделі.");
+
+        var length = range.To - range.From + 1;
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.AcceptEncoding.ParseAdd("identity");
+        request.Headers.Range = new RangeHeaderValue(range.From, range.To);
+        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        if (response.RequestMessage?.RequestUri?.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidDataException("Сервер спрямував завантаження на незахищену адресу.");
+
+        if (response.StatusCode == HttpStatusCode.PartialContent)
         {
-            var path = Path.Combine(directory, asset.Name);
-            await FetchAssetAsync(new Uri(asset.DownloadUrl),
-                new TranslationAsset(asset.Name, asset.Bytes, asset.Sha256), path, completed, progress, cancellationToken);
-            completed += asset.Bytes;
-            progress?.Report(completed);
+            var received = response.Content.Headers.ContentRange;
+            if (received is null || received.Unit != "bytes" || received.From != range.From
+                || received.To != range.To || received.Length != range.Total)
+                throw new InvalidDataException("Сервер повернув некоректний діапазон файлу моделі.");
         }
+        else if (response.StatusCode != HttpStatusCode.OK || range.From != 0 || length != range.Total)
+        {
+            throw new InvalidDataException("Сервер не повернув потрібний діапазон файлу моделі.");
+        }
+        if (response.Content.Headers.ContentLength is long declared && declared != length)
+            throw new InvalidDataException("Розмір діапазону не відповідає запиту.");
+
+        await using var input = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+            64 * 1024, FileOptions.Asynchronous);
+        var buffer = new byte[64 * 1024];
+        long copied = 0;
+        int count;
+        while ((count = await input.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) != 0)
+        {
+            copied += count;
+            if (copied > length) throw new InvalidDataException("Сервер надіслав зайві байти.");
+            await output.WriteAsync(buffer.AsMemory(0, count), cancellationToken).ConfigureAwait(false);
+        }
+        if (copied != length) throw new EndOfStreamException("Діапазон завантажено не повністю.");
+        return (int)response.StatusCode;
     }
 
     public static async Task StageOptionalModelFilesAsync(OptionalModel model, string stagingRoot,

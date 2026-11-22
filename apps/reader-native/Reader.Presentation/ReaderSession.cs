@@ -4,7 +4,7 @@ using Client = Reader.CoreClient.CoreClient;
 
 namespace Reader.Presentation;
 
-public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
+public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelTransferPort
 {
     private readonly Client client;
     private Snapshot snapshot = new([], []);
@@ -30,6 +30,27 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public ReaderSession(string path) => client = new Client(path);
 
     public Task RefreshAsync() => RunAsync(Read);
+    public Task<ModelTransferPlan> ModelTransferStatusAsync(ModelTransferPackage package) =>
+        Task.Run(() => client.ModelTransfer(package, "status"));
+
+    public Task<ModelTransferPlan> ResumeModelTransferAsync(ModelTransferPackage package) =>
+        Task.Run(() => client.ModelTransfer(package, "resume"));
+
+    public Task<ModelTransferPlan> AcceptModelRangeAsync(
+        ModelTransferPackage package, ModelTransferRange range, int status, string path) =>
+        Task.Run(() => client.AcceptModelRange(package, range, status, path));
+
+    public Task<ModelTransferPlan> AdoptModelPrefixAsync(ModelTransferPackage package, string asset, string path) =>
+        Task.Run(() => client.AdoptModelPrefix(package, asset, path));
+
+    public Task<ModelTransferPlan> PauseModelTransferAsync(ModelTransferPackage package) =>
+        Task.Run(() => client.ModelTransfer(package, "pause"));
+
+    public Task<ModelTransferPlan> ActivateModelTransferAsync(ModelTransferPackage package) =>
+        Task.Run(() => client.ModelTransfer(package, "activate"));
+
+    public Task<ModelTransferPlan> DiscardModelTransferAsync(ModelTransferPackage package) =>
+        Task.Run(() => client.ModelTransfer(package, "discard"));
     public Task<ReadingSession[]> RecentReadingSessionsAsync() => Task.Run(client.RecentReadingSessions);
     public Task CheckpointReadingAsync(ReadingSession session) =>
         Task.Run(() => client.CheckpointReading(session));

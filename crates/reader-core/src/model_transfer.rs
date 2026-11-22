@@ -29,6 +29,8 @@ pub enum TransferAction {
     Status,
     Resume,
     Pause,
+    Discard,
+    AdoptPrefix { asset: String, path: PathBuf },
     AcceptRange {
         asset: String,
         path: PathBuf,
@@ -118,7 +120,8 @@ impl ModelTransfer {
         let _lock = lock_package(&self.root.join(format!("{}.lock", self.manifest.revision)), true)?;
         if !self.stage.exists() && !matches!(&action, TransferAction::Resume) {
             return match action {
-                TransferAction::Status | TransferAction::Pause => Ok(self.inactive(TransferStatus::Idle)),
+                TransferAction::Status | TransferAction::Pause | TransferAction::Discard =>
+                    Ok(self.inactive(TransferStatus::Idle)),
                 _ => Err("Спочатку розпочніть завантаження пакета.".into()),
             };
         }
@@ -144,6 +147,28 @@ impl ModelTransfer {
                 OpenOptions::new().write(true).create(true).truncate(false).open(self.stage.join(PAUSED))
                     .and_then(|file| file.sync_all()).map_err(model_error)?;
                 sync_directory(&self.stage)?;
+                self.plan()
+            }
+            TransferAction::Discard => {
+                verify_root(&self.stage)?;
+                fs::remove_dir_all(&self.stage).map_err(model_error)?;
+                sync_directory(&self.root)?;
+                Ok(self.inactive(TransferStatus::Idle))
+            }
+            TransferAction::AdoptPrefix { asset, path } => {
+                let next = self.plan()?.next_range.ok_or("Пакет зараз не приймає дані.")?;
+                if next.from != 0 || next.asset != asset.as_str() {
+                    return Err("Новий кеш уже містить дані для цього файлу.".into());
+                }
+                let asset = self.manifest.assets.iter().find(|asset| asset.name == next.asset)
+                    .ok_or("Файл відсутній у каталозі.")?;
+                let length = file_length(&path)?.unwrap_or(0);
+                if (1..=asset.size).contains(&length) {
+                    self.append(asset, &path, 0, length)?;
+                    if length == asset.size {
+                        promote(&self.stage, asset)?;
+                    }
+                }
                 self.plan()
             }
             TransferAction::AcceptRange { asset, path, status, from, to, total } => {

@@ -10,6 +10,8 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
     {
         UseCookies = false,
     }));
+    private static string ModelTransportDirectory => Path.Combine(FileSystem.CacheDirectory, "model-transport");
+    private static string LegacyTranslationStaging => Path.Combine(FileSystem.CacheDirectory, "translation-downloads");
     private TranslationPackageStatus[] downloadChoices = [];
     private IGrouping<string, TranslationPackageStatus>[] removablePackages = [];
     private TranslationPair[] requestedPackages = [];
@@ -426,8 +428,8 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
 
     private async Task InstallDownloadedPackageAsync(TranslationPackageStatus package, CancellationTokenSource cancellation)
     {
-        var root = Path.Combine(FileSystem.CacheDirectory, "translation-downloads");
-        var archive = Path.Combine(FileSystem.CacheDirectory, $"translation-{Guid.NewGuid():N}.zip");
+        var session = AppState.Session;
+        var transfer = ModelTransferPackage.Translation(package.Source, package.Target);
         var total = package.Assets.Sum(asset => asset.Bytes);
         var progress = new Progress<long>(bytes =>
         {
@@ -437,22 +439,19 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
 
         CancelDownload.IsVisible = DownloadProgress.IsVisible = true;
         DownloadProgress.Progress = 0;
-        ModelStatus.Text = "Перевірка вільного місця…";
+        ModelStatus.Text = $"Завантаження пакета {DescribeRoutes([package])}…";
+        await Downloader.FetchModelAsync(session, transfer, ModelTransportDirectory, LegacyTranslationStaging,
+            progress, cancellation.Token);
+        cancellation.Token.ThrowIfCancellationRequested();
+        CancelDownload.IsVisible = false;
+        ModelStatus.Text = "Перевірка й встановлення…";
         try
         {
-            await AppState.Session.CheckTranslationDownloadSpaceAsync(package.Source, package.Target, root, FileSystem.CacheDirectory);
-            cancellation.Token.ThrowIfCancellationRequested();
-            ModelStatus.Text = $"Завантаження пакета {DescribeRoutes([package])}…";
-            await Task.Run(() => Downloader.FetchArchiveAsync(package, root, archive, progress, cancellation.Token),
-                cancellation.Token);
-            cancellation.Token.ThrowIfCancellationRequested();
-            CancelDownload.IsVisible = false;
-            ModelStatus.Text = "Перевірка й встановлення…";
-            var pair = await InstallTranslationAndRefreshAsync(archive);
-            ModelStatus.Text = $"Мовний пакет встановлено ({pair}).";
-            TryClean(() => ModelDownload.ClearStaging(package, root));
+            await session.ActivateModelTransferAsync(transfer);
+            ModelStatus.Text = $"Мовний пакет встановлено ({DescribeRoutes([package])}).";
+            TryClean(() => ModelDownload.ClearStaging(package, LegacyTranslationStaging));
         }
-        finally { TryClean(() => File.Delete(archive)); }
+        finally { await RefreshTranslationPackagesAsync(); }
     }
 
     private void CancelDownloadClicked(object? sender, EventArgs args) => activeDownload?.Cancel();
@@ -483,9 +482,9 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
                 return;
 
             var removed = await AppState.Session.RemoveTranslationPackageAsync(package.Source, package.Target);
+            await AppState.Session.DiscardModelTransferAsync(ModelTransferPackage.Translation(package.Source, package.Target));
             ModelStatus.Text = removed ? $"Пакет видалено ({choice})." : "Пакет уже відсутній.";
-            var root = Path.Combine(FileSystem.CacheDirectory, "translation-downloads");
-            if (Directory.Exists(root)) TryClean(() => ModelDownload.ClearStaging(package, root));
+            TryClean(() => ModelDownload.ClearStaging(package, LegacyTranslationStaging));
         }
         catch (Exception error) { ModelStatus.Text = error.Message; }
         finally

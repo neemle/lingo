@@ -9,6 +9,7 @@ public partial class SettingsPage
     private OptionalModel[] optionalModels = [];
     private bool optionalModelBusy;
     private CancellationTokenSource? optionalDownload;
+    private ModelTransferPlan? optionalTransfer;
     private static string OptionalStagingRoot => Path.Combine(FileSystem.CacheDirectory, "optional-model-downloads");
 
     private OptionalModel? SelectedOptionalModel
@@ -34,6 +35,7 @@ public partial class SettingsPage
             OptionalModelChoice.SelectedIndex = optionalModels.Length == 0 ? -1
                 : Math.Max(0, Array.FindIndex(optionalModels, model => model.Id == previous));
             UpdateOptionalModelControls();
+            await RefreshOptionalTransferAsync();
             UpdateCapabilityMatrix();
         }
         catch (Exception error)
@@ -44,7 +46,26 @@ public partial class SettingsPage
         }
     }
 
-    private void OptionalModelChanged(object? sender, EventArgs args) => UpdateOptionalModelControls();
+    private async void OptionalModelChanged(object? sender, EventArgs args)
+    {
+        UpdateOptionalModelControls();
+        await RefreshOptionalTransferAsync();
+    }
+
+    private async Task RefreshOptionalTransferAsync()
+    {
+        if (SelectedOptionalModel is not { } model) return;
+        try
+        {
+            var state = await AppState.Session.ModelTransferStatusAsync(ModelTransferPackage.Optional(model.Id));
+            if (SelectedOptionalModel?.Id == model.Id) optionalTransfer = state;
+        }
+        catch (Exception error)
+        {
+            System.Diagnostics.Debug.WriteLine(error.Message);
+        }
+        UpdateOptionalModelControls();
+    }
 
     private void UpdateOptionalModelControls()
     {
@@ -67,12 +88,16 @@ public partial class SettingsPage
         ExportOptionalModel.IsEnabled = !optionalModelBusy && selected is { FilesPresent: true };
         VerifyOptionalModel.IsEnabled = !optionalModelBusy && selected is { HasLocalFiles: true };
         RollbackOptionalModel.IsEnabled = !optionalModelBusy && selected is { HasRecoveryCopy: true };
+        var localTransfer = selected is not null && optionalTransfer?.Revision == selected.Revision
+            ? optionalTransfer : null;
         RepairOptionalModel.IsEnabled = !optionalModelBusy && selected is not null
-            && Directory.Exists(Path.Combine(OptionalStagingRoot, selected.Revision));
+            && (localTransfer is { TotalBytes: > 0 } && localTransfer.TotalBytes == localTransfer.ReceivedBytes
+                || Directory.Exists(Path.Combine(OptionalStagingRoot, selected.Revision)));
         OptionalModelRecovery.Text = selected is { HasRecoveryCopy: true }
             ? "Є збережена локальна копія. Перед відновленням буде перевірено її контрольні суми."
             : "Збереженої копії немає. Незавершене завантаження можна продовжити або встановити з кешу.";
-        DownloadOptionalModel.Text = selected is { HasLocalFiles: true } ? "Завантажити повторно" : "Завантажити";
+        DownloadOptionalModel.Text = localTransfer is { Status: "paused" or "awaitingRange" or "readyToInstall" }
+            ? "Продовжити" : selected is { HasLocalFiles: true } ? "Завантажити повторно" : "Завантажити";
     }
 
     private async void DownloadOptionalModelClicked(object? sender, EventArgs args)
@@ -90,22 +115,20 @@ public partial class SettingsPage
             StopOptionalModel.Text = "Зупинити завантаження";
             StopOptionalModel.IsVisible = OptionalProgress.IsVisible = true;
             OptionalProgress.Progress = 0;
-            OptionalModelStatus.Text = "Перевірка вільного місця…";
-            await AppState.Session.CheckOptionalModelSpaceAsync(model.Id, OptionalStagingRoot);
-            cancellation.Token.ThrowIfCancellationRequested();
-
+            var session = AppState.Session;
+            var transfer = ModelTransferPackage.Optional(model.Id);
             OptionalModelStatus.Text = $"Завантаження {model.Name}…";
             var progress = new Progress<long>(received =>
             {
                 if (ReferenceEquals(optionalDownload, cancellation)) OptionalProgress.Progress = (double)received / bytes;
             });
-            await Task.Run(() => Downloader.FetchOptionalModelAsync(model, OptionalStagingRoot, progress, cancellation.Token),
-                cancellation.Token);
+            await Downloader.FetchModelAsync(session, transfer, ModelTransportDirectory, OptionalStagingRoot,
+                progress, cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
 
             StopOptionalModel.IsVisible = false;
             OptionalModelStatus.Text = "Перевірка файлів і контрольний запуск…";
-            await AppState.Session.InstallOptionalModelAsync(model.Id, OptionalStagingRoot);
+            await session.ActivateModelTransferAsync(transfer);
             OptionalModelStatus.Text = $"Файли {model.Name} перевірено й встановлено.";
             await RefreshOptionalModelsAsync();
             ModelDownload.ClearOptionalStaging(model, OptionalStagingRoot);
@@ -120,6 +143,7 @@ public partial class SettingsPage
             optionalDownload = null;
             optionalModelBusy = false;
             StopOptionalModel.IsVisible = OptionalProgress.IsVisible = false;
+            await RefreshOptionalTransferAsync();
             UpdateOptionalModelControls();
         }
     }
@@ -266,8 +290,19 @@ public partial class SettingsPage
                 $"{model.Name}. Файли буде перевірено без завантаження з мережі. Поточну встановлену копію буде збережено.",
                 "Відновити", "Скасувати")) return;
             OptionalModelStatus.Text = "Перевірка локальних файлів і відновлення…";
-            if (rollback) await AppState.Session.RollbackOptionalModelAsync(model.Id);
-            else await AppState.Session.InstallOptionalModelAsync(model.Id, OptionalStagingRoot);
+            var session = AppState.Session;
+            if (rollback) await session.RollbackOptionalModelAsync(model.Id);
+            else
+            {
+                var transfer = ModelTransferPackage.Optional(model.Id);
+                var state = await session.ModelTransferStatusAsync(transfer);
+                if (state.ReceivedBytes > 0 && state.ReceivedBytes == state.TotalBytes)
+                {
+                    await session.ResumeModelTransferAsync(transfer);
+                    await session.ActivateModelTransferAsync(transfer);
+                }
+                else await session.InstallOptionalModelAsync(model.Id, OptionalStagingRoot);
+            }
             OptionalModelStatus.Text = $"{model.Name}: локальну копію перевірено й відновлено.";
         }
         catch (Exception error) { OptionalModelStatus.Text = error.Message; }
@@ -289,6 +324,7 @@ public partial class SettingsPage
             if (!await DisplayAlertAsync("Видалити файли моделі?",
                 $"{model.Name}. Буде видалено також збережені копії для відновлення й незавершене завантаження.", "Видалити", "Скасувати")) return;
             await AppState.Session.RemoveOptionalModelAsync(model.Id);
+            await AppState.Session.DiscardModelTransferAsync(ModelTransferPackage.Optional(model.Id));
             ModelDownload.ClearOptionalStaging(model, OptionalStagingRoot);
             OptionalModelStatus.Text = $"Локальні файли {model.Name} видалено.";
         }

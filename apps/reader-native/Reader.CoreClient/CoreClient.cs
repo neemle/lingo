@@ -22,6 +22,20 @@ public sealed class CoreClient : IDisposable
     }
 
     public Snapshot Snapshot() => Call<Snapshot>(new { version = 1, operation = "snapshot" });
+    public ModelTransferPlan ModelTransfer(ModelTransferPackage package, string operation) =>
+        ModelTransfer(package, new { kind = operation });
+
+    public ModelTransferPlan AcceptModelRange(ModelTransferPackage package, ModelTransferRange range, int status, string path) =>
+        ModelTransfer(package, new
+        {
+            kind = "acceptRange", asset = range.Asset, path, status, @from = range.From, to = range.To, total = range.Total,
+        });
+
+    public ModelTransferPlan AdoptModelPrefix(ModelTransferPackage package, string asset, string path) =>
+        ModelTransfer(package, new { kind = "adoptPrefix", asset, path });
+
+    private ModelTransferPlan ModelTransfer(ModelTransferPackage package, object action) =>
+        CallIndependent<ModelTransferPlan>(new { version = 1, operation = "model_transfer", package, action });
     public ReadingSession[] RecentReadingSessions() =>
         Call<ReadingSession[]>(new { version = 1, operation = "recent_reading_sessions" });
     public void CheckpointReading(ReadingSession session) =>
