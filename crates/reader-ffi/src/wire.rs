@@ -355,6 +355,18 @@ pub enum Command {
         #[serde(default, rename = "cachedOnly")]
         cached_only: bool,
     },
+    ExplainDetachedWord {
+        model: String,
+        document: String,
+        page: u16,
+        #[serde(rename = "startUtf16")]
+        start_utf16: usize,
+        word: String,
+        #[serde(rename = "revisionId")]
+        revision_id: Option<String>,
+        #[serde(default, rename = "cachedOnly")]
+        cached_only: bool,
+    },
     OptionalModels,
     ModelTransfer {
         package: reader_core::model_transfer::ModelPackage,

@@ -399,6 +399,11 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<WordExplanation?> ExplainWordAsync(string model, string document, string sentence, string word, bool cachedOnly = false) =>
         Task.Run(() => client.ExplainWord(model, document, sentence, word, cachedOnly));
 
+    public Task<WordExplanation?> ExplainDetachedWordAsync(string model, string document, int page,
+        TextSelection selection, string? revisionId = null, bool cachedOnly = false) =>
+        Task.Run(() => client.ExplainDetachedWord(model, document, page, selection.StartUtf16, selection.Text,
+            revisionId, cachedOnly));
+
     public Task<string[]> SemanticVocabularyAsync(string query, string? documentId = null) =>
         Task.Run(() => client.SemanticVocabulary(query, documentId));
 

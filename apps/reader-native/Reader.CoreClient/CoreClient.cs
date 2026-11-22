@@ -306,6 +306,14 @@ public sealed class CoreClient : IDisposable
 
     public WordExplanation? ExplainWord(string model, string document, string sentence, string word, bool cachedOnly = false) =>
         CallIndependent<WordExplanation?>(new { version = 1, operation = "explain_word", model, document, sentence, word, cachedOnly });
+
+    public WordExplanation? ExplainDetachedWord(string model, string document, int page, int startUtf16,
+        string word, string? revisionId = null, bool cachedOnly = false) =>
+        CallIndependent<WordExplanation?>(new
+        {
+            version = 1, operation = "explain_detached_word", model, document, page,
+            startUtf16, word, revisionId, cachedOnly
+        });
     public string[] SemanticVocabulary(string query, string? documentId = null) =>
         CallIndependent<string[]>(new { version = 1, operation = "semantic_vocabulary", query, documentId });
 

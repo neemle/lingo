@@ -267,6 +267,17 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
+        Command::ExplainDetachedWord {
+            model, document, page, start_utf16, word, revision_id, cached_only,
+        } => {
+            let job = registry::lock()?
+                .store(handle)?
+                .prepare_detached_word_explanation(
+                    model, document, *page, *start_utf16, word, revision_id.as_deref(), *cached_only,
+                )
+                .map_err(gateway::domain)?;
+            return encode_job(job.run());
+        }
         Command::InspectBackupFile { path } => {
             registry::lock()?.store(handle)?;
             return encode_job(reader_core::inspect_backup_file(std::path::Path::new(path)));

@@ -206,6 +206,12 @@ fn validate(command: &Command) -> Result<()> {
                 "Word explanation fields exceed their wire bounds",
             ))
         }
+        Command::ExplainDetachedWord { model, document, word, revision_id, .. }
+            if model.len() > 32 || !valid_token_address(document, "selection") || word.len() > 320
+                || revision_id.as_ref().is_some_and(|id| id.len() != 64 || !id.bytes().all(|byte| byte.is_ascii_hexdigit())) =>
+        {
+            Err(Error::new("invalid_argument", "Invalid PDF word explanation request"))
+        }
         Command::CachePdfOcrPage { lines, .. } if lines.len() > 8192 => {
             Err(Error::new("invalid_argument", "Too many OCR lines for one PDF page"))
         }
