@@ -820,7 +820,7 @@ pub(crate) fn normalize_ocr_input(
     normalized
 }
 
-fn word_hyphen(word: &str) -> Option<&str> {
+pub(crate) fn word_hyphen(word: &str) -> Option<&str> {
     word.strip_suffix(['-', '\u{00ad}', '\u{2010}'])
         .filter(|prefix| prefix.ends_with(char::is_alphabetic))
 }

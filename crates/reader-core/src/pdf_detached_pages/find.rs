@@ -80,31 +80,31 @@ impl Store {
             let text: String = row.get(1).map_err(database_error)?;
             let prefix = super::sentence_prefix(id, page, &super::page_revision(&text));
             let sentences = crate::segment(&text, &prefix);
-            let document = if let Some((target, source, _)) = &routes {
-                let reviewed = super::annotations::reviewed_for_page(&self.connection, id, page, target)?;
-                translation::page_document(text, sentences, source.clone(), target, reviewed)
+            let (projection, original) = if let Some((target, source, _)) = &routes {
+                (Some(self.project_pdf_translation_page(id, page, target, text, sentences, source.clone())?), Vec::new())
             } else {
-                crate::Document { sentences, ..crate::Document::default() }
+                (None, sentences)
             };
-            let reviews = target.and_then(|target| document.reviewed_translations.get(target));
-            for (position, sentence) in document.sentences.iter().enumerate().skip(first_position) {
-                let (text, pivot_language, reviewed, source_text) = if let Some((target, _, routes)) = &routes {
-                    if scanned_sentences == MAX_TRANSLATION_SCAN_SENTENCES {
-                        result.next = Some(DetachedPdfFindCursor { page, position });
-                        return Ok(result);
-                    }
-                    scanned_sentences += 1;
-                    if let Some(text) = reviews.and_then(|items| items.get(&sentence.id)) {
-                        (text.clone(), None, Some(true), None)
-                    } else if let Some(hit) = translation::cached_page_translation(self, routes, &document, position, target)? {
-                        if hit.start_position != position { continue; }
-                        (hit.text, hit.pivot_language, Some(false), hit.source_text)
+            let sentences = projection.as_ref().map_or(original.as_slice(), translation::PageProjection::physical_sentences);
+            for (position, sentence) in sentences.iter().enumerate().skip(first_position) {
+                let (text, pivot_language, reviewed, source_text) =
+                    if let (Some((target, _, routes)), Some(projection)) = (&routes, &projection) {
+                        if scanned_sentences == MAX_TRANSLATION_SCAN_SENTENCES {
+                            result.next = Some(DetachedPdfFindCursor { page, position });
+                            return Ok(result);
+                        }
+                        scanned_sentences += 1;
+                        if let Some(text) = projection.reviewed(&sentence.id, target) {
+                            (text.to_owned(), None, Some(true), None)
+                        } else if let Some(hit) = translation::cached_page_translation(self, routes, projection, position, target)? {
+                            if hit.start_position != position { continue; }
+                            (hit.text, hit.pivot_language, Some(false), hit.source_text)
+                        } else {
+                            continue;
+                        }
                     } else {
-                        continue;
-                    }
-                } else {
-                    (sentence.text.clone(), None, None, None)
-                };
+                        (sentence.text.clone(), None, None, None)
+                    };
                 let normalized = search_text(&text);
                 let Some(offset) = normalized.find(&needle) else { continue; };
                 if result.matches.len() == limit {

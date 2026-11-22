@@ -1,8 +1,8 @@
-use super::{annotations, CachedSentences};
+use super::{annotations, word_break, CachedSentences};
 use crate::translation::{CacheRoutes, ParagraphTranslation};
 use crate::{document_layout, Document, Result, Sentence, Store};
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, ops::Range};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -11,6 +11,30 @@ pub struct DetachedPdfTranslation {
     pub(super) pivot_language: Option<String>,
     pub(super) source_text: Option<String>,
     pub(super) start_position: usize,
+}
+
+pub(super) struct PageProjection {
+    document: Document,
+    physical: Range<usize>,
+}
+
+impl PageProjection {
+    pub(super) fn physical_sentences(&self) -> &[Sentence] {
+        &self.document.sentences[self.physical.clone()]
+    }
+
+    pub(super) fn reviewed(&self, sentence_id: &str, target: &str) -> Option<&str> {
+        self.document
+            .reviewed_translations
+            .get(target)?
+            .get(sentence_id)
+            .map(String::as_str)
+    }
+
+    fn localize(&self, mut result: DetachedPdfTranslation) -> DetachedPdfTranslation {
+        result.start_position = result.start_position.saturating_sub(self.physical.start);
+        result
+    }
 }
 
 impl Store {
@@ -36,56 +60,153 @@ impl Store {
         if sentences[selected].id != sentence_id {
             return Err("Позиція читання сторінки PDF змінилася.".into());
         }
-        let reviewed = annotations::reviewed_for_page(&self.connection, id, page, target)?;
-        let document = page_document(text, sentences, language, target, reviewed);
+        let projection =
+            self.project_pdf_translation_page(id, page, target, text, sentences, language)?;
         if cached_only {
-            let routes = self.detached_translation_routes(&document.language, target)?;
-            return cached_page_translation(self, &routes, &document, selected, target);
+            let routes = self.detached_translation_routes(&projection.document.language, target)?;
+            return cached_page_translation(self, &routes, &projection, selected, target);
         }
+        let position = projection.physical.start + selected;
         let translated =
-            self.translate_document_paragraph(&document, selected, target, background)?;
-        Ok(active_translation(&document, selected, translated))
+            self.translate_document_paragraph(&projection.document, position, target, background)?;
+        Ok(
+            active_translation(&projection.document, position, translated)
+                .map(|value| projection.localize(value)),
+        )
+    }
+
+    pub(super) fn project_pdf_translation_page(
+        &self,
+        id: &str,
+        page: u16,
+        target: &str,
+        text: String,
+        mut sentences: Vec<Sentence>,
+        language: String,
+    ) -> Result<PageProjection> {
+        let mut reviewed = annotations::reviewed_for_page(&self.connection, id, page, target)?;
+        let mut reviewed_translations: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        if !reviewed.is_empty() {
+            let values = sentences
+                .iter()
+                .filter_map(|sentence| {
+                    reviewed
+                        .remove(&sentence.start_utf16)
+                        .map(|text| (sentence.id.clone(), text))
+                })
+                .collect();
+            reviewed_translations.insert(target.to_owned(), values);
+        }
+
+        let (mut previous, mut next) =
+            word_break::neighboring_fragments(self, id, page, target, &sentences)?;
+        if let Some(items) = reviewed_translations.get(target) {
+            if sentences
+                .first()
+                .is_some_and(|sentence| items.contains_key(&sentence.id))
+            {
+                previous = None;
+            }
+            if sentences
+                .last()
+                .is_some_and(|sentence| items.contains_key(&sentence.id))
+            {
+                next = None;
+            }
+        }
+        let physical_start = usize::from(previous.is_some());
+        let physical = physical_start..physical_start + sentences.len();
+        let (text, page_starts) = if previous.is_some() || next.is_some() {
+            let (joined, starts) =
+                include_neighbors(id, page, &text, &mut sentences, previous, next);
+            (joined, Some(starts))
+        } else {
+            (text, None)
+        };
+        let layout = document_layout::from_transcript(text, page_starts);
+        let document = Document {
+            text: layout.text,
+            blocks: layout.blocks,
+            pdf_page_starts: layout.pdf_page_starts,
+            sentences,
+            language,
+            format: "pdf".into(),
+            reviewed_translations,
+            ..Document::default()
+        };
+        Ok(PageProjection { document, physical })
     }
 }
 
-pub(super) fn page_document(
-    text: String,
-    sentences: Vec<Sentence>,
-    language: String,
-    target: &str,
-    mut reviewed: BTreeMap<usize, String>,
-) -> Document {
-    let layout = document_layout::from_transcript(text, None);
-    let mut reviewed_translations = BTreeMap::new();
-    if !reviewed.is_empty() {
-        let values = sentences
-            .iter()
-            .filter_map(|sentence| {
-                reviewed
-                    .remove(&sentence.start_utf16)
-                    .map(|text| (sentence.id.clone(), text))
-            })
-            .collect();
-        reviewed_translations.insert(target.to_owned(), values);
+fn include_neighbors(
+    id: &str,
+    page: u16,
+    text: &str,
+    sentences: &mut Vec<Sentence>,
+    previous: Option<String>,
+    next: Option<String>,
+) -> (String, Vec<Option<usize>>) {
+    let center_end = if next.is_some() {
+        sentences
+            .last()
+            .map_or(text.len(), |sentence| sentence.end_utf8)
+    } else {
+        text.len()
+    };
+    let mut starts = vec![Some(0)];
+    let mut joined = String::with_capacity(
+        text.len()
+            + previous.as_ref().map_or(0, |part| part.len() + 2)
+            + next.as_ref().map_or(0, |part| part.len() + 2),
+    );
+    let mut center_byte = 0;
+    let mut center_utf16 = 0;
+    if let Some(previous) = previous {
+        center_byte = sentences[0].start_utf8;
+        center_utf16 = sentences[0].start_utf16;
+        let prefix = word_break::boundary_sentence(&previous, id, page - 1);
+        let shift_bytes = previous.len() + 2;
+        let shift_utf16 = prefix.end_utf16 + 2;
+        for sentence in sentences.iter_mut() {
+            sentence.start_utf8 = sentence.start_utf8 - center_byte + shift_bytes;
+            sentence.end_utf8 = sentence.end_utf8 - center_byte + shift_bytes;
+            sentence.start_utf16 = sentence.start_utf16 - center_utf16 + shift_utf16;
+            sentence.end_utf16 = sentence.end_utf16 - center_utf16 + shift_utf16;
+        }
+        joined.push_str(&previous);
+        joined.push_str("\n\n");
+        starts.push(Some(shift_utf16));
+        sentences.insert(0, prefix);
     }
-    Document {
-        text: layout.text,
-        blocks: layout.blocks,
-        sentences,
-        language,
-        format: "pdf".into(),
-        reviewed_translations,
-        ..Document::default()
+
+    if let Some(next) = next {
+        let last = &sentences[sentences.len() - 1];
+        joined.push_str(&text[center_byte..center_end]);
+        joined.push_str("\n\n");
+        let mut suffix = word_break::boundary_sentence(&next, id, page + 1);
+        suffix.start_utf8 = joined.len();
+        suffix.end_utf8 += suffix.start_utf8;
+        suffix.start_utf16 = last.end_utf16 + 2;
+        suffix.end_utf16 += suffix.start_utf16;
+        starts.push(Some(suffix.start_utf16));
+        joined.push_str(&next);
+        sentences.push(suffix);
+    } else {
+        joined.push_str(&text[center_byte..]);
     }
+    (joined, starts)
 }
 
 pub(super) fn cached_page_translation(
     store: &Store,
     routes: &CacheRoutes,
-    document: &Document,
+    projection: &PageProjection,
     selected: usize,
     target: &str,
 ) -> Result<Option<DetachedPdfTranslation>> {
+    let document = &projection.document;
+    let local_position = selected;
+    let selected = projection.physical.start + selected;
     let original = &document.sentences[selected];
     if document
         .reviewed_translations
@@ -96,7 +217,7 @@ pub(super) fn cached_page_translation(
     }
     let cached = routes.cached_active(store, document, selected, target)?;
     if let Some(active) = active_translation(document, selected, cached.paragraph) {
-        return Ok(Some(active));
+        return Ok(Some(projection.localize(active)));
     }
     if let Some(aligned) = cached.sentence {
         if let Some((text, ids)) = aligned.segments.into_iter().next().zip(
@@ -110,7 +231,8 @@ pub(super) fn cached_page_translation(
                 &ids,
                 text,
                 aligned.route.pivot_language().map(str::to_owned),
-            ));
+            )
+            .map(|value| projection.localize(value)));
         }
     }
     Ok(routes
@@ -119,7 +241,7 @@ pub(super) fn cached_page_translation(
             text,
             pivot_language,
             source_text: None,
-            start_position: selected,
+            start_position: local_position,
         }))
 }
 
