@@ -67,7 +67,20 @@ pub(super) fn decode(
     width: u8,
     limit: usize,
 ) -> Result<Vec<u32>> {
-    search(
+    candidates(model, encoded, config, width, limit)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Модель не завершила переклад речення".into())
+}
+
+pub(super) fn candidates(
+    model: &MTModel,
+    encoded: &Tensor,
+    config: &Config,
+    width: u8,
+    limit: usize,
+) -> Result<Vec<Vec<u32>>> {
+    search_candidates(
         CandleState {
             model: model.clone(),
             encoded: encoded.clone(),
@@ -81,9 +94,19 @@ pub(super) fn decode(
             limit,
         },
     )
+    .map(|finished| finished.into_iter().map(|beam| beam.tokens).collect())
 }
 
-fn search<S: DecoderState>(mut initial: S, options: Options) -> Result<Vec<u32>> {
+#[cfg(test)]
+fn search<S: DecoderState>(initial: S, options: Options) -> Result<Vec<u32>> {
+    search_candidates(initial, options)?
+        .into_iter()
+        .next()
+        .map(|beam| beam.tokens)
+        .ok_or_else(|| "Модель не завершила переклад речення".into())
+}
+
+fn search_candidates<S: DecoderState>(mut initial: S, options: Options) -> Result<Vec<Finished>> {
     if !(1..=MAX_BEAMS).contains(&options.width) || !(1..=MAX_TOKENS).contains(&options.limit) {
         return Err("Некоректні межі декодування перекладу".into());
     }
@@ -100,7 +123,10 @@ fn search<S: DecoderState>(mut initial: S, options: Options) -> Result<Vec<u32>>
                 .map(|(id, _)| id as u32)
                 .ok_or("Модель не повернула доступного токена")?;
             if options.ends(last) {
-                return Ok(output);
+                return Ok(vec![Finished {
+                    tokens: output,
+                    score: 0.0,
+                }]);
             }
             output.push(last);
         }
@@ -183,11 +209,11 @@ fn search<S: DecoderState>(mut initial: S, options: Options) -> Result<Vec<u32>>
         }
         active = next;
     }
-    finished
-        .into_iter()
-        .next()
-        .map(|beam| beam.tokens)
-        .ok_or_else(|| "Модель не завершила переклад речення".into())
+    if finished.is_empty() {
+        Err("Модель не завершила переклад речення".into())
+    } else {
+        Ok(finished)
+    }
 }
 
 fn best_tokens(logits: &[f32], pad: u32, count: usize) -> Result<Vec<(u32, f64)>> {

@@ -10,6 +10,7 @@ use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::marian::{Config, MTModel};
 use sentencepiece_rs::SentencePieceProcessor;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     model_storage::{
@@ -28,6 +29,8 @@ use crate::{
 
 #[path = "marian_decoder.rs"]
 mod decoder;
+#[path = "marian_rerank.rs"]
+mod rerank;
 
 mod catalog {
     include!("marian_catalog.rs");
@@ -527,19 +530,88 @@ impl TranslationProvider for MarianProvider<'_> {
                     .encoder()
                     .forward(&encoder_input, 0)
                     .map_err(model_error)?;
-                let decoded =
-                    decoder::decode(&model, &encoded, &config, settings.beam_size, limit)?;
-                let pieces = decoded
-                    .iter()
-                    .map(|token| {
-                        output_pieces
-                            .get(token)
-                            .copied()
-                            .ok_or("Невідомий токен перекладу")
-                    })
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                let translated = output.decode(&pieces).map_err(model_error)?;
-                translated_parts.push(translated.trim().to_owned());
+                let decode_text = |tokens: &[u32]| -> Result<String> {
+                    let pieces = tokens
+                        .iter()
+                        .map(|token| {
+                            output_pieces
+                                .get(token)
+                                .copied()
+                                .ok_or("Невідомий токен перекладу")
+                        })
+                        .collect::<std::result::Result<Vec<_>, _>>()?;
+                    output
+                        .decode(&pieces)
+                        .map(|text| text.trim().to_owned())
+                        .map_err(model_error)
+                };
+                let mut decoded =
+                    decoder::candidates(&model, &encoded, &config, settings.beam_size, limit)?
+                        .into_iter();
+                let best = decoded
+                    .next()
+                    .ok_or("Модель не завершила переклад речення")?;
+                let mut translated = decode_text(&best)?;
+                let units: Vec<_> = segment
+                    .unicode_sentences()
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .take(4)
+                    .collect();
+                if start == 0
+                    && end == source_pieces.len()
+                    && segment.len() <= 768
+                    && (2..=3).contains(&units.len())
+                    && decoded.len() > 0
+                {
+                    let mut alternatives = vec![translated.clone()];
+                    for text in decoded.filter_map(|tokens| decode_text(&tokens).ok()) {
+                        if !alternatives.contains(&text) {
+                            alternatives.push(text);
+                        }
+                    }
+                    let mut reference = |text: &str, width| -> Result<String> {
+                        let pieces = input
+                            .encode(normalized_input(package.source, text).as_ref())
+                            .map_err(model_error)?;
+                        if pieces.len() > capacity {
+                            return Err("Речення завелике для перевірки контексту".into());
+                        }
+                        let mut ids: Vec<_> = prefix
+                            .into_iter()
+                            .chain(
+                                pieces
+                                    .iter()
+                                    .map(|piece| vocabulary.get(piece).copied().unwrap_or(unknown)),
+                            )
+                            .collect();
+                        ids.push(config.eos_token_id);
+                        model.reset_kv_cache();
+                        let tensor = Tensor::new(ids.as_slice(), &Device::Cpu)
+                            .and_then(|value| value.unsqueeze(0))
+                            .map_err(model_error)?;
+                        let encoded = model.encoder().forward(&tensor, 0).map_err(model_error)?;
+                        decode_text(&decoder::decode(&model, &encoded, &config, width, limit)?)
+                    };
+                    let references = units
+                        .iter()
+                        .map(|text| {
+                            let greedy = reference(text, 1)?;
+                            // A greedy paraphrase absent from every candidate cannot arbitrate.
+                            // One bounded width-2 retry may recover discriminating evidence.
+                            if rerank::supported_reference(&alternatives, &greedy) {
+                                Ok(greedy)
+                            } else {
+                                reference(text, 2).or(Ok(greedy))
+                            }
+                        })
+                        .collect::<Result<Vec<_>>>();
+                    if let Ok(references) = references {
+                        let chosen = rerank::choose(&alternatives, &references);
+                        translated = alternatives.swap_remove(chosen);
+                    }
+                }
+                translated_parts.push(translated);
                 if end == source_pieces.len() {
                     break;
                 }

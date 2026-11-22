@@ -659,7 +659,8 @@ fn cache_key(
     context: Option<&str>,
     settings: TranslationSettings,
 ) -> Result<String> {
-    let input = serde_json::to_vec(&(2, route, segments, context, settings))
+    // Decoder/tokenizer and contextual reranking revisions must not reuse older outputs.
+    let input = serde_json::to_vec(&(3, route, segments, context, settings))
         .map_err(|error| error.to_string())?;
     Ok(format!("{:x}", Sha256::digest(input)))
 }
