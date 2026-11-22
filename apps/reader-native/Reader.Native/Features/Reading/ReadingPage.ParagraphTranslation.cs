@@ -7,9 +7,71 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage
 {
     private const int TranslationWindowLimit = 6;
+    private const string AutoTranslatePreference = "reader.translation.follow";
     private readonly List<TranslationWindow> translationWindows = [];
+    private bool readingPageActive;
+    private bool autoTranslate;
+    private CancellationTokenSource? scheduledTranslation;
+    private TranslationKey? lastAutoTranslation;
 
+    private sealed record TranslationKey(string Document, string Sentence, string Source, string Target, string Text);
     private sealed record TranslationScope(string Document, string Source, string Target);
+
+    private void UpdateAutoTranslateButton()
+    {
+        AutoTranslate.Text = autoTranslate ? "Автопереклад ✓" : "Автопереклад";
+        SemanticProperties.SetDescription(AutoTranslate, autoTranslate
+            ? "Вимкнути автоматичний офлайн-переклад абзаців"
+            : "Увімкнути автоматичний офлайн-переклад абзаців");
+    }
+
+    private void AutoTranslateClicked(object? sender, EventArgs args)
+    {
+        autoTranslate = !autoTranslate;
+        lastAutoTranslation = null;
+        Preferences.Set(AutoTranslatePreference, autoTranslate);
+        UpdateAutoTranslateButton();
+        ScheduleAutoTranslation();
+    }
+
+    private TranslationKey? PendingAutoTranslation() =>
+        readingPageActive && autoTranslate && translationVisible && TranslateOffline.IsEnabled
+            ? ActiveTranslationKey() : null;
+
+    private void CancelScheduledTranslation()
+    {
+        var pending = scheduledTranslation;
+        scheduledTranslation = null;
+        pending?.Cancel();
+    }
+
+    private void ScheduleAutoTranslation()
+    {
+        var key = PendingAutoTranslation();
+        if (key is null || key == lastAutoTranslation)
+        {
+            CancelScheduledTranslation();
+            return;
+        }
+        if (scheduledTranslation is not null) return;
+        _ = TranslateAfterNavigationAsync(key);
+    }
+
+    private async Task TranslateAfterNavigationAsync(TranslationKey key)
+    {
+        using var pending = new CancellationTokenSource();
+        scheduledTranslation = pending;
+        try { await Task.Delay(350, pending.Token); }
+        catch (OperationCanceledException) { return; }
+        scheduledTranslation = null;
+        if (PendingAutoTranslation() != key)
+        {
+            ScheduleAutoTranslation();
+            return;
+        }
+        lastAutoTranslation = key;
+        await TranslateOfflineAsync(useContext: true);
+    }
 
     private sealed record AlignedUnit(int First, Sentence[] Sources, string? MachineText, bool JoinedLines,
         string? SourceSpan)
@@ -111,7 +173,11 @@ public partial class ReadingPage
             paragraph.PivotLanguage, true, paragraph.MoreBefore, paragraph.MoreAfter);
     }
 
-    private async void TranslateOfflineClicked(object? sender, EventArgs args) => await TranslateOfflineAsync(true);
+    private async void TranslateOfflineClicked(object? sender, EventArgs args)
+    {
+        lastAutoTranslation = ActiveTranslationKey();
+        await TranslateOfflineAsync(true);
+    }
 
     private async void TranslateSentenceClicked(object? sender, EventArgs args) => await TranslateOfflineAsync(false);
 

@@ -141,6 +141,7 @@ and the source text, bookmarks, and current reading position remain intact.
 
 The full download catalogue covers 24 directions across all 12 starting languages, including English pivot
 routes. In the reader, **Перекласти абзац офлайн** keeps translated text linked to its source sentences.
+Turn on **Автопереклад** to translate the active paragraph as you move through the source with an installed route.
 When multiple directions share a package, removing the package disables all of those directions.
 
 ## Optional local model files

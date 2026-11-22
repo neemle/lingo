@@ -110,8 +110,10 @@
      </Grid>
 
      <Grid Grid.Column="1" x:Name="TranslationPane" RowDefinitions="Auto,*,Auto" BackgroundColor="{StaticResource Panel}">
-      <Grid Padding="16,10" BackgroundColor="#F8F9F3">
-       <Label Text="ПЕРЕКЛАД" Style="{StaticResource ReaderColumnCaption}" />
+      <Grid Padding="16,10" ColumnDefinitions="*,Auto" BackgroundColor="#F8F9F3">
+       <Label Text="ПЕРЕКЛАД" Style="{StaticResource ReaderColumnCaption}" VerticalOptions="Center" />
+       <Button Grid.Column="1" x:Name="AutoTranslate" Text="Автопереклад"
+        Style="{StaticResource PlayerButton}" Clicked="AutoTranslateClicked" />
       </Grid>
       <ScrollView Grid.Row="1">
        <VerticalStackLayout Spacing="10" Padding="16,12">

@@ -14,7 +14,7 @@ public partial class ReadingPage : ContentPage
     private bool stacked;
     private bool translationVisible = true;
     private bool translating;
-    private (string Document, string Sentence, string Source, string Target, string Text)? statusKey;
+    private TranslationKey? statusKey;
     private string? machineStatus;
     private (string Source, string Target)? readinessPair;
     private TranslationReadiness? readiness;
@@ -49,6 +49,10 @@ public partial class ReadingPage : ContentPage
     protected override void OnAppearing()
     {
         base.OnAppearing();
+        readingPageActive = true;
+        autoTranslate = Preferences.Get(AutoTranslatePreference, false);
+        lastAutoTranslation = null;
+        UpdateAutoTranslateButton();
         BindingContext = AppState.Session;
         AppState.Session.PropertyChanged += SessionChanged;
         BeginReadingHistory();
@@ -69,6 +73,8 @@ public partial class ReadingPage : ContentPage
 
     protected override void OnDisappearing()
     {
+        readingPageActive = false;
+        CancelScheduledTranslation();
         EndReadingHistory(keepVisit: showingMeanings);
         StopSpeech();
         voiceCatalogRevision++;
@@ -148,6 +154,7 @@ public partial class ReadingPage : ContentPage
         translationVisible = !translationVisible;
         ToggleTranslation.Text = translationVisible ? "Переклад ✓" : "Переклад";
         ArrangeReadingColumns();
+        ScheduleAutoTranslation();
     }
 
     private void DecreaseReaderFont(object? sender, EventArgs args) => ChangeReadingSize(-1);
@@ -218,6 +225,7 @@ public partial class ReadingPage : ContentPage
         TargetLanguage.IsEnabled = active && !session.Busy;
         UpdateSourceLocation(document, session.Sentence);
         UpdateParagraphPreview(document, window, unit);
+        ScheduleAutoTranslation();
     }
 
     private string ReadinessMessage()
@@ -264,11 +272,11 @@ public partial class ReadingPage : ContentPage
         catch (Exception error) { TranslationNotice.Text = error.Message; }
     }
 
-    private (string Document, string Sentence, string Source, string Target, string Text)? ActiveTranslationKey()
+    private TranslationKey? ActiveTranslationKey()
     {
         var session = AppState.Session;
         return session.Document is { } document && session.Sentence is { } sentence && TargetCode is { } target
-            ? (document.Id, sentence.Id, document.Language, target, sentence.Text)
+            ? new TranslationKey(document.Id, sentence.Id, document.Language, target, sentence.Text)
             : null;
     }
 
