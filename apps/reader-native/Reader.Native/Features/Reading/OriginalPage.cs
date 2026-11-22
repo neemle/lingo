@@ -35,6 +35,7 @@ internal sealed class OriginalPage : ContentPage
     private DetachedPdfOcrPage? detachedOcr;
     private readonly ReaderSession session;
     private readonly string documentId;
+    internal string? PdfDocumentId { get; }
     private readonly Button lineButton = new() { Text = "Розпізнані рядки" };
     private int selectedLineChoice = -1;
     private readonly Button edit = new() { Text = "Виправити" };
@@ -67,6 +68,7 @@ internal sealed class OriginalPage : ContentPage
         this.recognizeWindow = recognizeWindow;
         this.lines = lines;
         this.documentId = documentId;
+        PdfDocumentId = isPdf ? documentId : null;
         this.session = session;
         this.pageCount = pageCount;
         focus = selection is not null ? (selection.StartUtf16, selection.StartUtf16 + selection.LengthUtf16)
@@ -211,6 +213,9 @@ internal sealed class OriginalPage : ContentPage
             ResizePage();
             ApplyOcrLines(cached);
             status.Text = pageCount == 1 ? "" : $"{pageIndex + 1} / {pageCount}";
+            if (changingPage && visible && session.Document is { } document && document.Id == documentId &&
+                HasPhysicalPageAddress(document))
+                await session.SetPdfReadingPageAsync(documentId, index);
             QueuePageOcr(index);
             if (changingPage && (viewport.ScrollX > 0 || viewport.ScrollY > 0))
                 await viewport.ScrollToAsync(0, 0, animated: false);
