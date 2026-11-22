@@ -17,7 +17,8 @@ public sealed record WordMeaning(string Id, string Lemma, string PartOfSpeech, s
 
 public sealed record DictionaryArchive(int Version, Vocabulary[] Entries, DictionaryReview[] Reviews,
     DictionarySource[] Sources);
-public sealed record DictionaryReview(string Id, string EntryId, string Direction, byte Grade, long ReviewedAt);
+public sealed record DictionaryReview(string Id, string EntryId, string Direction, byte Grade, long ReviewedAt,
+    string? Answer = null, long? ElapsedMs = null);
 public sealed record DictionarySource(string DocumentId, string? Title, string? SourceHash, string[] EntryIds);
 public sealed record DictionaryImport(int AddedCards, int ExistingCards, int AddedReviews);
 

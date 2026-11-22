@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text;
 using Reader.Contracts;
 using Reader.Native.Services;
 using Reader.Presentation;
@@ -10,6 +12,10 @@ public partial class PracticePage : ContentPage
     private sealed record CollectionChoice(PracticeCollection? Scope, string Title);
 
     private static readonly CollectionChoice AllCards = new(null, "Усі картки");
+    private const int MaxAnswerBytes = 2000;
+    private const long MaxElapsedMs = 86_400_000;
+    private readonly Stopwatch responseTimer = new();
+    private ulong? timedRevision;
     private CollectionChoice[] collections = [AllCards];
     private VocabularyCard[] vocabulary = [];
     private PracticeProgress? progress;
@@ -33,6 +39,7 @@ public partial class PracticePage : ContentPage
     protected override void OnDisappearing()
     {
         visible = false;
+        responseTimer.Stop();
         loadVersion++;
         loading = false;
         base.OnDisappearing();
@@ -151,6 +158,8 @@ public partial class PracticePage : ContentPage
         var ready = visible && !loading && !grading && progress is not null;
         QuestionPanel.IsEnabled = Direction.IsEnabled = Mode.IsEnabled = ready;
         CollectionPicker.IsEnabled = ready && collections.Length > 1;
+        if (ready && timedRevision.HasValue) responseTimer.Start();
+        else responseTimer.Stop();
     }
 
     private void OpenQuestion(PracticeProgress state, VocabularyCard[] cards, bool settingsChanged = false)
@@ -173,6 +182,13 @@ public partial class PracticePage : ContentPage
         vocabulary = cards;
         ShowSelectedCollection(state.Collection);
         Render(state, due.Length);
+        var revision = state.Question is { Revealed: false } ? state.Revision : (ulong?)null;
+        if (revision != timedRevision)
+        {
+            responseTimer.Reset();
+            timedRevision = revision;
+        }
+        UpdateControls();
     }
 
     private void Render(PracticeProgress state, int due)
@@ -261,12 +277,18 @@ public partial class PracticePage : ContentPage
 
     private void ShowAnswer(string? attempt)
     {
-        if (loading || grading || progress is not { Question: { Revealed: false } question } state) return;
+        if (!visible || loading || grading || progress is not { Question: { Revealed: false } question } state) return;
+        if (attempt is not null && Encoding.UTF8.GetByteCount(attempt) > MaxAnswerBytes)
+        {
+            QueueStatus.Text = "Відповідь перевищує 2000 байтів. Скоротіть її та спробуйте ще раз.";
+            return;
+        }
+        var elapsed = Math.Min(responseTimer.ElapsedMilliseconds, MaxElapsedMs);
         try
         {
             var saved = AppState.Session.SetPractice(state with
             {
-                Question = question with { Revealed = true, GivenAnswer = attempt },
+                Question = question with { Revealed = true, GivenAnswer = attempt, ElapsedMs = elapsed },
             });
             OpenQuestion(saved, vocabulary);
         }

@@ -6,4 +6,4 @@ public sealed record PracticeProgress(ulong Revision, string Direction, byte Mod
 public sealed record PracticeCollection(string DocumentId, string? SourceHash = null);
 
 public sealed record SavedQuestion(string CardId, string Prompt, string[] Answers, string[] Options,
-    bool Revealed = false, string? GivenAnswer = null);
+    bool Revealed = false, string? GivenAnswer = null, long? ElapsedMs = null);
