@@ -1,5 +1,6 @@
 using Foundation;
 using Microsoft.Maui.Handlers;
+using Reader.Contracts;
 using UIKit;
 
 namespace Reader.Native.Controls;
@@ -9,6 +10,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
     private UITapGestureRecognizer? tap;
     private bool updating;
     private string? renderedText;
+    private DocumentBlock[] renderedBlocks = [];
     private int renderedFontSize;
     private Reader.Presentation.TextSelection? highlightedSentence;
     private Reader.Presentation.TextSelection? spokenWord;
@@ -16,6 +18,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
         new PropertyMapper<NativeReaderView, NativeReaderHandler>(ViewMapper)
         {
             [nameof(NativeReaderView.Text)] = MapText,
+            [nameof(NativeReaderView.Blocks)] = MapText,
             [nameof(NativeReaderView.HighlightStart)] = MapText,
             [nameof(NativeReaderView.HighlightLength)] = MapText,
             [nameof(NativeReaderView.SpokenWord)] = MapSpokenWord,
@@ -46,6 +49,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
         if (tap is not null) { platformView.RemoveGestureRecognizer(tap); tap.Dispose(); }
         tap = null;
         renderedText = null;
+        renderedBlocks = [];
         highlightedSentence = spokenWord = null;
         base.DisconnectHandler(platformView);
     }
@@ -75,14 +79,18 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
         var source = view.Text;
         var newText = handler.renderedText != source;
         var newFont = handler.renderedFontSize != view.ReadingFontSize;
+        var blocks = view.Blocks;
+        var newBlocks = !ReferenceEquals(handler.renderedBlocks, blocks) &&
+            !handler.renderedBlocks.AsSpan().SequenceEqual(blocks);
+        handler.renderedBlocks = blocks;
         var sentence = view.HighlightedSpan();
         var newSentence = newText || sentence != handler.highlightedSentence;
-        if (!newSentence && !newFont) return;
+        if (!newSentence && !newFont && !newBlocks) return;
 
         handler.updating = true;
         try
         {
-            if (newText || newFont)
+            if (newText || newFont || newBlocks)
             {
                 var font = UIFont.FromName("Georgia", view.ReadingFontSize)
                     ?? UIFont.SystemFontOfSize(view.ReadingFontSize);
@@ -98,9 +106,8 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
                     handler.PlatformView.AttributedText = text;
                     handler.renderedText = source;
                 }
-                else if (source.Length > 0 && font is not null)
-                    handler.PlatformView.TextStorage.AddAttribute(UIStringAttributeKey.Font, font,
-                        new NSRange(0, source.Length));
+                if (font is not null)
+                    handler.ApplyHeadingFonts(source, blocks, font, view.ReadingFontSize, resetBody: !newText);
                 handler.renderedFontSize = view.ReadingFontSize;
             }
 
@@ -122,6 +129,32 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
         if (newSentence && sentence is not null)
             handler.PlatformView.ScrollRangeToVisible(new NSRange(sentence.StartUtf16, sentence.LengthUtf16));
     }
+
+    private void ApplyHeadingFonts(string text, DocumentBlock[] blocks, UIFont body, int size, bool resetBody)
+    {
+        if (text.Length == 0) return;
+        var storage = PlatformView.TextStorage;
+        storage.BeginEditing();
+        try
+        {
+            if (resetBody) storage.AddAttribute(UIStringAttributeKey.Font, body, new NSRange(0, text.Length));
+            foreach (var block in blocks)
+            {
+                var start = block.StartUtf16;
+                var end = block.EndUtf16;
+                if (block.Kind != "heading" || start < 0 || end <= start || end > text.Length ||
+                    char.IsLowSurrogate(text[start]) || end < text.Length && char.IsLowSurrogate(text[end]))
+                    continue;
+
+                var headingSize = size + (block.HeadingLevel switch { 1 => 6, 2 => 4, _ => 2 });
+                var heading = UIFont.FromName("Georgia-Bold", headingSize) ?? UIFont.BoldSystemFontOfSize(headingSize);
+                if (heading is not null)
+                    storage.AddAttribute(UIStringAttributeKey.Font, heading, new NSRange(start, end - start));
+            }
+        }
+        finally { storage.EndEditing(); }
+    }
+
     private static void MapSpokenWord(NativeReaderHandler handler, NativeReaderView view)
     {
         if (handler.renderedText != view.Text) return;

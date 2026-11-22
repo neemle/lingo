@@ -1,3 +1,4 @@
+using Reader.Contracts;
 using Reader.Presentation;
 
 namespace Reader.Native.Controls;
@@ -7,6 +8,8 @@ public sealed class NativeReaderView : View
     private SourceRanges? sourceRanges;
     public static readonly BindableProperty TextProperty = BindableProperty.Create(
         nameof(Text), typeof(string), typeof(NativeReaderView), "");
+    public static readonly BindableProperty BlocksProperty = BindableProperty.Create(
+        nameof(Blocks), typeof(DocumentBlock[]), typeof(NativeReaderView));
     public static readonly BindableProperty HighlightStartProperty = BindableProperty.Create(
         nameof(HighlightStart), typeof(int), typeof(NativeReaderView), 0);
     public static readonly BindableProperty HighlightLengthProperty = BindableProperty.Create(
@@ -27,6 +30,7 @@ public sealed class NativeReaderView : View
         set => SetValue(SpokenWordProperty, value);
     }
     public string Text { get => GetValue(TextProperty) as string ?? ""; set => SetValue(TextProperty, value); }
+    public DocumentBlock[] Blocks { get => GetValue(BlocksProperty) as DocumentBlock[] ?? []; set => SetValue(BlocksProperty, value); }
     public int HighlightStart
     {
         get => (int)GetValue(HighlightStartProperty);

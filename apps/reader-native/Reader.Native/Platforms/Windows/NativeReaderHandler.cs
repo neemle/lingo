@@ -13,10 +13,15 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, RichEdit
     private Reader.Presentation.TextSelection? spokenWord;
     private Reader.Presentation.WindowsTextMap textMap = new("");
     private string sourceText = "";
+    private HeadingRange[] headings = [];
+
+    private readonly record struct HeadingRange(int Start, int End, int Level);
+
     public static readonly IPropertyMapper<NativeReaderView, NativeReaderHandler> ReaderMapper =
         new PropertyMapper<NativeReaderView, NativeReaderHandler>(ViewMapper)
         {
             [nameof(NativeReaderView.Text)] = MapText,
+            [nameof(NativeReaderView.Blocks)] = MapBlocks,
             [nameof(NativeReaderView.HighlightStart)] = MapText,
             [nameof(NativeReaderView.HighlightLength)] = MapText,
             [nameof(NativeReaderView.SpokenWord)] = MapSpokenWord,
@@ -45,6 +50,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, RichEdit
         platformView.SelectionChanged -= Selected;
         sourceText = "";
         textMap = new Reader.Presentation.WindowsTextMap("");
+        headings = [];
         highlightedSentence = spokenWord = null;
         base.DisconnectHandler(platformView);
     }
@@ -76,6 +82,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, RichEdit
             {
                 handler.sourceText = view.Text;
                 handler.textMap = new Reader.Presentation.WindowsTextMap(view.Text);
+                handler.headings = handler.HeadingRanges(view);
                 handler.PlatformView.Document.SetText(TextSetOptions.None, handler.textMap.Text);
                 MapFont(handler, view);
                 handler.PlatformView.Document.GetRange(0, handler.textMap.Text.Length)
@@ -103,6 +110,22 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, RichEdit
         }
         finally { handler.updating = false; }
     }
+
+    private HeadingRange[] HeadingRanges(NativeReaderView view) => view.Blocks
+        .Where(block => block.Kind == "heading" && block.StartUtf16 >= 0 &&
+            block.EndUtf16 > block.StartUtf16 && block.EndUtf16 <= sourceText.Length)
+        .Select(block => new HeadingRange(block.StartUtf16, block.EndUtf16, block.HeadingLevel ?? 0))
+        .ToArray();
+
+    private static void MapBlocks(NativeReaderHandler handler, NativeReaderView view)
+    {
+        if (handler.sourceText != view.Text) return;
+        var headings = handler.HeadingRanges(view);
+        if (handler.headings.AsSpan().SequenceEqual(headings)) return;
+        handler.headings = headings;
+        MapFont(handler, view);
+    }
+
     private static void MapFont(NativeReaderHandler handler, NativeReaderView view)
     {
         var wasUpdating = handler.updating;
@@ -114,6 +137,17 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, RichEdit
             var format = handler.PlatformView.Document.GetRange(0, handler.textMap.Text.Length).CharacterFormat;
             format.Name = "Georgia";
             format.Size = view.ReadingFontSize;
+            format.Bold = FormatEffect.Off;
+            foreach (var heading in handler.headings)
+            {
+                var start = handler.textMap.NativeOffset(heading.Start);
+                var end = handler.textMap.NativeOffset(heading.End);
+                if (end <= start) continue;
+                var headingFormat = handler.PlatformView.Document.GetRange(start, end).CharacterFormat;
+                headingFormat.Bold = FormatEffect.On;
+                var increment = heading.Level switch { 1 => 6, 2 => 4, _ => 2 };
+                headingFormat.Size = view.ReadingFontSize + increment;
+            }
         }
         finally { handler.updating = wasUpdating; }
     }
