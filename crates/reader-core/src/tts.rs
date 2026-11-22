@@ -215,67 +215,41 @@ pub fn ukrainian_stress(text: &str) -> std::borrow::Cow<'_, str> {
             .flat_map(char::to_lowercase)
             .collect::<String>()
     };
-    for (offset, word) in text.unicode_word_indices() {
+    let mut words = text.unicode_word_indices().peekable();
+    while let Some((offset, word)) = words.next() {
         let (earlier_end, earlier_word) = before_previous;
         let (previous_end, previous_word) = previous;
         before_previous = previous;
         previous = (offset + word.len(), word);
-        if !word
-            .chars()
-            .flat_map(char::to_lowercase)
-            .eq("вікна".chars())
-            || !phrase_space(&text[previous_end..offset])
-        {
+        if word.contains(STRESS_MARK) {
+            continue;
+        }
+        let lower = word.to_lowercase();
+        if !matches!(lower.as_str(), "вікна" | "замок" | "руки") {
             continue;
         }
 
-        let earlier = if phrase_space(&text[earlier_end..previous_end - previous_word.len()]) {
+        let has_prior = phrase_space(&text[previous_end..offset]);
+        let prior = if has_prior { cue(previous_word) } else { String::new() };
+        let earlier = if has_prior &&
+            phrase_space(&text[earlier_end..previous_end - previous_word.len()])
+        {
             cue(earlier_word)
         } else {
             String::new()
         };
-        let prior = cue(previous_word);
-        // Two, three, and four retain the genitive singular stress in this plural form.
-        let count =
-            |token: &str| matches!(token, "два" | "обидва" | "три" | "чотири" | "2" | "3" | "4");
-        let genitive_preposition = |token: &str| {
-            matches!(
-                token,
-                "біля" | "поблизу" | "навколо" | "до" | "від" | "без" | "коло" | "після"
-            )
+        let next = words.peek()
+            .filter(|(start, _)| phrase_space(&text[previous.0..*start]))
+            .map_or_else(String::new, |(_, word)| cue(word));
+        let vowel_index = match lower.as_str() {
+            "вікна" => window_stress(&earlier, &prior),
+            "замок" => castle_or_lock_stress(&prior, &next),
+            "руки" => hands_stress(&earlier, &prior),
+            _ => None,
         };
-        let plural_modifier = |token: &str| {
-            matches!(
-                token,
-                "відчинені"
-                    | "зачинені"
-                    | "великі"
-                    | "малі"
-                    | "нові"
-                    | "старі"
-                    | "ці"
-                    | "ті"
-                    | "усі"
-                    | "всі"
-                    | "мої"
-                    | "твої"
-                    | "свої"
-                    | "наші"
-                    | "ваші"
-                    | "їхні"
-            )
-        };
-        let stressed_end = match (earlier.as_str(), prior.as_str()) {
-            (_, token) if genitive_preposition(token) || count(token) => word.len(),
-            (preposition, modifier)
-                if genitive_preposition(preposition) && modifier.ends_with("ого") =>
-            {
-                word.len()
-            }
-            (number, token) if count(number) && plural_modifier(token) => word.len(),
-            (_, token) if plural_modifier(token) => word.chars().take(2).map(char::len_utf8).sum(),
-            _ => continue,
-        } + offset;
+        let Some(vowel_index) = vowel_index else { continue };
+        let Some((index, vowel)) = word.char_indices().nth(vowel_index) else { continue };
+        let stressed_end = offset + index + vowel.len_utf8();
         spoken.push_str(&text[copied..stressed_end]);
         spoken.push(STRESS_MARK);
         copied = stressed_end;
@@ -285,6 +259,82 @@ pub fn ukrainian_stress(text: &str) -> std::borrow::Cow<'_, str> {
     }
     spoken.push_str(&text[copied..]);
     spoken.into()
+}
+
+fn window_stress(earlier: &str, prior: &str) -> Option<usize> {
+    // Two, three, and four retain the genitive singular stress in this plural form.
+    let count =
+        |token: &str| matches!(token, "два" | "обидва" | "три" | "чотири" | "2" | "3" | "4");
+    let genitive_preposition = |token: &str| {
+        matches!(
+            token,
+            "біля" | "поблизу" | "навколо" | "до" | "від" | "без" | "коло" | "після"
+        )
+    };
+    let plural_modifier = |token: &str| {
+        matches!(
+            token,
+            "відчинені"
+                | "зачинені"
+                | "великі"
+                | "малі"
+                | "нові"
+                | "старі"
+                | "ці"
+                | "ті"
+                | "усі"
+                | "всі"
+                | "мої"
+                | "твої"
+                | "свої"
+                | "наші"
+                | "ваші"
+                | "їхні"
+        )
+    };
+
+    match (earlier, prior) {
+        (_, token) if genitive_preposition(token) || count(token) => Some(4),
+        (preposition, modifier)
+            if genitive_preposition(preposition) && modifier.ends_with("ого") => Some(4),
+        (number, token) if count(number) && plural_modifier(token) => Some(4),
+        (_, token) if plural_modifier(token) => Some(1),
+        _ => None,
+    }
+}
+
+fn castle_or_lock_stress(prior: &str, next: &str) -> Option<usize> {
+    let castle = matches!(
+        prior, "середньовічний" | "королівський" | "князівський" | "лицарський" | "готичний"
+    ) || matches!(next, "височів" | "височіє" | "височить");
+    let lock = matches!(
+        prior,
+        "дверний" | "навісний" | "врізний" | "кодовий"
+            | "відімкнути" | "відімкнув" | "відімкнула" | "замкнути" | "замкнув" | "замкнула"
+    ) || matches!(next, "дверей");
+    match (castle, lock) {
+        (true, false) => Some(1),
+        (false, true) => Some(3),
+        _ => None,
+    }
+}
+
+fn hands_stress(earlier: &str, prior: &str) -> Option<usize> {
+    let genitive_preposition = |token| matches!(token, "без" | "від" | "до" | "біля");
+    if genitive_preposition(prior)
+        || matches!(prior, "моєї" | "твоєї" | "своєї" | "цієї" | "тієї" | "лівої" | "правої")
+        || (genitive_preposition(earlier) && prior.ends_with("ої"))
+    {
+        Some(3)
+    } else if matches!(
+        prior,
+        "мої" | "твої" | "свої" | "наші" | "ваші" | "ці" | "ті" | "обидві"
+            | "підняв" | "підняла" | "підніми" | "помий" | "мити"
+    ) {
+        Some(1)
+    } else {
+        None
+    }
 }
 
 #[derive(Deserialize)]
