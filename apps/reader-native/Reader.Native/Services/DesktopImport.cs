@@ -3,7 +3,7 @@ using System.Text;
 
 namespace Reader.Native.Services;
 
-internal sealed record DesktopFile(string Name, Func<Task<byte[]>> Read)
+internal static class DesktopFile
 {
     internal static bool Supports(string name) => Path.GetExtension(name).ToLowerInvariant() is
         ".txt" or ".docx" or ".pdf" or ".jpg" or ".jpeg" or ".png" or ".webp" or ".heic" or ".heif";

@@ -1,10 +1,15 @@
+using System.Text.Json.Serialization;
+
 namespace Reader.Native.Services;
 
 internal sealed record ShareInboxItem(Guid Id, string Kind, string Name, DateTimeOffset ReceivedAt, long Bytes,
-    string? PhotoLanguage = null)
+    [property: JsonPropertyName("photoLanguage")] string? SourceLanguage = null, bool ScanPdf = false)
 {
     internal string Label => $"{Name} · {ReceivedAt.LocalDateTime:g}";
 }
+
+internal sealed class ShareInboxFullException() : InvalidOperationException(
+    "Вхідні матеріали заповнено. Завершіть або видаліть попередні імпорти в бібліотеці.");
 
 internal static class ShareInbox
 {
@@ -13,8 +18,7 @@ internal static class ShareInbox
     private static readonly SemaphoreSlim Staging = new(1, 1);
     private static readonly Lazy<string> Storage = new(Initialize);
 
-    internal static async Task<ShareInboxItem> StageAsync(string kind, string name, Stream source,
-        string? photoLanguage = null)
+    internal static async Task<ShareInboxItem> StageAsync(string kind, string name, Stream source, bool scanPdf = false)
     {
         var id = Guid.NewGuid();
         var maximum = Limit(kind);
@@ -23,7 +27,7 @@ internal static class ShareInbox
         try
         {
             if (EntryFolders().Take(MaxItems).Count() == MaxItems)
-                throw new InvalidOperationException("Вхідні матеріали заповнено. Завершіть або видаліть попередні імпорти в бібліотеці.");
+                throw new ShareInboxFullException();
             var temporary = Path.Combine(Storage.Value, $".incoming-{id:N}");
             Directory.CreateDirectory(temporary);
             try
@@ -37,7 +41,7 @@ internal static class ShareInbox
                     if (length == 0) throw new InvalidDataException("Вхідний матеріал порожній.");
                     target.Flush(flushToDisk: true);
                 }
-                var item = new ShareInboxItem(id, kind, name, DateTimeOffset.UtcNow, length, photoLanguage);
+                var item = new ShareInboxItem(id, kind, name, DateTimeOffset.UtcNow, length, ScanPdf: scanPdf);
                 WriteMetadata(Path.Combine(temporary, "item.json"), item);
                 Directory.Move(temporary, Folder(id));
                 return item;
@@ -60,11 +64,11 @@ internal static class ShareInbox
 
     internal static bool Contains(ShareInboxItem item) => Directory.Exists(Folder(item.Id));
 
-    internal static void SavePhotoLanguage(ShareInboxItem item, string language)
+    internal static void SaveSourceLanguage(ShareInboxItem item, string language)
     {
         var folder = Folder(item.Id);
         var replacement = Path.Combine(folder, "item.pending.json");
-        WriteMetadata(replacement, item with { PhotoLanguage = language });
+        WriteMetadata(replacement, item with { SourceLanguage = language });
         File.Move(replacement, Path.Combine(folder, "item.json"), overwrite: true);
     }
 

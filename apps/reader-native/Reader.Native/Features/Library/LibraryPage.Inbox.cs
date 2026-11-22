@@ -31,13 +31,14 @@ public partial class LibraryPage
             var selected = Array.IndexOf(choices, choice);
             if (selected < 0) return;
             var item = items[selected];
-            string[] actions = item.Kind == "damaged" ? [] : item.PhotoLanguage is null
-                ? ["Продовжити імпорт"] : ["Продовжити імпорт", "Змінити мову OCR"];
+            const string changeLanguage = "Змінити мову оригіналу";
+            string[] actions = item.Kind == "damaged" ? [] : item.SourceLanguage is null
+                ? ["Продовжити імпорт"] : ["Продовжити імпорт", changeLanguage];
             var action = await DisplayActionSheetAsync(item.Name, "Скасувати", "Видалити копію", actions);
             if (action == "Видалити копію" && await DisplayAlertAsync("Видалити вхідний матеріал?", item.Name, "Видалити", "Скасувати"))
                 await RemoveShareItemAsync(item);
-            if (action is "Продовжити імпорт" or "Змінити мову OCR")
-                await ImportExternalAsync(item, choosePhotoLanguage: action == "Змінити мову OCR");
+            if (action is "Продовжити імпорт" or changeLanguage)
+                await ImportExternalAsync(item, chooseLanguage: action == changeLanguage);
         }
         catch (Exception error) { await DisplayAlertAsync("Вхідні матеріали", error.Message, "Гаразд"); }
         finally
@@ -47,26 +48,13 @@ public partial class LibraryPage
         }
     }
 
-    internal async Task ImportExternalAsync(ShareInboxItem item, bool choosePhotoLanguage = false)
+    internal async Task ImportExternalAsync(ShareInboxItem item, bool chooseLanguage = false)
     {
         await loading;
-        if (!ShareInbox.Contains(item)) return;
         importing = true;
         try
         {
-            var bytes = await ShareInbox.ReadAsync(item);
-            var id = item.Kind switch
-            {
-                "file" => await ImportFileAsync(new DesktopFile(item.Name, () => Task.FromResult(bytes)),
-                    scanPdf: false, staged: item, choosePhotoLanguage: choosePhotoLanguage),
-                "text" => await ImportPastedTextCoreAsync(Encoding.UTF8.GetString(bytes)),
-                "url" => await ImportArticleCoreAsync(WebArticles.Address(Encoding.UTF8.GetString(bytes))
-                    ?? throw new InvalidDataException("Збережене вебпосилання недійсне.")),
-                _ => throw new InvalidDataException("Вхідний матеріал пошкоджено."),
-            };
-            if (id is null) return;
-            await RemoveShareItemAsync(item);
-            await AppState.OpenAsync(id);
+            if (await ImportInboxItemAsync(item, chooseLanguage) is { } id) await AppState.OpenAsync(id);
         }
         catch (Exception error) { await DisplayAlertAsync(item.Name, error.Message, "Гаразд"); }
         finally
@@ -75,6 +63,22 @@ public partial class LibraryPage
             ImportStatus.Text = "";
             await RefreshShareInboxAsync();
         }
+    }
+
+    private async Task<string?> ImportInboxItemAsync(ShareInboxItem item, bool chooseLanguage = false)
+    {
+        if (!ShareInbox.Contains(item)) return null;
+        var bytes = await ShareInbox.ReadAsync(item);
+        var id = item.Kind switch
+        {
+            "file" => await ImportFileAsync(item, bytes, chooseLanguage),
+            "text" => await ImportPastedTextCoreAsync(Encoding.UTF8.GetString(bytes)),
+            "url" => await ImportArticleCoreAsync(WebArticles.Address(Encoding.UTF8.GetString(bytes))
+                ?? throw new InvalidDataException("Збережене вебпосилання недійсне.")),
+            _ => throw new InvalidDataException("Вхідний матеріал пошкоджено."),
+        };
+        if (id is not null) await RemoveShareItemAsync(item);
+        return id;
     }
 
     private Task RemoveShareItemAsync(ShareInboxItem item) => Task.Run(() => ShareInbox.Remove(item));
