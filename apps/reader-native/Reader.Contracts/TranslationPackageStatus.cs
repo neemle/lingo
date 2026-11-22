@@ -8,4 +8,12 @@ public sealed record TranslationPackageStatus(
     string Source, string Target, bool FilesPresent, string Revision, TranslationAsset[] Assets,
     bool HasLocalFiles = false, string? Repository = null, string? License = null);
 
+public sealed record TranslationPackageValidation(
+    string Source, string Target, string Repository, string Revision, string Input, string Output)
+{
+    public bool Matches(TranslationPackageStatus package) =>
+        Source == package.Source && Target == package.Target &&
+        Repository == package.Repository && Revision == package.Revision;
+}
+
 public sealed record TranslationAsset(string Name, long Bytes, string Sha256);

@@ -136,6 +136,8 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         {
             var packages = await AppState.Session.TranslationPackagesAsync();
             translationInventory = packages;
+            translationValidations.RemoveAll(result => !packages.Any(package =>
+                package.FilesPresent && result.Matches(package)));
             TranslationPackages.Text = string.Join(Environment.NewLine, packages.Select(package =>
                 $"{DocumentLanguages.Name(package.Source)} → {DocumentLanguages.Name(package.Target)}: " +
                 (package.FilesPresent ? "файли на місці" : package.HasLocalFiles ? "лишилися файли пакета" : "пакет відсутній")));
@@ -177,6 +179,8 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         RemoveTranslation.IsEnabled = !busy && RemoveTranslation.IsVisible;
         VerifyTranslation.IsVisible = RemoveTranslation.IsVisible;
         VerifyTranslation.IsEnabled = !busy && VerifyTranslation.IsVisible;
+        ValidateTranslation.IsVisible = translationInventory?.Any(CanValidateTranslation) == true;
+        ValidateTranslation.IsEnabled = !busy && ValidateTranslation.IsVisible;
         RepairTranslation.IsVisible = RemoveTranslation.IsVisible;
         RepairTranslation.IsEnabled = !busy && RepairTranslation.IsVisible;
     }
@@ -260,6 +264,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         changingTranslationFiles = true;
         UpdateTranslationControls();
         string? selectedRoutes = null;
+        TranslationPackageStatus? selectedPackage = null;
         try
         {
             var choices = removablePackages.ToDictionary(group => DescribeRoutes(group), group => group.First());
@@ -267,12 +272,14 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
             if (choice is null || !choices.TryGetValue(choice, out var package)) return;
 
             selectedRoutes = choice;
+            selectedPackage = package;
             ModelStatus.Text = $"Перевіряємо контрольні суми SHA-256 пакета ({choice})…";
             await AppState.Session.VerifyTranslationPackageAsync(package.Source, package.Target);
             ModelStatus.Text = $"Контрольні суми SHA-256 пакета ({choice}) збігаються.";
         }
         catch (Exception error)
         {
+            if (selectedPackage is not null) InvalidateTranslationValidation(selectedPackage);
             ModelStatus.Text = selectedRoutes is null
                 ? error.Message
                 : $"Не вдалося перевірити пакет ({selectedRoutes}). {error.Message} Щоб відновити файли, виберіть «Завантажити пакет повторно».";
@@ -374,6 +381,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
             cancellation.Token.ThrowIfCancellationRequested();
             CancelDownload.IsVisible = false;
             ModelStatus.Text = "Перевірка й встановлення…";
+            InvalidateTranslationValidation(package);
             var pair = await AppState.Session.InstallTranslationPackageAsync(archive);
             ModelStatus.Text = $"Мовний пакет встановлено ({pair}).";
             TryClean(() => ModelDownload.ClearStaging(package, root));
@@ -409,6 +417,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
                 "Пакет можна буде завантажити знову. Ваші тексти й переклади збережуться.", "Видалити", "Скасувати"))
                 return;
 
+            InvalidateTranslationValidation(package);
             var removed = await AppState.Session.RemoveTranslationPackageAsync(package.Source, package.Target);
             ModelStatus.Text = removed ? $"Пакет видалено ({choice})." : "Пакет уже відсутній.";
             var root = Path.Combine(FileSystem.CacheDirectory, "translation-downloads");
@@ -448,7 +457,14 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
                     await output.WriteAsync(buffer.AsMemory(0, count));
                 }
             }
-            var pair = await AppState.Session.InstallTranslationPackageAsync(path);
+            string pair;
+            try { pair = await AppState.Session.InstallTranslationPackageAsync(path); }
+            catch
+            {
+                InvalidateTranslationValidation();
+                throw;
+            }
+            InvalidateTranslationValidationForInstalledRoutes(pair);
             Status.Text = $"Мовний пакет встановлено ({pair}).";
             await RefreshTranslationPackagesAsync();
         }

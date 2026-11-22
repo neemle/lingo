@@ -130,6 +130,8 @@ public sealed class CoreClient : IDisposable
         CallIndependent<string>(new { version = 1, operation = "install_translation_package", path });
     public void VerifyTranslationPackage(string source, string target) =>
         CallIndependent<JsonElement>(new { version = 1, operation = "verify_translation_package", source, target });
+    public TranslationPackageValidation ValidateTranslationPackage(string source, string target) =>
+        CallIndependent<TranslationPackageValidation>(new { version = 1, operation = "validate_translation_package", source, target });
     public bool RemoveTranslationPackage(string source, string target) =>
         CallIndependent<bool>(new { version = 1, operation = "remove_translation_package", source, target });
     public void CheckTranslationDownloadSpace(string source, string target, string stagingRoot, string archiveDirectory) =>

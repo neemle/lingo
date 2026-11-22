@@ -84,7 +84,7 @@
        </VerticalStackLayout>
       </VerticalStackLayout>
      </ScrollView>
-     <Label Text="— недоступно. «Встановлено» показує наявність ресурсу."
+     <Label Text="— недоступно. «Встановлено» показує наявність ресурсу. «Перевірено» означає, що пробний переклад пройшов принаймні для одного маршруту цього напряму."
       Style="{StaticResource ResourceDetail}" />
      <Button x:Name="ExportCapabilities" Text="Зберегти профілі JSON" Clicked="ExportCapabilitiesClicked"
       IsEnabled="False" HorizontalOptions="Start" Style="{StaticResource OutlineButton}" />
@@ -124,6 +124,8 @@
       <Button x:Name="InstallTranslation" Text="Встановити мовний пакет із ZIP" Clicked="InstallTranslationClicked"
        Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
       <Button x:Name="VerifyTranslation" Text="Перевірити цілісність пакета" IsVisible="False" Clicked="VerifyTranslationClicked"
+       Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
+      <Button x:Name="ValidateTranslation" Text="Пробний офлайн-переклад" IsVisible="False" Clicked="ValidateTranslationClicked"
        Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
       <Button x:Name="RepairTranslation" Text="Завантажити пакет повторно" IsVisible="False" Clicked="RepairTranslationClicked"
        Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />

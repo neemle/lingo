@@ -24,7 +24,8 @@ public sealed record LanguageCapability(CapabilityLevel Level, string Detail, st
     };
 }
 
-public sealed record CapabilityRoute(string Source, string Target, string? PivotLanguage, CapabilityLevel Level);
+public sealed record CapabilityRoute(string Source, string Target, string? PivotLanguage, CapabilityLevel Level,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TranslationPackageValidation? Validation = null);
 
 public sealed record LanguageCapabilityProfile(
     string Language, string Name, LanguageCapability Ocr, LanguageCapability Tts,
@@ -42,11 +43,14 @@ public static class LanguageCapabilities
     public static LanguageCapabilityProfile[] Build(
         TranslationPackageStatus[]? translation, KnowledgePackage[]? knowledge, LexicalPackage[]? lexical,
         OptionalModel[]? models, SpeechVoice[] systemVoices, string? voiceError,
-        NativeRecognitionInventory recognition)
+        NativeRecognitionInventory recognition, IReadOnlyCollection<TranslationPackageValidation>? validations = null)
     {
         var catalog = translation?.Select(item => (item.Source, item.Target)).ToHashSet() ?? [];
         var installed = translation?.Where(item => item.FilesPresent).Select(item => (item.Source, item.Target))
             .ToHashSet() ?? [];
+        var verified = (translation ?? []).Where(package => package.FilesPresent)
+            .SelectMany(package => (validations ?? []).Where(validation => validation.Matches(package)))
+            .ToLookup(validation => (validation.Source, validation.Target));
         var routes = new List<CapabilityRoute>();
         foreach (var (from, _) in DocumentLanguages.All)
         foreach (var (to, _) in DocumentLanguages.All)
@@ -54,7 +58,10 @@ public static class LanguageCapabilities
             if (from == to) continue;
             var present = FindRoute(installed, from, to, CapabilityLevel.Installed);
             var route = present ?? FindRoute(catalog, from, to, CapabilityLevel.Available);
-            if (route is not null) routes.Add(route);
+            if (route is null) continue;
+            if (route.PivotLanguage is null && verified[(from, to)].FirstOrDefault() is { } evidence)
+                route = route with { Level = CapabilityLevel.Validated, Validation = evidence };
+            routes.Add(route);
         }
 
         return DocumentLanguages.All.Select(language =>
@@ -107,11 +114,15 @@ public static class LanguageCapabilities
         {
             var other = DocumentLanguages.Name(outgoing ? route.Target : route.Source);
             var via = route.PivotLanguage is null ? "прямий" : $"через {DocumentLanguages.Name(route.PivotLanguage)}";
-            var state = route.Level == CapabilityLevel.Installed ? "файли на місці" : "потрібен пакет";
+            var state = route.Level switch
+            {
+                CapabilityLevel.Validated => "пробний офлайн-переклад пройдено",
+                CapabilityLevel.Installed => "файли на місці",
+                _ => "потрібен пакет",
+            };
             return $"{other} · {via} · {state}";
         }));
-        return new LanguageCapability(routes.Any(route => route.Level == CapabilityLevel.Installed)
-            ? CapabilityLevel.Installed : CapabilityLevel.Available, detail,
+        return new LanguageCapability(routes.Max(route => route.Level), detail,
             routes.Select(route => route.PivotLanguage is null
                 ? $"{route.Source}→{route.Target}" : $"{route.Source}→{route.PivotLanguage}→{route.Target}").ToArray());
     }
