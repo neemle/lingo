@@ -82,6 +82,13 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::PdfReadingPage { id } => value(store.pdf_reading_page(&id)),
         Command::SetPdfReadingPage { id, page } => value(store.set_pdf_reading_page(&id, page)),
         Command::PdfReadWindow { id, center } => value(store.pdf_read_window(&id, center)),
+        Command::SentenceTokens { id, sentence_id, start, limit } => value(store.sentence_tokens(
+            &id, &sentence_id, start,
+            limit.unwrap_or(reader_core::document_tokens::DEFAULT_TOKEN_PAGE_SIZE),
+        )),
+        Command::LookupSentenceToken { id, sentence_id, revision_id, start_utf16 } => {
+            value(store.lookup_sentence_token(&id, &sentence_id, &revision_id, start_utf16))
+        }
         Command::PdfOcrNeededPages { id, center } => value(store.pdf_ocr_needed_pages(&id, center)),
         Command::ClaimPdfOcrPage { id } => value(store.claim_pdf_ocr_page(&id)),
         Command::RetryPdfOcrPage { id, page, token } => {

@@ -107,6 +107,19 @@ pub struct WordLookup {
     meanings: Vec<WordMeaning>,
 }
 
+impl WordLookup {
+    pub(crate) fn bind_expression_tokens(&mut self, token_id: impl Fn(usize) -> String) {
+        for expression in &mut self.expressions {
+            expression.token_ids = expression
+                .part_starts_utf16
+                .iter()
+                .copied()
+                .map(&token_id)
+                .collect();
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WordContext {
@@ -364,6 +377,10 @@ fn neighbor_hash(key: &str) -> i64 {
 }
 
 impl WordContext {
+    pub(crate) fn new(sentence: String, start_utf16: usize) -> Self {
+        Self { sentence, start_utf16 }
+    }
+
     fn parts(&self) -> impl Iterator<Item = (usize, &str)> {
         self.sentence
             .split_word_bounds()

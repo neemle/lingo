@@ -16,6 +16,7 @@ pub use card_learning::SenseSnapshot;
 pub mod dictionary_transfer;
 pub mod document_layout;
 pub mod document_revisions;
+pub mod document_tokens;
 pub mod e5;
 pub mod file_originals;
 pub mod knowledge;

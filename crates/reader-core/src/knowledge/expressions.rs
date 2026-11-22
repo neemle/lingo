@@ -13,6 +13,9 @@ pub struct ExpressionMatch {
     pub(super) canonical: String,
     kind: String,
     observations: u32,
+    pub(super) part_starts_utf16: Vec<usize>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) token_ids: Vec<String>,
 }
 
 struct CorpusToken {
@@ -105,6 +108,7 @@ impl<'a> Indexer<'a> {
 
 struct Token<'a> {
     text: &'a str,
+    start_utf16: usize,
     key: String,
     verb_lemmas: BTreeSet<String>,
 }
@@ -123,7 +127,7 @@ pub(super) fn lookup(
         if before.len() == 8 {
             before.pop_front();
         }
-        before.push_back(*part);
+        before.push_back((*start, *part));
         false
     }) else {
         return Ok(Vec::new());
@@ -134,10 +138,11 @@ pub(super) fn lookup(
     let selected = before.len();
     let mut window: Vec<_> = before
         .into_iter()
-        .chain(std::iter::once(clicked))
-        .chain(parts.take(8).map(|(_, part)| part))
-        .map(|part| Token {
+        .chain(std::iter::once((start, clicked)))
+        .chain(parts.take(8))
+        .map(|(start_utf16, part)| Token {
             text: part,
+            start_utf16,
             key: word_key(part),
             verb_lemmas: BTreeSet::new(),
         })
@@ -180,27 +185,29 @@ pub(super) fn lookup(
             ))
         })
         .map_err(|error| error.to_string())?;
-    let mut matches = BTreeMap::<(String, String, String), u32>::new();
+    let mut matches = BTreeMap::new();
     for row in rows {
         let (kind, parts, observations) = row.map_err(|error| error.to_string())?;
         let parts: Vec<String> = serde_json::from_str(&parts).map_err(|error| error.to_string())?;
         let canonical = parts.join(" ");
         for start in 0..=selected {
-            if let Some(text) = match_expression(&window, &parts, &kind, start, selected) {
+            if let Some((text, offsets)) = match_expression(&window, &parts, &kind, start, selected) {
                 let count = matches
-                    .entry((text, kind.clone(), canonical.clone()))
-                    .or_default();
+                    .entry((text, kind.clone(), canonical.clone(), offsets))
+                    .or_insert(0u32);
                 *count = (*count).max(observations);
             }
         }
     }
     let mut matches: Vec<_> = matches
         .into_iter()
-        .map(|((text, kind, canonical), observations)| ExpressionMatch {
+        .map(|((text, kind, canonical, part_starts_utf16), observations)| ExpressionMatch {
             text,
             canonical,
             kind,
             observations,
+            part_starts_utf16,
+            token_ids: Vec::new(),
         })
         .collect();
     matches.sort_by(|left, right| {
@@ -219,7 +226,7 @@ fn match_expression(
     kind: &str,
     start: usize,
     selected: usize,
-) -> Option<String> {
+) -> Option<(String, Vec<usize>)> {
     if kind == "fixed" {
         let range = tokens.get(start..start + parts.len())?;
         return (selected < start + parts.len()
@@ -228,11 +235,13 @@ fn match_expression(
                 .zip(parts)
                 .all(|(token, part)| token.key == *part))
         .then(|| {
-            range
+            let text = range
                 .iter()
                 .map(|token| token.text)
                 .collect::<Vec<_>>()
-                .join(" ")
+                .join(" ");
+            let offsets = range.iter().map(|token| token.start_utf16).collect();
+            (text, offsets)
         });
     }
     let [verb, particle] = parts else {
@@ -251,5 +260,8 @@ fn match_expression(
         token.key == *particle && (selected == start || *index == selected)
     })?;
     let separator = if end == start + 1 { " " } else { " … " };
-    Some(format!("{}{separator}{}", tokens[start].text, matched.text))
+    Some((
+        format!("{}{separator}{}", tokens[start].text, matched.text),
+        vec![tokens[start].start_utf16, matched.start_utf16],
+    ))
 }

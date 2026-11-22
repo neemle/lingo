@@ -69,6 +69,23 @@ pub enum Command {
         id: String,
         center: u16,
     },
+    SentenceTokens {
+        id: String,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        #[serde(default)]
+        start: usize,
+        limit: Option<usize>,
+    },
+    LookupSentenceToken {
+        id: String,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        #[serde(rename = "revisionId")]
+        revision_id: String,
+        #[serde(rename = "startUtf16")]
+        start_utf16: usize,
+    },
     PdfOcrNeededPages {
         id: String,
         center: u16,

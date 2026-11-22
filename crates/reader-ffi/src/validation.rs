@@ -122,6 +122,19 @@ fn validate(command: &Command) -> Result<()> {
             "invalid_argument",
             "Semantic vocabulary query exceeds its wire bound",
         )),
+        Command::SentenceTokens { id, sentence_id, limit, .. }
+            if !valid_token_address(id, sentence_id)
+                || limit.is_some_and(|limit| !(1..=reader_core::document_tokens::MAX_TOKEN_PAGE_SIZE).contains(&limit)) =>
+        {
+            Err(Error::new("invalid_argument", "Invalid sentence token page"))
+        }
+        Command::LookupSentenceToken { id, sentence_id, revision_id, .. }
+            if !valid_token_address(id, sentence_id)
+                || revision_id.len() != 64
+                || !revision_id.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+        {
+            Err(Error::new("invalid_argument", "Invalid sentence token address"))
+        }
         Command::ExplainWord {
             model,
             document,
@@ -176,4 +189,10 @@ fn validate(command: &Command) -> Result<()> {
         ),
         _ => Ok(()),
     }
+}
+
+fn valid_token_address(id: &str, sentence_id: &str) -> bool {
+    [id, sentence_id].into_iter().all(|value| {
+        !value.is_empty() && value.len() <= 256 && !value.contains('\0')
+    })
 }
