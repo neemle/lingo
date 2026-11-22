@@ -72,8 +72,8 @@ public sealed class CoreClient : IDisposable
         Call<KnowledgePackage[]>(new { version = 1, operation = "knowledge_packages" });
     public KnowledgePackage InstallKnowledgePackage(string language, string path) =>
         Call<KnowledgePackage>(new { version = 1, operation = "install_knowledge_package", language, path });
-    public WordLookup? LookupWord(string language, string word) =>
-        Call<WordLookup?>(new { version = 1, operation = "lookup_word", language, word });
+    public WordLookup? LookupWord(string language, string word, WordContext? context = null) =>
+        Call<WordLookup?>(new { version = 1, operation = "lookup_word", language, word, context });
     public string InstallTranslationPackage(string path) =>
         Call<string>(new { version = 1, operation = "install_translation_package", path });
     public MachineTranslation? TranslateSentence(string id, string sentenceId, string target) =>

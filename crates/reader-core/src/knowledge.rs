@@ -1,6 +1,6 @@
 use crate::{Result, Store};
 use rusqlite::{params, Connection, OpenFlags};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -8,6 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use unicode_normalization::UnicodeNormalization;
+use unicode_segmentation::UnicodeSegmentation;
 
 struct Pack {
     language: &'static str,
@@ -66,6 +67,7 @@ pub struct KnowledgePackage {
     bytes: usize,
     sha256: &'static str,
     installed: bool,
+    context_available: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -75,6 +77,7 @@ pub struct WordAnalysis {
     part_of_speech: String,
     features: String,
     observations: u32,
+    context_observations: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -85,6 +88,13 @@ pub struct WordLookup {
     analyses: Vec<WordAnalysis>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WordContext {
+    sentence: String,
+    start_utf16: usize,
+}
+
 impl Pack {
     fn path(&self, root: &Path) -> PathBuf {
         root.join(self.language)
@@ -92,7 +102,13 @@ impl Pack {
             .join("knowledge.sqlite")
     }
 
-    fn describe(&self, root: &Path) -> KnowledgePackage {
+    fn index_version(&self, root: &Path) -> u32 {
+        Connection::open_with_flags(self.path(root), OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .and_then(|db| db.query_row("PRAGMA user_version", [], |row| row.get(0)))
+            .unwrap_or_default()
+    }
+
+    fn describe(&self, index_version: u32) -> KnowledgePackage {
         KnowledgePackage {
             language: self.language,
             name: self.name,
@@ -109,7 +125,8 @@ impl Pack {
             license: self.license,
             bytes: self.bytes,
             sha256: self.sha256,
-            installed: self.path(root).is_file(),
+            installed: index_version != 0,
+            context_available: index_version >= 2,
         }
     }
 }
@@ -118,7 +135,7 @@ impl Store {
     pub fn knowledge_packages(&self) -> Vec<KnowledgePackage> {
         PACKS
             .iter()
-            .map(|pack| pack.describe(&self.knowledge_directory))
+            .map(|pack| pack.describe(pack.index_version(&self.knowledge_directory)))
             .collect()
     }
 
@@ -155,10 +172,15 @@ impl Store {
         staging
             .persist(&destination)
             .map_err(|error| error.to_string())?;
-        Ok(pack.describe(&self.knowledge_directory))
+        Ok(pack.describe(2))
     }
 
-    pub fn lookup_word(&self, language: &str, word: &str) -> Result<Option<WordLookup>> {
+    pub fn lookup_word(
+        &self,
+        language: &str,
+        word: &str,
+        context: Option<&WordContext>,
+    ) -> Result<Option<WordLookup>> {
         let Some(pack) = PACKS.iter().find(|pack| pack.language == language) else {
             return Ok(None);
         };
@@ -168,26 +190,45 @@ impl Store {
         }
         let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|error| error.to_string())?;
+        let index_version: u32 = db
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .map_err(|error| error.to_string())?;
         let key = word_key(word);
+        let (left, right) = context
+            .filter(|_| index_version >= 2)
+            .map(|context| context.neighbor_hashes(&key))
+            .unwrap_or_default();
+        let candidates = if left.is_some() || right.is_some() {
+            "SELECT f.lemma, f.pos, f.features, f.observations, coalesce(m.hits,0) AS hits
+             FROM forms f LEFT JOIN (
+               SELECT lemma, pos, features, sum(observations) AS hits
+               FROM neighbors WHERE term=?1 AND ((side=0 AND neighbor=?2) OR (side=1 AND neighbor=?3))
+               GROUP BY lemma, pos, features
+             ) m USING (lemma,pos,features) WHERE f.term=?1"
+        } else {
+            "SELECT lemma,pos,features,observations,0 AS hits FROM forms
+             WHERE term=?1 AND ?2 IS NULL AND ?3 IS NULL"
+        };
         let mut query = db
-            .prepare(
-                "WITH ranked AS (
-                    SELECT lemma, pos, features, observations, sum(observations) OVER () AS total,
-                           row_number() OVER (PARTITION BY lemma, pos ORDER BY observations DESC, features) AS variant
-                    FROM forms WHERE term=?1
+            .prepare(&format!(
+                "WITH candidates AS ({candidates}), ranked AS (
+                    SELECT lemma,pos,features,observations,hits,sum(observations) OVER () AS total,
+                           row_number() OVER (PARTITION BY lemma,pos ORDER BY hits DESC,observations DESC,features) AS variant
+                    FROM candidates
                  )
-                 SELECT lemma, pos, features, observations, total FROM ranked
-                 ORDER BY variant != 1, observations DESC, lemma, pos, features LIMIT 5",
-            )
+                 SELECT lemma,pos,features,observations,total,hits FROM ranked
+                 ORDER BY variant != 1,hits DESC,observations DESC,lemma,pos,features LIMIT 5"
+            ))
             .map_err(|error| error.to_string())?;
         let rows = query
-            .query_map([&key], |row| {
+            .query_map(params![key, left, right], |row| {
                 Ok((
                     WordAnalysis {
                         lemma: row.get(0)?,
                         part_of_speech: row.get(1)?,
                         features: row.get(2)?,
                         observations: row.get(3)?,
+                        context_observations: row.get(5)?,
                     },
                     row.get::<_, u32>(4)?,
                 ))
@@ -201,11 +242,50 @@ impl Store {
             analyses.push(analysis);
         }
         Ok(Some(WordLookup {
-            package: pack.describe(&self.knowledge_directory),
+            package: pack.describe(index_version),
             total_observations: total,
             analyses,
         }))
     }
+}
+
+fn neighbor_hash(key: &str) -> i64 {
+    let hash = Sha256::digest(key.as_bytes());
+    i64::from_le_bytes(hash[..8].try_into().expect("SHA-256 contains eight bytes"))
+}
+
+impl WordContext {
+    fn neighbor_hashes(&self, selected: &str) -> (Option<i64>, Option<i64>) {
+        let mut parts = self
+            .sentence
+            .split_word_bounds()
+            .scan(0, |offset, part| {
+                let start = *offset;
+                *offset += part.encode_utf16().count();
+                Some((start, part))
+            })
+            .filter(|(_, part)| !part.trim().is_empty());
+        let mut previous = None;
+        while let Some((start, part)) = parts.next() {
+            if start == self.start_utf16 && word_key(part) == selected {
+                return (
+                    previous.and_then(token_hash),
+                    parts.next().and_then(|(_, word)| token_hash(word)),
+                );
+            }
+            if start >= self.start_utf16 {
+                break;
+            }
+            previous = Some(part);
+        }
+        (None, None)
+    }
+}
+
+fn token_hash(part: &str) -> Option<i64> {
+    part.chars()
+        .any(char::is_alphabetic)
+        .then(|| neighbor_hash(&word_key(part)))
 }
 
 pub(crate) fn word_key(word: &str) -> String {
@@ -221,7 +301,11 @@ fn build_pack(path: &Path, input: impl BufRead) -> Result<()> {
     db.execute_batch(
         "CREATE TABLE forms (term TEXT NOT NULL, lemma TEXT NOT NULL, pos TEXT NOT NULL,
             features TEXT NOT NULL, observations INTEGER NOT NULL,
-            PRIMARY KEY(term, lemma, pos, features)) WITHOUT ROWID; PRAGMA user_version=1;",
+            PRIMARY KEY(term, lemma, pos, features)) WITHOUT ROWID;
+         CREATE TABLE neighbors (term TEXT NOT NULL, side INTEGER NOT NULL, neighbor INTEGER NOT NULL,
+            lemma TEXT NOT NULL, pos TEXT NOT NULL, features TEXT NOT NULL, observations INTEGER NOT NULL,
+            PRIMARY KEY(term,side,neighbor,lemma,pos,features)) WITHOUT ROWID;
+         PRAGMA user_version=2;",
     )
     .map_err(|error| error.to_string())?;
     let transaction = db.transaction().map_err(|error| error.to_string())?;
@@ -230,9 +314,17 @@ fn build_pack(path: &Path, input: impl BufRead) -> Result<()> {
         let mut insert = transaction.prepare(
             "INSERT INTO forms VALUES (?1,?2,?3,?4,1) ON CONFLICT DO UPDATE SET observations=observations+1",
         ).map_err(|error| error.to_string())?;
+        let mut link = transaction.prepare(
+            "INSERT INTO neighbors VALUES (?1,?2,?3,?4,?5,?6,1) ON CONFLICT DO UPDATE SET observations=observations+1",
+        ).map_err(|error| error.to_string())?;
+        let mut previous = None;
         for line in input.lines() {
             let line = line.map_err(|error| error.to_string())?;
-            if line.is_empty() || line.starts_with('#') {
+            if line.is_empty() {
+                previous = None;
+                continue;
+            }
+            if line.starts_with('#') {
                 continue;
             }
             let mut fields = line.split('\t');
@@ -241,21 +333,42 @@ fn build_pack(path: &Path, input: impl BufRead) -> Result<()> {
             else {
                 return Err("Неповний запис у корпусі CoNLL-U.".into());
             };
-            if id.parse::<u32>().is_err()
-                || !form.chars().any(char::is_alphabetic)
+            if id.parse::<u32>().is_err() {
+                continue;
+            }
+            if !form.chars().any(char::is_alphabetic)
                 || lemma == "_"
                 || matches!(pos, "_" | "X" | "PUNCT" | "SYM")
             {
+                previous = None;
                 continue;
             }
+            let term = word_key(form);
+            let hash = neighbor_hash(&term);
+            let features = if features == "_" { "" } else { features };
             insert
-                .execute(params![
-                    word_key(form),
-                    lemma,
-                    pos,
-                    if features == "_" { "" } else { features }
+                .execute(params![term, lemma, pos, features])
+                .map_err(|error| error.to_string())?;
+            if let Some((prev_term, prev_lemma, prev_pos, prev_features, prev_hash)) = previous {
+                link.execute(params![term, 0, prev_hash, lemma, pos, features])
+                    .map_err(|error| error.to_string())?;
+                link.execute(params![
+                    prev_term,
+                    1,
+                    hash,
+                    prev_lemma,
+                    prev_pos,
+                    prev_features
                 ])
                 .map_err(|error| error.to_string())?;
+            }
+            previous = Some((
+                term,
+                lemma.to_owned(),
+                pos.to_owned(),
+                features.to_owned(),
+                hash,
+            ));
             inserted += 1;
         }
     }
@@ -283,17 +396,75 @@ mod tests {
             "4-5\tCafé\t_\t_\t_\t_\t_\t_\t_\t_\n",
         );
         build_pack(&path, corpus.as_bytes()).unwrap();
-        let found = store.lookup_word("fr", "CAFE\u{301}").unwrap().unwrap();
+        let found = store
+            .lookup_word("fr", "CAFE\u{301}", None)
+            .unwrap()
+            .unwrap();
         assert_eq!(found.total_observations, 3);
         assert_eq!(found.analyses[0].lemma, "café");
         assert_eq!(found.analyses[0].observations, 2);
         assert_eq!(found.analyses[1].part_of_speech, "PROPN");
-        assert!(store.lookup_word("en", "café").unwrap().is_none());
+        assert!(store.lookup_word("en", "café", None).unwrap().is_none());
         assert!(store
-            .lookup_word("fr", "unknown")
+            .lookup_word("fr", "unknown", None)
             .unwrap()
             .unwrap()
             .analyses
             .is_empty());
+    }
+
+    #[test]
+    fn contextual_evidence_can_promote_a_rare_reading_and_old_indexes_still_work() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(&directory.path().join("user.sqlite")).unwrap();
+        let path = PACKS[0].path(&store.knowledge_directory);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let corpus = concat!(
+            "1\tI\tI\tPRON\t_\t_\n",
+            "2\tsaw\tsee\tVERB\t_\tTense=Past\n\n",
+            "1\tThey\tthey\tPRON\t_\t_\n",
+            "2\tsaw\tsee\tVERB\t_\tTense=Past\n\n",
+            "1\told\told\tADJ\t_\t_\n",
+            "2\tsaw\tsaw\tNOUN\t_\tNumber=Sing\n",
+        );
+        build_pack(&path, corpus.as_bytes()).unwrap();
+        let context = WordContext {
+            sentence: "😀 old saw.".into(),
+            start_utf16: "😀 old ".encode_utf16().count(),
+        };
+        let found = store
+            .lookup_word("en", "saw", Some(&context))
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.total_observations, 3);
+        assert_eq!(found.analyses[0].part_of_speech, "NOUN");
+        assert_eq!(found.analyses[0].context_observations, 1);
+        assert_eq!(found.analyses[1].part_of_speech, "VERB");
+        let missing = WordContext {
+            sentence: "old, saw.".into(),
+            start_utf16: 5,
+        };
+        assert_eq!(
+            store
+                .lookup_word("en", "saw", Some(&missing))
+                .unwrap()
+                .unwrap()
+                .analyses[0]
+                .part_of_speech,
+            "VERB"
+        );
+
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("DROP TABLE neighbors; PRAGMA user_version=1;")
+            .unwrap();
+        let old = store
+            .lookup_word("en", "saw", Some(&context))
+            .unwrap()
+            .unwrap();
+        assert!(old.package.installed);
+        assert!(!old.package.context_available);
+        assert_eq!(old.analyses[0].part_of_speech, "VERB");
+        assert_eq!(old.analyses[0].context_observations, 0);
     }
 }

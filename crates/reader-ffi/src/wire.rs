@@ -91,6 +91,7 @@ pub enum Command {
     LookupWord {
         language: String,
         word: String,
+        context: Option<reader_core::knowledge::WordContext>,
     },
     InstallTranslationPackage {
         path: String,

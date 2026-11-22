@@ -222,7 +222,9 @@ public partial class ReadingPage : ContentPage
         if (index >= 0 && index != doc.Position) { StopSpeech(); await session.SelectSentenceAsync(index); }
         try
         {
-            var lookup = await session.LookupWordAsync(doc.Language, selected.Text);
+            var context = index < 0 ? null : new WordContext(doc.Sentences[index].Text,
+                selected.StartUtf16 - doc.Sentences[index].StartUtf16);
+            var lookup = await session.LookupWordAsync(doc.Language, selected.Text, context);
             if (selection != selected || session.Document?.Id != doc.Id || !WordCard.IsVisible) return;
             if (lookup is null)
             {
@@ -233,7 +235,8 @@ public partial class ReadingPage : ContentPage
             var readings = lookup.Analyses.Select(analysis =>
                 $"{analysis.Lemma} · {analysis.PartOfSpeech}" +
                 (analysis.Features.Length == 0 ? "" : $" · {analysis.Features.Replace("|", ", ")}") +
-                $" · {(double)analysis.Observations / lookup.TotalObservations:P0}");
+                $" · {(double)analysis.Observations / lookup.TotalObservations:P0}" +
+                (analysis.ContextObservations == 0 ? "" : $" · збігів із сусідніми словами: {analysis.ContextObservations}"));
             KnowledgeAnalysis.Text = lookup.Analyses.Length == 0
                 ? $"Словоформи немає в корпусі {source}."
                 : $"{string.Join(Environment.NewLine, readings)}{Environment.NewLine}Частота в корпусі · {source}";

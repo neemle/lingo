@@ -77,7 +77,11 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::InstallKnowledgePackage { language, path } => {
             value(store.install_knowledge_package(&language, std::path::Path::new(&path)))
         }
-        Command::LookupWord { language, word } => value(store.lookup_word(&language, &word)),
+        Command::LookupWord {
+            language,
+            word,
+            context,
+        } => value(store.lookup_word(&language, &word, context.as_ref())),
         Command::InstallTranslationPackage { path } => {
             value(store.install_translation_package(std::path::Path::new(&path)))
         }

@@ -122,11 +122,14 @@ through English. The translation panel marks that route. Installing French → U
 
 ## Offline word analysis
 
-In **Налаштування**, select **Завантажити пакет аналізу** and choose a language. The reader verifies the
+In **Налаштування**, select **Встановити або оновити пакет аналізу** and choose a language. The reader verifies the
 corpus against its pinned SHA-256 and builds a local read-only index. Select a word in the source to see
 observed lemmas, parts of speech, grammatical features and relative frequency. If there are multiple
 readings, the card shows the most frequent variant for each before showing additional variants.
 The card names the corpus and marks missing forms. Analysis leaves the original and reading text intact.
+Current indexes can rank readings using observed words immediately before and after the selection.
+The card reports matching corpus occurrences and keeps other readings available. Earlier indexes retain
+frequency-based lookup and can be updated from Settings.
 In **Форма для словникової картки**, choose the reading you intend to save. Equivalent inflections
 of the same lemma, part of speech and reviewed translation share one card and its review history.
 The card retains the recorded form, source sentence and the grammatical data available when saved.

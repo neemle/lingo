@@ -129,8 +129,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public Task<KnowledgePackage[]> KnowledgePackagesAsync() => Task.Run(client.KnowledgePackages);
     public Task<KnowledgePackage> InstallKnowledgePackageAsync(string language, string path) =>
         Task.Run(() => client.InstallKnowledgePackage(language, path));
-    public Task<WordLookup?> LookupWordAsync(string language, string word) =>
-        Task.Run(() => client.LookupWord(language, word));
+    public Task<WordLookup?> LookupWordAsync(string language, string word, WordContext? context = null) =>
+        Task.Run(() => client.LookupWord(language, word, context));
 
     public Task<string> InstallTranslationPackageAsync(string path) =>
         Task.Run(() => client.InstallTranslationPackage(path));

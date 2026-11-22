@@ -29,8 +29,9 @@ public partial class SettingsPage : ContentPage
             var packages = await AppState.Session.KnowledgePackagesAsync();
             KnowledgePackages.Text = string.Join(Environment.NewLine, packages.Select(package =>
                 $"{LanguageName(package.Language)} · {package.Name} {package.Version} · {package.License} · " +
-                (package.Installed ? "встановлено" : "доступно для завантаження")));
-            InstallKnowledge.IsVisible = packages.Any(package => !package.Installed);
+                (package.ContextAvailable ? "встановлено" : package.Installed
+                    ? "доступне оновлення контексту" : "доступно для завантаження")));
+            InstallKnowledge.IsVisible = packages.Any(package => !package.ContextAvailable);
         }
         catch (Exception error) { KnowledgeStatus.Text = error.Message; }
     }
@@ -41,7 +42,7 @@ public partial class SettingsPage : ContentPage
         try
         {
             var packages = await AppState.Session.KnowledgePackagesAsync();
-            var choices = packages.Where(package => !package.Installed).ToDictionary(package =>
+            var choices = packages.Where(package => !package.ContextAvailable).ToDictionary(package =>
                 $"{LanguageName(package.Language)} · {package.License} · {package.Bytes / 1_000_000d:F0} МБ");
             if (choices.Count == 0) return;
             var choice = await DisplayActionSheetAsync("Пакети Universal Dependencies", "Скасувати", null, choices.Keys.ToArray());
