@@ -438,7 +438,7 @@ public partial class ReadingPage : ContentPage
             if (session.Document?.Id != document.Id) return;
             await Navigation.PushAsync(new OriginalPage(original.Name, total, initial, isPdf,
                 page => isPdf ? PdfScan.PreviewAsync(bytes, page) : PhotoOcr.PreviewAsync(bytes),
-                document.Id, session, document.OcrLines ?? []));
+                document.Id, session, document.OcrLines ?? [], selection));
         }
         catch (Exception error) { await DisplayAlertAsync("Оригінал", error.Message, "Гаразд"); }
     }

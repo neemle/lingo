@@ -41,6 +41,47 @@ pub(crate) fn activate_verified_package(
     Ok(())
 }
 
+/// Activate a caller-verified recovery copy and retain the replaced installation.
+/// The caller must hold the package's exclusive lock throughout this operation.
+pub(crate) fn restore_verified_package(candidate: &Path, active: &Path) -> Result<()> {
+    if !package_directory(candidate)? {
+        return Err("Збережена копія моделі відсутня.".into());
+    }
+    let had_active = package_directory(active)?;
+    if !had_active {
+        return fs::rename(candidate, active).map_err(model_error);
+    }
+    let root = active.parent().ok_or("Некоректне сховище моделі.")?;
+    let holding = tempfile::Builder::new()
+        .prefix(".model-recovery-")
+        .tempdir_in(root)
+        .map_err(model_error)?
+        .keep();
+    let retained = holding.join("installed");
+    if let Err(error) = fs::rename(active, &retained) {
+        let _ = fs::remove_dir(&holding);
+        return Err(model_error(error));
+    }
+    if let Err(error) = fs::rename(candidate, active) {
+        let restored = fs::rename(&retained, active);
+        if restored.is_ok() {
+            let _ = fs::remove_dir(&holding);
+        }
+        return Err(format!(
+            "Не вдалося відновити модель: {error}. Попередні файли збережено: {}",
+            if restored.is_ok() { active } else { &retained }.display()
+        ));
+    }
+    fs::rename(&retained, candidate).map_err(|error| {
+        format!(
+            "Модель відновлено. Замінені файли збережено в {}: {error}",
+            retained.display()
+        )
+    })?;
+    let _ = fs::remove_dir(&holding);
+    Ok(())
+}
+
 pub(crate) fn remove_package_directory(path: &Path) -> Result<bool> {
     if !package_directory(path)? {
         return Ok(false);

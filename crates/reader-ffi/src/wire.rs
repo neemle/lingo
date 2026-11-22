@@ -22,6 +22,8 @@ pub enum Command {
         name: String,
         bytes: Vec<u8>,
         language: String,
+        #[serde(rename = "sourceUrl")]
+        source_url: Option<String>,
     },
     ImportImage {
         name: String,
@@ -107,6 +109,9 @@ pub enum Command {
         id: String,
         #[serde(rename = "stagingRoot")]
         staging_root: String,
+    },
+    RollbackOptionalModel {
+        id: String,
     },
     VerifyOptionalModel {
         id: String,

@@ -22,12 +22,14 @@ public sealed class CoreClient : IDisposable
     public Snapshot Snapshot() => Call<Snapshot>(new { version = 1, operation = "snapshot" });
     public Backup Export() => Call<Backup>(new { version = 1, operation = "export" });
     public Original Original(string id) => Call<Original>(new { version = 1, operation = "original", id });
-    public Document Import(string name, ReadOnlySpan<byte> bytes, string language)
+    public Document Import(string name, ReadOnlySpan<byte> bytes, string language, string? sourceUrl = null)
     {
         if (bytes.Length is 0 or > MaxImportBytes)
             throw new ArgumentOutOfRangeException(nameof(bytes), "Import requires 1..20MiB");
-        return Call<Document>(new { version = 1, operation = "import", name,
-            bytes = bytes.ToArray().Select(value => (int)value).ToArray(), language });
+        var payload = bytes.ToArray().Select(value => (int)value).ToArray();
+        return sourceUrl is null
+            ? Call<Document>(new { version = 1, operation = "import", name, bytes = payload, language })
+            : Call<Document>(new { version = 1, operation = "import", name, bytes = payload, language, sourceUrl });
     }
     public Document ImportImage(string name, byte[] bytes, string language, OcrLine[] lines)
     {
@@ -79,6 +81,8 @@ public sealed class CoreClient : IDisposable
         Call<JsonElement>(new { version = 1, operation = "check_optional_model_space", id, stagingRoot });
     public void InstallOptionalModel(string id, string stagingRoot) =>
         Call<JsonElement>(new { version = 1, operation = "install_optional_model", id, stagingRoot });
+    public void RollbackOptionalModel(string id) =>
+        Call<JsonElement>(new { version = 1, operation = "rollback_optional_model", id });
     public void VerifyOptionalModel(string id) =>
         Call<JsonElement>(new { version = 1, operation = "verify_optional_model", id });
     public bool RemoveOptionalModel(string id) =>

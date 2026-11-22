@@ -556,7 +556,7 @@ impl Store {
         let Some(route) = resolve_route(&provider.installed_models()?, source, target)? else {
             return Ok(None);
         };
-        let settings = TranslationSettings { beam_size: 1 };
+        let settings = TranslationSettings::default();
         let mut uncached = Vec::new();
         let mut output = vec![String::new(); input.len()];
         for (index, text) in input.iter().enumerate() {
@@ -647,7 +647,7 @@ fn cache_key(
     context: Option<&str>,
     settings: TranslationSettings,
 ) -> Result<String> {
-    let input = serde_json::to_vec(&(1, route, segments, context, settings))
+    let input = serde_json::to_vec(&(2, route, segments, context, settings))
         .map_err(|error| error.to_string())?;
     Ok(format!("{:x}", Sha256::digest(input)))
 }

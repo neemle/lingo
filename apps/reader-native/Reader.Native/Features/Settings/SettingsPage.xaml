@@ -171,12 +171,17 @@
        Style="{StaticResource AccentButton}" Margin="0,0,8,8" />
       <Button x:Name="VerifyOptionalModel" Text="Перевірити файли" Clicked="VerifyOptionalModelClicked" IsEnabled="False"
        Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
+      <Button x:Name="RollbackOptionalModel" Text="Відновити збережену копію" Clicked="RollbackOptionalModelClicked" IsEnabled="False"
+       Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
+      <Button x:Name="RepairOptionalModel" Text="Встановити з локального кешу" Clicked="RepairOptionalModelClicked" IsEnabled="False"
+       Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
       <Button x:Name="RemoveOptionalModel" Text="Видалити файли" Clicked="RemoveOptionalModelClicked" IsEnabled="False"
        Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
       <Button x:Name="StopOptionalModel" Text="Зупинити завантаження" Clicked="StopOptionalModelClicked" IsVisible="False"
        Style="{StaticResource OutlineButton}" Margin="0,0,0,8" />
      </FlexLayout>
      <ProgressBar x:Name="OptionalProgress" IsVisible="False" ProgressColor="{StaticResource Accent}" />
+     <Label x:Name="OptionalModelRecovery" Style="{StaticResource ResourceDetail}" />
      <Label x:Name="OptionalModelStatus" Style="{StaticResource ResourceDetail}" />
     </VerticalStackLayout>
    </Border>

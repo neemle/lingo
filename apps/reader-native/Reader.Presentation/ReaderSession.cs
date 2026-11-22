@@ -38,9 +38,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         await RefreshAsync();
     }
 
-    public Task ImportAsync(string name, byte[] bytes, string language) => RunAsync(() =>
+    public Task ImportAsync(string name, byte[] bytes, string language, string? sourceUrl = null) => RunAsync(() =>
     {
-        var id = client.Import(name, bytes, language).Id;
+        var id = client.Import(name, bytes, language, sourceUrl).Id;
         return (client.Snapshot(), id);
     });
 
@@ -142,6 +142,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         Task.Run(() => client.CheckOptionalModelSpace(id, stagingRoot));
     public Task InstallOptionalModelAsync(string id, string stagingRoot) =>
         Task.Run(() => client.InstallOptionalModel(id, stagingRoot));
+    public Task RollbackOptionalModelAsync(string id) => Task.Run(() => client.RollbackOptionalModel(id));
     public Task VerifyOptionalModelAsync(string id) => Task.Run(() => client.VerifyOptionalModel(id));
     public Task<bool> RemoveOptionalModelAsync(string id) => Task.Run(() => client.RemoveOptionalModel(id));
 

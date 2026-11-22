@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
     fs::{self, File},
     io,
@@ -24,6 +25,9 @@ use crate::{
     },
     Result, Store,
 };
+
+#[path = "marian_decoder.rs"]
+mod decoder;
 
 mod catalog {
     include!("marian_catalog.rs");
@@ -341,7 +345,7 @@ impl Store {
                 target,
                 segments: &[text],
                 context: None,
-                settings: TranslationSettings { beam_size: 1 },
+                settings: TranslationSettings::default(),
             },
         )
         .map(|translation| {
@@ -407,8 +411,8 @@ impl TranslationProvider for MarianProvider<'_> {
         _context: Option<&str>,
         settings: TranslationSettings,
     ) -> Result<Vec<String>> {
-        if settings.beam_size != 1 {
-            return Err("Цей мовний пакет підтримує лише один варіант декодування".into());
+        if !(1..=8).contains(&settings.beam_size) {
+            return Err("Некоректні параметри декодування перекладу".into());
         }
         let package = catalog::PACKAGES
             .iter()
@@ -492,7 +496,9 @@ impl TranslationProvider for MarianProvider<'_> {
 
         let mut results = Vec::with_capacity(segments.len());
         for segment in segments {
-            let source_pieces = input.encode(segment).map_err(model_error)?;
+            let source_pieces = input
+                .encode(normalized_input(package.source, segment).as_ref())
+                .map_err(model_error)?;
             let mut start = 0;
             let mut translated_parts = Vec::new();
             loop {
@@ -521,41 +527,17 @@ impl TranslationProvider for MarianProvider<'_> {
                     .encoder()
                     .forward(&encoder_input, 0)
                     .map_err(model_error)?;
-                let mut token = config.decoder_start_token_id;
-                let mut pieces = Vec::new();
-                let mut complete = false;
-                for index in 0..limit {
-                    let decoder_input =
-                        Tensor::new(&[[token]], &Device::Cpu).map_err(model_error)?;
-                    // Marian uses padding as the decoder start token but disallows generating it.
-                    let scores = model
-                        .decode(&decoder_input, &encoded, index)
-                        .and_then(|output| output.get(0)?.get(0)?.to_vec1::<f32>())
-                        .map_err(model_error)?;
-                    token = scores
-                        .into_iter()
-                        .enumerate()
-                        .filter(|(id, score)| {
-                            *id != config.pad_token_id as usize && score.is_finite()
-                        })
-                        .max_by(|(_, a), (_, b)| a.total_cmp(b))
-                        .map(|(id, _)| id as u32)
-                        .ok_or("Модель не повернула доступного токена")?;
-                    if token == config.eos_token_id || token == config.forced_eos_token_id {
-                        complete = true;
-                        break;
-                    }
-                    if token != config.pad_token_id {
-                        pieces.push(
-                            *output_pieces
-                                .get(&token)
-                                .ok_or("Невідомий токен перекладу")?,
-                        );
-                    }
-                }
-                if !complete {
-                    return Err("Модель не завершила переклад речення".into());
-                }
+                let decoded =
+                    decoder::decode(&model, &encoded, &config, settings.beam_size, limit)?;
+                let pieces = decoded
+                    .iter()
+                    .map(|token| {
+                        output_pieces
+                            .get(token)
+                            .copied()
+                            .ok_or("Невідомий токен перекладу")
+                    })
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
                 let translated = output.decode(&pieces).map_err(model_error)?;
                 translated_parts.push(translated.trim().to_owned());
                 if end == source_pieces.len() {
@@ -566,6 +548,14 @@ impl TranslationProvider for MarianProvider<'_> {
             results.push(translated_parts.join(" "));
         }
         Ok(results)
+    }
+}
+
+fn normalized_input<'a>(source: &str, text: &'a str) -> Cow<'a, str> {
+    if source == "fr" && text.contains('’') {
+        Cow::Owned(text.replace('’', "'"))
+    } else {
+        Cow::Borrowed(text)
     }
 }
 
@@ -591,6 +581,21 @@ fn verify_files(directory: &Path, package: &Package, assets: &[&str]) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn french_apostrophe_normalization_only_changes_model_input() {
+        let source = "Marie n’a pas payé les 27 euros à Lyon.";
+        assert_eq!(
+            normalized_input("fr", source),
+            "Marie n'a pas payé les 27 euros à Lyon."
+        );
+        assert_eq!(source, "Marie n’a pas payé les 27 euros à Lyon.");
+        assert!(matches!(normalized_input("uk", source), Cow::Borrowed(_)));
+        assert!(matches!(
+            normalized_input("fr", "L'heure."),
+            Cow::Borrowed(_)
+        ));
+    }
 
     #[test]
     fn failed_activation_restores_active_files_and_keeps_prior_copy() {

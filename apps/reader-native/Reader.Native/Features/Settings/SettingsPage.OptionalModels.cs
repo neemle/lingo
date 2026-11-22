@@ -63,7 +63,13 @@ public partial class SettingsPage
         };
         OptionalModelChoice.IsEnabled = !optionalModelBusy;
         DownloadOptionalModel.IsEnabled = RemoveOptionalModel.IsEnabled = !optionalModelBusy && selected is not null;
-        VerifyOptionalModel.IsEnabled = !optionalModelBusy && selected is { FilesPresent: true };
+        VerifyOptionalModel.IsEnabled = !optionalModelBusy && selected is { HasLocalFiles: true };
+        RollbackOptionalModel.IsEnabled = !optionalModelBusy && selected is { HasRecoveryCopy: true };
+        RepairOptionalModel.IsEnabled = !optionalModelBusy && selected is not null
+            && Directory.Exists(Path.Combine(OptionalStagingRoot, selected.Revision));
+        OptionalModelRecovery.Text = selected is { HasRecoveryCopy: true }
+            ? "Є збережена локальна копія. Перед відновленням буде перевірено її контрольні суми."
+            : "Збереженої копії немає. Незавершене завантаження можна продовжити або встановити з кешу.";
         DownloadOptionalModel.Text = selected is { HasLocalFiles: true } ? "Завантажити повторно" : "Завантажити";
     }
 
@@ -136,6 +142,42 @@ public partial class SettingsPage
         }
     }
 
+    private async void RollbackOptionalModelClicked(object? sender, EventArgs args)
+    {
+        if (optionalModelBusy || SelectedOptionalModel is not { } model) return;
+        await RecoverOptionalModelAsync(model, rollback: true);
+    }
+
+    private async void RepairOptionalModelClicked(object? sender, EventArgs args)
+    {
+        if (optionalModelBusy || SelectedOptionalModel is not { } model) return;
+        await RecoverOptionalModelAsync(model, rollback: false);
+    }
+
+    private async Task RecoverOptionalModelAsync(OptionalModel model, bool rollback)
+    {
+        optionalModelBusy = true;
+        UpdateOptionalModelControls();
+        try
+        {
+            var action = rollback ? "Відновити збережену копію?" : "Встановити модель з локального кешу?";
+            if (!await DisplayAlertAsync(action,
+                $"{model.Name}. Файли буде перевірено без завантаження з мережі. Поточну встановлену копію буде збережено.",
+                "Відновити", "Скасувати")) return;
+            OptionalModelStatus.Text = "Перевірка локальних файлів і відновлення…";
+            if (rollback) await AppState.Session.RollbackOptionalModelAsync(model.Id);
+            else await AppState.Session.InstallOptionalModelAsync(model.Id, OptionalStagingRoot);
+            OptionalModelStatus.Text = $"{model.Name}: локальну копію перевірено й відновлено.";
+        }
+        catch (Exception error) { OptionalModelStatus.Text = error.Message; }
+        finally
+        {
+            await RefreshOptionalModelsAsync();
+            optionalModelBusy = false;
+            UpdateOptionalModelControls();
+        }
+    }
+
     private async void RemoveOptionalModelClicked(object? sender, EventArgs args)
     {
         if (optionalModelBusy || SelectedOptionalModel is not { } model) return;
@@ -144,7 +186,7 @@ public partial class SettingsPage
         try
         {
             if (!await DisplayAlertAsync("Видалити файли моделі?",
-                $"{model.Name}. Також буде видалено незавершене завантаження.", "Видалити", "Скасувати")) return;
+                $"{model.Name}. Буде видалено також збережені копії для відновлення й незавершене завантаження.", "Видалити", "Скасувати")) return;
             await AppState.Session.RemoveOptionalModelAsync(model.Id);
             ModelDownload.ClearOptionalStaging(model, OptionalStagingRoot);
             OptionalModelStatus.Text = $"Локальні файли {model.Name} видалено.";

@@ -63,6 +63,8 @@ pub struct Document {
     pub created_at: i64,
     pub source_hash: String,
     pub format: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -371,6 +373,13 @@ impl Store {
                 let (body, resume) = row.map_err(|e| e.to_string())?;
                 let mut document: Document =
                     serde_json::from_str(&body).map_err(|e| e.to_string())?;
+                if document
+                    .ocr_lines
+                    .as_ref()
+                    .is_some_and(|lines| lines.iter().any(|line| line.source_span.is_none()))
+                {
+                    ocr::refresh_provenance(&mut document);
+                }
                 document.speech_resume = resume
                     .as_deref()
                     .and_then(|body| serde_json::from_str::<SpeechResume>(body).ok())
@@ -392,7 +401,27 @@ impl Store {
         })
     }
     pub fn import(&mut self, name: &str, bytes: &[u8], language: &str) -> Result<Document> {
-        self.import_document(name, bytes, language, None, None, false)
+        self.import_document(name, bytes, language, None, None)
+    }
+
+    pub fn import_article(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+        language: &str,
+        url: &str,
+    ) -> Result<Document> {
+        let address = url
+            .strip_prefix("https://")
+            .or_else(|| url.strip_prefix("http://"));
+        if !name.to_ascii_lowercase().ends_with(".txt")
+            || url.len() > 4096
+            || url.chars().any(|c| c.is_whitespace() || c.is_control())
+            || address.is_none_or(|address| address.is_empty() || address.starts_with('/'))
+        {
+            return Err("Некоректна адреса джерела статті.".into());
+        }
+        self.import_document(name, bytes, language, None, Some(url))
     }
 
     pub fn import_image(
@@ -402,7 +431,7 @@ impl Store {
         language: &str,
         lines: Vec<ocr::OcrLine>,
     ) -> Result<Document> {
-        self.import_document(name, bytes, language, Some(lines), None, false)
+        self.import_document(name, bytes, language, Some((lines, None, false)), None)
     }
 
     pub fn import_scanned_pdf(
@@ -413,7 +442,13 @@ impl Store {
         lines: Vec<ocr::OcrLine>,
         pages: u16,
     ) -> Result<Document> {
-        self.import_document(name, bytes, language, Some(lines), Some(pages), false)
+        self.import_document(
+            name,
+            bytes,
+            language,
+            Some((lines, Some(pages), false)),
+            None,
+        )
     }
 
     pub fn import_mixed_pdf(
@@ -424,7 +459,13 @@ impl Store {
         lines: Vec<ocr::OcrLine>,
         pages: u16,
     ) -> Result<Document> {
-        self.import_document(name, bytes, language, Some(lines), Some(pages), true)
+        self.import_document(
+            name,
+            bytes,
+            language,
+            Some((lines, Some(pages), true)),
+            None,
+        )
     }
 
     fn import_document(
@@ -432,10 +473,13 @@ impl Store {
         name: &str,
         bytes: &[u8],
         language: &str,
-        ocr_lines: Option<Vec<ocr::OcrLine>>,
-        ocr_pdf_pages: Option<u16>,
-        mixed: bool,
+        ocr: Option<(Vec<ocr::OcrLine>, Option<u16>, bool)>,
+        source_url: Option<&str>,
     ) -> Result<Document> {
+        let (ocr_lines, ocr_pdf_pages, mixed) = ocr
+            .map_or((None, None, false), |(lines, pages, mixed)| {
+                (Some(lines), pages, mixed)
+            });
         valid_language(language)?;
         let parsed = match (ocr_lines.as_deref(), ocr_pdf_pages, mixed) {
             (Some(lines), Some(pages), true) => {
@@ -478,6 +522,7 @@ impl Store {
                     document.ocr_pdf_pages = Some(pages);
                     document.pdf_page_starts = parsed.pdf_page_starts;
                     document.blocks = parsed.blocks;
+                    ocr::refresh_provenance(document);
                     updated = document.clone();
                     Ok(true)
                 })?;
@@ -500,10 +545,48 @@ impl Store {
                         }
                         document.pdf_page_starts = parsed.pdf_page_starts;
                         document.blocks = parsed.blocks;
+                        ocr::refresh_provenance(document);
                         existing = document.clone();
                         Ok(true)
                     })?;
                 }
+            }
+            if let Some(incoming) = ocr_lines {
+                let id = existing.id.clone();
+                self.edit_document(&id, |document, _| {
+                    let Some(stored) = document.ocr_lines.as_mut() else {
+                        return Ok(false);
+                    };
+                    let mut changed = false;
+                    if stored.len() == incoming.len()
+                        && stored.iter().zip(&incoming).all(|(old, new)| {
+                            old.page == new.page && old.text.trim() == new.text.trim()
+                        })
+                    {
+                        for (old, new) in stored.iter_mut().zip(incoming) {
+                            if old.words.is_empty() && !new.words.is_empty() {
+                                old.words = new.words;
+                                changed = true;
+                            }
+                        }
+                    }
+                    ocr::refresh_provenance(document);
+                    existing = document.clone();
+                    Ok(changed)
+                })?;
+            } else if existing.ocr_lines.is_some() {
+                ocr::refresh_provenance(&mut existing);
+            }
+            if let Some(url) = source_url.filter(|_| existing.source_url.is_none()) {
+                self.edit_document(&existing.id.clone(), |document, _| {
+                    if document.source_url.is_none() {
+                        document.source_url = Some(url.to_owned());
+                        existing = document.clone();
+                        return Ok(true);
+                    }
+                    existing = document.clone();
+                    Ok(false)
+                })?;
             }
             return Ok(existing);
         }
@@ -520,7 +603,7 @@ impl Store {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("Document.txt");
-        let document = Document {
+        let mut document = Document {
             sentences: segment(&text, &id),
             id,
             title: Path::new(name)
@@ -540,12 +623,14 @@ impl Store {
             pdf_page_starts,
             created_at: now(),
             source_hash: hash,
+            source_url: source_url.map(str::to_owned),
             format: Path::new(name)
                 .extension()
                 .and_then(|x| x.to_str())
                 .unwrap_or("txt")
                 .to_lowercase(),
         };
+        ocr::refresh_provenance(&mut document);
         let tx = self.connection.transaction().map_err(|e| e.to_string())?;
         tx.execute(
             "INSERT INTO documents VALUES (?1,?2,?3)",
@@ -623,6 +708,7 @@ impl Store {
             ocr::update_transcript(document, parsed.text)?;
             document.pdf_page_starts = parsed.pdf_page_starts;
             document.blocks = parsed.blocks;
+            ocr::refresh_provenance(document);
             Self::discard_changed_speech_resume(tx, document)?;
             Ok(true)
         })
@@ -1049,6 +1135,7 @@ impl Store {
             d.text = parsed.text;
             d.blocks = parsed.blocks;
             d.pdf_page_starts = parsed.pdf_page_starts;
+            ocr::refresh_provenance(&mut d);
             d.sentences = segment(&d.text, &d.id);
             d.position = d.position.min(d.sentences.len().saturating_sub(1));
             d.speech_resume = d
@@ -1495,6 +1582,8 @@ mod tests {
                     height: 0.2,
                     confidence: None,
                     correction: None,
+                    words: Vec::new(),
+                    source_span: None,
                 }],
             )
             .unwrap();

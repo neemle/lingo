@@ -321,7 +321,10 @@ fn photo_import_preserves_original_ocr_geometry_and_rebuilds_offsets_on_restore(
     let document = &imported["data"];
     let id = &document["id"];
     assert_eq!(document["text"], "Bonjour 🦊.\nВітаю, світе!");
-    assert_eq!(document["ocrLines"], lines);
+    let mut projected = lines.clone();
+    projected[0]["sourceSpan"] = json!({"startUtf8":0,"endUtf8":13,"startUtf16":0,"endUtf16":11});
+    projected[1]["sourceSpan"] = json!({"startUtf8":14,"endUtf8":37,"startUtf16":12,"endUtf16":25});
+    assert_eq!(document["ocrLines"], projected);
     assert_eq!(import(lines.clone())["data"]["id"], *id);
     let saved = call(store.handle, json!({"version":1,"operation":"export"}));
     let mut backup = saved["data"].clone();
@@ -338,7 +341,7 @@ fn photo_import_preserves_original_ocr_geometry_and_rebuilds_offsets_on_restore(
     let copy = &snapshot["data"]["documents"][0];
     assert_eq!(copy["text"], document["text"]);
     assert_eq!(copy["sentences"], document["sentences"]);
-    assert_eq!(copy["ocrLines"], lines);
+    assert_eq!(copy["ocrLines"], projected);
     let original = call(
         target.handle,
         json!({"version":1,"operation":"original","id":id}),
@@ -451,7 +454,8 @@ fn mixed_pdf_uses_embedded_text_and_keeps_existing_annotations() {
             store.handle,
             json!({
                 "version":1,"operation":"import_mixed_pdf","name":"mixed.pdf","bytes":pdf,"language":"en","pages":2,
-                "lines":[{"page":page,"text":"Scanned first page.","x":0.1,"y":0.1,"width":0.7,"height":0.1,"confidence":null}]
+                "lines":[{"page":page,"text":"Scanned first page.","x":0.1,"y":0.1,"width":0.7,"height":0.1,"confidence":null,
+                    "words":[{"text":"first","x":0.3,"y":0.1,"width":0.2,"height":0.1,"rawStartUtf16":8}]}]
             }),
         )
     };
@@ -464,6 +468,10 @@ fn mixed_pdf_uses_embedded_text_and_keeps_existing_annotations() {
         "Scanned first page.\n\nEmbedded second page."
     );
     assert_eq!(mixed["data"]["pdfPageStarts"], json!([0, 21]));
+    assert_eq!(
+        mixed["data"]["ocrLines"][0]["words"][0]["sourceSpan"],
+        json!({"startUtf8":8,"endUtf8":13,"startUtf16":8,"endUtf16":13})
+    );
     assert_eq!(mixed["data"]["position"], 1);
     let moved = mixed["data"]["sentences"][1]["id"].as_str().unwrap();
     assert_eq!(mixed["data"]["bookmarks"], json!([moved]));

@@ -1,7 +1,7 @@
 use crate::{
     model_storage::{
         activate_verified_package, copy_and_hash, lock_package, model_error, package_directory,
-        remove_package_directory,
+        remove_package_directory, restore_verified_package,
     },
     resources::{MemoryReadiness, ModelBudget, RESOURCES},
     space::{ensure_capacity, PACKAGE_OVERHEAD},
@@ -189,6 +189,7 @@ pub struct OptionalModel {
     revision: &'static str,
     files_present: bool,
     has_local_files: bool,
+    has_recovery_copy: bool,
     memory: MemoryReadiness,
     assets: Vec<OptionalAsset>,
 }
@@ -354,6 +355,12 @@ impl Store {
                     has_local_files: [&paths.active, &paths.previous, &paths.removed]
                         .iter()
                         .any(|path| path.symlink_metadata().is_ok()),
+                    has_recovery_copy: [&paths.removed, &paths.previous].iter().any(|path| {
+                        package_directory(path).unwrap_or(false)
+                            && model.assets.iter().all(|asset| {
+                                local_size(&path.join(asset.name)) == Some(asset.bytes)
+                            })
+                    }),
                     memory: model.budget.readiness(),
                     assets: model
                         .assets
@@ -425,9 +432,31 @@ impl Store {
             &paths.previous,
             &paths.removed,
         )?;
-        remove_package_directory(&paths.previous)?;
-        remove_package_directory(&paths.removed)?;
+        // Retain the prior install for an explicit offline, checksum-verified rollback.
         Ok(())
+    }
+
+    pub fn rollback_optional_model(&self, id: &str) -> Result<()> {
+        self.rollback_optional_model_files(model(id)?)
+    }
+
+    fn rollback_optional_model_files(&self, model: &Model) -> Result<()> {
+        let root = &self.optional_model_directory;
+        if !package_directory(root)? {
+            return Err("Збережена копія моделі відсутня.".into());
+        }
+        let paths = ModelPaths::new(root, model.id);
+        let _gate = lock_package(&paths.lock, true)?;
+        for candidate in [&paths.removed, &paths.previous] {
+            if package_directory(candidate)?
+                && model.assets.iter().all(|asset| {
+                    verify_asset(&candidate.join(asset.name), asset, io::sink()).is_ok()
+                })
+            {
+                return restore_verified_package(candidate, &paths.active);
+            }
+        }
+        Err("Немає збереженої копії, яка відповідає контрольним сумам поточного каталогу. Скористайтеся перевіреним локальним завантаженням або завантажте модель повторно. Поточні файли збережено.".into())
     }
 
     pub fn verify_optional_model(&self, id: &str) -> Result<()> {
@@ -498,10 +527,25 @@ mod tests {
             .install_optional_model_files(&model, root.path())
             .unwrap();
 
+        store
+            .install_optional_model_files(&model, root.path())
+            .unwrap();
+        let previous = store
+            .optional_model_directory
+            .join(".previous-fixture/model.onnx");
+        assert_eq!(fs::read(&previous).unwrap(), b"abc");
+
         fs::write(&candidate, b"bad").unwrap();
         assert!(store
             .install_optional_model_files(&model, root.path())
             .is_err());
+        assert_eq!(fs::read(&active).unwrap(), b"abc");
+
+        fs::write(&active, b"bad").unwrap();
+        store.rollback_optional_model_files(&model).unwrap();
+        assert_eq!(fs::read(&active).unwrap(), b"abc");
+        assert_eq!(fs::read(&previous).unwrap(), b"bad");
+        assert!(store.rollback_optional_model_files(&model).is_err());
         assert_eq!(fs::read(&active).unwrap(), b"abc");
 
         fs::write(&active, b"bad").unwrap();

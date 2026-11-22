@@ -11,6 +11,7 @@ public sealed record Document(
     string SourceHash,
     string Format)
 {
+    public string? SourceUrl { get; init; }
     public DocumentBlock[] Blocks { get; init; } = [];
     public OcrLine[]? OcrLines { get; init; }
     public int? OcrPdfPages { get; init; }

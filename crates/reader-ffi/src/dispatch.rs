@@ -18,7 +18,11 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             name,
             bytes,
             language,
-        } => value(store.import(&name, &bytes, &language)),
+            source_url,
+        } => value(match source_url {
+            Some(url) => store.import_article(&name, &bytes, &language, &url),
+            None => store.import(&name, &bytes, &language),
+        }),
         Command::ImportImage {
             name,
             bytes,
@@ -89,6 +93,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::InstallOptionalModel { id, staging_root } => {
             value(store.install_optional_model(&id, std::path::Path::new(&staging_root)))
         }
+        Command::RollbackOptionalModel { id } => value(store.rollback_optional_model(&id)),
         Command::VerifyOptionalModel { id } => value(store.verify_optional_model(&id)),
         Command::RemoveOptionalModel { id } => value(store.remove_optional_model(&id)),
         Command::TranslationPackages => value(Ok(store.translation_packages())),

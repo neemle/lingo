@@ -43,6 +43,7 @@
     <MauiAsset Include="$(OnnxRuntimePath)/LICENSE" LogicalName="OnnxRuntimeLicense.txt" />
     <MauiAsset Include="$(OnnxRuntimePath)/ThirdPartyNotices.txt" LogicalName="OnnxRuntimeThirdPartyNotices.txt" />
     <PackageReference Include="Microsoft.Maui.Controls" Version="10.0.0" />
+    <PackageReference Include="AngleSharp" Version="1.10.5" />
   </ItemGroup>
   <ItemGroup Condition="$(TargetFramework.Contains('maccatalyst'))">
     <NativeReference Include="../../../target/aarch64-apple-ios-macabi/release/libreader_ffi.a">

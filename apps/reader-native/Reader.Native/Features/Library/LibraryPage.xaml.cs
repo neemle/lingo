@@ -85,8 +85,10 @@ public partial class LibraryPage : ContentPage
     {
         try
         {
-            if (await DesktopFiles.QueueDropAsync(args) == 0)
-                ImportStatus.Text = "Серед перетягнутих об’єктів немає підтримуваних файлів.";
+            if (await DesktopFiles.GetDropAddressAsync(args) is { } address)
+                await ImportArticleAsync(address);
+            else if (await DesktopFiles.QueueDropAsync(args) == 0)
+                ImportStatus.Text = "Серед перетягнутих об’єктів немає підтримуваних файлів або посилань.";
         }
         catch (Exception error) { await DisplayAlertAsync("Імпорт", error.Message, "Гаразд"); }
     }
@@ -97,10 +99,22 @@ public partial class LibraryPage : ContentPage
         importing = true;
         try
         {
-            var file = await FilePicker.Default.PickAsync(new PickOptions { PickerTitle = scanPdf ? "Виберіть сканований PDF" : "Додати документ або фотографію" });
-            if (file is null) return;
-            await ImportFileAsync(new DesktopFile(file.FileName,
-                () => NativeFiles.ReadBoundedAsync(file, Reader.CoreClient.CoreClient.MaxImportBytes)), scanPdf, external: false);
+            var options = new PickOptions { PickerTitle = scanPdf ? "Виберіть сканований PDF" : "Додати документи або фотографії" };
+            IEnumerable<FileResult?> selected = scanPdf
+                ? await FilePicker.Default.PickAsync(options) is { } pdf ? [pdf] : []
+                : await FilePicker.Default.PickMultipleAsync(options);
+            string? lastDocument = null;
+            foreach (var file in selected.OfType<FileResult>())
+            {
+                try
+                {
+                    var id = await ImportFileAsync(new DesktopFile(file.FileName,
+                        () => NativeFiles.ReadBoundedAsync(file, Reader.CoreClient.CoreClient.MaxImportBytes)), scanPdf, external: false);
+                    lastDocument = id ?? lastDocument;
+                }
+                catch (Exception error) { await DisplayAlertAsync(file.FileName, error.Message, "Гаразд"); }
+            }
+            if (lastDocument is not null) await AppState.OpenAsync(lastDocument);
         }
         catch (Exception error) { await DisplayAlertAsync("Імпорт", error.Message, "Гаразд"); }
         finally
@@ -115,7 +129,11 @@ public partial class LibraryPage : ContentPage
     {
         await loading;
         importing = true;
-        try { await ImportFileAsync(file, scanPdf: false, external: true); }
+        try
+        {
+            if (await ImportFileAsync(file, scanPdf: false, external: true) is { } id)
+                await AppState.OpenAsync(id);
+        }
         catch (Exception error) { await DisplayAlertAsync(file.Name, error.Message, "Гаразд"); }
         finally
         {
@@ -124,13 +142,13 @@ public partial class LibraryPage : ContentPage
         }
     }
 
-    private async Task ImportFileAsync(DesktopFile file, bool scanPdf, bool external)
+    private async Task<string?> ImportFileAsync(DesktopFile file, bool scanPdf, bool external)
     {
         var extension = Path.GetExtension(file.Name);
         var isPdf = extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase);
         if (scanPdf && !isPdf) throw new InvalidDataException("Виберіть файл PDF для розпізнавання.");
         var language = await ChooseLanguageAsync(external ? $"Мова оригіналу · {file.Name}" : "Мова оригіналу");
-        if (language is null) return;
+        if (language is null) return null;
         var bytes = await file.Read();
         var session = AppState.Session;
         await session.WaitUntilIdleAsync();
@@ -162,8 +180,8 @@ public partial class LibraryPage : ContentPage
             await session.ImportImageAsync(file.Name, bytes, language, lines);
         }
         else await session.ImportAsync(file.Name, bytes, language);
-        if (session.Error.Length == 0 && session.Document is { } doc)
-            await AppState.OpenAsync(doc.Id);
+        if (session.Error.Length != 0) throw new InvalidDataException(session.Error);
+        return session.Document?.Id;
     }
 
     private async Task<string?> ChooseLanguageAsync(string title)
@@ -238,6 +256,7 @@ public sealed class LibraryCard
     public Document? Document { get; }
     public bool IsDocument => Document is not null;
     public bool IsNew => Document is null;
+    public bool HasArticleSource => WebArticles.Address(Document?.SourceUrl) is not null;
     public string Title => Document?.Title ?? "";
     public string LanguageCode => Document?.Language.ToUpperInvariant() ?? "";
     public string Details => Document is { } doc

@@ -25,16 +25,22 @@ internal sealed class OriginalPage : ContentPage
     private readonly int pageCount;
     private int pageIndex;
     private bool loading;
+    private (int Start, int End)? focus;
+    private int previewWidth;
+    private int previewHeight;
 
     internal OriginalPage(string filename, int pageCount, int initialPage, bool isPdf,
-        Func<int, Task<PhotoPreview>> loadPage, string documentId, ReaderSession session, OcrLine[] lines)
+        Func<int, Task<PhotoPreview>> loadPage, string documentId, ReaderSession session, OcrLine[] lines,
+        TextSelection? selection)
     {
         this.loadPage = loadPage;
         this.lines = lines;
         this.documentId = documentId;
         this.session = session;
         this.pageCount = pageCount;
-        pageIndex = initialPage;
+        focus = selection is not null ? (selection.StartUtf16, selection.StartUtf16 + selection.LengthUtf16)
+            : SentenceRange();
+        pageIndex = lines.FirstOrDefault(line => Overlaps(line.SourceSpan, focus))?.Page ?? initialPage;
         Title = isPdf ? "Вихідний PDF" : "Вихідна фотографія";
         SemanticProperties.SetDescription(image, filename);
         SemanticProperties.SetDescription(previous, "Попередня сторінка");
@@ -42,12 +48,13 @@ internal sealed class OriginalPage : ContentPage
         previous.IsVisible = next.IsVisible = pageCount > 1;
         previous.Clicked += async (_, _) => await LoadAsync(pageIndex - 1);
         next.Clicked += async (_, _) => await LoadAsync(pageIndex + 1);
-        var toggle = new Button { Text = "Показати області тексту", IsVisible = lines.Length > 0 };
+        overlay.IsVisible = lines.Any(line => Overlaps(line.SourceSpan, focus));
+        var toggle = new Button { Text = OverlayLabel(), IsVisible = lines.Length > 0 };
         toggle.Clicked += (_, _) =>
         {
             overlay.IsVisible = !overlay.IsVisible;
             overlay.Invalidate();
-            toggle.Text = overlay.IsVisible ? "Приховати області тексту" : "Показати області тексту";
+            toggle.Text = OverlayLabel();
         };
         var controls = new HorizontalStackLayout { Spacing = 8, Children = { previous, next, toggle, status } };
         SemanticProperties.SetDescription(linePicker, "Рядок для виправлення");
@@ -108,9 +115,9 @@ internal sealed class OriginalPage : ContentPage
             var preview = await loadPage(index);
             pageIndex = index;
             image.Source = ImageSource.FromStream(() => new MemoryStream(preview.Bytes, writable: false));
-            overlay.Drawable = new LineOverlay(preview.Width, preview.Height,
-                lines.Where(line => line.Page == pageIndex).ToArray());
-            overlay.Invalidate();
+            previewWidth = preview.Width;
+            previewHeight = preview.Height;
+            UpdateOverlay();
             RebuildLineChoices();
             status.Text = pageCount == 1 ? "" : $"{pageIndex + 1} / {pageCount}";
         }
@@ -122,6 +129,21 @@ internal sealed class OriginalPage : ContentPage
             next.IsEnabled = pageIndex + 1 < pageCount;
             UpdateEditButtons();
         }
+    }
+
+    private string OverlayLabel() => overlay.IsVisible ? "Приховати області тексту" : "Показати області тексту";
+
+    private (int Start, int End)? SentenceRange() => session.Sentence is { } sentence
+        ? (sentence.StartUtf16, sentence.EndUtf16) : null;
+
+    private static bool Overlaps(OcrSpan? span, (int Start, int End)? focus) =>
+        span is { } source && focus is { } range && source.StartUtf16 < range.End && source.EndUtf16 > range.Start;
+
+    private void UpdateOverlay()
+    {
+        overlay.Drawable = new LineOverlay(previewWidth, previewHeight,
+            lines.Where(line => line.Page == pageIndex).ToArray(), focus);
+        overlay.Invalidate();
     }
 
     private void RebuildLineChoices()
@@ -187,7 +209,8 @@ internal sealed class OriginalPage : ContentPage
                 if (text is null) return;
             }
             if (session.Document?.Id != documentId || session.Document.OcrLines is not { } current ||
-                index >= current.Length || current[index] != line) return;
+                index >= current.Length || current[index].Page != line.Page || current[index].Text != line.Text ||
+                current[index].Correction != line.Correction) return;
             await session.CorrectOcrLineAsync(documentId, index, text);
             if (session.Error.Length != 0)
             {
@@ -197,6 +220,8 @@ internal sealed class OriginalPage : ContentPage
             if (session.Document?.OcrLines is { } updated)
             {
                 lines = updated;
+                focus = SentenceRange();
+                UpdateOverlay();
                 RebuildLineChoices();
             }
             editStatus.Text = action == LineAction.Reset ? "Початковий текст відновлено." : "Виправлення збережено.";
@@ -238,21 +263,39 @@ internal sealed class OriginalPage : ContentPage
             : null;
     }
 
-    private sealed class LineOverlay(int width, int height, OcrLine[] lines) : IDrawable
+    private sealed class LineOverlay(int width, int height, OcrLine[] lines, (int Start, int End)? focus) : IDrawable
     {
         public void Draw(ICanvas canvas, RectF area)
         {
+            if (width <= 0 || height <= 0) return;
             var scale = Math.Min(area.Width / width, area.Height / height);
             var contentWidth = width * scale;
             var contentHeight = height * scale;
             var left = area.X + (area.Width - contentWidth) / 2;
             var top = area.Y + (area.Height - contentHeight) / 2;
-            canvas.StrokeColor = Color.FromArgb("#2669CD");
+            canvas.FillColor = Color.FromArgb("#55E39137");
+            var outline = Color.FromArgb("#66714D");
+            var highlight = Color.FromArgb("#B7532F");
             canvas.StrokeSize = 2;
             foreach (var line in lines)
             {
-                canvas.DrawRectangle(left + (float)line.X * contentWidth, top + (float)line.Y * contentHeight,
-                    (float)line.Width * contentWidth, (float)line.Height * contentHeight);
+                var matched = false;
+                foreach (var word in line.Words ?? [])
+                {
+                    if (!Overlaps(word.SourceSpan, focus)) continue;
+                    matched = true;
+                    DrawBox(word.X, word.Y, word.Width, word.Height, true);
+                }
+                DrawBox(line.X, line.Y, line.Width, line.Height, !matched && Overlaps(line.SourceSpan, focus));
+            }
+
+            void DrawBox(double x, double y, double boxWidth, double boxHeight, bool selected)
+            {
+                var box = new RectF(left + (float)x * contentWidth, top + (float)y * contentHeight,
+                    (float)boxWidth * contentWidth, (float)boxHeight * contentHeight);
+                canvas.StrokeColor = selected ? highlight : outline;
+                if (selected) canvas.FillRectangle(box);
+                canvas.DrawRectangle(box);
             }
         }
     }

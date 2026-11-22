@@ -2,6 +2,7 @@ using CoreGraphics;
 using Foundation;
 using UIKit;
 using ImageIO;
+using NaturalLanguage;
 using Reader.Contracts;
 using Reader.Presentation;
 using Vision;
@@ -70,14 +71,34 @@ internal static class PhotoOcr
             throw new InvalidOperationException(error?.LocalizedDescription ?? "Помилка розпізнавання зображення.");
 
         var lines = new List<OcrLine>();
+        using var tokenizer = new NLTokenizer(NLTokenUnit.Word);
         foreach (var observation in request.Results ?? [])
         {
             var candidate = observation.TopCandidates(1).FirstOrDefault();
             if (candidate is null) continue;
             var bounds = observation.BoundingBox;
-            if (PhotoGeometry.Line(candidate.String, bounds.X, 1 - bounds.Y - bounds.Height,
-                bounds.X + bounds.Width, 1 - bounds.Y, candidate.Confidence) is { } line)
-                lines.Add(line);
+            var raw = candidate.String;
+            if (PhotoGeometry.Line(raw, bounds.X, 1 - bounds.Y - bounds.Height,
+                bounds.X + bounds.Width, 1 - bounds.Y, candidate.Confidence) is not { } line) continue;
+            var words = new List<OcrWord>();
+            tokenizer.String = raw;
+            foreach (var token in tokenizer.GetTokens(new NSRange(0, raw.Length)))
+            {
+                using var value = token;
+                var range = value.RangeValue;
+                var start = (int)range.Location;
+                var length = (int)range.Length;
+                if (start < 0 || start > raw.Length || length <= 0 || length > raw.Length - start) continue;
+                var text = raw.Substring(start, length);
+                var offset = PhotoGeometry.NormalizedOffset(raw.AsSpan(0, start));
+                using var geometry = candidate.GetBoundingBox(range, out _);
+                if (geometry is null) continue;
+                var word = geometry.BoundingBox;
+                if (PhotoGeometry.Word(text, word.X, 1 - word.Y - word.Height,
+                    word.X + word.Width, 1 - word.Y, offset) is { } normalized)
+                    words.Add(normalized);
+            }
+            lines.Add(line with { Words = words.ToArray() });
         }
         return lines.ToArray();
     }

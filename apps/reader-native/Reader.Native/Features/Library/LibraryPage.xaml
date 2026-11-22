@@ -11,6 +11,7 @@
      <KeyboardAccelerator Modifiers="{OnPlatform MacCatalyst=Cmd, WinUI=Ctrl}" Key="O" />
     </MenuFlyoutItem.KeyboardAccelerators>
    </MenuFlyoutItem>
+   <MenuFlyoutItem Text="Додати статтю за посиланням" Clicked="ImportArticleClicked" IsEnabled="{Binding CanInteract}" />
   </MenuBarItem>
  </ContentPage.MenuBarItems>
  <Grid Padding="36,30,36,20" RowDefinitions="Auto,Auto,*" RowSpacing="18">
@@ -19,18 +20,19 @@
     <Label Text="Бібліотека" Style="{StaticResource SerifTitle}" FontSize="42" SemanticProperties.HeadingLevel="Level1" />
     <Label Text="Книжки, нотатки й тексти на цьому пристрої." TextColor="{StaticResource Muted}" FontSize="14" />
    </VerticalStackLayout>
-   <HorizontalStackLayout x:Name="LibraryActions" Grid.Row="1" Grid.ColumnSpan="2" Spacing="8" VerticalOptions="Center">
+   <FlexLayout x:Name="LibraryActions" Grid.Row="1" Grid.ColumnSpan="2" Wrap="Wrap" AlignItems="Center" VerticalOptions="Center">
     <ActivityIndicator IsRunning="{Binding Busy}" IsVisible="{Binding Busy}" Color="{StaticResource Sage}" />
-    <Button Text="Розпізнати PDF" Style="{StaticResource OutlineButton}" Clicked="ScanPdfClicked" IsEnabled="{Binding CanInteract}" />
-    <Button Text="Вставити текст" Style="{StaticResource OutlineButton}" Clicked="PasteTextClicked" IsEnabled="{Binding CanInteract}" />
-    <Button Text="Додати документ" Style="{StaticResource AccentButton}" Clicked="ImportClicked" IsEnabled="{Binding CanInteract}" />
-   </HorizontalStackLayout>
+    <Button Text="Розпізнати PDF" Margin="0,0,8,6" Style="{StaticResource OutlineButton}" Clicked="ScanPdfClicked" IsEnabled="{Binding CanInteract}" />
+    <Button Text="Вставити текст" Margin="0,0,8,6" Style="{StaticResource OutlineButton}" Clicked="PasteTextClicked" IsEnabled="{Binding CanInteract}" />
+    <Button Text="Додати статтю" Margin="0,0,8,6" Style="{StaticResource OutlineButton}" Clicked="ImportArticleClicked" IsEnabled="{Binding CanInteract}" />
+    <Button Text="Додати документи" Margin="0,0,0,6" Style="{StaticResource AccentButton}" Clicked="ImportClicked" IsEnabled="{Binding CanInteract}" />
+   </FlexLayout>
   </Grid>
   <VerticalStackLayout Grid.Row="1" Spacing="5">
    <Border Padding="12,9" Stroke="#D6D9CA" StrokeThickness="1" StrokeDashArray="5,4"
     StrokeShape="RoundRectangle 8" BackgroundColor="#F0F3E9">
     <Border.GestureRecognizers><DropGestureRecognizer Drop="FilesDropped" /></Border.GestureRecognizers>
-    <Label Text="Перетягніть TXT, DOCX, PDF або фотографію сюди · до 20 МБ на файл"
+    <Label Text="Перетягніть TXT, DOCX, PDF, фотографію або посилання сюди · до 20 МБ на файл"
      TextColor="{StaticResource Sage}" FontSize="13" />
    </Border>
    <Label Text="{Binding Error}" TextColor="{StaticResource Accent}" SemanticProperties.Description="Помилка операції" />
@@ -65,6 +67,8 @@
          <Label Text="{Binding Details}" TextColor="{StaticResource Muted}" FontSize="12" MaxLines="1" LineBreakMode="TailTruncation" />
          <ProgressBar Progress="{Binding Progress}" ProgressColor="#9DAB88" HeightRequest="4" />
          <Label Text="{Binding ProgressLabel}" TextColor="{StaticResource Muted}" FontSize="11" />
+         <Button Text="Джерело статті" IsVisible="{Binding HasArticleSource}" HorizontalOptions="Start" Style="{StaticResource OutlineButton}"
+          Clicked="OpenArticleSourceClicked" CommandParameter="{Binding Document}" />
          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="7">
           <Button Text="Читати →" Style="{StaticResource OutlineButton}" Clicked="OpenCardClicked"
            CommandParameter="{Binding .}" SemanticProperties.Description="{Binding Title, StringFormat='Читати {0}'}" />

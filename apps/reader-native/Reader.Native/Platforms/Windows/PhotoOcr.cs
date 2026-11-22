@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Reader.Contracts;
 using Reader.Presentation;
 using Windows.Globalization;
 using Windows.Graphics.Imaging;
@@ -45,8 +46,19 @@ internal static class PhotoOcr
             if (PhotoGeometry.Line(recognized.Text,
                 boxes.Min(box => box.X) / bitmap.PixelWidth, boxes.Min(box => box.Y) / bitmap.PixelHeight,
                 boxes.Max(box => box.Right) / bitmap.PixelWidth, boxes.Max(box => box.Bottom) / bitmap.PixelHeight,
-                null) is { } line)
-                lines.Add(line);
+                null) is not { } line) continue;
+            var words = new List<OcrWord>(recognized.Words.Count);
+            var cursor = 0;
+            foreach (var word in recognized.Words)
+            {
+                var box = word.BoundingRect;
+                var text = word.Text.Trim();
+                var offset = PhotoGeometry.MatchWord(line.Text, text, ref cursor);
+                if (PhotoGeometry.Word(text, box.X / bitmap.PixelWidth, box.Y / bitmap.PixelHeight,
+                    box.Right / bitmap.PixelWidth, box.Bottom / bitmap.PixelHeight, offset) is { } geometry)
+                    words.Add(geometry);
+            }
+            lines.Add(line with { Words = words.ToArray() });
         }
         return lines.ToArray();
     }

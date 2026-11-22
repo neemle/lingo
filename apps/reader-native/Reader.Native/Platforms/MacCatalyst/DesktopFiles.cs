@@ -64,6 +64,21 @@ internal static class DesktopFiles
         return count;
     }
 
+    internal static async Task<Uri?> GetDropAddressAsync(DropEventArgs args)
+    {
+        if (args.PlatformArgs?.DropSession is not { } session) return null;
+        foreach (var item in session.Items)
+        {
+            var provider = item.ItemProvider;
+            if (provider.HasItemConformingTo("public.file-url") || !provider.HasItemConformingTo("public.url")) continue;
+            var completion = new TaskCompletionSource<Uri?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            provider.LoadItem("public.url", null, (value, error) =>
+                completion.TrySetResult(error is null && value is NSUrl url ? WebArticles.Address(url.AbsoluteString) : null));
+            if (await completion.Task is { } address) return address;
+        }
+        return null;
+    }
+
     private static Task<byte[]> ReadProviderAsync(NSItemProvider provider, string type)
     {
         var completion = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
