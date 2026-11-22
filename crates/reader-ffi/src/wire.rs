@@ -295,6 +295,9 @@ pub enum Command {
     ExportBackupFile {
         path: String,
     },
+    InspectBackupFile {
+        path: String,
+    },
     RestoreBackupFile {
         path: String,
     },

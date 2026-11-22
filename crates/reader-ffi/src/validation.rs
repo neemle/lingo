@@ -25,7 +25,9 @@ fn validate(command: &Command) -> Result<()> {
                 "Database path must be nonempty and bounded",
             ))
         }
-        Command::ExportBackupFile { path } | Command::RestoreBackupFile { path }
+        Command::ExportBackupFile { path }
+        | Command::InspectBackupFile { path }
+        | Command::RestoreBackupFile { path }
             if path.is_empty() || path.len() > 4096 || path.contains('\0') =>
         {
             Err(Error::new(

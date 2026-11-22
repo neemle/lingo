@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 mod backup_files;
 mod backup_limits;
-pub use backup_files::MAX_BACKUP_FILE_BYTES;
+pub use backup_files::{inspect_backup_file, BackupInspection, MAX_BACKUP_FILE_BYTES};
 mod backup_resources;
 pub use backup_resources::BackupResource;
 mod card_learning;
@@ -1260,9 +1260,11 @@ impl Store {
             .map_err(|e| e.to_string())
     }
     pub fn restore(&mut self, backup: Backup) -> Result<()> {
-        if backup.version != 1 {
-            return Err("Невідома версія архіву".into());
-        }
+        let originals = backup_files::checked_originals(
+            backup.version,
+            &backup.snapshot.documents,
+            &backup.originals,
+        )?;
         let mut revisions =
             std::collections::HashMap::<String, Vec<document_revisions::DocumentRevision>>::new();
         for revision in backup.document_revisions {
@@ -1275,14 +1277,7 @@ impl Store {
         let mut validated = Vec::new();
         for doc in &backup.snapshot.documents {
             valid_language(&doc.language)?;
-            let original = backup
-                .originals
-                .iter()
-                .find(|o| o.document_id == doc.id)
-                .ok_or("В архіві немає оригіналу")?;
-            if format!("{:x}", Sha256::digest(&original.bytes)) != doc.source_hash {
-                return Err("Пошкоджений оригінал в архіві".into());
-            }
+            let original = originals[doc.id.as_str()];
             let parsed = match (
                 &doc.ocr_lines,
                 doc.ocr_pdf_pages,

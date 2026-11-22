@@ -247,6 +247,9 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::ExportBackupFile { path } => {
             value(store.export_backup_file(std::path::Path::new(&path)))
         }
+        Command::InspectBackupFile { path } => value(reader_core::inspect_backup_file(
+            std::path::Path::new(&path),
+        )),
         Command::RestoreBackupFile { path } => {
             value(store.restore_backup_file(std::path::Path::new(&path)))
         }

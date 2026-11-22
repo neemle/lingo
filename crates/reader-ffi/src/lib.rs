@@ -128,6 +128,10 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
+        Command::InspectBackupFile { path } => {
+            registry::lock()?.store(handle)?;
+            return encode_job(reader_core::inspect_backup_file(std::path::Path::new(path)));
+        }
         Command::InstallTranslationPackage { path } => {
             let files = registry::lock()?.store(handle)?.translation_package_files();
             return encode_job(files.install(std::path::Path::new(path)));

@@ -1,13 +1,15 @@
 use crate::{
     backup_limits::{LimitedReader, LimitedWriter},
     dictionary_transfer, document_revisions, practice, reading_history, Backup, BackupResource,
-    Result, Snapshot, Store,
+    Document, Original, Result, Snapshot, Store,
 };
 use serde::{
     ser::{Error as _, SerializeSeq},
     Serialize, Serializer,
 };
+use sha2::{Digest, Sha256};
 use std::{
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::{BufReader, BufWriter, Write},
     path::Path,
@@ -136,25 +138,137 @@ impl Store {
 
     /// Parse capped JSON and retain the existing all-or-nothing Store restore.
     pub fn restore_backup_file(&mut self, path: &Path) -> Result<Vec<BackupResource>> {
-        validate_path(path)?;
-        if !fs::symlink_metadata(path).map_err(archive_error)?.is_file() {
-            return Err("Резервна копія має бути звичайним файлом.".into());
-        }
-        let file = File::open(path).map_err(archive_error)?;
-        let metadata = file.metadata().map_err(archive_error)?;
-        if !metadata.is_file() || metadata.len() > MAX_BACKUP_FILE_BYTES {
-            return Err("Резервна копія перевищує 1 ГіБ або не є звичайним файлом.".into());
-        }
-        let mut reader =
-            BufReader::with_capacity(64 * 1024, LimitedReader::new(&file, MAX_BACKUP_FILE_BYTES));
-        let backup: Backup = serde_json::from_reader(&mut reader).map_err(archive_error)?;
-        if file.metadata().map_err(archive_error)?.len() > MAX_BACKUP_FILE_BYTES {
-            return Err("Резервна копія перевищує 1 ГіБ.".into());
-        }
+        let backup = read_backup_file(path)?;
         // Keep the success response within the small ABI envelope before committing data.
         validate_resources(&backup.resources)?;
         let resources = backup.resources.clone();
         self.restore(backup)?;
         Ok(resources)
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupInspection {
+    pub documents: usize,
+    pub vocabulary: usize,
+    pub reviews: usize,
+    pub reading_sessions: usize,
+    pub resources: usize,
+    pub has_practice: bool,
+}
+
+/// Read archive counts and verify every original without changing a library.
+pub fn inspect_backup_file(path: &Path) -> Result<BackupInspection> {
+    let backup = read_backup_file(path)?;
+    validate_resources(&backup.resources)?;
+    checked_originals(
+        backup.version,
+        &backup.snapshot.documents,
+        &backup.originals,
+    )?;
+    Ok(BackupInspection {
+        documents: backup.snapshot.documents.len(),
+        vocabulary: backup.snapshot.vocabulary.len(),
+        reviews: backup.reviews.len(),
+        reading_sessions: backup.reading_sessions.len(),
+        resources: backup.resources.len(),
+        has_practice: backup
+            .practice
+            .is_some_and(|progress| progress.question.is_some()),
+    })
+}
+
+pub(crate) fn checked_originals<'a>(
+    version: u32,
+    documents: &[Document],
+    originals: &'a [Original],
+) -> Result<HashMap<&'a str, &'a Original>> {
+    if version != 1 {
+        return Err("Невідома версія архіву".into());
+    }
+
+    let mut indexed = HashMap::new();
+    for original in originals {
+        if indexed
+            .insert(original.document_id.as_str(), original)
+            .is_some()
+        {
+            return Err("В архіві є кілька оригіналів для одного документа".into());
+        }
+    }
+
+    let mut seen = HashSet::new();
+    for document in documents {
+        if !seen.insert(document.id.as_str()) {
+            return Err("В архіві є кілька документів з однаковим ідентифікатором".into());
+        }
+        let original = indexed
+            .get(document.id.as_str())
+            .ok_or("В архіві немає оригіналу")?;
+        if format!("{:x}", Sha256::digest(&original.bytes)) != document.source_hash {
+            return Err("Пошкоджений оригінал в архіві".into());
+        }
+    }
+    if seen.len() != indexed.len() {
+        return Err("В архіві є оригінал без документа".into());
+    }
+    Ok(indexed)
+}
+
+fn read_backup_file(path: &Path) -> Result<Backup> {
+    validate_path(path)?;
+    if !fs::symlink_metadata(path).map_err(archive_error)?.is_file() {
+        return Err("Резервна копія має бути звичайним файлом.".into());
+    }
+    let file = File::open(path).map_err(archive_error)?;
+    let metadata = file.metadata().map_err(archive_error)?;
+    if !metadata.is_file() || metadata.len() > MAX_BACKUP_FILE_BYTES {
+        return Err("Резервна копія перевищує 1 ГіБ або не є звичайним файлом.".into());
+    }
+    let mut reader =
+        BufReader::with_capacity(64 * 1024, LimitedReader::new(&file, MAX_BACKUP_FILE_BYTES));
+    let backup: Backup = serde_json::from_reader(&mut reader).map_err(archive_error)?;
+    if file.metadata().map_err(archive_error)?.len() > MAX_BACKUP_FILE_BYTES {
+        return Err("Резервна копія перевищує 1 ГіБ.".into());
+    }
+    Ok(backup)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inspection_counts_originals_and_rejects_ambiguous_or_corrupt_data() {
+        let root = tempfile::tempdir().unwrap();
+        let database_path = root.path().join("reader.db");
+        let archive_path = root.path().join("backup.json");
+        let mut source = Store::open(&database_path).unwrap();
+        source.import("note.txt", b"One sentence.", "en").unwrap();
+        source.export_backup_file(&archive_path).unwrap();
+
+        let summary = inspect_backup_file(&archive_path).unwrap();
+        assert_eq!(summary.documents, 1);
+        assert_eq!(summary.vocabulary, 0);
+        assert!(!summary.has_practice);
+
+        let mut backup = read_backup_file(&archive_path).unwrap();
+        backup.originals.push(backup.originals[0].clone());
+        fs::write(&archive_path, serde_json::to_vec(&backup).unwrap()).unwrap();
+        assert!(inspect_backup_file(&archive_path)
+            .unwrap_err()
+            .contains("кілька оригіналів"));
+
+        backup.originals.pop();
+        backup.originals[0].bytes[0] ^= 1;
+        fs::write(&archive_path, serde_json::to_vec(&backup).unwrap()).unwrap();
+        assert!(inspect_backup_file(&archive_path)
+            .unwrap_err()
+            .contains("Пошкоджений оригінал"));
+
+        let mut destination = Store::open(&root.path().join("destination.db")).unwrap();
+        assert!(destination.restore_backup_file(&archive_path).is_err());
+        assert!(destination.snapshot().unwrap().documents.is_empty());
     }
 }
