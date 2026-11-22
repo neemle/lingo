@@ -5,12 +5,15 @@ use std::{collections::BTreeMap, path::Path};
 use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
 
+mod backup_resources;
+pub use backup_resources::BackupResource;
 mod card_learning;
 pub use card_learning::SenseSnapshot;
 pub mod dictionary_transfer;
 pub mod document_layout;
 pub mod e5;
 pub mod knowledge;
+pub mod language_detection;
 mod marian_provider;
 mod model_storage;
 pub mod ocr;
@@ -19,6 +22,8 @@ pub mod optional_models;
 pub mod pdf_layers;
 pub mod practice;
 pub mod qwen;
+mod review_schedule;
+pub use review_schedule::FsrsMemory;
 mod resources;
 mod space;
 pub mod supertonic;
@@ -52,6 +57,8 @@ pub struct Document {
     pub speech_resume: Option<SpeechResume>,
     #[serde(default)]
     pub bookmarks: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub notes: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub reviewed_translations: BTreeMap<String, BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -97,6 +104,8 @@ pub struct ReviewState {
     pub due_at: i64,
     pub interval_days: u32,
     pub reviews: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fsrs: Option<FsrsMemory>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -254,6 +263,8 @@ pub struct Backup {
     pub dictionary_review_origins: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub practice: Option<practice::PracticeProgress>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<BackupResource>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -338,6 +349,13 @@ impl Store {
             .map_err(|e| e.to_string())?;
         connection.execute("CREATE TABLE IF NOT EXISTS practice (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)", [])
             .map_err(|e| e.to_string())?;
+        connection
+            .execute(
+                "CREATE INDEX IF NOT EXISTS review_card_direction_time
+             ON review_events(entry_id, direction, reviewed_at)",
+                [],
+            )
+            .map_err(|error| error.to_string())?;
         dictionary_transfer::initialize(&connection)?;
         Ok(Self {
             connection,
@@ -617,6 +635,7 @@ impl Store {
             position: 0,
             speech_resume: None,
             bookmarks: Vec::new(),
+            notes: BTreeMap::new(),
             reviewed_translations: BTreeMap::new(),
             ocr_lines,
             ocr_pdf_pages,
@@ -827,6 +846,32 @@ impl Store {
         })
     }
 
+    pub fn set_sentence_note(&mut self, id: &str, sentence_id: &str, note: &str) -> Result<()> {
+        let note = note.trim();
+        validate_sentence_note(note)?;
+        self.edit_document(id, |document, _| {
+            if !document
+                .sentences
+                .iter()
+                .any(|sentence| sentence.id == sentence_id)
+            {
+                return Err("Речення для нотатки не знайдено".into());
+            }
+            if note.is_empty() {
+                return Ok(document.notes.remove(sentence_id).is_some());
+            }
+            if document
+                .notes
+                .get(sentence_id)
+                .is_some_and(|saved| saved == note)
+            {
+                return Ok(false);
+            }
+            document.notes.insert(sentence_id.into(), note.into());
+            Ok(true)
+        })
+    }
+
     pub fn set_reviewed_translation(
         &mut self,
         id: &str,
@@ -1014,32 +1059,8 @@ impl Store {
         } else {
             &mut entry.reverse
         };
-        state.interval_days = match grade {
-            0 => 0,
-            1 => 1,
-            2 => {
-                if state.interval_days == 0 {
-                    2
-                } else {
-                    state.interval_days.saturating_mul(2).min(365)
-                }
-            }
-            _ => {
-                if state.interval_days == 0 {
-                    4
-                } else {
-                    state.interval_days.saturating_mul(3).min(365)
-                }
-            }
-        };
         let time = now();
-        state.due_at = time
-            + if grade == 0 {
-                60
-            } else {
-                state.interval_days as i64 * 86400
-            };
-        state.reviews += 1;
+        review_schedule::review(connection, id, direction, state, grade, time)?;
         connection
             .execute(
                 "UPDATE vocabulary SET body=? WHERE id=?",
@@ -1093,6 +1114,7 @@ impl Store {
             dictionary_sources,
             dictionary_review_origins,
             practice: practice::read(&tx)?,
+            resources: self.backup_resources(),
         };
         tx.commit().map_err(|error| error.to_string())?;
         Ok(backup)
@@ -1141,7 +1163,8 @@ impl Store {
             d.speech_resume = d
                 .speech_resume
                 .filter(|resume| d.sentences.iter().any(|sentence| resume.matches(sentence)));
-            if !d.bookmarks.is_empty() || !d.reviewed_translations.is_empty() {
+            if !d.bookmarks.is_empty() || !d.reviewed_translations.is_empty() || !d.notes.is_empty()
+            {
                 let known: std::collections::HashSet<_> = d
                     .sentences
                     .iter()
@@ -1152,6 +1175,14 @@ impl Store {
                 }
                 d.bookmarks.sort_unstable();
                 d.bookmarks.dedup();
+                for (sentence_id, note) in &d.notes {
+                    if !known.contains(sentence_id.as_str()) || note.trim().is_empty() {
+                        return Err(
+                            "В архіві є нотатка для невідомого речення або порожня нотатка".into(),
+                        );
+                    }
+                    validate_sentence_note(note)?;
+                }
                 for (target, segments) in &d.reviewed_translations {
                     valid_language(target)?;
                     if target == &d.language {
@@ -1204,6 +1235,17 @@ impl Store {
         }
         tx.commit().map_err(|e| e.to_string())
     }
+}
+
+fn validate_sentence_note(note: &str) -> Result<()> {
+    if note.len() > 4000
+        || note
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+    {
+        return Err("Нотатка задовга або містить керівні символи".into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

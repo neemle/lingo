@@ -43,11 +43,12 @@ public partial class LibraryPage
         };
         var text = new Editor { Placeholder = "Вставте текст, який хочете прочитати", MinimumHeightRequest = 240 };
         var status = new Label { TextColor = (Color)Application.Current!.Resources["Accent"] };
+        var detect = new Button { Text = "Визначити мову", Style = (Style)Application.Current.Resources["OutlineButton"] };
         var import = new Button { Text = "Почати читати", Style = (Style)Application.Current.Resources["AccentButton"] };
         var cancel = new Button { Text = "Скасувати" };
         var form = new VerticalStackLayout { Spacing = 12, Padding = 24, MaximumWidthRequest = 680 };
         form.Children.Add(new Label { Text = "Додати текст", Style = (Style)Application.Current.Resources["SerifTitle"] });
-        foreach (var field in new View[] { language, title, text, status, import, cancel })
+        foreach (var field in new View[] { language, title, text, detect, status, import, cancel })
             form.Children.Add(field);
         var page = new ContentPage { Title = "Додати текст", Content = new ScrollView { Content = form } };
         page.Disappearing += (_, _) => { if (!closing) completion.TrySetResult(null); };
@@ -63,6 +64,27 @@ public partial class LibraryPage
             catch (Exception error) { completion.TrySetException(error); }
         }
         cancel.Clicked += async (_, _) => await CloseAsync(null);
+        detect.Clicked += async (_, _) =>
+        {
+            if (closing || string.IsNullOrWhiteSpace(text.Text)) return;
+            detect.IsEnabled = false;
+            var sample = text.Text;
+            try
+            {
+                var code = await AppState.Session.DetectLanguageAsync(sample);
+                if (closing || sample != text.Text) return;
+                var suggestions = DocumentLanguages.All.Select((item, index) => (item, index));
+                var suggestion = suggestions.FirstOrDefault(entry => entry.item.Code == code);
+                if (code is not null && suggestion.item.Code == code)
+                {
+                    language.SelectedIndex = suggestion.index;
+                    status.Text = $"Визначена мова · {suggestion.item.Name}";
+                }
+                else status.Text = "Виберіть мову вручну.";
+            }
+            catch (Exception error) { status.Text = error.Message; }
+            finally { detect.IsEnabled = true; }
+        };
         import.Clicked += async (_, _) =>
         {
             if (language.SelectedIndex < 0)

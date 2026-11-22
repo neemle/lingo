@@ -18,6 +18,13 @@ pub enum Command {
         path: String,
     },
     Snapshot,
+    DetectLanguage {
+        text: String,
+    },
+    DetectDocumentLanguage {
+        name: String,
+        bytes: Vec<u8>,
+    },
     Import {
         name: String,
         bytes: Vec<u8>,
@@ -80,6 +87,12 @@ pub enum Command {
         #[serde(rename = "sentenceId")]
         sentence_id: String,
         saved: bool,
+    },
+    SetSentenceNote {
+        id: String,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        note: String,
     },
     SetReviewedTranslation {
         id: String,
@@ -201,6 +214,9 @@ pub enum Command {
         id: String,
         #[serde(rename = "acceptedTranslations")]
         accepted_translations: Vec<String>,
+    },
+    VocabularyReviewHistory {
+        id: String,
     },
     Review {
         id: String,

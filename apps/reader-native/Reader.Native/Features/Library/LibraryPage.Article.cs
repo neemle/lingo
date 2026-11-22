@@ -18,12 +18,13 @@ public partial class LibraryPage
                 "Завантажити", "Скасувати", "https://…", 4096, Keyboard.Url, suggested?.AbsoluteUri ?? "");
             if (input is null) return;
             var address = WebArticles.Address(input) ?? throw new InvalidDataException("Введіть дійсну адресу HTTP або HTTPS.");
-            var language = await ChooseLanguageAsync("Мова оригіналу");
-            if (language is null) return;
             ImportStatus.Text = "Завантажуємо статтю…";
             var article = await Task.Run(() => WebArticles.DownloadAsync(address));
             var session = AppState.Session;
             await session.WaitUntilIdleAsync();
+            ImportStatus.Text = "";
+            var language = await ChooseLanguageAsync("Мова оригіналу", await session.DetectLanguageAsync(article.Text));
+            if (language is null) return;
             await session.ImportAsync(article.Title + ".txt", Encoding.UTF8.GetBytes(article.Text), language,
                 article.Address.AbsoluteUri);
             if (session.Error.Length == 0 && session.Document is { } document)

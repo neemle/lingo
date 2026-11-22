@@ -327,7 +327,9 @@ pub(crate) fn update_transcript(document: &mut crate::Document, text: String) ->
             .get(old_id)
             .and_then(|old| matching_index(old))
             .map(|index| sentences[index].id.clone())
-            .ok_or("Зміна зачіпає речення із закладкою або збереженим перекладом".to_owned())
+            .ok_or(
+                "Зміна зачіпає речення із закладкою, нотаткою або збереженим перекладом".to_owned(),
+            )
     };
 
     let mut bookmarks: Vec<_> = document
@@ -337,6 +339,12 @@ pub(crate) fn update_transcript(document: &mut crate::Document, text: String) ->
         .collect::<Result<_>>()?;
     bookmarks.sort_unstable();
     bookmarks.dedup();
+    let mut notes = std::collections::BTreeMap::new();
+    for (id, note) in &document.notes {
+        if notes.insert(map_id(id)?, note.clone()).is_some() {
+            return Err("Не вдалося однозначно перенести нотатки".into());
+        }
+    }
     let mut translations = std::collections::BTreeMap::new();
     for (language, entries) in &document.reviewed_translations {
         let mut moved = std::collections::BTreeMap::new();
@@ -354,6 +362,7 @@ pub(crate) fn update_transcript(document: &mut crate::Document, text: String) ->
         .unwrap_or(document.position.min(sentences.len().saturating_sub(1)));
 
     document.bookmarks = bookmarks;
+    document.notes = notes;
     document.reviewed_translations = translations;
     document.position = position;
     document.text = text;

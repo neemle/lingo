@@ -1,8 +1,6 @@
-using Reader.Contracts;
-
 namespace Reader.Native.Services;
 
-internal sealed record PdfRecognition(int Pages, OcrLine[] Lines)
+internal static class PdfRecognition
 {
     internal const int MaxPages = 40;
 

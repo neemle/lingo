@@ -23,7 +23,8 @@ internal static class PdfScan
         return Render(document, page, 1800);
     });
 
-    internal static Task<PdfRecognition> RecognizeAsync(byte[] bytes, string language, int[] missingPages, IProgress<int> progress) =>
+    internal static Task RecognizeAsync(byte[] bytes, string language, int expectedPages, int[] pendingPages,
+        Action<int, OcrLine[]> pageCompleted, CancellationToken cancellation) =>
         Task.Run(() =>
         {
             using var pool = new NSAutoreleasePool();
@@ -31,16 +32,16 @@ internal static class PdfScan
             using var document = Open(data);
             var count = checked((int)document.PageCount);
             PdfRecognition.CheckPageCount(count);
-            var lines = new List<OcrLine>();
-            foreach (var page in missingPages)
+            if (count != expectedPages) throw new InvalidDataException("Кількість сторінок PDF змінилася.");
+            foreach (var page in pendingPages)
             {
-                progress.Report(page + 1);
+                cancellation.ThrowIfCancellationRequested();
                 using var pagePool = new NSAutoreleasePool();
                 var rendered = Render(document, page, 2600);
-                var recognized = PhotoOcr.Recognize(rendered.Bytes, language);
-                lines.AddRange(recognized.Select(line => line with { Page = page }));
+                cancellation.ThrowIfCancellationRequested();
+                var recognized = PhotoOcr.RecognizePdfPage(rendered, language, cancellation);
+                pageCompleted(page, recognized.Select(line => line with { Page = page }).ToArray());
             }
-            return new PdfRecognition(count, lines.ToArray());
         });
 
     private static PdfDocument Open(NSData data)

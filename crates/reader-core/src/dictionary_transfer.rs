@@ -1,3 +1,4 @@
+use crate::review_schedule::MAX_INTERVAL_DAYS;
 use crate::{valid_language, Document, Result, ReviewEvent, ReviewState, Store, Vocabulary};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -313,6 +314,8 @@ fn restore_archive(
                 added.reverse,
             );
         }
+        discard_stale_memory(&mut local.forward, before.forward, added.forward);
+        discard_stale_memory(&mut local.reverse, before.reverse, added.reverse);
         write_card(tx, &local)?;
     }
     Ok((stats, card_ids))
@@ -655,9 +658,13 @@ fn validate_archive(archive: &DictionaryArchive) -> Result<()> {
             || entry.word.len() > 500
             || entry.translation.trim().is_empty()
             || entry.translation.len() > 2000
-            || [&entry.forward, &entry.reverse]
-                .iter()
-                .any(|state| state.interval_days > 365 || state.reviews == u32::MAX)
+            || [&entry.forward, &entry.reverse].iter().any(|state| {
+                state.interval_days > MAX_INTERVAL_DAYS
+                    || state.reviews == u32::MAX
+                    || state
+                        .fsrs
+                        .is_some_and(|memory| !memory.is_valid(state.reviews))
+            })
             || card_documents(entry).any(|id| !identifier(id))
         {
             return Err("Некоректна картка в архіві словника".into());
@@ -759,6 +766,16 @@ fn merge_state(
         before.latest = incoming_history.latest;
     }
     local.reviews = count;
+}
+
+fn discard_stale_memory(state: &mut ReviewState, before: Direction, added: Direction) {
+    let merged_count = before.count.saturating_add(added.count);
+    if state
+        .fsrs
+        .is_some_and(|memory| memory.history_reviews != merged_count)
+    {
+        state.fsrs = None;
+    }
 }
 
 fn error(error: impl std::fmt::Display) -> String {

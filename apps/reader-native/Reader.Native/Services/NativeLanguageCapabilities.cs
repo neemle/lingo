@@ -5,7 +5,7 @@ namespace Reader.Native.Services;
 internal sealed record NativeLanguageCapabilities(
     NativeRecognitionInventory Recognition, SpeechVoice[] Voices, string? VoiceError)
 {
-    internal static NativeLanguageCapabilities Read()
+    internal static async Task<NativeLanguageCapabilities> ReadAsync()
     {
         NativeRecognitionInventory recognition;
         try { recognition = ReadRecognition(); }
@@ -13,6 +13,7 @@ internal sealed record NativeLanguageCapabilities(
         {
             recognition = new(CapabilityLevel.Unavailable, [], $"Не вдалося перевірити OCR. {error.Message}");
         }
+        recognition = recognition with { FallbackLanguages = await TesseractOcr.InstalledLanguagesAsync() };
         try { return new(recognition, NativeSpeech.InstalledVoices(), null); }
         catch (Exception error)
         {

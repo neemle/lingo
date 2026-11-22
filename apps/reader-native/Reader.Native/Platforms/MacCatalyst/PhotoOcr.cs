@@ -12,7 +12,12 @@ namespace Reader.Native.Services;
 internal static class PhotoOcr
 {
     internal static Task<OcrLine[]> RecognizeAsync(byte[] bytes, string language) =>
-        Task.Run(() => Recognize(bytes, language));
+        TesseractOcr.WithFallbackAsync(() => Task.Run(() => RecognizeNative(bytes, language)),
+            () => PreviewAsync(bytes), language, default);
+
+    internal static OcrLine[] RecognizePdfPage(PhotoPreview rendered, string language, CancellationToken cancellation) =>
+        TesseractOcr.WithFallbackAsync(() => Task.FromResult(RecognizeNative(rendered.Bytes, language)),
+            () => Task.FromResult(rendered), language, cancellation).GetAwaiter().GetResult();
 
     internal static Task<PhotoPreview> PreviewAsync(byte[] bytes) => Task.Run(() =>
     {
@@ -56,7 +61,7 @@ internal static class PhotoOcr
         return languages?.Select(tag => tag.ToString()).ToArray() ?? [];
     }
 
-    internal static OcrLine[] Recognize(byte[] bytes, string language)
+    private static OcrLine[] RecognizeNative(byte[] bytes, string language)
     {
         using var pool = new NSAutoreleasePool();
         using var image = Decode(bytes, 4096);

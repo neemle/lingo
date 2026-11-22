@@ -33,7 +33,7 @@ public sealed record LanguageCapabilityProfile(
     CapabilityRoute[] OutgoingRoutes, CapabilityRoute[] IncomingRoutes);
 
 public sealed record NativeRecognitionInventory(CapabilityLevel Level, string[] LanguageTags, string Detail,
-    string? Source = null);
+    string? Source = null, string[]? FallbackLanguages = null);
 
 public sealed record LanguageCapabilityReport(int Version, string Platform, LanguageCapabilityProfile[] Languages);
 
@@ -61,10 +61,11 @@ public static class LanguageCapabilities
         {
             var code = language.Code;
             var ocrTags = recognition.LanguageTags.Where(tag => SpeechVoice.MatchesLanguage(tag, code)).ToArray();
-            var ocr = new LanguageCapability(
-                ocrTags.Length == 0 ? CapabilityLevel.Unavailable : recognition.Level,
-                ocrTags.Length == 0 ? recognition.Detail : $"{recognition.Source} · {string.Join(", ", ocrTags)}",
-                ocrTags);
+            var ocr = ocrTags.Length > 0
+                ? new LanguageCapability(recognition.Level, $"{recognition.Source} · {string.Join(", ", ocrTags)}", ocrTags)
+                : recognition.FallbackLanguages?.Contains(code) == true
+                    ? new LanguageCapability(CapabilityLevel.Installed, "Tesseract · локальний резервний OCR", [code])
+                    : new LanguageCapability(CapabilityLevel.Unavailable, recognition.Detail, []);
             var voice = SpeechCapability(models, systemVoices, voiceError, code);
             var outgoing = routes.Where(route => route.Source == code).ToArray();
             var incoming = routes.Where(route => route.Target == code).ToArray();
@@ -76,9 +77,8 @@ public static class LanguageCapabilities
                 RouteCapability(incoming, translation is not null, outgoing: false),
                 PackageCapability(grammar?.Name, grammar?.Installed == true, knowledge is not null,
                     grammar?.Revision, "Пакет містить словоформи, леми й граматичні ознаки."),
-                new LanguageCapability(CapabilityLevel.Unavailable, grammar?.ContextAvailable == true
-                    ? "Індекс підказує форму за сусідніми словами. Повного синтаксичного розбору немає."
-                    : "Повного синтаксичного розбору немає.", []),
+                PackageCapability(grammar?.Name, grammar?.SyntaxAvailable == true, knowledge is not null,
+                    grammar?.Revision, "Підказки за спостереженими зв’язками Universal Dependencies між словами поблизу виділення."),
                 PackageCapability(grammar?.Name, grammar?.ExpressionsAvailable == true, knowledge is not null,
                     grammar?.Revision, "Індекс містить сталі вирази. Стару версію пакета можна оновити."),
                 PackageCapability(dictionary?.Name, dictionary?.Installed == true, lexical is not null,

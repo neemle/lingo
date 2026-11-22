@@ -23,6 +23,10 @@
    <FlexLayout x:Name="LibraryActions" Grid.Row="1" Grid.ColumnSpan="2" Wrap="Wrap" AlignItems="Center" VerticalOptions="Center">
     <ActivityIndicator IsRunning="{Binding Busy}" IsVisible="{Binding Busy}" Color="{StaticResource Sage}" />
     <Button Text="Розпізнати PDF" Margin="0,0,8,6" Style="{StaticResource OutlineButton}" Clicked="ScanPdfClicked" IsEnabled="{Binding CanInteract}" />
+    <Button x:Name="ResumePdf" Text="Продовжити OCR" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
+     Clicked="ResumePdfClicked" IsVisible="False" IsEnabled="{Binding CanInteract}" />
+    <Button x:Name="PausePdf" Text="Призупинити OCR" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
+     Clicked="PausePdfClicked" IsVisible="False" />
     <Button Text="Вставити текст" Margin="0,0,8,6" Style="{StaticResource OutlineButton}" Clicked="PasteTextClicked" IsEnabled="{Binding CanInteract}" />
     <Button Text="Додати статтю" Margin="0,0,8,6" Style="{StaticResource OutlineButton}" Clicked="ImportArticleClicked" IsEnabled="{Binding CanInteract}" />
     <Button Text="Додати документи" Margin="0,0,0,6" Style="{StaticResource AccentButton}" Clicked="ImportClicked" IsEnabled="{Binding CanInteract}" />
@@ -37,6 +41,7 @@
    </Border>
    <Label Text="{Binding Error}" TextColor="{StaticResource Accent}" SemanticProperties.Description="Помилка операції" />
    <Label x:Name="ImportStatus" TextColor="{StaticResource Sage}" />
+   <Label x:Name="PdfStatus" TextColor="{StaticResource Sage}" IsVisible="False" />
    <Label x:Name="StartupError" TextColor="{StaticResource Accent}" />
   </VerticalStackLayout>
   <CollectionView Grid.Row="2" x:Name="Books" SelectionMode="Single" SelectionChanged="DocumentSelected"

@@ -41,7 +41,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         await RefreshKnowledgePackagesAsync();
         await RefreshLexicalPackagesAsync();
         await RefreshOptionalModelsAsync();
-        nativeCapabilities = NativeLanguageCapabilities.Read();
+        nativeCapabilities = await NativeLanguageCapabilities.ReadAsync();
         UpdateCapabilityMatrix();
     }
 
@@ -53,9 +53,9 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
             knowledgeInventory = packages;
             KnowledgePackages.Text = string.Join(Environment.NewLine, packages.Select(package =>
                 $"{DocumentLanguages.Name(package.Language)} · {package.Name} {package.Version} · {package.License} · " +
-                (package.ExpressionsAvailable ? "встановлено" : package.Installed
+                (package.SyntaxAvailable && package.ExpressionsAvailable ? "встановлено" : package.Installed
                     ? "доступне оновлення індексу" : "доступно для завантаження")));
-            InstallKnowledge.IsVisible = packages.Any(package => !package.ExpressionsAvailable);
+            InstallKnowledge.IsVisible = packages.Any(package => !package.SyntaxAvailable || !package.ExpressionsAvailable);
             UpdateCapabilityMatrix();
         }
         catch (Exception error)
@@ -72,7 +72,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         try
         {
             var packages = await AppState.Session.KnowledgePackagesAsync();
-            var choices = packages.Where(package => !package.ExpressionsAvailable).ToDictionary(package =>
+            var choices = packages.Where(package => !package.SyntaxAvailable || !package.ExpressionsAvailable).ToDictionary(package =>
                 $"{DocumentLanguages.Name(package.Language)} · {package.License} · {package.Bytes / 1_000_000d:F0} МБ");
             if (choices.Count == 0) return;
             var choice = await DisplayActionSheetAsync("Пакети Universal Dependencies", "Скасувати", null, choices.Keys.ToArray());
@@ -158,6 +158,8 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
                 "Документи й слова з архіву буде додано до локальної бібліотеки.", "Відновити", "Скасувати")) return;
             await AppState.Session.RestoreAsync(backup);
             Status.Text = AppState.Session.Error.Length == 0 ? "Архів відновлено." : "Відновлення не підтверджено.";
+            if (AppState.Session.Error.Length == 0 && backup.Resources is { Length: > 0 })
+                await ReportBackupResourcesAsync(backup.Resources);
         }
         catch (Exception error) { await DisplayAlertAsync("Відновлення", error.Message, "Гаразд"); }
     }

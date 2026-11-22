@@ -80,9 +80,13 @@ public partial class PracticePage : ContentPage
                 : "Усі картки цього напряму повторено. Можна змінити напрям або повернутися до читання."
             : state.Direction == "reverse" ? "Згадайте слово мовою оригіналу."
                 : card?.Context;
-        if (state.Direction == "forward" && card?.Sense is { } sense &&
-            !string.Equals(sense.GlossLanguage, card.TargetLanguage, StringComparison.OrdinalIgnoreCase))
-            context = string.IsNullOrWhiteSpace(context) ? sense.Gloss : $"{context}{Environment.NewLine}{sense.Gloss}";
+        if (state.Direction == "forward" && card?.Sense is { } sense)
+        {
+            var showGloss = saved?.Revealed == true ||
+                !string.Equals(sense.GlossLanguage, card.TargetLanguage, StringComparison.OrdinalIgnoreCase);
+            var hint = showGloss ? sense.Gloss : sense.PartOfSpeech;
+            context = string.IsNullOrWhiteSpace(context) ? hint : $"{context}{Environment.NewLine}{hint}";
+        }
         QuestionContext.Text = context;
         QuestionContext.IsVisible = !string.IsNullOrWhiteSpace(context);
         EmptyAction.Text = session.Document is null ? "Відкрити бібліотеку" : "Продовжити читати";

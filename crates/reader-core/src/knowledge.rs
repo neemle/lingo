@@ -14,10 +14,11 @@ mod expressions;
 mod grammar_cues;
 mod lexicon;
 mod ocr_suggestions;
+mod syntax;
 
 pub use lexicon::{LexicalPackage, LexicalPackageInstall, WordMeaning};
 
-const INDEX_VERSION: u32 = 3;
+const INDEX_VERSION: u32 = 4;
 
 struct Pack {
     language: &'static str,
@@ -66,18 +67,19 @@ const PACKS: [Pack; 3] = [
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgePackage {
-    language: &'static str,
+    pub(crate) language: &'static str,
     name: &'static str,
     version: &'static str,
     source_url: String,
     download_url: String,
-    revision: &'static str,
+    pub(crate) revision: &'static str,
     license: &'static str,
     bytes: usize,
     sha256: &'static str,
-    installed: bool,
+    pub(crate) installed: bool,
     context_available: bool,
     expressions_available: bool,
+    syntax_available: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,6 +101,7 @@ pub struct WordLookup {
     total_observations: u32,
     analyses: Vec<WordAnalysis>,
     expressions: Vec<expressions::ExpressionMatch>,
+    syntax_evidence: Vec<syntax::SyntaxEvidence>,
     lexical_package: Option<LexicalPackage>,
     meanings: Vec<WordMeaning>,
 }
@@ -143,6 +146,7 @@ impl Pack {
             installed: index_version != 0,
             context_available: index_version >= 2,
             expressions_available: index_version >= 3,
+            syntax_available: index_version >= 4,
         }
     }
 }
@@ -232,6 +236,7 @@ impl Store {
                 total_observations: 0,
                 analyses: Vec::new(),
                 expressions: Vec::new(),
+                syntax_evidence: Vec::new(),
                 lexical_package,
                 meanings,
             }));
@@ -294,6 +299,10 @@ impl Store {
             Some(context) if index_version >= 3 => expressions::lookup(&db, context, &key)?,
             _ => Vec::new(),
         };
+        let syntax_evidence = match context {
+            Some(context) if index_version >= 4 => syntax::lookup(&db, context, &key)?,
+            _ => Vec::new(),
+        };
         let (lexical_package, meanings) = lexicon::lookup(
             &self.knowledge_directory,
             language,
@@ -308,6 +317,7 @@ impl Store {
             total_observations: total,
             analyses,
             expressions,
+            syntax_evidence,
             lexical_package,
             meanings,
         }))
@@ -374,6 +384,8 @@ fn build_pack(path: &Path, input: impl BufRead) -> Result<()> {
              observations INTEGER NOT NULL, PRIMARY KEY(anchor,kind,parts)) WITHOUT ROWID;",
     )
     .map_err(|error| error.to_string())?;
+    db.execute_batch(syntax::SCHEMA)
+        .map_err(|error| error.to_string())?;
     let transaction = db.transaction().map_err(|error| error.to_string())?;
     transaction
         .pragma_update(None, "user_version", INDEX_VERSION)
@@ -388,10 +400,12 @@ fn build_pack(path: &Path, input: impl BufRead) -> Result<()> {
         ).map_err(|error| error.to_string())?;
         let mut previous = None;
         let mut expressions = expressions::Indexer::new(&transaction)?;
+        let mut syntax = syntax::Indexer::new(&transaction)?;
         for line in input.lines() {
             let line = line.map_err(|error| error.to_string())?;
             if line.is_empty() {
                 expressions.flush()?;
+                syntax.flush()?;
                 previous = None;
                 continue;
             }
@@ -408,7 +422,9 @@ fn build_pack(path: &Path, input: impl BufRead) -> Result<()> {
                 continue;
             };
             if let (Some(head), Some(relation)) = (fields.next(), fields.next()) {
-                expressions.token(id, form, lemma, head.parse().unwrap_or_default(), relation);
+                let head = head.parse().unwrap_or_default();
+                expressions.token(id, form, lemma, head, relation);
+                syntax.token(id, form, pos, head, relation);
             }
             if !form.chars().any(char::is_alphabetic)
                 || lemma == "_"
@@ -446,6 +462,7 @@ fn build_pack(path: &Path, input: impl BufRead) -> Result<()> {
             inserted += 1;
         }
         expressions.flush()?;
+        syntax.flush()?;
     }
     if inserted == 0 {
         return Err("У корпусі немає граматичних записів.".into());

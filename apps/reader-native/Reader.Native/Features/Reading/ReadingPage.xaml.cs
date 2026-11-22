@@ -304,6 +304,7 @@ public partial class ReadingPage : ContentPage
         VocabularyReading.IsVisible = false;
         SelectedWord.Text = selected.Text;
         ShowMeanings(null);
+        ShowLocalSyntax(null);
         KnowledgeAnalysis.Text = "Пошук у мовному пакеті…";
         WordCard.IsVisible = true;
         var index = Array.FindIndex(doc.Sentences, sentence => selected.StartUtf16 >= sentence.StartUtf16
@@ -316,6 +317,7 @@ public partial class ReadingPage : ContentPage
             var lookup = await session.LookupWordAsync(doc.Language, selected.Text, context);
             if (selection != selected || session.Document?.Id != doc.Id || !WordCard.IsVisible) return;
             ShowMeanings(lookup);
+            ShowLocalSyntax(lookup);
             if (lookup is null)
             {
                 KnowledgeAnalysis.Text = "Встановіть мовний пакет у налаштуваннях.";

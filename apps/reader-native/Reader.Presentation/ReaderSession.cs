@@ -31,6 +31,10 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
 
     public Task RefreshAsync() => RunAsync(Read);
 
+    public Task<string?> DetectLanguageAsync(string text) => Task.Run(() => client.DetectLanguage(text));
+    public Task<string?> DetectDocumentLanguageAsync(string name, byte[] bytes) =>
+        Task.Run(() => client.DetectDocumentLanguage(name, bytes));
+
     public async Task SelectAsync(string id)
     {
         if (busy) { RejectBusy(); return; }
@@ -131,6 +135,12 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
             return Read();
         });
 
+    public Task SetSentenceNoteAsync(string documentId, string sentenceId, string note) => RunAsync(() =>
+    {
+        client.SetSentenceNote(documentId, sentenceId, note);
+        return Read();
+    });
+
     public Task<WordExplanation> ExplainWordAsync(string model, string document, string sentence, string word) =>
         Task.Run(() => client.ExplainWord(model, document, sentence, word));
 
@@ -204,6 +214,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         client.SetVocabularyVariants(id, acceptedTranslations);
         return Read();
     });
+
+    public Task<ReviewEvent[]> VocabularyReviewHistoryAsync(string id) =>
+        Task.Run(() => client.VocabularyReviewHistory(id));
 
     public Task ReviewAsync(string id, string direction, byte grade) => RunAsync(() =>
     {

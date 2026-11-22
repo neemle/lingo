@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text;
 using Reader.Contracts;
 using Reader.Native.Services;
 using Reader.Presentation;
@@ -69,6 +70,7 @@ public partial class LibraryPage : ContentPage
             }
             ShowBooks(session.Snapshot);
             await session.RefreshAsync();
+            await RefreshPendingPdfAsync();
             var last = Preferences.Get("lastDocument", "");
             if (!string.IsNullOrEmpty(last)) await AppState.Session.SelectAsync(last);
         }
@@ -147,12 +149,18 @@ public partial class LibraryPage : ContentPage
         var extension = Path.GetExtension(file.Name);
         var isPdf = extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase);
         if (scanPdf && !isPdf) throw new InvalidDataException("Виберіть файл PDF для розпізнавання.");
-        var language = await ChooseLanguageAsync(external ? $"Мова оригіналу · {file.Name}" : "Мова оригіналу");
-        if (language is null) return null;
         var bytes = await file.Read();
         var session = AppState.Session;
         await session.WaitUntilIdleAsync();
-        if (scanPdf || (external && isPdf))
+        var suggestion = extension.ToLowerInvariant() switch
+        {
+            ".txt" => await session.DetectLanguageAsync(Encoding.UTF8.GetString(bytes.AsSpan(0, Math.Min(bytes.Length, 32_000)))),
+            ".docx" or ".pdf" when !scanPdf => await session.DetectDocumentLanguageAsync(file.Name, bytes),
+            _ => null,
+        };
+        var language = await ChooseLanguageAsync(external ? $"Мова оригіналу · {file.Name}" : "Мова оригіналу", suggestion);
+        if (language is null) return null;
+        if (isPdf)
         {
             ImportStatus.Text = "Відкриваємо PDF…";
             var pages = await PdfScan.PageCountAsync(bytes);
@@ -161,14 +169,15 @@ public partial class LibraryPage : ContentPage
             else
             {
                 PdfRecognition.CheckPageCount(pages);
-                var progress = new Progress<int>(page =>
-                {
-                    if (importing) ImportStatus.Text = $"Розпізнавання сторінки {page}…";
-                });
                 var missing = await session.PdfPagesNeedingOcrAsync(file.Name, bytes, pages);
-                var lines = missing.Length == 0 ? [] : (await PdfScan.RecognizeAsync(bytes, language, missing, progress)).Lines;
+                if (missing.Length > 0)
+                {
+                    var checkpoint = await Task.Run(() => PdfOcrCheckpoint.Create(file.Name, bytes, language, pages, missing));
+                    ImportStatus.Text = "";
+                    return await RunPdfOcrAsync(checkpoint, bytes);
+                }
                 await session.WaitUntilIdleAsync();
-                await session.ImportMixedPdfAsync(file.Name, bytes, language, lines, pages);
+                await session.ImportMixedPdfAsync(file.Name, bytes, language, [], pages);
             }
         }
         else if (ImageExtensions.Contains(extension))
@@ -184,11 +193,13 @@ public partial class LibraryPage : ContentPage
         return session.Document?.Id;
     }
 
-    private async Task<string?> ChooseLanguageAsync(string title)
+    private async Task<string?> ChooseLanguageAsync(string title, string? suggested = null)
     {
-        var selected = await DisplayActionSheetAsync(title, "Скасувати", null,
-            DocumentLanguages.All.Select(language => language.Name).ToArray());
-        return DocumentLanguages.All.FirstOrDefault(language => language.Name == selected).Code;
+        var choices = DocumentLanguages.All.OrderByDescending(language => language.Code == suggested)
+            .Select(language => (Label: language.Code == suggested ? $"{language.Name} · визначено за текстом" : language.Name,
+                language.Code)).ToArray();
+        var selected = await DisplayActionSheetAsync(title, "Скасувати", null, choices.Select(choice => choice.Label).ToArray());
+        return choices.FirstOrDefault(choice => choice.Label == selected).Code;
     }
 
     private async void ChangeLanguageClicked(object? sender, EventArgs args)

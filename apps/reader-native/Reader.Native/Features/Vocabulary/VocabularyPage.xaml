@@ -122,6 +122,9 @@
          <Button Text="Варіанти" FontSize="11" HorizontalOptions="End" Style="{StaticResource OutlineButton}"
           Clicked="EditVariantsClicked" CommandParameter="{Binding .}"
           SemanticProperties.Description="{Binding Word, StringFormat='Редагувати варіанти перекладу для {0}'}" />
+         <Button Text="Історія" FontSize="11" HorizontalOptions="End" Style="{StaticResource OutlineButton}"
+          Clicked="ReviewHistoryClicked" CommandParameter="{Binding .}"
+          SemanticProperties.Description="{Binding Word, StringFormat='Історія повторень картки {0}'}" />
          <Button Text="Поширити" FontSize="11" HorizontalOptions="End" Style="{StaticResource OutlineButton}"
           Clicked="ShareCardClicked" CommandParameter="{Binding .}"
           SemanticProperties.Description="{Binding Word, StringFormat='Поширити картку {0}'}" />

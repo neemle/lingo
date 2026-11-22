@@ -26,6 +26,7 @@ fn validate(command: &Command) -> Result<()> {
             ))
         }
         Command::Import { bytes, name, .. }
+        | Command::DetectDocumentLanguage { bytes, name }
         | Command::ImportImage { bytes, name, .. }
         | Command::ImportScannedPdf { bytes, name, .. }
         | Command::ImportMixedPdf { bytes, name, .. }
@@ -40,6 +41,10 @@ fn validate(command: &Command) -> Result<()> {
                 "Import must contain 1..20MiB and a bounded filename",
             ))
         }
+        Command::DetectLanguage { text } if text.len() > 32_000 => Err(Error::new(
+            "invalid_argument",
+            "Language sample is too long",
+        )),
         Command::SemanticVocabulary { query, .. } if query.len() > 960 => Err(Error::new(
             "invalid_argument",
             "Semantic vocabulary query exceeds its wire bound",

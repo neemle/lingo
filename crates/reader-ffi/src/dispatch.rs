@@ -14,6 +14,12 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
     match command {
         Command::Open { .. } => Err(Error::new("invalid_handle", "Open requires handle zero")),
         Command::Snapshot => value(store.snapshot()),
+        Command::DetectLanguage { text } => {
+            value(Ok(reader_core::language_detection::detect(&text)))
+        }
+        Command::DetectDocumentLanguage { name, bytes } => value(Ok(
+            reader_core::language_detection::detect_document(&name, &bytes),
+        )),
         Command::Import {
             name,
             bytes,
@@ -73,6 +79,11 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             sentence_id,
             saved,
         } => value(store.set_bookmark(&id, &sentence_id, saved)),
+        Command::SetSentenceNote {
+            id,
+            sentence_id,
+            note,
+        } => value(store.set_sentence_note(&id, &sentence_id, &note)),
         Command::SetReviewedTranslation {
             id,
             sentence_id,
@@ -166,6 +177,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             id,
             accepted_translations,
         } => value(store.set_vocabulary_variants(&id, accepted_translations)),
+        Command::VocabularyReviewHistory { id } => value(store.vocabulary_review_history(&id)),
         Command::Review {
             id,
             direction,

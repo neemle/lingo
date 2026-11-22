@@ -20,6 +20,15 @@ public sealed class CoreClient : IDisposable
     }
 
     public Snapshot Snapshot() => Call<Snapshot>(new { version = 1, operation = "snapshot" });
+    public string? DetectLanguage(string text)
+    {
+        var length = Math.Min(text.Length, 8000);
+        if (length > 0 && char.IsHighSurrogate(text[length - 1])) length--;
+        return Call<string?>(new { version = 1, operation = "detect_language", text = text[..length] });
+    }
+    public string? DetectDocumentLanguage(string name, byte[] bytes) =>
+        Call<string?>(new { version = 1, operation = "detect_document_language", name,
+            bytes = bytes.Select(value => (int)value).ToArray() });
     public Backup Export() => Call<Backup>(new { version = 1, operation = "export" });
     public Original Original(string id) => Call<Original>(new { version = 1, operation = "original", id });
     public Document Import(string name, ReadOnlySpan<byte> bytes, string language, string? sourceUrl = null)
@@ -68,6 +77,8 @@ public sealed class CoreClient : IDisposable
         Call<JsonElement>(new { version = 1, operation = "set_speech_resume", id, sentenceId, textHash, offsetUtf16 });
     public void SetBookmark(string id, string sentenceId, bool saved) =>
         Call<JsonElement>(new { version = 1, operation = "set_bookmark", id, sentenceId, saved });
+    public void SetSentenceNote(string id, string sentenceId, string note) =>
+        Call<JsonElement>(new { version = 1, operation = "set_sentence_note", id, sentenceId, note });
     public void SetReviewedTranslation(string id, string sentenceId, string target, string text) =>
         Call<JsonElement>(new { version = 1, operation = "set_reviewed_translation", id, sentenceId, target, text });
     public WordExplanation ExplainWord(string model, string document, string sentence, string word) =>
@@ -131,6 +142,8 @@ public sealed class CoreClient : IDisposable
         Call<Vocabulary>(new { version = 1, operation = "save_word", entry });
     public Vocabulary SetVocabularyVariants(string id, string[] acceptedTranslations) =>
         Call<Vocabulary>(new { version = 1, operation = "set_vocabulary_variants", id, acceptedTranslations });
+    public ReviewEvent[] VocabularyReviewHistory(string id) =>
+        Call<ReviewEvent[]>(new { version = 1, operation = "vocabulary_review_history", id });
     public void Review(string id, string direction, byte grade) =>
         Call<JsonElement>(new { version = 1, operation = "review", id, direction, grade });
     public PracticeProgress GetPractice() =>

@@ -53,16 +53,16 @@ const PACKS: &[Pack] = &[
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LexicalPackage {
-    language: &'static str,
+    pub(crate) language: &'static str,
     name: String,
     source_url: String,
     download_url: String,
-    revision: &'static str,
+    pub(crate) revision: &'static str,
     license: &'static str,
     gloss_language: &'static str,
     bytes: u64,
     sha256: &'static str,
-    installed: bool,
+    pub(crate) installed: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

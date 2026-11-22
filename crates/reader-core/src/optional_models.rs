@@ -183,11 +183,11 @@ const MODELS: &[Model] = &[
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OptionalModel {
-    id: &'static str,
+    pub(crate) id: &'static str,
     name: &'static str,
     license: &'static str,
-    revision: &'static str,
-    files_present: bool,
+    pub(crate) revision: &'static str,
+    pub(crate) files_present: bool,
     has_local_files: bool,
     has_recovery_copy: bool,
     memory: MemoryReadiness,
