@@ -14,13 +14,13 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs::{self, File},
-    io::{BufReader, BufWriter, Write},
+    io::{BufReader, BufWriter, Read, Seek, Write},
     path::Path,
 };
 
 pub const MAX_BACKUP_FILE_BYTES: u64 = 1024 * 1024 * 1024;
 
-fn archive_error(error: impl std::fmt::Display) -> String {
+pub(crate) fn archive_error(error: impl std::fmt::Display) -> String {
     format!("Помилка резервної копії: {error}")
 }
 
@@ -32,7 +32,7 @@ fn validate_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn validate_resources(resources: &[BackupResource]) -> Result<()> {
+pub(crate) fn validate_resources(resources: &[BackupResource]) -> Result<()> {
     if resources.len() > 1024
         || resources.iter().any(|resource| {
             [&resource.kind, &resource.id, &resource.revision]
@@ -149,6 +149,51 @@ fn merge_sentence_text(
     }
 }
 
+/// Insert a validated document and its metadata, or merge it into a matching source.
+pub(crate) fn restore_document(
+    db: &Connection,
+    mut document: Document,
+    history: Vec<document_revisions::DocumentRevision>,
+) -> Result<Option<String>> {
+    let speech_resume = document.speech_resume.take();
+    if merge_existing_document(db, &document, speech_resume.clone())? {
+        return Ok(None);
+    }
+    let body = serde_json::to_string(&document).map_err(archive_error)?;
+    let inserted = db
+        .execute(
+            "INSERT INTO documents VALUES (?1,?2,?3) ON CONFLICT(id) DO NOTHING",
+            params![document.id, body, document.source_hash],
+        )
+        .map_err(archive_error)?;
+    if inserted == 0 {
+        return Err("Ідентифікатор документа з копії вже належить іншому документу.".into());
+    }
+    if let Some(resume) = speech_resume {
+        Store::write_speech_resume(db, &document.id, &resume)?;
+    }
+    for revision in history {
+        revision.insert(db)?;
+    }
+    Ok(Some(document.id))
+}
+
+pub(crate) fn restore_library_data<O>(db: &Connection, backup: Backup<O>) -> Result<()> {
+    let review_cards = dictionary_transfer::restore_backup_dictionary(
+        db,
+        backup.snapshot.vocabulary,
+        backup.reviews,
+        backup.dictionary_review_origins,
+        backup.dictionary_sources,
+        &backup.snapshot.documents,
+    )?;
+    reading_history::restore(db, backup.reading_sessions, &backup.snapshot.documents)?;
+    if let Some(progress) = backup.practice {
+        practice::restore_if_fresh(db, progress, &review_cards)?;
+    }
+    Ok(())
+}
+
 struct StreamingOriginals<'a> {
     store: &'a Store,
     ids: Vec<String>,
@@ -165,7 +210,7 @@ impl Serialize for StreamingOriginals<'_> {
     }
 }
 
-fn assemble<O>(
+pub(crate) fn assemble<O>(
     store: &Store,
     tx: &rusqlite::Transaction<'_>,
     snapshot: Snapshot,
@@ -205,7 +250,7 @@ impl Store {
         Ok(backup)
     }
 
-    /// Publish complete private JSON without overwriting any existing destination.
+    /// Publish a complete archive without overwriting any existing destination.
     pub fn export_backup_file(&self, path: &Path) -> Result<()> {
         validate_path(path)?;
         match path.symlink_metadata() {
@@ -221,31 +266,42 @@ impl Store {
             .prefix(".reader-backup-")
             .tempfile_in(parent)
             .map_err(archive_error)?;
-        let tx = self
-            .connection
-            .unchecked_transaction()
-            .map_err(archive_error)?;
-        let snapshot = self.snapshot()?;
-        let originals = StreamingOriginals {
-            store: self,
-            ids: snapshot.documents.iter().map(|d| d.id.clone()).collect(),
-        };
-        let backup = assemble(self, &tx, snapshot, originals)?;
+        if path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
         {
-            let bounded = LimitedWriter::new(output.as_file_mut(), MAX_BACKUP_FILE_BYTES);
-            let mut writer = BufWriter::with_capacity(64 * 1024, bounded);
-            serde_json::to_writer(&mut writer, &backup).map_err(archive_error)?;
-            writer.flush().map_err(archive_error)?;
+            crate::backup_zip::write(self, output.as_file_mut())?;
+        } else {
+            let tx = self
+                .connection
+                .unchecked_transaction()
+                .map_err(archive_error)?;
+            let snapshot = self.snapshot()?;
+            let originals = StreamingOriginals {
+                store: self,
+                ids: snapshot.documents.iter().map(|d| d.id.clone()).collect(),
+            };
+            let backup = assemble(self, &tx, snapshot, originals)?;
+            {
+                let bounded = LimitedWriter::new(output.as_file_mut(), MAX_BACKUP_FILE_BYTES);
+                let mut writer = BufWriter::with_capacity(64 * 1024, bounded);
+                serde_json::to_writer(&mut writer, &backup).map_err(archive_error)?;
+                writer.flush().map_err(archive_error)?;
+            }
+            tx.commit().map_err(archive_error)?;
         }
         output.as_file().sync_all().map_err(archive_error)?;
-        tx.commit().map_err(archive_error)?;
         output.persist_noclobber(path).map_err(archive_error)?;
         Ok(())
     }
 
-    /// Parse capped JSON and retain the existing all-or-nothing Store restore.
+    /// Restore legacy JSON or ZIP transactionally.
     pub fn restore_backup_file(&mut self, path: &Path) -> Result<Vec<BackupResource>> {
-        let backup = read_backup_file(path)?;
+        let (file, zip) = open_backup_file(path)?;
+        if zip {
+            return crate::backup_zip::restore(self, file);
+        }
+        let backup = read_backup_json(file)?;
         // Keep the success response within the small ABI envelope before committing data.
         validate_resources(&backup.resources)?;
         let resources = backup.resources.clone();
@@ -267,12 +323,20 @@ pub struct BackupInspection {
 
 /// Read archive counts and validate its documents without changing a library.
 pub fn inspect_backup_file(path: &Path) -> Result<BackupInspection> {
-    let backup = read_backup_file(path)?;
+    let (file, zip) = open_backup_file(path)?;
+    if zip {
+        return crate::backup_zip::inspect(file);
+    }
+    let backup = read_backup_json(file)?;
     validate_resources(&backup.resources)?;
     for document in prepare_documents(&backup)? {
         document?;
     }
-    Ok(BackupInspection {
+    Ok(inspection(&backup))
+}
+
+pub(crate) fn inspection<O>(backup: &Backup<O>) -> BackupInspection {
+    BackupInspection {
         documents: backup.snapshot.documents.len(),
         vocabulary: backup.snapshot.vocabulary.len(),
         reviews: backup.reviews.len(),
@@ -280,8 +344,9 @@ pub fn inspect_backup_file(path: &Path) -> Result<BackupInspection> {
         resources: backup.resources.len(),
         has_practice: backup
             .practice
+            .as_ref()
             .is_some_and(|progress| progress.question.is_some()),
-    })
+    }
 }
 
 fn checked_originals<'a>(
@@ -337,16 +402,7 @@ pub(crate) fn prepare_documents(
 ) -> Result<impl Iterator<Item = Result<PreparedDocument<'_>>>> {
     let documents = &backup.snapshot.documents;
     let originals = checked_originals(backup.version, documents, &backup.originals)?;
-    let mut revisions: HashMap<&str, Vec<_>> = HashMap::new();
-    for revision in &backup.document_revisions {
-        if !originals.contains_key(revision.document_id.as_str()) {
-            return Err("В архіві є ревізії без документа".into());
-        }
-        revisions
-            .entry(revision.document_id.as_str())
-            .or_default()
-            .push(revision.clone());
-    }
+    let mut revisions = revision_groups(backup, originals.keys().copied())?;
     Ok(documents.iter().map(move |document| {
         prepare_document(
             document,
@@ -356,12 +412,29 @@ pub(crate) fn prepare_documents(
     }))
 }
 
-fn prepare_document<'a>(
+pub(crate) fn revision_groups<'a, O>(
+    backup: &'a Backup<O>,
+    document_ids: impl IntoIterator<Item = &'a str>,
+) -> Result<HashMap<&'a str, Vec<document_revisions::DocumentRevision>>> {
+    let document_ids: HashSet<_> = document_ids.into_iter().collect();
+    let mut revisions: HashMap<&str, Vec<_>> = HashMap::new();
+    for revision in &backup.document_revisions {
+        if !document_ids.contains(revision.document_id.as_str()) {
+            return Err("В архіві є ревізії без документа".into());
+        }
+        revisions
+            .entry(&revision.document_id)
+            .or_default()
+            .push(revision.clone());
+    }
+    Ok(revisions)
+}
+
+pub(crate) fn prepare_document<'a>(
     doc: &Document,
     original: &'a Original,
     history: Option<Vec<document_revisions::DocumentRevision>>,
 ) -> Result<PreparedDocument<'a>> {
-    valid_language(&doc.language)?;
     let parsed = match (
         &doc.ocr_lines,
         doc.ocr_pdf_pages,
@@ -379,6 +452,20 @@ fn prepare_document<'a>(
         (None, None, _) => document_layout::parse(&original.name, &original.bytes)?,
         _ => return Err("В архіві PDF немає потрібних даних сторінок".into()),
     };
+    let (document, history) = prepare_layout(doc, parsed, history)?;
+    Ok(PreparedDocument {
+        document,
+        original,
+        history,
+    })
+}
+
+pub(crate) fn prepare_layout(
+    doc: &Document,
+    parsed: document_layout::Extracted,
+    history: Option<Vec<document_revisions::DocumentRevision>>,
+) -> Result<(Document, Vec<document_revisions::DocumentRevision>)> {
+    valid_language(&doc.language)?;
     let mut d = doc.clone();
     let mut history = match history {
         Some(history) => document_revisions::validate_chain(&d, history)?,
@@ -459,21 +546,27 @@ fn prepare_document<'a>(
             }
         }
     }
-    Ok(PreparedDocument {
-        document: d,
-        original,
-        history,
-    })
+    Ok((d, history))
 }
 
-fn read_backup_file(path: &Path) -> Result<Backup> {
+fn open_backup_file(path: &Path) -> Result<(File, bool)> {
     validate_path(path)?;
     if !fs::symlink_metadata(path).map_err(archive_error)?.is_file() {
         return Err("Резервна копія має бути звичайним файлом.".into());
     }
-    let file = File::open(path).map_err(archive_error)?;
+    let mut file = File::open(path).map_err(archive_error)?;
+    if !file.metadata().map_err(archive_error)?.is_file() {
+        return Err("Резервна копія має бути звичайним файлом.".into());
+    }
+    let mut magic = [0; 4];
+    let is_zip = file.read_exact(&mut magic).is_ok() && magic == *b"PK\x03\x04";
+    file.rewind().map_err(archive_error)?;
+    Ok((file, is_zip))
+}
+
+fn read_backup_json(file: File) -> Result<Backup> {
     let metadata = file.metadata().map_err(archive_error)?;
-    if !metadata.is_file() || metadata.len() > MAX_BACKUP_FILE_BYTES {
+    if metadata.len() > MAX_BACKUP_FILE_BYTES {
         return Err("Резервна копія перевищує 1 ГіБ або не є звичайним файлом.".into());
     }
     let mut reader =
@@ -503,7 +596,7 @@ mod tests {
         assert_eq!(summary.vocabulary, 0);
         assert!(!summary.has_practice);
 
-        let mut backup = read_backup_file(&archive_path).unwrap();
+        let mut backup = read_backup_json(File::open(&archive_path).unwrap()).unwrap();
         backup.originals.push(backup.originals[0].clone());
         fs::write(&archive_path, serde_json::to_vec(&backup).unwrap()).unwrap();
         assert!(inspect_backup_file(&archive_path)

@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 mod backup_files;
 mod backup_limits;
+mod backup_zip;
 pub use backup_files::{inspect_backup_file, BackupInspection, MAX_BACKUP_FILE_BYTES};
 mod backup_resources;
 pub use backup_resources::BackupResource;
@@ -1340,51 +1341,18 @@ impl Store {
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        for backup_files::PreparedDocument {
-            document: mut d,
-            original,
-            history,
-        } in validated
-        {
-            let speech_resume = d.speech_resume.take();
-            if backup_files::merge_existing_document(&tx, &d, speech_resume.clone())? {
-                continue;
-            }
-            let inserted = tx
-                .execute(
-                    "INSERT INTO documents VALUES (?1,?2,?3) ON CONFLICT(id) DO NOTHING",
-                    params![d.id, serde_json::to_string(&d).unwrap(), d.source_hash],
+        for prepared in validated {
+            if let Some(id) =
+                backup_files::restore_document(&tx, prepared.document, prepared.history)?
+            {
+                tx.execute(
+                    "INSERT INTO originals VALUES (?1,?2,?3)",
+                    params![id, prepared.original.name, prepared.original.bytes],
                 )
                 .map_err(|e| e.to_string())?;
-            if inserted == 0 {
-                return Err(
-                    "Ідентифікатор документа з копії вже належить іншому документу.".into(),
-                );
-            }
-            if let Some(resume) = speech_resume {
-                Self::write_speech_resume(&tx, &d.id, &resume)?;
-            }
-            tx.execute(
-                "INSERT INTO originals VALUES (?1,?2,?3)",
-                params![d.id, original.name, original.bytes],
-            )
-            .map_err(|e| e.to_string())?;
-            for revision in history {
-                revision.insert(&tx)?;
             }
         }
-        let review_cards = dictionary_transfer::restore_backup_dictionary(
-            &tx,
-            backup.snapshot.vocabulary,
-            backup.reviews,
-            backup.dictionary_review_origins,
-            backup.dictionary_sources,
-            &backup.snapshot.documents,
-        )?;
-        reading_history::restore(&tx, backup.reading_sessions, &backup.snapshot.documents)?;
-        if let Some(progress) = backup.practice {
-            practice::restore_if_fresh(&tx, progress, &review_cards)?;
-        }
+        backup_files::restore_library_data(&tx, backup)?;
         tx.commit().map_err(|e| e.to_string())
     }
 }

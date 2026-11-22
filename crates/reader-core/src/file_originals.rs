@@ -45,18 +45,7 @@ pub fn prepare_pdf_import(
     lines: Vec<ocr::OcrLine>,
 ) -> Result<PreparedPdfImport> {
     valid_language(language)?;
-    let name = Path::new(name)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| name.len() <= 4_096 && !name.chars().any(char::is_control))
-        .ok_or("Некоректна назва файлу PDF")?;
-    if !Path::new(name)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
-    {
-        return Err("Виберіть файл PDF".into());
-    }
+    let name = pdf_name(name)?;
     let page_count = u16::try_from(page_text.len()).map_err(|_| "PDF містить забагато сторінок")?;
     let text_bytes = page_text
         .iter()
@@ -100,6 +89,22 @@ pub fn prepare_pdf_import(
     })
 }
 
+pub(crate) fn pdf_name(name: &str) -> Result<&str> {
+    let name = Path::new(name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| name.len() <= 4_096 && !name.chars().any(char::is_control))
+        .ok_or("Некоректна назва файлу PDF")?;
+    if !Path::new(name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+    {
+        return Err("Виберіть файл PDF".into());
+    }
+    Ok(name)
+}
+
 fn copy_pdf(mut input: impl Read, output: &mut File) -> Result<(u64, String)> {
     let mut buffer = vec![0; 64 * 1024];
     let mut digest = Sha256::new();
@@ -119,7 +124,7 @@ fn copy_pdf(mut input: impl Read, output: &mut File) -> Result<(u64, String)> {
     }
 }
 
-fn ensure_root(path: &Path) -> Result<()> {
+pub(crate) fn ensure_root(path: &Path) -> Result<()> {
     let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
     {
@@ -148,7 +153,7 @@ fn staging_gate(root: &Path) -> io::Result<File> {
         .open(root.join(".staging.lock"))
 }
 
-fn stage_original(root: &Path) -> Result<NamedTempFile> {
+pub(crate) fn stage_original(root: &Path) -> Result<NamedTempFile> {
     // Serialize name creation with the orphan scan until this individual file is locked.
     let gate = staging_gate(root).map_err(storage_error)?;
     gate.lock().map_err(storage_error)?;
@@ -160,14 +165,14 @@ fn stage_original(root: &Path) -> Result<NamedTempFile> {
     Ok(staged)
 }
 
-fn verify_root(path: &Path) -> Result<()> {
+pub(crate) fn verify_root(path: &Path) -> Result<()> {
     match path.symlink_metadata() {
         Ok(metadata) if metadata.is_dir() => Ok(()),
         _ => Err("Каталог оригіналів PDF відсутній або пошкоджений".into()),
     }
 }
 
-fn original_path(root: &Path, id: &str) -> Result<PathBuf> {
+pub(crate) fn original_path(root: &Path, id: &str) -> Result<PathBuf> {
     let valid_id = Uuid::parse_str(id).map_err(storage_error)?;
     Ok(root.join(format!("{valid_id}.pdf")))
 }
@@ -383,7 +388,7 @@ pub(crate) fn cleanup_orphans(connection: &mut Connection, root: &Path) {
     }
 }
 
-fn sync_directory(path: &Path) -> Result<()> {
+pub(crate) fn sync_directory(path: &Path) -> Result<()> {
     #[cfg(unix)]
     File::open(path)
         .and_then(|directory| directory.sync_all())

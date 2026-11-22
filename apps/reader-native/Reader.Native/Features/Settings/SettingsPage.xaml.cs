@@ -288,7 +288,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         try
         {
             Status.Text = "Готуємо резервну копію…";
-            Status.Text = await NativeFiles.ExportAsync(this, "reader-backup.json",
+            Status.Text = await NativeFiles.ExportAsync(this, "reader-backup.zip",
                 share: sender is Button { CommandParameter: "share" },
                 write: AppState.Session.ExportBackupFileAsync) ?? "";
         }

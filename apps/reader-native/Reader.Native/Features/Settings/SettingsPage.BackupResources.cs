@@ -1,6 +1,7 @@
 using Reader.Contracts;
 using Reader.Native.Services;
 using Reader.Presentation;
+using Client = Reader.CoreClient.CoreClient;
 
 namespace Reader.Native.Features.Settings;
 
@@ -16,15 +17,12 @@ public partial class SettingsPage
         DirectoryInfo? directory = null;
         try
         {
-            var file = await FilePicker.Default.PickAsync(new PickOptions { PickerTitle = "Архів Читай JSON" });
+            var file = await FilePicker.Default.PickAsync(new PickOptions { PickerTitle = "Резервна копія Читай (ZIP або JSON)" });
             if (file is null) return;
             Status.Text = "Копіюємо резервну копію…";
             directory = Directory.CreateTempSubdirectory("lingo-restore-");
-            var path = Path.Combine(directory.FullName, "reader-backup.json");
-            await using (var source = await file.OpenReadAsync())
-            await using (var destination = new FileStream(path, FileMode.CreateNew, FileAccess.Write,
-                FileShare.None, 64 * 1024, FileOptions.Asynchronous))
-                await NativeFiles.CopyBoundedAsync(source, destination, Reader.CoreClient.CoreClient.MaxBackupFileBytes);
+            var path = Path.Combine(directory.FullName, "library.backup");
+            await StageBackupAsync(file, path);
 
             Status.Text = "Перевіряємо оригінали в архіві…";
             var session = AppState.Session;
@@ -60,6 +58,25 @@ public partial class SettingsPage
                 Status.Text += "\nНе вдалося видалити тимчасову копію архіву.";
             }
         }
+    }
+
+    private async Task StageBackupAsync(FileResult file, string path)
+    {
+        await using var source = await file.OpenReadAsync();
+        var prefix = new byte[4];
+        var length = await source.ReadAtLeastAsync(prefix, prefix.Length, false);
+        var isZip = length == prefix.Length && prefix.AsSpan().SequenceEqual("PK\u0003\u0004"u8);
+        // ZIP originals are streamed and checked individually by the core. Legacy JSON is decoded in memory.
+        var maximum = isZip ? long.MaxValue : Client.MaxBackupFileBytes;
+        await using var destination = new FileStream(path, FileMode.CreateNew, FileAccess.Write,
+            FileShare.None, 64 * 1024, FileOptions.Asynchronous);
+        await destination.WriteAsync(prefix.AsMemory(0, length));
+        var progress = new Progress<long>(bytes =>
+        {
+            if (restoringBackup && Status.Text?.StartsWith("Копіюємо резервну копію", StringComparison.Ordinal) == true)
+                Status.Text = $"Копіюємо резервну копію · {(bytes + length) / (1024d * 1024):F0} МіБ";
+        });
+        await NativeFiles.CopyBoundedAsync(source, destination, maximum - length, progress: progress);
     }
 
     private async Task ReportBackupResourcesAsync(BackupResource[] resources)
