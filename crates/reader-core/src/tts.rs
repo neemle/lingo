@@ -248,9 +248,9 @@ pub fn ukrainian_stress(text: &str) -> std::borrow::Cow<'_, str> {
             .filter(|(start, _)| phrase_space(&text[previous.0..*start]))
             .map_or_else(String::new, |(_, word)| cue(word));
         let vowel_index = match lower.as_str() {
-            "вікна" => window_stress(&earlier, &prior),
+            "вікна" => window_stress(&earlier, &prior, &next),
             "замок" => castle_or_lock_stress(&prior, &next),
-            "руки" => hands_stress(&earlier, &prior),
+            "руки" => hands_stress(&earlier, &prior, &next),
             _ => None,
         };
         let Some(vowel_index) = vowel_index else { continue };
@@ -267,14 +267,15 @@ pub fn ukrainian_stress(text: &str) -> std::borrow::Cow<'_, str> {
     spoken.into()
 }
 
-fn window_stress(earlier: &str, prior: &str) -> Option<usize> {
+fn window_stress(earlier: &str, prior: &str, next: &str) -> Option<usize> {
     // Two, three, and four retain the genitive singular stress in this plural form.
     let count =
         |token: &str| matches!(token, "два" | "обидва" | "три" | "чотири" | "2" | "3" | "4");
     let genitive_preposition = |token: &str| {
         matches!(
             token,
-            "біля" | "поблизу" | "навколо" | "до" | "від" | "без" | "коло" | "після"
+            "біля" | "поблизу" | "неподалік" | "навколо" | "до" | "від" | "без" | "коло"
+                | "після" | "з" | "із" | "зі"
         )
     };
     let plural_modifier = |token: &str| {
@@ -296,6 +297,14 @@ fn window_stress(earlier: &str, prior: &str) -> Option<usize> {
                 | "наші"
                 | "ваші"
                 | "їхні"
+                | "інші"
+        )
+    };
+    let plural_predicate = |token: &str| {
+        matches!(
+            token,
+            "відчинені" | "зачинені" | "відкриті" | "закриті" | "відчинилися" | "зачинилися"
+                | "відчиняються" | "зачиняються" | "запітніли" | "виходять"
         )
     };
 
@@ -304,7 +313,15 @@ fn window_stress(earlier: &str, prior: &str) -> Option<usize> {
         (preposition, modifier)
             if genitive_preposition(preposition) && modifier.ends_with("ого") => Some(4),
         (number, token) if count(number) && plural_modifier(token) => Some(4),
+        (_, token) if matches!(
+            token,
+            "цього" | "того" | "одного" | "мого" | "твого" | "свого" | "нашого" | "вашого"
+                | "рама" | "рами" | "раму" | "рамі" | "рамою" | "скло" | "скла" | "склі"
+                | "стулка" | "стулки" | "стулку" | "стулок" | "підвіконня"
+        ) => Some(4),
         (_, token) if plural_modifier(token) => Some(1),
+        // At a clause boundary there is no preceding noun that can govern a genitive.
+        (_, "") if plural_predicate(next) => Some(1),
         _ => None,
     }
 }
@@ -325,8 +342,8 @@ fn castle_or_lock_stress(prior: &str, next: &str) -> Option<usize> {
     }
 }
 
-fn hands_stress(earlier: &str, prior: &str) -> Option<usize> {
-    let genitive_preposition = |token| matches!(token, "без" | "від" | "до" | "біля");
+fn hands_stress(earlier: &str, prior: &str, next: &str) -> Option<usize> {
+    let genitive_preposition = |token| matches!(token, "без" | "від" | "до" | "біля" | "з" | "із" | "зі");
     if genitive_preposition(prior)
         || matches!(prior, "моєї" | "твоєї" | "своєї" | "цієї" | "тієї" | "лівої" | "правої")
         || (genitive_preposition(earlier) && prior.ends_with("ої"))
@@ -336,7 +353,7 @@ fn hands_stress(earlier: &str, prior: &str) -> Option<usize> {
         prior,
         "мої" | "твої" | "свої" | "наші" | "ваші" | "ці" | "ті" | "обидві"
             | "підняв" | "підняла" | "підніми" | "помий" | "мити"
-    ) {
+    ) || (prior.is_empty() && matches!(next, "тремтять" | "змерзли" | "втомилися" | "опустилися")) {
         Some(1)
     } else {
         None
@@ -542,6 +559,12 @@ mod tests {
                 "Є чотири великі вікна́, а ці ві́кна старі.",
             ),
             ("Є 3 вікна; біля\n\nВікна", "Є 3 вікна́; біля\n\nВікна"),
+            ("Вікна відчинені. Зі старого вікна дме.", "Ві́кна відчинені. Зі старого вікна́ дме."),
+            ("Скло вікна запітніло. Інші вікна зачинені.", "Скло вікна́ запітніло. Інші ві́кна зачинені."),
+            ("Вікна, відчинені навстіж.", "Вікна, відчинені навстіж."),
+            ("Стулки вікна відчинилися.", "Стулки вікна́ відчинилися."),
+            ("Руки тремтять. Книжка випала з руки.", "Ру́ки тремтять. Книжка випала з руки́."),
+
             (
                 "Наші вікна виходять у сад. Стіл біля великого вікна.",
                 "Наші ві́кна виходять у сад. Стіл біля великого вікна́.",
