@@ -228,32 +228,44 @@ impl Store {
     /// Warm one sentence in the current reading window. A changed cursor or
     /// revision makes queued work obsolete.
     pub fn prefetch_linguistics(
-        &self, document_id: &str, anchor_id: &str, expected_revision: &str, step: i8,
+        &self, document_id: &str, anchor_id: &str, expected_revision: &str, step: i8, page: Option<u16>,
     ) -> Result<()> {
         if !(-1..=1).contains(&step) {
             return Err("Фоновий аналіз доступний лише для сусідніх речень.".into());
         }
-        let document = self.token_document(document_id)?;
-        if document.current_revision_id.as_deref() != Some(expected_revision)
-            || document.sentences.get(document.position).map(|item| item.id.as_str()) != Some(anchor_id)
+        let (language, sentences, position, revision) = if let Some(page) = page {
+            if self.pdf_reading_page(document_id)? != Some(page) {
+                return Ok(());
+            }
+            let Some(cached) = self.detached_pdf_sentences(document_id, page)? else {
+                return Ok(());
+            };
+            let position = cached.saved.min(cached.sentences.len() - 1);
+            (cached.language, cached.sentences, position, Some(cached.revision))
+        } else {
+            let document = self.token_document(document_id)?;
+            (document.language, document.sentences, document.position, document.current_revision_id)
+        };
+        if revision.as_deref() != Some(expected_revision)
+            || sentences.get(position).map(|item| item.id.as_str()) != Some(anchor_id)
         {
             return Ok(());
         }
-        let Some(position) = document.position.checked_add_signed(isize::from(step)) else {
+        let Some(position) = position.checked_add_signed(isize::from(step)) else {
             return Ok(());
         };
-        let Some(sentence) = document.sentences.get(position)
+        let Some(sentence) = sentences.get(position)
             .filter(|sentence| sentence.text.len() <= MAX_PREFETCH_SENTENCE_BYTES)
         else {
             return Ok(());
         };
-        let language = &document.language;
+        let language = language.as_str();
         let index = self.open_knowledge_index(language)?;
         let lookup_index = versioned_index(&index)?;
         let lexical = lexicon::index_identity(&self.knowledge_directory, language);
         if lookup_index.is_some() || lexical.is_some() {
             self.cached_scope(
-                (&document.id, language), sentence, expected_revision, &AnalysisScope::Sentence { start: 0 },
+                (document_id, language), sentence, expected_revision, &AnalysisScope::Sentence { start: 0 },
                 lookup_index, lexical,
             )?;
         }

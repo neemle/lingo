@@ -135,8 +135,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         }
         Command::AnalyzeDetachedPdf { id, page, request } =>
             value(store.cached_detached_pdf_analysis(&id, page, request)),
-        Command::PrefetchLinguistics { id, sentence_id, revision_id, step } => {
-            value(store.prefetch_linguistics(&id, &sentence_id, &revision_id, step))
+        Command::PrefetchLinguistics { id, sentence_id, revision_id, step, page } => {
+            value(store.prefetch_linguistics(&id, &sentence_id, &revision_id, step, page))
         }
         Command::PdfOcrNeededPages { id, center } => value(store.pdf_ocr_needed_pages(&id, center)),
         Command::ClaimPdfOcrPage { id, center } => value(store.claim_pdf_ocr_page_for_window(&id, center)),

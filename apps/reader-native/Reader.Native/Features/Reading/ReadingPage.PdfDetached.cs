@@ -44,6 +44,7 @@ public partial class ReadingPage
         if (detachedAddress is null) return;
         detachedAddress = null;
         detachedSentence = null;
+        StopAnalysisPrefetch();
         SetDetachedSelection(null);
         UpdateDetachedExplainButton();
         loadingDetachedSentence = false;
@@ -57,6 +58,7 @@ public partial class ReadingPage
         if (!automatic) CancelDetachedSpeechTravel();
         var request = ++detachedSentenceRequest;
         loadingDetachedSentence = true;
+        SyncAnalysisPrefetch();
         SetDetachedSelection(null);
         UpdateDetachedExplainButton();
         if (!automatic) ClearDetachedSpeech();
@@ -82,6 +84,7 @@ public partial class ReadingPage
             if (request == detachedSentenceRequest && ReferenceEquals(detachedAddress, address))
             {
                 loadingDetachedSentence = false;
+                SyncAnalysisPrefetch();
                 ShowDetachedReviewedTranslation();
                 UpdateDetachedControls();
                 _ = RestoreDetachedTranslationAsync();

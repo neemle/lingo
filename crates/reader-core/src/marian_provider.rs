@@ -433,10 +433,10 @@ impl StoreWorker {
     }
 
     pub fn prefetch_linguistics(
-        self, id: &str, anchor_id: &str, revision: &str, step: i8,
+        self, id: &str, anchor_id: &str, revision: &str, step: i8, page: Option<u16>,
     ) -> Result<()> {
         self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?
-            .prefetch_linguistics(id, anchor_id, revision, step)
+            .prefetch_linguistics(id, anchor_id, revision, step, page)
     }
 
     pub fn translate_sentence(

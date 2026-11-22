@@ -85,12 +85,12 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             }
             Command::AnalyzeDetachedPdf { id, page, request }
         }
-        Command::PrefetchLinguistics { id, sentence_id, revision_id, step } => {
+        Command::PrefetchLinguistics { id, sentence_id, revision_id, step, page } => {
             let worker = registry::lock()?.store(handle)?.prepare_store_worker();
             if let Some(worker) = worker {
-                return encode_job(worker.prefetch_linguistics(&id, &sentence_id, &revision_id, step));
+                return encode_job(worker.prefetch_linguistics(&id, &sentence_id, &revision_id, step, page));
             }
-            Command::PrefetchLinguistics { id, sentence_id, revision_id, step }
+            Command::PrefetchLinguistics { id, sentence_id, revision_id, step, page }
         }
         Command::ModelTransfer { package, action } => {
             let transfer = registry::lock()?.store(handle)?

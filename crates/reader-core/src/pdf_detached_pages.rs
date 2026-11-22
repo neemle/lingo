@@ -65,7 +65,7 @@ pub struct DetachedPdfSentence {
 pub(crate) struct CachedSentences {
     pub(crate) language: String,
     text: String,
-    saved: usize,
+    pub(crate) saved: usize,
     pub(crate) sentences: Vec<Sentence>,
     pub(crate) revision: String,
 }

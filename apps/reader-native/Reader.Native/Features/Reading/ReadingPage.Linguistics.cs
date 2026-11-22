@@ -6,7 +6,7 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage
 {
-    private sealed record AnalysisAnchor(string DocumentId, string Revision, string SentenceId, string Language);
+    private sealed record AnalysisAnchor(string DocumentId, string Revision, string SentenceId, string Language, int? Page = null);
     private static readonly SemaphoreSlim AnalysisPrefetchGate = new(1, 1);
     private AnalysisAnchor? analysisPrefetchAnchor;
     private CancellationTokenSource? analysisPrefetchRun;
@@ -14,22 +14,32 @@ public partial class ReadingPage
     private void SyncAnalysisPrefetch()
     {
         var session = AppState.Session;
-        if (!readingPageActive || PdfPageNotice.IsVisible ||
-            session.Document is not { CurrentRevisionId: { } revision } document ||
-            session.Sentence is not { } sentence)
+        var anchor = readingPageActive ? CurrentAnalysisAnchor(session) : null;
+        if (anchor is null)
         {
             StopAnalysisPrefetch();
             return;
         }
         if (session.Busy) return;
 
-        var anchor = new AnalysisAnchor(document.Id, revision, sentence.Id, document.Language);
         if (analysisPrefetchAnchor == anchor) return;
         StopAnalysisPrefetch();
         analysisPrefetchAnchor = anchor;
         var run = new CancellationTokenSource();
         analysisPrefetchRun = run;
         _ = PrefetchAnalysisAsync(session, anchor, run);
+    }
+
+    private AnalysisAnchor? CurrentAnalysisAnchor(ReaderSession session)
+    {
+        if (PdfPageNotice.IsVisible)
+            return !loadingDetachedSentence && detachedAddress is { } address &&
+                detachedSentence is { RevisionId: { } pageRevision } detached &&
+                session.Document?.Id == address.Document
+                ? new(address.Document, pageRevision, detached.Sentence.Id, detached.Language, address.Page) : null;
+
+        return session.Document is { CurrentRevisionId: { } revision } document && session.Sentence is { } sentence
+            ? new(document.Id, revision, sentence.Id, document.Language) : null;
     }
 
     private async Task PrefetchAnalysisAsync(ReaderSession session, AnalysisAnchor anchor, CancellationTokenSource run)
@@ -43,12 +53,12 @@ public partial class ReadingPage
             {
                 foreach (var step in new[] { 0, 1, -1 })
                 {
-                    while (session.Busy || utteranceActive || translating)
+                    while (session.Busy || utteranceActive || translating || speakingDetachedSentence || translatingDetachedSentence)
                         await Task.Delay(250, cancellation);
                     cancellation.ThrowIfCancellationRequested();
                     if (analysisPrefetchAnchor != anchor) return;
                     await session.PrefetchLinguisticsAsync(
-                        anchor.DocumentId, anchor.SentenceId, anchor.Revision, step, cancellation);
+                        anchor.DocumentId, anchor.SentenceId, anchor.Revision, step, cancellation, anchor.Page);
                 }
             }
             finally { AnalysisPrefetchGate.Release(); }

@@ -284,10 +284,10 @@ public sealed class CoreClient : IDisposable
     public LinguisticAnalysis AnalyzeSentence(string id, string sentenceId, string revisionId, int start) =>
         AnalyzeLinguistics(id, sentenceId, revisionId, new { kind = "sentence", start });
 
-    public void PrefetchLinguistics(string id, string sentenceId, string revisionId, int step) =>
+    public void PrefetchLinguistics(string id, string sentenceId, string revisionId, int step, int? page = null) =>
         CallIndependent<JsonElement>(new
         {
-            version = 1, operation = "prefetch_linguistics", id, sentenceId, revisionId, step,
+            version = 1, operation = "prefetch_linguistics", id, sentenceId, revisionId, step, page,
         });
 
     public LinguisticAnalysis AnalyzeDetachedPdfSentence(string id, int page, string sentenceId, int start) =>

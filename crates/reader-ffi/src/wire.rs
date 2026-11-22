@@ -233,6 +233,7 @@ pub enum Command {
         #[serde(rename = "revisionId")]
         revision_id: String,
         step: i8,
+        page: Option<u16>,
     },
     PdfOcrNeededPages {
         id: String,
