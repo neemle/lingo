@@ -7,6 +7,8 @@ internal sealed class NativeWavePlayer
 {
     private AVAudioPlayer? active;
 
+    internal TimeSpan? Position => active is { } player ? TimeSpan.FromSeconds(player.CurrentTime) : null;
+
     internal bool Pause()
     {
         if (active?.Playing != true) return false;

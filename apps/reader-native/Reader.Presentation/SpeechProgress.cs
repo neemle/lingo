@@ -12,9 +12,12 @@ public static class SpeechProgress
 
     public static int? ResumeOffset(Sentence sentence, SpeechResume? resume)
     {
-        if (resume is null || resume.SentenceId != sentence.Id || resume.TextHash != TextHash(sentence))
+        if (resume is null || resume.Model is not null || !Matches(sentence, resume))
             return null;
         return Array.BinarySearch(StringInfo.ParseCombiningCharacters(sentence.Text), resume.OffsetUtf16) >= 0
             ? resume.OffsetUtf16 : null;
     }
+
+    public static bool Matches(Sentence sentence, SpeechResume resume) =>
+        resume.SentenceId == sentence.Id && resume.TextHash == TextHash(sentence);
 }

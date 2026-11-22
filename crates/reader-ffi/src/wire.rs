@@ -88,6 +88,8 @@ pub enum Command {
         text_hash: String,
         #[serde(rename = "offsetUtf16")]
         offset_utf16: Option<usize>,
+        #[serde(default)]
+        model: Option<reader_core::ModelSpeechResume>,
     },
     SetBookmark {
         id: String,

@@ -76,7 +76,13 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             sentence_id,
             text_hash,
             offset_utf16,
-        } => value(store.set_speech_resume(&id, &sentence_id, &text_hash, offset_utf16)),
+            model,
+        } => match model {
+            Some(model) => {
+                value(store.set_model_speech_resume(&id, &sentence_id, &text_hash, model))
+            }
+            None => value(store.set_speech_resume(&id, &sentence_id, &text_hash, offset_utf16)),
+        },
         Command::SetBookmark {
             id,
             sentence_id,

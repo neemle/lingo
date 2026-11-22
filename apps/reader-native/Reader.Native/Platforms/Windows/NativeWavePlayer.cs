@@ -8,6 +8,8 @@ internal sealed class NativeWavePlayer
 {
     private MediaPlayer? active;
 
+    internal TimeSpan? Position => active?.PlaybackSession.Position;
+
     internal bool Pause()
     {
         if (active is null) return false;

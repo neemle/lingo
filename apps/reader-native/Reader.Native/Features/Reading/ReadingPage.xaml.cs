@@ -51,7 +51,7 @@ public partial class ReadingPage : ContentPage
     private bool utteranceActive;
     private (string DocumentId, SpeechResume Resume)? pendingSpeechResume;
     private long lastSpeechSave;
-    private int? resumeSpeechOffset;
+    private SpeechResume? speechResume;
     private bool loadingSpeechPreferences;
     private bool speechPreferencesReady;
     private const string RatePreference = "reader.speech.rate";
@@ -74,7 +74,6 @@ public partial class ReadingPage : ContentPage
         UpdateHighlight();
         readinessPair = null;
         UpdateTranslation();
-        RefreshSpeechResume();
         loadingSpeechPreferences = true;
         try
         {
@@ -83,6 +82,7 @@ public partial class ReadingPage : ContentPage
         }
         finally { loadingSpeechPreferences = false; }
         speechPreferencesReady = true;
+        RefreshSpeechResume();
         RefreshVoices(force: true);
     }
 
@@ -519,30 +519,45 @@ public partial class ReadingPage : ContentPage
         if (!speechPreferencesReady || loadingSpeechPreferences || Rate.SelectedIndex < 0) return;
         Preferences.Set(RatePreference, Rate.SelectedIndex);
         Preferences.Set(ContinuousPreference, ContinueSpeech.IsChecked);
+        if (!utteranceActive) RefreshSpeechResume();
     }
+
+    private int SpeechRatePercent => Rate.SelectedIndex switch { 0 => 75, 2 => 125, _ => 100 };
 
     private void RefreshSpeechResume()
     {
-        resumeSpeechOffset = null;
+        speechResume = null;
         ResumeSpeech.IsVisible = false;
         var session = AppState.Session;
-        if (session.Busy || SelectedVoice()?.Engine is not null ||
-            session.Document is not { } document || session.Sentence is not { } sentence) return;
+        if (session.Busy || session.Document is not { } document || session.Sentence is not { } sentence) return;
 
         try
         {
-            resumeSpeechOffset = SpeechProgress.ResumeOffset(sentence, session.GetSpeechResume(document.Id));
-            ResumeSpeech.IsVisible = resumeSpeechOffset.HasValue;
+            var resume = session.GetSpeechResume(document.Id);
+            if (resume is null || !SpeechProgress.Matches(sentence, resume)) return;
+            var voice = SelectedVoice();
+            var position = voice?.Engine is null ? SpeechProgress.ResumeOffset(sentence, resume)
+                : ModelResumePosition(resume, voice, document.Language, SpeechRatePercent);
+            if (!position.HasValue) return;
+            speechResume = resume;
+            ResumeSpeech.IsVisible = true;
         }
         catch (Exception error) { SpeechStatus.Text = $"Не вдалося прочитати позицію озвучення. {error.Message}"; }
     }
 
+    internal void CheckpointSpeechPosition()
+    {
+        checkpointModelSpeech?.Invoke();
+        SaveSpeechResume();
+    }
+
     private void SaveSpeechResume()
     {
+        if (pendingSpeechResume is not { } pending) return;
         var session = AppState.Session;
-        if (pendingSpeechResume is not { } pending || session.Busy) return;
+        if (session.Busy) return;
         if (session.Document?.Id != pending.DocumentId || session.Sentence is not { } sentence ||
-            sentence.Id != pending.Resume.SentenceId || SpeechProgress.TextHash(sentence) != pending.Resume.TextHash)
+            !SpeechProgress.Matches(sentence, pending.Resume))
         {
             pendingSpeechResume = null;
             return;
@@ -550,27 +565,30 @@ public partial class ReadingPage : ContentPage
         try
         {
             var resume = pending.Resume;
-            session.SetSpeechResume(pending.DocumentId, resume.SentenceId, resume.TextHash, resume.OffsetUtf16);
+            if (resume.Model is { } model)
+                session.SetModelSpeechResume(pending.DocumentId, resume.SentenceId, resume.TextHash, model);
+            else
+                session.SetSpeechResume(pending.DocumentId, resume.SentenceId, resume.TextHash, resume.OffsetUtf16);
             pendingSpeechResume = null;
             lastSpeechSave = Stopwatch.GetTimestamp();
         }
         catch (Exception error) { SpeechStatus.Text = $"Не вдалося зберегти позицію озвучення. {error.Message}"; }
     }
 
-    private async void SpeakClicked(object? sender, EventArgs args) => await SpeakAsync(0);
+    private async void SpeakClicked(object? sender, EventArgs args) => await SpeakAsync();
 
     private async void ResumeSpeechClicked(object? sender, EventArgs args)
     {
         RefreshSpeechResume();
-        if (resumeSpeechOffset is int offset) await SpeakAsync(offset);
+        if (speechResume is { } resume) await SpeakAsync(resume);
     }
 
-    private async Task SpeakAsync(int offset)
+    private async Task SpeakAsync(SpeechResume? resume = null)
     {
         var session = AppState.Session;
         if (session.Busy || session.Document is not { } initial || session.Sentence is not { } sentence) return;
         var source = SpeechSourceFor(initial, sentence);
-        SaveSpeechResume();
+        CheckpointSpeechPosition();
         var request = ++speechRequest;
         speech.Stop();
         CancelModelSpeech();
@@ -583,28 +601,31 @@ public partial class ReadingPage : ContentPage
         if (request != speechRequest || !IsSpeechSourceCurrent(session, source) || session.Busy) return;
         using var run = new CancellationTokenSource();
         modelSpeechRun = run;
-        try { await SpeakRunAsync(session, initial.Id, offset, request, run.Token); }
+        try { await SpeakRunAsync(session, initial.Id, resume, request, run.Token); }
         finally
         {
             if (ReferenceEquals(modelSpeechRun, run)) CancelModelSpeech();
         }
     }
 
-    private async Task SpeakRunAsync(ReaderSession session, string documentId, int offset, int request, CancellationToken token)
+    private async Task SpeakRunAsync(ReaderSession session, string documentId, SpeechResume? resume, int request,
+        CancellationToken token)
     {
         var voice = SelectedVoice();
         var modelVoice = voice?.Engine is not null;
-        var rate = Rate.SelectedIndex switch { 0 => .75f, 2 => 1.25f, _ => 1f };
+        var ratePercent = SpeechRatePercent;
         speech.PreferredVoice = modelVoice ? null : voice?.Id;
-        speech.Rate = rate;
+        speech.Rate = ratePercent / 100f;
         var receivedCue = false;
         string? status = LocalSpeech.CompletedStatus;
 
         while (request == speechRequest && session.Document is { } doc && doc.Id == documentId &&
             session.Sentence is { } sentence)
         {
-            var startAt = modelVoice ? 0 : offset;
-            offset = 0;
+            var startAt = modelVoice ? 0 : SpeechProgress.ResumeOffset(sentence, resume) ?? 0;
+            var startAtMs = modelVoice && resume is not null && SpeechProgress.Matches(sentence, resume)
+                ? ModelResumePosition(resume, voice, doc.Language, ratePercent) ?? 0 : 0;
+            resume = null;
             var textHash = SpeechProgress.TextHash(sentence);
             lastSpeechSave = 0;
             SourceText.SpokenWord = null;
@@ -619,7 +640,7 @@ public partial class ReadingPage : ContentPage
             RecordReadingActivity();
             if (modelVoice)
             {
-                status = await PlayModelAsync(session, doc, sentence, voice!, rate, request, token);
+                status = await PlayModelAsync(session, doc, sentence, voice!, ratePercent, startAtMs, textHash, request, token);
                 if (request != speechRequest) return;
                 if (status is not null && status != LocalSpeech.CompletedStatus)
                 {
@@ -716,7 +737,7 @@ public partial class ReadingPage : ContentPage
         if (speechPaused)
         {
             ResetReadingActivity();
-            SaveSpeechResume();
+            CheckpointSpeechPosition();
         }
     }
 
@@ -726,8 +747,10 @@ public partial class ReadingPage : ContentPage
         StopSpeech();
     }
 
-    private void StopSpeech()
+    internal void StopSpeech()
     {
+        CheckpointSpeechPosition();
+        checkpointModelSpeech = null;
         speechRequest++;
         speech.Stop();
         CancelModelSpeech();
@@ -738,7 +761,6 @@ public partial class ReadingPage : ContentPage
         PauseSpeech.IsEnabled = false;
         PauseSpeech.Text = "Пауза";
         SpeechStatus.Text = "Озвучення зупинено.";
-        SaveSpeechResume();
-        RefreshSpeechResume();
+        if (readingPageActive) RefreshSpeechResume();
     }
 }

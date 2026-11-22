@@ -87,6 +87,31 @@ pub struct SpeechResume {
     pub sentence_id: String,
     pub text_hash: String,
     pub offset_utf16: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelSpeechResume>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelSpeechResume {
+    voice_id: String,
+    revision: String,
+    language: String,
+    rate_percent: u32,
+    position_ms: u32,
+}
+
+impl ModelSpeechResume {
+    fn valid(&self) -> bool {
+        !self.voice_id.is_empty()
+            && self.voice_id.len() <= 128
+            && !self.revision.is_empty()
+            && self.revision.len() <= 128
+            && !self.language.is_empty()
+            && self.language.len() <= 32
+            && (50..=200).contains(&self.rate_percent)
+            && (1..45_000).contains(&self.position_ms)
+    }
 }
 
 impl SpeechResume {
@@ -95,6 +120,9 @@ impl SpeechResume {
             || self.text_hash != format!("{:x}", Sha256::digest(sentence.text.as_bytes()))
         {
             return false;
+        }
+        if let Some(model) = &self.model {
+            return model.valid();
         }
         let mut offset = 0;
         for grapheme in sentence.text.graphemes(true) {
@@ -850,6 +878,7 @@ impl Store {
                 sentence_id: sentence_id.into(),
                 text_hash: text_hash.into(),
                 offset_utf16,
+                model: None,
             };
             Self::write_speech_resume(&self.connection, id, &resume)
         } else {
@@ -859,6 +888,28 @@ impl Store {
             ).map_err(|e| e.to_string())?;
             Ok(())
         }
+    }
+
+    pub fn set_model_speech_resume(
+        &mut self,
+        id: &str,
+        sentence_id: &str,
+        text_hash: &str,
+        model: ModelSpeechResume,
+    ) -> Result<()> {
+        if !model.valid() {
+            return Err("Некоректна позиція локального голосу".into());
+        }
+        Self::write_speech_resume(
+            &self.connection,
+            id,
+            &SpeechResume {
+                sentence_id: sentence_id.into(),
+                text_hash: text_hash.into(),
+                offset_utf16: 0,
+                model: Some(model),
+            },
+        )
     }
 
     fn write_speech_resume(connection: &Connection, id: &str, resume: &SpeechResume) -> Result<()> {

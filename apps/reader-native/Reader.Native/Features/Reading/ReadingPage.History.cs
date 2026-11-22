@@ -61,6 +61,7 @@ public partial class ReadingPage
     {
         readingHistoryForeground = false;
         ResetReadingActivity();
+        CheckpointSpeechPosition();
     }
 
     private void ResetReadingActivity()

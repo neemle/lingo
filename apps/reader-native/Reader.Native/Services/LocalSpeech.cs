@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using Reader.Contracts;
 using Reader.Presentation;
 
@@ -28,13 +29,30 @@ public sealed class LocalSpeech : IDisposable
         });
     }
 
-    internal Task<string?> PlayWaveAsync(SpeechAudio audio, Action? started) => playback.PlayAsync(async token =>
+    internal TimeSpan? WavePosition => wave.Position;
+
+    internal Task<string?> PlayWaveAsync(SpeechAudio audio, int startAtMs, Action<int> started) => playback.PlayAsync(async token =>
     {
         if (audio.SampleRate is <= 0 or > 48_000 || audio.Samples <= 0 ||
             audio.Samples > audio.SampleRate * 45 || audio.WavBytes.Length != 44 + audio.Samples * 2)
             throw new InvalidOperationException("Голосовий пакет повернув некоректне аудіо.");
-        var wav = Array.ConvertAll(audio.WavBytes, value => checked((byte)value));
-        await wave.PlayAsync(wav, started, token);
+        // Both packaged voice engines return a 44-byte mono PCM header and 16-bit samples.
+        // Trim on a sample boundary so playback starts at the same position on both platforms.
+        var firstSample = (int)((long)startAtMs * audio.SampleRate / 1000);
+        if (firstSample < 0 || firstSample >= audio.Samples)
+        {
+            firstSample = 0;
+            startAtMs = 0;
+        }
+        var payloadBytes = (audio.Samples - firstSample) * 2;
+        var wav = new byte[44 + payloadBytes];
+        for (var index = 0; index < 44; index++)
+            wav[index] = checked((byte)audio.WavBytes[index]);
+        for (var index = 0; index < payloadBytes; index++)
+            wav[44 + index] = checked((byte)audio.WavBytes[44 + firstSample * 2 + index]);
+        BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(4, 4), wav.Length - 8);
+        BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(40, 4), payloadBytes);
+        await wave.PlayAsync(wav, () => started(startAtMs), token);
         return CompletedStatus;
     });
 

@@ -119,6 +119,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public void SetSpeechResume(string id, string sentenceId, string textHash, int? offsetUtf16) =>
         client.SetSpeechResume(id, sentenceId, textHash, offsetUtf16);
 
+    public void SetModelSpeechResume(string id, string sentenceId, string textHash, ModelSpeechResume model) =>
+        client.SetModelSpeechResume(id, sentenceId, textHash, model);
+
     public Task SelectSentenceAsync(int position) => RunAsync(() =>
     {
         if (Document is not { } doc || position < 0 || position >= doc.Sentences.Length) return Read();

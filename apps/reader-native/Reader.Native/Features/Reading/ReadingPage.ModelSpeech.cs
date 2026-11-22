@@ -1,3 +1,4 @@
+using Microsoft.Maui.Dispatching;
 using Reader.Contracts;
 using Reader.Native.Services;
 using Reader.Presentation;
@@ -6,7 +7,7 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage
 {
-    private sealed record VoiceChoice(string Id, string Label, string? Engine = null, uint Speaker = 0);
+    private sealed record VoiceChoice(string Id, string Label, string? Engine = null, uint Speaker = 0, string? Revision = null);
     private sealed record SpeechSource(string Document, string Sentence, string Language, string Text);
     private sealed record ClipKey(SpeechSource Source, string Engine, uint Speaker, float Rate);
     private sealed record PendingClip(ClipKey Key, Task<SpeechAudio> Audio);
@@ -19,6 +20,7 @@ public partial class ReadingPage
     private CancellationTokenSource? modelSpeechRun;
     private PendingClip? nextClip;
     private SpeechSource? activeSpeechSource;
+    private Action? checkpointModelSpeech;
 
     private static string VoicePreference(string language) => $"reader.speech.voice.{language}";
 
@@ -47,17 +49,17 @@ public partial class ReadingPage
             try
             {
                 var installed = await AppState.Session.OptionalModelsAsync();
-                bool Installed(string engine) => installed.Any(model => model.Id == engine && model.FilesPresent);
-                if (language == "uk" && Installed("piper-uk"))
+                string? InstalledRevision(string engine) => installed.FirstOrDefault(model => model.Id == engine && model.FilesPresent)?.Revision;
+                if (language == "uk" && InstalledRevision("piper-uk") is { } piper)
                 {
-                    voices.Add(new("piper-uk:0", "Лада · Piper", "piper-uk", 0));
-                    voices.Add(new("piper-uk:1", "Микита · Piper", "piper-uk", 1));
-                    voices.Add(new("piper-uk:2", "Тетяна · Piper", "piper-uk", 2));
+                    voices.Add(new("piper-uk:0", "Лада · Piper", "piper-uk", 0, piper));
+                    voices.Add(new("piper-uk:1", "Микита · Piper", "piper-uk", 1, piper));
+                    voices.Add(new("piper-uk:2", "Тетяна · Piper", "piper-uk", 2, piper));
                 }
-                if (DocumentLanguages.All.Any(item => item.Code == language) && Installed("supertonic-3"))
+                if (DocumentLanguages.All.Any(item => item.Code == language) && InstalledRevision("supertonic-3") is { } supertonic)
                 {
-                    voices.Add(new("supertonic-3:0", "M1 · Supertonic", "supertonic-3", 0));
-                    voices.Add(new("supertonic-3:1", "F1 · Supertonic", "supertonic-3", 1));
+                    voices.Add(new("supertonic-3:0", "M1 · Supertonic", "supertonic-3", 0, supertonic));
+                    voices.Add(new("supertonic-3:1", "F1 · Supertonic", "supertonic-3", 1, supertonic));
                 }
             }
             catch (Exception problem) { error ??= $"Не вдалося отримати локальні голоси. {problem.Message}"; }
@@ -108,6 +110,12 @@ public partial class ReadingPage
     private VoiceChoice? SelectedVoice() => VoicePicker.SelectedIndex > 0 && VoicePicker.SelectedIndex <= availableVoices.Length
         ? availableVoices[VoicePicker.SelectedIndex - 1] : null;
 
+    private static int? ModelResumePosition(SpeechResume? resume, VoiceChoice? voice, string language, int ratePercent) =>
+        resume?.Model is { } model && voice?.Revision is { } revision && model.Revision == revision &&
+        model.VoiceId == voice.Id && model.Language == language && model.RatePercent == ratePercent &&
+        model.PositionMs is > 0 and < 45_000
+            ? model.PositionMs : null;
+
     private static SpeechSource SpeechSourceFor(Document document, Sentence sentence) =>
         new(document.Id, sentence.Id, document.Language, sentence.Text);
 
@@ -116,20 +124,40 @@ public partial class ReadingPage
         source == SpeechSourceFor(document, sentence);
 
     private async Task<string?> PlayModelAsync(ReaderSession session, Document document, Sentence sentence,
-        VoiceChoice voice, float rate, int request, CancellationToken token)
+        VoiceChoice voice, int ratePercent, int startAtMs, string textHash, int request, CancellationToken token)
     {
         var source = SpeechSourceFor(document, sentence);
-        var key = new ClipKey(source, voice.Engine!, voice.Speaker, rate);
+        var key = new ClipKey(source, voice.Engine!, voice.Speaker, ratePercent / 100f);
         var previous = nextClip;
         nextClip = null;
         var audio = previous?.Key == key ? previous.Audio : PrepareAudio(session, key, token);
+        IDispatcherTimer? timer = null;
+        var playbackStartMs = 0;
+        var lastCheckpointMs = startAtMs;
+        void CapturePosition()
+        {
+            if (request != speechRequest || !IsSpeechSourceCurrent(session, source) || speech.WavePosition is not { } position)
+                return;
+            var millis = playbackStartMs + (int)position.TotalMilliseconds;
+            if (millis <= lastCheckpointMs || millis >= 45_000) return;
+            lastCheckpointMs = millis;
+            var model = new ModelSpeechResume(voice.Id, voice.Revision!, document.Language, ratePercent, millis);
+            pendingSpeechResume = (document.Id, new(sentence.Id, textHash, 0, model));
+        }
+        Action capture = CapturePosition;
         try
         {
             var clip = await audio.WaitAsync(token);
             if (request != speechRequest || !IsSpeechSourceCurrent(session, source)) return null;
-            return await speech.PlayWaveAsync(clip, () =>
+            return await speech.PlayWaveAsync(clip, startAtMs, actualStartMs =>
             {
                 if (request != speechRequest || token.IsCancellationRequested) return;
+                playbackStartMs = lastCheckpointMs = actualStartMs;
+                checkpointModelSpeech = capture;
+                timer = Dispatcher.CreateTimer();
+                timer.Interval = TimeSpan.FromSeconds(2);
+                timer.Tick += (_, _) => CheckpointSpeechPosition();
+                timer.Start();
                 PauseSpeech.IsEnabled = true;
                 SpeechStatus.Text = "Озвучення поточного речення…";
                 if (ContinueSpeech.IsChecked && document.Position + 1 < document.Sentences.Length)
@@ -141,6 +169,11 @@ public partial class ReadingPage
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { return null; }
         catch (Exception error) { return $"Локальний голос недоступний. {error.Message}"; }
+        finally
+        {
+            timer?.Stop();
+            if (checkpointModelSpeech == capture) checkpointModelSpeech = null;
+        }
     }
 
     private Task<SpeechAudio> PrepareAudio(ReaderSession session, ClipKey key, CancellationToken token)

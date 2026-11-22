@@ -23,7 +23,9 @@ public sealed record Document(
     public Dictionary<string, Dictionary<string, string>> ReviewedTranslations { get; init; } = [];
 }
 
-public sealed record SpeechResume(string SentenceId, string TextHash, int OffsetUtf16);
+public sealed record SpeechResume(string SentenceId, string TextHash, int OffsetUtf16, ModelSpeechResume? Model = null);
+
+public sealed record ModelSpeechResume(string VoiceId, string Revision, string Language, int RatePercent, int PositionMs);
 
 public sealed record DocumentRevision(string Id, string DocumentId, string? ParentId, string SourceHash,
     string ParserVersion, string TextHash, int CanonicalBytes, long CreatedAt);
