@@ -110,7 +110,36 @@ public partial class LibraryPage : ContentPage
     }
 
     private async void ImportClicked(object? sender, EventArgs args) => await ImportAsync(scanPdf: false);
-    private async void ScanPdfClicked(object? sender, EventArgs args) => await ImportAsync(scanPdf: true);
+    private async void ChooseImportSourceClicked(object? sender, EventArgs args)
+    {
+        if (importing || changingLanguage || !AppState.Session.CanInteract) return;
+
+        const string files = "Вибрати файли або фотографії";
+        const string scan = "Розпізнати сканований PDF";
+        const string text = "Вставити текст";
+        const string image = "Вставити зображення";
+        const string article = "Додати статтю за посиланням";
+
+        var choice = await DisplayActionSheetAsync("Додати документ", "Скасувати", null, files, scan, text, image, article);
+        switch (choice)
+        {
+            case files:
+                await ImportAsync(scanPdf: false);
+                break;
+            case scan:
+                await ImportAsync(scanPdf: true);
+                break;
+            case text:
+                await PasteTextAsync();
+                break;
+            case image:
+                await PasteImageAsync();
+                break;
+            case article:
+                await ImportArticleAsync(null);
+                break;
+        }
+    }
 
     private async void FilesDropped(object? sender, DropEventArgs args)
     {

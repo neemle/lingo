@@ -8,7 +8,7 @@ public partial class LibraryPage
 {
     private sealed record PastedDocument(string Name, string Text, string Language);
 
-    private async void PasteTextClicked(object? sender, EventArgs args)
+    private async Task PasteTextAsync()
     {
         string? clipboard = null;
         try { if (Clipboard.Default.HasText) clipboard = await Clipboard.Default.GetTextAsync(); }
@@ -16,7 +16,7 @@ public partial class LibraryPage
         await ImportPastedTextAsync(clipboard);
     }
 
-    private async void PasteImageClicked(object? sender, EventArgs args)
+    private async Task PasteImageAsync()
     {
         if (importing || changingLanguage || AppState.Session.Busy || !DesktopImport.Gate.Wait(0)) return;
         try

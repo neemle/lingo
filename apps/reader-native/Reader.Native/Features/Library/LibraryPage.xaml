@@ -21,25 +21,9 @@
     <Label Text="Бібліотека" Style="{StaticResource SerifTitle}" FontSize="42" SemanticProperties.HeadingLevel="Level1" />
     <Label Text="Книжки, нотатки й тексти на цьому пристрої." TextColor="{StaticResource Muted}" FontSize="14" />
    </VerticalStackLayout>
-   <FlexLayout x:Name="LibraryActions" Grid.Row="1" Grid.ColumnSpan="2" Wrap="Wrap" AlignItems="Center" VerticalOptions="Center">
-    <ActivityIndicator IsRunning="{Binding Busy}" IsVisible="{Binding Busy}" Color="{StaticResource Sage}" />
-    <Button Text="Історія" Margin="0,0,8,6" Style="{StaticResource OutlineButton}" Clicked="ReadingHistoryClicked"
-     IsEnabled="{Binding CanInteract}" SemanticProperties.Description="Історія читання" />
-    <Button Text="Розпізнати PDF" Margin="0,0,8,6" Style="{StaticResource OutlineButton}" Clicked="ScanPdfClicked" IsEnabled="{Binding CanInteract}" />
-    <Button x:Name="OpenShareInbox" Text="Вхідні матеріали" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
-     Clicked="OpenShareInboxClicked" IsVisible="False" IsEnabled="{Binding CanInteract}" />
-    <Button x:Name="PauseExternalBatch" Text="Призупинити добірку" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
-     Clicked="PauseExternalBatchClicked" IsVisible="False" SemanticProperties.Description="Призупинити імпорт після поточного матеріалу" />
-    <Button x:Name="ResumePdf" Text="Продовжити OCR" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
-     Clicked="ResumePdfClicked" IsVisible="False" IsEnabled="{Binding CanInteract}" />
-    <Button x:Name="PausePdf" Text="Призупинити OCR" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
-     Clicked="PausePdfClicked" IsVisible="False" />
-    <Button Text="Вставити текст" Margin="0,0,8,6" Style="{StaticResource OutlineButton}" Clicked="PasteTextClicked" IsEnabled="{Binding CanInteract}" />
-    <Button Text="Вставити зображення" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
-     Clicked="PasteImageClicked" IsEnabled="{Binding CanInteract}" />
-    <Button Text="Додати статтю" Margin="0,0,8,6" Style="{StaticResource OutlineButton}" Clicked="ImportArticleClicked" IsEnabled="{Binding CanInteract}" />
-    <Button Text="Додати документи" Margin="0,0,0,6" Style="{StaticResource AccentButton}" Clicked="ImportClicked" IsEnabled="{Binding CanInteract}" />
-   </FlexLayout>
+   <Button x:Name="LibraryActions" Grid.Row="1" Grid.ColumnSpan="2" Text="+ Додати документ"
+    Style="{StaticResource AccentButton}" Clicked="ChooseImportSourceClicked" IsEnabled="{Binding CanInteract}"
+    HorizontalOptions="Start" VerticalOptions="Center" SemanticProperties.Description="Додати документ" />
   </Grid>
   <VerticalStackLayout Grid.Row="1" Spacing="5">
    <Border Padding="12,9" Stroke="#D6D9CA" StrokeThickness="1" StrokeDashArray="5,4"
@@ -48,6 +32,20 @@
     <Label Text="Перетягніть файл, фотографію, текст або посилання сюди"
      TextColor="{StaticResource Sage}" FontSize="13" />
    </Border>
+   <FlexLayout Wrap="Wrap" AlignItems="Center">
+    <ActivityIndicator IsRunning="{Binding Busy}" IsVisible="{Binding Busy}" Color="{StaticResource Sage}" />
+    <Button Text="Історія" Margin="0,0,8,6" Style="{StaticResource OutlineButton}" Clicked="ReadingHistoryClicked"
+     IsEnabled="{Binding CanInteract}" SemanticProperties.Description="Історія читання" />
+    <Button x:Name="OpenShareInbox" Text="Вхідні матеріали" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
+     Clicked="OpenShareInboxClicked" IsVisible="False" IsEnabled="{Binding CanInteract}" />
+    <Button x:Name="PauseExternalBatch" Text="Призупинити добірку" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
+     Clicked="PauseExternalBatchClicked" IsVisible="False" SemanticProperties.Description="Призупинити імпорт після поточного матеріалу" />
+    <Button x:Name="ResumePdf" Text="Продовжити OCR" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
+     Clicked="ResumePdfClicked" IsVisible="False" IsEnabled="{Binding CanInteract}" />
+    <Button x:Name="PausePdf" Text="Призупинити OCR" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
+     Clicked="PausePdfClicked" IsVisible="False" />
+     Clicked="PasteImageClicked" IsEnabled="{Binding CanInteract}" />
+   </FlexLayout>
    <Label Text="{Binding Error}" TextColor="{StaticResource Accent}" SemanticProperties.Description="Помилка операції" />
    <Label x:Name="ImportStatus" TextColor="{StaticResource Sage}" />
    <Label x:Name="PdfStatus" TextColor="{StaticResource Sage}" IsVisible="False" />
@@ -113,7 +111,7 @@
         <Label Text="Нова історія" Style="{StaticResource SerifTitle}" FontSize="24"
          TextColor="{StaticResource Sage}" HorizontalTextAlignment="Center" />
         <Label Text="TXT · DOCX · PDF · фото" TextColor="{StaticResource Muted}" FontSize="12" HorizontalTextAlignment="Center" />
-        <Button Text="Додати документ" Style="{StaticResource OutlineButton}" Clicked="ImportClicked" HorizontalOptions="Center" />
+        <Button Text="Додати документ" Style="{StaticResource OutlineButton}" Clicked="ChooseImportSourceClicked" HorizontalOptions="Center" />
        </VerticalStackLayout>
       </Border>
      </Grid>
