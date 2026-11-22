@@ -23,9 +23,9 @@ pub struct OriginalFile {
     pub path: PathBuf,
 }
 
-/// Private source data copied and hashed before taking the SQLite write lock.
+/// Private source data secured and hashed before taking the SQLite write lock.
 pub struct PreparedPdfImport {
-    original: NamedTempFile,
+    original: PreparedPdfSource,
     name: String,
     language: String,
     size: u64,
@@ -37,6 +37,37 @@ pub struct PreparedPdfImport {
     needs_cache_merge: bool,
     deferred_from: Option<u16>,
     extracted: document_layout::Extracted,
+}
+
+enum PreparedPdfSource {
+    Copied(NamedTempFile),
+    StagedIntake(PathBuf),
+}
+
+impl PreparedPdfSource {
+    fn publish(self, root: &Path, path: &Path, expected_hash: &str) -> Result<()> {
+        match self {
+            Self::Copied(original) => original.persist_noclobber(path).map(|_| ()).map_err(storage_error),
+            Self::StagedIntake(staged) => {
+                // Keep the inbox name until the document and intake association have committed.
+                // Publishing a second name makes both sides recoverable after an interruption.
+                match fs::hard_link(&staged, path) {
+                    Ok(()) => Ok(()),
+                    Err(error) if matches!(
+                        error.kind(), io::ErrorKind::Unsupported | io::ErrorKind::PermissionDenied
+                    ) => {
+                        let (source, size) = open_pdf_source(&staged)?;
+                        let (original, _, hash) = stage_pdf_copy(root, source, size)?;
+                        if hash != expected_hash {
+                            return Err("Збережений PDF змінився під час імпорту.".into());
+                        }
+                        Self::Copied(original).publish(root, path, expected_hash)
+                    }
+                    Err(error) => Err(storage_error(error)),
+                }
+            }
+        }
+    }
 }
 
 pub fn prepare_pdf_import(
@@ -57,7 +88,30 @@ pub fn prepare_pdf_import_with_empty_pages(
     language: &str,
     page_text: Vec<String>,
     lines: Vec<ocr::OcrLine>,
+    empty_pages: Vec<u16>,
+) -> Result<PreparedPdfImport> {
+    prepare_pdf(root, name, path, language, page_text, lines, empty_pages, false)
+}
+
+pub(crate) fn prepare_staged_pdf_import(
+    root: &Path,
+    name: &str,
+    path: &Path,
+    language: &str,
+    page_text: Vec<String>,
+) -> Result<PreparedPdfImport> {
+    prepare_pdf(root, name, path, language, page_text, Vec::new(), Vec::new(), true)
+}
+
+fn prepare_pdf(
+    root: &Path,
+    name: &str,
+    path: &Path,
+    language: &str,
+    page_text: Vec<String>,
+    lines: Vec<ocr::OcrLine>,
     mut empty_pages: Vec<u16>,
+    staged_intake: bool,
 ) -> Result<PreparedPdfImport> {
     valid_language(language)?;
     let name = pdf_name(name)?;
@@ -79,12 +133,14 @@ pub fn prepare_pdf_import_with_empty_pages(
     let extracted = document_layout::from_transcript(text, Some(starts));
     let (input, expected_size) = open_pdf_source(path)?;
     ensure_root(root)?;
-    let mut original = stage_original(root)?;
-    let (size, hash) = copy_pdf(input, original.as_file_mut())?;
-    if size != expected_size {
-        return Err("Розмір файлу PDF змінився під час імпорту".into());
-    }
-    original.as_file().sync_all().map_err(storage_error)?;
+    let (original, size, hash) = if staged_intake {
+        let (size, hash) = copy_pdf(input, io::sink())?;
+        verify_pdf_size(size, expected_size)?;
+        (PreparedPdfSource::StagedIntake(path.to_owned()), size, hash)
+    } else {
+        let (original, size, hash) = stage_pdf_copy(root, input, expected_size)?;
+        (PreparedPdfSource::Copied(original), size, hash)
+    };
     Ok(PreparedPdfImport {
         original,
         name: name.to_owned(),
@@ -99,6 +155,21 @@ pub fn prepare_pdf_import_with_empty_pages(
         deferred_from: None,
         extracted,
     })
+}
+
+fn stage_pdf_copy(root: &Path, input: File, expected_size: u64) -> Result<(NamedTempFile, u64, String)> {
+    let mut original = stage_original(root)?;
+    let (size, hash) = copy_pdf(input, original.as_file_mut())?;
+    verify_pdf_size(size, expected_size)?;
+    original.as_file().sync_all().map_err(storage_error)?;
+    Ok((original, size, hash))
+}
+
+fn verify_pdf_size(size: u64, expected_size: u64) -> Result<()> {
+    if size != expected_size {
+        return Err("Розмір файлу PDF змінився під час імпорту".into());
+    }
+    Ok(())
 }
 
 impl PreparedPdfImport {
@@ -157,7 +228,7 @@ pub(crate) fn pdf_name(name: &str) -> Result<&str> {
     Ok(name)
 }
 
-pub(crate) fn copy_pdf(mut input: impl Read, output: &mut File) -> Result<(u64, String)> {
+pub(crate) fn copy_pdf(mut input: impl Read, mut output: impl Write) -> Result<(u64, String)> {
     let mut buffer = vec![0; 64 * 1024];
     let mut digest = Sha256::new();
     let mut size = 0;
@@ -356,7 +427,7 @@ impl Store {
         revision.insert(&tx)?;
         // After publishing the source, synchronize the entry before committing its reference.
         verify_root(&self.file_original_directory)?;
-        original.persist_noclobber(&path).map_err(storage_error)?;
+        original.publish(&self.file_original_directory, &path, &document.source_hash)?;
         if let Err(error) = sync_directory(&self.file_original_directory)
             .and_then(|_| tx.commit().map_err(storage_error))
         {

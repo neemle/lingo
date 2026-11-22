@@ -202,7 +202,7 @@ impl IntakeRepository for Store {
             "UPDATE intake SET metadata=?2,document_id=?3,payload=NULL WHERE id=?1",
             params![item.id, metadata, item.document_id],
         ).map_err(intake_error)?;
-        if matches!(item.metadata.kind, IntakeKind::TextPdf | IntakeKind::ScannedPdf | IntakeKind::MixedPdf) {
+        if matches!(item.metadata.kind, IntakeKind::Pdf | IntakeKind::TextPdf | IntakeKind::ScannedPdf | IntakeKind::MixedPdf) {
             let uuid = Uuid::parse_str(&item.id).map_err(intake_error)?;
             let _ = fs::remove_file(pdf_path(&self.file_original_directory, uuid));
         }

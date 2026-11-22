@@ -20,8 +20,8 @@ impl DocumentImporter for Store {
                 self.import_image(&name, &bytes, &language, lines)?
             }
             ImportMaterial::Pdf { name, path, page_texts, deferred_from, language } => {
-                let mut prepared = file_originals::prepare_pdf_import(
-                    &self.file_original_directory, &name, &path, &language, page_texts, Vec::new(),
+                let mut prepared = file_originals::prepare_staged_pdf_import(
+                    &self.file_original_directory, &name, &path, &language, page_texts,
                 )?;
                 if let Some(first_page) = deferred_from {
                     prepared.defer_text_layers_from(first_page)?;
