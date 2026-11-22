@@ -1,3 +1,4 @@
+using System.Globalization;
 using Reader.Contracts;
 using Reader.Native.Services;
 using Reader.Presentation;
@@ -34,7 +35,8 @@ internal sealed class OriginalPage : ContentPage
     private DetachedPdfOcrPage? detachedOcr;
     private readonly ReaderSession session;
     private readonly string documentId;
-    private readonly Picker linePicker = new() { Title = "Розпізнані рядки" };
+    private readonly Button lineButton = new() { Text = "Розпізнані рядки" };
+    private int selectedLineChoice = -1;
     private readonly Button edit = new() { Text = "Виправити" };
     private readonly Button suggest = new() { Text = "Підказки" };
     private readonly Button reset = new() { Text = "Скинути" };
@@ -43,6 +45,7 @@ internal sealed class OriginalPage : ContentPage
     private bool editing;
     private bool leavingOriginal;
     private bool choosingPage;
+    private bool choosingLine;
     private readonly int pageCount;
     private int pageIndex;
     private bool loading;
@@ -104,19 +107,9 @@ internal sealed class OriginalPage : ContentPage
             control.Margin = new Thickness(0, 0, 8, 5);
             controls.Children.Add(control);
         }
-        SemanticProperties.SetDescription(linePicker, "Рядок для виправлення");
+        SemanticProperties.SetDescription(lineButton, "Вибрати розпізнаний рядок");
+        lineButton.Clicked += async (_, _) => await ChooseLineAsync();
         SemanticProperties.SetDescription(reset, "Відновити початковий результат OCR для рядка");
-        linePicker.SelectedIndexChanged += (_, _) =>
-        {
-            var index = LineIndex();
-            if (detachedOcr is not null && index >= 0 && lines[index].SourceSpan is { } span)
-            {
-                activeWord = null;
-                focus = (span.StartUtf16, span.EndUtf16);
-                UpdateOverlay();
-            }
-            UpdateEditButtons();
-        };
         edit.Clicked += async (_, _) => await CorrectAsync(LineAction.Edit);
         suggest.Clicked += async (_, _) => await CorrectAsync(LineAction.Suggest);
         reset.Clicked += async (_, _) => await CorrectAsync(LineAction.Reset);
@@ -126,7 +119,7 @@ internal sealed class OriginalPage : ContentPage
             new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Auto),
         }};
         Grid.SetColumn(editButtons, 1);
-        editor.Children.Add(linePicker);
+        editor.Children.Add(lineButton);
         editor.Children.Add(editButtons);
 
         var content = new Grid
@@ -328,7 +321,7 @@ internal sealed class OriginalPage : ContentPage
 
     private void SelectOcrAt(View surface, TappedEventArgs args)
     {
-        if (loading || editing || leavingOriginal || session.Busy || args.GetPosition(surface) is not { } point) return;
+        if (loading || editing || leavingOriginal || choosingLine || session.Busy || args.GetPosition(surface) is not { } point) return;
         var fitted = AspectFit(new RectF(0, 0, (float)surface.Width, (float)surface.Height), previewWidth, previewHeight);
         if (fitted.Width <= 0 || fitted.Height <= 0) return;
         var x = (point.X - fitted.X) / fitted.Width;
@@ -343,7 +336,7 @@ internal sealed class OriginalPage : ContentPage
             {
                 if (x < word.X || x >= word.X + word.Width || y < word.Y || y >= word.Y + word.Height ||
                     CurrentWord(index, word) is not { } selected) continue;
-                linePicker.SelectedIndex = choice;
+                SelectLine(choice, highlight: false);
                 activeWord = (index, word, selected);
                 focus = (selected.StartUtf16, selected.StartUtf16 + selected.LengthUtf16);
                 overlay.IsVisible = true;
@@ -356,7 +349,7 @@ internal sealed class OriginalPage : ContentPage
             if (detachedOcr is not null && x >= line.X && x < line.X + line.Width &&
                 y >= line.Y && y < line.Y + line.Height)
             {
-                linePicker.SelectedIndex = choice;
+                SelectLine(choice, highlight: false);
                 activeWord = null;
                 focus = line.SourceSpan is { } span ? (span.StartUtf16, span.EndUtf16) : null;
                 overlay.IsVisible = true;
@@ -496,39 +489,79 @@ internal sealed class OriginalPage : ContentPage
         overlay.Invalidate();
     }
 
+    private async Task ChooseLineAsync()
+    {
+        if (!lineButton.IsEnabled || Navigation.NavigationStack.LastOrDefault() != this) return;
+        choosingLine = true;
+        UpdateEditButtons();
+        try
+        {
+            var currentPage = pageIndex;
+            var offered = currentLineIndices.Select(index => lines[index]).ToArray();
+            var selected = await NativeChoices.ChooseAsync(this, "Розпізнані рядки", null,
+                offered.Select((line, choice) => (choice.ToString(CultureInfo.InvariantCulture), LineLabel(line, choice))),
+                selectedLineChoice.ToString(CultureInfo.InvariantCulture));
+            if (pageIndex != currentPage || !int.TryParse(selected, CultureInfo.InvariantCulture, out var choice) ||
+                choice < 0 || choice >= offered.Length || choice >= currentLineIndices.Length)
+                return;
+
+            var current = lines[currentLineIndices[choice]];
+            var original = offered[choice];
+            if (current.Text == original.Text && current.Correction == original.Correction &&
+                current.SourceSpan == original.SourceSpan)
+                SelectLine(choice, highlight: true);
+        }
+        finally
+        {
+            choosingLine = false;
+            UpdateEditButtons();
+        }
+    }
+
     private void RebuildLineChoices()
     {
         var selected = LineIndex();
         currentLineIndices = Enumerable.Range(0, lines.Length).Where(index => lines[index].Page == pageIndex).ToArray();
-        linePicker.ItemsSource = currentLineIndices.Select((index, position) =>
-        {
-            var line = lines[index];
-            var text = new System.Globalization.StringInfo(line.Correction ?? line.Text);
-            var preview = text.LengthInTextElements > 52 ? text.SubstringByTextElements(0, 52) + "…" : text.String;
-            return $"{position + 1}. {preview}";
-        }).ToArray();
-        linePicker.SelectedIndex = currentLineIndices.Length == 0 ? -1
-            : Math.Max(0, Array.IndexOf(currentLineIndices, selected));
+        SelectLine(currentLineIndices.Length == 0 ? -1 : Math.Max(0, Array.IndexOf(currentLineIndices, selected)),
+            highlight: false);
         UpdateEditButtons();
     }
 
-    private int LineIndex()
+    private void SelectLine(int choice, bool highlight)
     {
-        var selected = linePicker.SelectedIndex;
-        return selected >= 0 && selected < currentLineIndices.Length ? currentLineIndices[selected] : -1;
+        selectedLineChoice = choice;
+        var index = LineIndex();
+        lineButton.Text = index < 0 ? "Розпізнані рядки" : LineLabel(lines[index], choice);
+        if (!highlight || index < 0 || lines[index].SourceSpan is not { } span) return;
+
+        activeWord = null;
+        focus = (span.StartUtf16, span.EndUtf16);
+        overlay.IsVisible = true;
+        toggle.Text = OverlayLabel();
+        UpdateOverlay();
     }
+
+    private static string LineLabel(OcrLine line, int choice)
+    {
+        var text = new StringInfo(line.Correction ?? line.Text);
+        var preview = text.LengthInTextElements > 52 ? text.SubstringByTextElements(0, 52) + "…" : text.String;
+        return $"{choice + 1}. {preview}";
+    }
+
+    private int LineIndex() => selectedLineChoice >= 0 && selectedLineChoice < currentLineIndices.Length
+        ? currentLineIndices[selectedLineChoice] : -1;
 
     private void UpdateEditButtons()
     {
         var index = LineIndex();
-        var canInteract = !loading && !editing && !leavingOriginal && !choosingPage;
+        var canInteract = !loading && !editing && !leavingOriginal && !choosingPage && !choosingLine;
         var canZoom = canInteract && image.Source is not null;
         zoomIn.IsEnabled = canZoom && zoomLevel + 1 < ZoomLevels.Length;
         zoomOut.IsEnabled = fit.IsEnabled = canZoom && zoomLevel > 0;
         previous.IsEnabled = canInteract && pageIndex > 0;
         next.IsEnabled = canInteract && pageIndex + 1 < pageCount;
         jump.IsEnabled = canInteract && pageCount > 1;
-        linePicker.IsEnabled = canInteract && currentLineIndices.Length > 0;
+        lineButton.IsEnabled = canInteract && currentLineIndices.Length > 0;
         wordCard.IsEnabled = canInteract && activeWord is not null;
         readPage.IsEnabled = readPage.IsVisible && canInteract && image.Source is not null &&
             session.Document is { } document && document.Id == documentId &&

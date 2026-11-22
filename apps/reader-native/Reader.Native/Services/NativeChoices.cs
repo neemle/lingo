@@ -2,6 +2,8 @@ namespace Reader.Native.Services;
 
 internal static class NativeChoices
 {
+    private sealed record Choice(string Value, string Label, Style Style);
+
     internal static async Task<string?> ChooseAsync(Page owner, string title, string? detail,
         IEnumerable<(string Value, string Label)> options, string? selected = null)
     {
@@ -14,8 +16,14 @@ internal static class NativeChoices
             header.Children.Add(new Label { Text = detail, TextColor = (Color)resources["Muted"],
                 MaxLines = 2, LineBreakMode = LineBreakMode.TailTruncation });
 
-        var list = new VerticalStackLayout { Spacing = 7 };
-        var scroll = new ScrollView { Content = list };
+        var selectedStyle = (Style)resources["AccentButton"];
+        var regularStyle = (Style)resources["OutlineButton"];
+        var list = new CollectionView {
+            ItemsLayout = new LinearItemsLayout(ItemsLayoutOrientation.Vertical) { ItemSpacing = 7 },
+            SelectionMode = SelectionMode.None,
+            ItemsSource = options.Select(option =>
+                new Choice(option.Value, option.Label, option.Value == selected ? selectedStyle : regularStyle)).ToArray()
+        };
         var cancel = new Button { Text = "Скасувати", HorizontalOptions = LayoutOptions.Start };
         var layout = new Grid {
             Padding = 24,
@@ -28,7 +36,7 @@ internal static class NativeChoices
             }
         };
         layout.Add(header, 0, 0);
-        layout.Add(scroll, 0, 1);
+        layout.Add(list, 0, 1);
         layout.Add(cancel, 0, 2);
         var page = new ContentPage { Title = title, Content = layout };
 
@@ -48,15 +56,21 @@ internal static class NativeChoices
         }
 
         cancel.Clicked += async (_, _) => await CloseAsync(null);
-        foreach (var (value, label) in options)
+        list.ItemTemplate = new DataTemplate(() =>
         {
-            var button = new Button {
-                Text = label,
-                Style = (Style)resources[value == selected ? "AccentButton" : "OutlineButton"]
+            var button = new Button();
+            button.BindingContextChanged += (_, _) =>
+            {
+                if (button.BindingContext is not Choice choice) return;
+                button.Text = choice.Label;
+                button.Style = choice.Style;
             };
-            button.Clicked += async (_, _) => await CloseAsync(value);
-            list.Children.Add(button);
-        }
+            button.Clicked += async (_, _) =>
+            {
+                if (button.BindingContext is Choice choice) await CloseAsync(choice.Value);
+            };
+            return button;
+        });
 
         await owner.Navigation.PushModalAsync(page);
         return await completion.Task;
