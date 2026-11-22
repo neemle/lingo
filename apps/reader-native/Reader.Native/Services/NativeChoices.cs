@@ -1,8 +1,8 @@
-namespace Reader.Native.Features.Library;
+namespace Reader.Native.Services;
 
-public partial class LibraryPage
+internal static class NativeChoices
 {
-    private async Task<string?> ChooseLibraryOptionAsync(string title, string? detail,
+    internal static async Task<string?> ChooseAsync(Page owner, string title, string? detail,
         IEnumerable<(string Value, string Label)> options, string? selected = null)
     {
         var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -58,7 +58,7 @@ public partial class LibraryPage
             list.Children.Add(button);
         }
 
-        await Navigation.PushModalAsync(page);
+        await owner.Navigation.PushModalAsync(page);
         return await completion.Task;
     }
 }

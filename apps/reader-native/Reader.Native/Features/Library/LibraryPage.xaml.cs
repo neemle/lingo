@@ -125,7 +125,7 @@ public partial class LibraryPage : ContentPage
         choosingImportSource = true;
         try
         {
-            choice = await ChooseLibraryOptionAsync("Додати документ", null,
+            choice = await NativeChoices.ChooseAsync(this, "Додати документ", null,
                 new[] { files, scan, text, image, article }.Select(label => (label, label)));
         }
         finally
@@ -287,7 +287,7 @@ public partial class LibraryPage : ContentPage
         DocumentLanguages.All.Any(language => language.Code == code) ? code : null;
 
     private Task<string?> ChooseLanguageAsync(string title, string document, string? selected = null) =>
-        ChooseLibraryOptionAsync(title, document,
+        NativeChoices.ChooseAsync(this, title, document,
             DocumentLanguages.All.OrderBy(language => language.Name, StringComparer.Create(
                 CultureInfo.GetCultureInfo("uk-UA"), ignoreCase: true))
                 .Select(language => (language.Code, language.Name)), selected);

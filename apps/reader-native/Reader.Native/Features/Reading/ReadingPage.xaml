@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
- xmlns:models="clr-namespace:Reader.Contracts;assembly=Reader.Contracts"
  xmlns:state="clr-namespace:Reader.Presentation;assembly=Reader.Presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
  xmlns:controls="clr-namespace:Reader.Native.Controls" x:DataType="state:ReaderSession"
@@ -86,9 +85,8 @@
   </Grid>
 
   <Grid Grid.Row="1" x:Name="SentenceToolbar" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
-   <Picker x:Name="SentencePicker" Title="Перейти до речення"
-    ItemsSource="{Binding Document.Sentences}" ItemDisplayBinding="{Binding Text, x:DataType=models:Sentence}"
-    SelectedIndex="{Binding Document.Position, Mode=OneWay}" SelectedIndexChanged="SentenceChanged" />
+   <Button Text="До речення…" Style="{StaticResource OutlineButton}" Clicked="JumpSentenceClicked"
+    IsEnabled="{Binding CanBookmark}" SemanticProperties.Description="Перейти до речення за номером" />
    <Button Grid.Column="1" Text="{Binding BookmarkAction}" Style="{StaticResource OutlineButton}"
     IsEnabled="{Binding CanBookmark}" Clicked="BookmarkClicked" />
    <Button Grid.Column="2" Text="Закладки" Style="{StaticResource OutlineButton}"
@@ -112,8 +110,9 @@
       <Label x:Name="SourceLanguageName" Style="{StaticResource ReaderMeta}" />
      </HorizontalStackLayout>
      <Label Grid.Column="1" Text="→" FontSize="19" VerticalOptions="Center" TextColor="{StaticResource Sage}" />
-     <Picker Grid.Column="2" x:Name="TargetLanguage" Title="Мова перекладу"
-      SelectedIndexChanged="TargetChanged" SemanticProperties.Description="Мова перекладу речення" />
+     <Button Grid.Column="2" x:Name="TargetLanguage" Text="Мова перекладу" HorizontalOptions="Start"
+      Style="{StaticResource PlayerButton}" Clicked="ChooseTargetClicked"
+      SemanticProperties.Description="Мова перекладу речення" />
      <Button Grid.Column="3" Text="A−" Style="{StaticResource PlayerButton}" Clicked="DecreaseReaderFont"
       SemanticProperties.Description="Зменшити шрифт читання" />
      <Button Grid.Column="4" Text="A+" Style="{StaticResource PlayerButton}" Clicked="IncreaseReaderFont"

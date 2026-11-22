@@ -10,7 +10,8 @@ public partial class ReadingPage : ContentPage
 {
     private (string Code, string Name)[] availableTargets = [];
     private string? lastSourceLanguage;
-    private bool updatingTargets;
+    private bool choosingTarget;
+    private bool jumpingSentence;
     private bool narrowReader;
     private bool narrowPlayer;
     private ReaderLayout readingLayout;
@@ -31,14 +32,7 @@ public partial class ReadingPage : ContentPage
     private TranslationReadiness? readiness;
     private string? readinessError;
     private int readinessRequest;
-    private string? TargetCode
-    {
-        get
-        {
-            var index = TargetLanguage.SelectedIndex;
-            return index >= 0 && index < availableTargets.Length ? availableTargets[index].Code : null;
-        }
-    }
+    private string? TargetCode { get; set; }
     private readonly LocalSpeech speech = new();
     private TextSelection? selection;
     private sealed record VocabularyReadingOption(string Label, LemmaSnapshot? Lemma = null,
@@ -257,19 +251,16 @@ public partial class ReadingPage : ContentPage
         {
             var previous = TargetCode;
             lastSourceLanguage = source;
-            updatingTargets = true;
-            try
-            {
-                availableTargets = DocumentLanguages.All.Where(language => language.Code != source).ToArray();
-                TargetLanguage.ItemsSource = availableTargets.Select(language => language.Name).ToArray();
-                var preferred = source is not null && readerPreferences.TranslationTargets.TryGetValue(source, out var stored)
-                    ? stored : previous;
-                var preferredIndex = Array.FindIndex(availableTargets, language => language.Code == preferred);
-                var defaultIndex = Array.FindIndex(availableTargets, language => language.Code == (source == "uk" ? "fr" : "uk"));
-                TargetLanguage.SelectedIndex = preferredIndex >= 0 ? preferredIndex : defaultIndex;
-            }
-            finally { updatingTargets = false; }
+            availableTargets = DocumentLanguages.All.Where(language => language.Code != source).ToArray();
+            var preferred = source is not null && readerPreferences.TranslationTargets.TryGetValue(source, out var stored)
+                ? stored : previous;
+            TargetCode = availableTargets.FirstOrDefault(language => language.Code == preferred).Code
+                ?? (source is null ? null : source == "uk" ? "fr" : "uk");
         }
+
+        var targetLabel = TargetCode is { } chosenTarget ? DocumentLanguages.Name(chosenTarget) : "Мова перекладу";
+        TargetLanguage.Text = targetLabel;
+        SemanticProperties.SetDescription(TargetLanguage, $"Мова перекладу · {targetLabel}");
 
         var wordTranslationLabel = TargetCode is { } cardTarget
             ? $"Ваш переклад · {DocumentLanguages.Name(cardTarget)}" : "Виберіть мову перекладу";
@@ -379,14 +370,25 @@ public partial class ReadingPage : ContentPage
             : null;
     }
 
-    private void TargetChanged(object? sender, EventArgs args)
+    private async void ChooseTargetClicked(object? sender, EventArgs args)
     {
-        if (TranslationNotice is null || Translation is null || updatingTargets) return;
-        Translation.Text = "";
-        if (AppState.Session.Document is { } document && TargetCode is { } target)
+        var session = AppState.Session;
+        if (choosingTarget || session.Busy || session.Document is not { } document) return;
+        choosingTarget = true;
+        try
+        {
+            var target = await NativeChoices.ChooseAsync(this, "Мова перекладу", null,
+                availableTargets.Select(language => (language.Code, language.Name)), TargetCode);
+            if (target is null || target == TargetCode || session.Document is not { } current ||
+                current.Id != document.Id || current.Language != document.Language) return;
+
+            TargetCode = target;
+            Translation.Text = "";
             SaveReaderPreference(ReaderPreferenceChange.TranslationTarget(document.Language, target));
-        UpdateTranslation();
-        if (DetachedTranslation is not null) ResetDetachedTranslation();
+            UpdateTranslation();
+            ResetDetachedTranslation();
+        }
+        finally { choosingTarget = false; }
     }
 
     private async void EditTranslationClicked(object? sender, EventArgs args)
@@ -647,12 +649,32 @@ public partial class ReadingPage : ContentPage
         CancelDetachedSpeechTravel();
         StopSpeech(); await AppState.Session.MoveAsync(1);
     }
-    private async void SentenceChanged(object? sender, EventArgs args)
+    private async void JumpSentenceClicked(object? sender, EventArgs args)
     {
-        if (SentencePicker.SelectedIndex < 0 || AppState.Session.Busy ||
-            SentencePicker.SelectedIndex == AppState.Session.Document?.Position) return;
-        CancelDetachedSpeechTravel();
-        StopSpeech(); await AppState.Session.SelectSentenceAsync(SentencePicker.SelectedIndex);
+        var session = AppState.Session;
+        if (jumpingSentence || PdfPageNotice.IsVisible || session.Busy ||
+            session.Document is not { Sentences.Length: > 0 } document) return;
+
+        jumpingSentence = true;
+        try
+        {
+            var input = await DisplayPromptAsync("Перейти до речення", $"Введіть номер від 1 до {document.Sentences.Length}.",
+                accept: "Перейти", cancel: "Скасувати", keyboard: Keyboard.Numeric, maxLength: 10,
+                initialValue: (document.Position + 1).ToString());
+            if (input is null || session.Busy || session.Document is not { } current ||
+                current.Id != document.Id || current.CurrentRevisionId != document.CurrentRevisionId) return;
+            if (!int.TryParse(input, out var number) || number < 1 || number > current.Sentences.Length)
+            {
+                await DisplayAlertAsync("Перейти до речення", $"Введіть номер від 1 до {current.Sentences.Length}.", "Гаразд");
+                return;
+            }
+            if (number - 1 == current.Position) return;
+
+            CancelDetachedSpeechTravel();
+            StopSpeech();
+            await session.SelectSentenceAsync(number - 1);
+        }
+        finally { jumpingSentence = false; }
     }
 
     private void SpeechPreferencesChanged(object? sender, EventArgs args)
