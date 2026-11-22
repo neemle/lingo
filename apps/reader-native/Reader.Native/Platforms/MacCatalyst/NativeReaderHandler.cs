@@ -1,6 +1,7 @@
 using Foundation;
 using Microsoft.Maui.Handlers;
 using Reader.Contracts;
+using Reader.Presentation;
 using UIKit;
 
 namespace Reader.Native.Controls;
@@ -10,6 +11,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
     private UITapGestureRecognizer? tap;
     private bool updating;
     private string? renderedText;
+    private ReaderTextProjection? projection;
     private DocumentBlock[] renderedBlocks = [];
     private int renderedFontSize;
     private Reader.Presentation.TextSelection? highlightedSentence;
@@ -51,6 +53,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
         if (tap is not null) { platformView.RemoveGestureRecognizer(tap); tap.Dispose(); }
         tap = null;
         renderedText = null;
+        projection = null;
         renderedBlocks = [];
         highlightedSentence = spokenWord = null;
         base.DisconnectHandler(platformView);
@@ -60,14 +63,14 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
     {
         if (renderedText is not { } text || offset < 0 || offset >= text.Length) return;
         var length = char.IsSurrogatePair(text, offset) ? 2 : 1;
-        PlatformView.ScrollRangeToVisible(new NSRange(offset, length));
+        PlatformView.ScrollRangeToVisible(DisplayRange(offset, length));
     }
 
     private void Selected(object? sender, EventArgs args)
     {
         if (updating) return;
         var range = PlatformView.SelectedRange;
-        if (range.Length > 0) VirtualView.SelectSource((int)range.Location, (int)range.Length);
+        SelectDisplayedRange((int)range.Location, (int)range.Length);
     }
 
     private void Tapped()
@@ -80,7 +83,19 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
         if (range is null) return;
         var start = (int)PlatformView.GetOffsetFromPosition(PlatformView.BeginningOfDocument, range.Start);
         var length = (int)PlatformView.GetOffsetFromPosition(range.Start, range.End);
-        VirtualView.SelectSource(start, length);
+        SelectDisplayedRange(start, length);
+    }
+
+    private void SelectDisplayedRange(int start, int length)
+    {
+        if (projection?.ToSource(start, length) is { } source)
+            VirtualView.SelectSource(source.Start, source.Length);
+    }
+
+    private NSRange DisplayRange(int start, int length, bool includeLeadingMarker = false)
+    {
+        var range = projection?.ToDisplay(start, length, includeLeadingMarker) ?? (start, length);
+        return new NSRange(range.Item1, range.Item2);
     }
 
     private static void MapText(NativeReaderHandler handler, NativeReaderView view)
@@ -93,20 +108,22 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
             !handler.renderedBlocks.AsSpan().SequenceEqual(blocks);
         handler.renderedBlocks = blocks;
         var sentence = view.HighlightedSpan();
-        var newSentence = newText || sentence != handler.highlightedSentence;
+        var newLayout = newText || newBlocks;
+        var newSentence = newLayout || sentence != handler.highlightedSentence;
         if (!newSentence && !newFont && !newBlocks) return;
 
         handler.updating = true;
         try
         {
-            if (newText || newFont || newBlocks)
+            if (newLayout || newFont)
             {
                 var font = UIFont.FromName("Georgia", view.ReadingFontSize)
                     ?? UIFont.SystemFontOfSize(view.ReadingFontSize);
-                if (newText)
+                if (newLayout)
                 {
+                    handler.projection = new ReaderTextProjection(source, blocks);
                     using var paragraph = new NSMutableParagraphStyle { LineSpacing = 6 };
-                    using var text = new NSAttributedString(source, new UIStringAttributes
+                    using var text = new NSAttributedString(handler.projection.Text, new UIStringAttributes
                     {
                         Font = font,
                         ForegroundColor = UIColor.FromRGB(72, 75, 64),
@@ -116,19 +133,19 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
                     handler.renderedText = source;
                 }
                 if (font is not null)
-                    handler.ApplyHeadingFonts(source, blocks, font, view.ReadingFontSize, resetBody: !newText);
+                    handler.ApplyBlockStyles(source, blocks, font, view.ReadingFontSize, resetBody: !newLayout);
                 handler.renderedFontSize = view.ReadingFontSize;
             }
 
             if (newSentence)
             {
                 var storage = handler.PlatformView.TextStorage;
-                if (!newText && handler.highlightedSentence is { } previous)
+                if (!newLayout && handler.highlightedSentence is { } previous)
                     storage.RemoveAttribute(UIStringAttributeKey.BackgroundColor,
-                        new NSRange(previous.StartUtf16, previous.LengthUtf16));
+                        handler.DisplayRange(previous.StartUtf16, previous.LengthUtf16));
                 if (sentence is not null)
                     storage.AddAttribute(UIStringAttributeKey.BackgroundColor, UIColor.FromRGB(245, 240, 229),
-                        new NSRange(sentence.StartUtf16, sentence.LengthUtf16));
+                        handler.DisplayRange(sentence.StartUtf16, sentence.LengthUtf16));
                 handler.highlightedSentence = sentence;
                 handler.spokenWord = null;
                 MapSpokenWord(handler, view);
@@ -136,32 +153,65 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
         }
         finally { handler.updating = false; }
         if (newSentence && sentence is not null)
-            handler.PlatformView.ScrollRangeToVisible(new NSRange(sentence.StartUtf16, sentence.LengthUtf16));
+            handler.PlatformView.ScrollRangeToVisible(handler.DisplayRange(sentence.StartUtf16, sentence.LengthUtf16));
     }
 
-    private void ApplyHeadingFonts(string text, DocumentBlock[] blocks, UIFont body, int size, bool resetBody)
+    private void ApplyBlockStyles(string text, DocumentBlock[] blocks, UIFont body, int size, bool resetBody)
     {
-        if (text.Length == 0) return;
+        if (projection is not { } layout || layout.Text.Length == 0) return;
         var storage = PlatformView.TextStorage;
         storage.BeginEditing();
         try
         {
-            if (resetBody) storage.AddAttribute(UIStringAttributeKey.Font, body, new NSRange(0, text.Length));
+            if (resetBody) storage.AddAttribute(UIStringAttributeKey.Font, body, new NSRange(0, layout.Text.Length));
+            DocxTableCell? previousCell = null;
             foreach (var block in blocks)
             {
                 var start = block.StartUtf16;
                 var end = block.EndUtf16;
-                if (block.Kind != "heading" || start < 0 || end <= start || end > text.Length ||
+                if (start < 0 || end <= start || end > text.Length ||
                     char.IsLowSurrogate(text[start]) || end < text.Length && char.IsLowSurrogate(text[end]))
                     continue;
 
-                var headingSize = size + (block.HeadingLevel switch { 1 => 6, 2 => 4, _ => 2 });
-                var heading = UIFont.FromName("Georgia-Bold", headingSize) ?? UIFont.BoldSystemFontOfSize(headingSize);
-                if (heading is not null)
-                    storage.AddAttribute(UIStringAttributeKey.Font, heading, new NSRange(start, end - start));
+                if (block.Kind == "heading")
+                {
+                    var headingSize = size + (block.HeadingLevel switch { 1 => 6, 2 => 4, _ => 2 });
+                    var heading = UIFont.FromName("Georgia-Bold", headingSize) ?? UIFont.BoldSystemFontOfSize(headingSize);
+                    if (heading is not null)
+                        storage.AddAttribute(UIStringAttributeKey.Font, heading, DisplayRange(start, end - start));
+                }
+
+                if (block.List is not null || block.TableCell is not null)
+                {
+                    using var style = ParagraphStyle(block, previousCell, size);
+                    var paragraphStart = start > 0 ? text.LastIndexOf('\n', start - 1) + 1 : 0;
+                    var paragraphEnd = text.IndexOf('\n', end);
+                    paragraphEnd = paragraphEnd < 0 ? text.Length : paragraphEnd + 1;
+                    storage.AddAttribute(UIStringAttributeKey.ParagraphStyle, style,
+                        DisplayRange(paragraphStart, paragraphEnd - paragraphStart, includeLeadingMarker: true));
+                }
+                previousCell = block.TableCell;
             }
         }
         finally { storage.EndEditing(); }
+    }
+
+    private static NSMutableParagraphStyle ParagraphStyle(DocumentBlock block, DocxTableCell? previousCell, int size)
+    {
+        var list = block.List;
+        var cell = block.TableCell;
+        var indent = cell is null ? 0 : size / 2 + (int)Math.Min(cell.Column, 4U) * 6;
+        if (list is not null) indent += size / 2 + Math.Clamp(list.Level, 0, 8) * 9;
+        var hanging = list?.Marker is { Length: > 0 } marker ? Math.Min(marker.Length, 6) * size / 2 : 0;
+        var spacing = cell is null ? 0 : previousCell is null || previousCell.Table != cell.Table ? 12
+            : previousCell.Row != cell.Row ? 9 : previousCell.Column != cell.Column ? 3 : 0;
+        return new NSMutableParagraphStyle
+        {
+            LineSpacing = 6,
+            ParagraphSpacingBefore = spacing,
+            FirstLineHeadIndent = indent,
+            HeadIndent = indent + hanging,
+        };
     }
 
     private static void MapSpokenWord(NativeReaderHandler handler, NativeReaderView view)
@@ -170,7 +220,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
         var storage = handler.PlatformView.TextStorage;
         if (handler.spokenWord is { } previous)
             storage.AddAttribute(UIStringAttributeKey.BackgroundColor, UIColor.FromRGB(245, 240, 229),
-                new NSRange(previous.StartUtf16, previous.LengthUtf16));
+                handler.DisplayRange(previous.StartUtf16, previous.LengthUtf16));
 
         var word = view.SpokenWord;
         handler.spokenWord = null;
@@ -179,7 +229,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
             word.StartUtf16 + word.LengthUtf16 <= view.Text.Length)
         {
             storage.AddAttribute(UIStringAttributeKey.BackgroundColor, UIColor.FromRGB(247, 201, 112),
-                new NSRange(word.StartUtf16, word.LengthUtf16));
+                handler.DisplayRange(word.StartUtf16, word.LengthUtf16));
             handler.spokenWord = word;
         }
     }
