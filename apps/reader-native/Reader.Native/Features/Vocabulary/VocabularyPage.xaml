@@ -21,15 +21,19 @@
    <Button Grid.Column="1" Text="Повторити слова" Style="{StaticResource AccentButton}" VerticalOptions="Center" Clicked="PracticeClicked" />
   </Grid>
   <VerticalStackLayout Grid.Row="1" Spacing="8">
-   <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+   <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
     <Border Padding="6,0" Stroke="{StaticResource BorderTone}" StrokeShape="RoundRectangle 8" BackgroundColor="{StaticResource Panel}">
      <Picker x:Name="CollectionPicker" Title="Добірка за документом" IsEnabled="False"
       SelectedIndexChanged="CollectionChanged" SemanticProperties.Description="Добірка за документом" />
     </Border>
-    <Button Grid.Column="1" x:Name="ExportDictionary" Text="Експорт словника" Style="{StaticResource OutlineButton}"
-     IsEnabled="False" Clicked="ExportClicked" />
-    <Button Grid.Column="2" x:Name="ImportDictionary" Text="Імпорт словника" Style="{StaticResource OutlineButton}" Clicked="ImportClicked" />
+    <Button Grid.Column="1" x:Name="ImportDictionary" Text="Імпорт словника" Style="{StaticResource OutlineButton}" Clicked="ImportClicked" />
    </Grid>
+   <HorizontalStackLayout Spacing="8">
+    <Button x:Name="ExportDictionary" Text="Зберегти словник" Style="{StaticResource OutlineButton}"
+     IsEnabled="False" Clicked="ExportClicked" />
+    <Button x:Name="ShareDictionary" Text="Поширити словник" Style="{StaticResource OutlineButton}"
+     IsEnabled="False" Clicked="ExportClicked" CommandParameter="share" />
+   </HorizontalStackLayout>
    <Label x:Name="ArchiveStatus" TextColor="{StaticResource Sage}" IsVisible="False" />
    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
     <Border Stroke="{StaticResource BorderTone}" StrokeShape="RoundRectangle 8" BackgroundColor="{StaticResource Panel}">

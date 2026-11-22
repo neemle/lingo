@@ -140,8 +140,9 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         try
         {
             var backup = await AppState.Session.ExportAsync();
-            await NativeFiles.ShareBytesAsync("reader-backup.json", NativeFiles.Encode(backup));
-            Status.Text = "Архів підготовлено. Місце збереження обираєте ви.";
+            var bytes = await Task.Run(() => NativeFiles.Encode(backup));
+            Status.Text = await NativeFiles.ExportBytesAsync(this, "reader-backup.json", bytes,
+                share: sender is Button { CommandParameter: "share" }) ?? "";
         }
         catch (Exception error) { await DisplayAlertAsync("Резервна копія", error.Message, "Гаразд"); }
     }
@@ -171,7 +172,8 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
             if (AppState.Session.Document is not { } doc) { Status.Text = "Спочатку відкрийте документ."; return; }
             var original = await AppState.Session.OriginalAsync(doc.Id);
             var bytes = original.Bytes.Select(value => checked((byte)value)).ToArray();
-            await NativeFiles.ShareBytesAsync(original.Name, bytes);
+            Status.Text = await NativeFiles.ExportBytesAsync(this, original.Name, bytes,
+                share: sender is Button { CommandParameter: "share" }) ?? "";
         }
         catch (Exception error) { await DisplayAlertAsync("Оригінал", error.Message, "Гаразд"); }
     }

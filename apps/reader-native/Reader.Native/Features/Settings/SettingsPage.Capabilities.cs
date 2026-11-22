@@ -32,7 +32,8 @@ public partial class SettingsPage
         try
         {
             CapabilityStatus.Text = "";
-            await NativeFiles.ShareBytesAsync("lingo-language-capabilities.json", NativeFiles.Encode(profile));
+            CapabilityStatus.Text = await NativeFiles.ExportBytesAsync(this, "lingo-language-capabilities.json",
+                NativeFiles.Encode(profile)) ?? "";
         }
         catch (Exception error)
         {

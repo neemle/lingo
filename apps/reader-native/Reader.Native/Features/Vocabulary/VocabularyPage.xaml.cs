@@ -187,8 +187,9 @@ public partial class VocabularyPage : ContentPage
         var ready = !transferring && !loadingCollection;
         CollectionPicker.IsEnabled = !transferring && choices.Length > 1;
         ImportDictionary.IsEnabled = !transferring;
-        ExportDictionary.IsEnabled = ready && entries.Length > 0;
-        ExportDictionary.Text = ActiveCollection.DocumentId is null ? "Експорт словника" : "Експорт добірки";
+        ExportDictionary.IsEnabled = ShareDictionary.IsEnabled = ready && entries.Length > 0;
+        ExportDictionary.Text = ActiveCollection.DocumentId is null ? "Зберегти словник" : "Зберегти добірку";
+        ShareDictionary.Text = ActiveCollection.DocumentId is null ? "Поширити словник" : "Поширити добірку";
         SemanticSearch.IsEnabled = ready && !searching && entries.Length > 0 &&
             !string.IsNullOrWhiteSpace(VocabularyQuery.Text);
     }
@@ -363,7 +364,9 @@ public partial class VocabularyPage : ContentPage
             }
             var fileName = documentId is null ? "chytai-dictionary.json" : "chytai-collection.json";
             var bytes = await Task.Run(() => NativeFiles.Encode(archive));
-            await NativeFiles.ShareBytesAsync(fileName, bytes);
+            if (await NativeFiles.ExportBytesAsync(this, fileName, bytes,
+                share: sender is Button { CommandParameter: "share" }) is { } status)
+                ShowArchiveStatus(status);
         }
         catch (Exception error) { ShowArchiveStatus(error.Message); }
         finally
