@@ -94,6 +94,10 @@ public partial class ReadingPage
             || saved.Cursor.TokenLengthUtf16 is not int length || offset < 0 || length <= 0
             || offset > sentence.EndUtf16 - sentence.StartUtf16 - length)
             return null;
-        return (sentence.StartUtf16 + offset, length);
+        var start = sentence.StartUtf16 + offset;
+        if (offset > sentence.Text.Length - length) return null;
+        var selection = new TextSelection(start, length, sentence.Text.Substring(offset, length));
+        return SourceRanges.TrimFootnoteReference(selection, document.Blocks) is { } lexical
+            ? (lexical.StartUtf16, lexical.LengthUtf16) : null;
     }
 }

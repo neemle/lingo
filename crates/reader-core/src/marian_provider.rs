@@ -842,6 +842,20 @@ impl Store {
             )?;
             Ok(sentence)
         }
+        let cleaned = |document: &crate::Document, sentence: &crate::Sentence,
+                       projected: word_break::ProjectedSelection<'_>| {
+            let projected_text = projected.text.into_owned();
+            let projected_context = projected.context.into_owned();
+            let mask = crate::document_layout::mask_pdf_note_references;
+            if projected_context == sentence.text {
+                let source = mask(document, &projected_text, sentence.start_utf8 + projected.start_utf8)
+                    .map(|text| text.trim().to_owned()).unwrap_or(projected_text);
+                let context = mask(document, &projected_context, sentence.start_utf8).unwrap_or(projected_context);
+                (source, context)
+            } else {
+                (projected_text, projected_context)
+            }
+        };
         let (language, source, context) = if let Some(page) = selection.page {
             let cached = self.detached_pdf_sentences(id, page)?
                 .ok_or("Текст сторінки PDF недоступний.")?;
@@ -849,15 +863,23 @@ impl Store {
             let projected = word_break::project_selection(
                 self, (id, page), &cached.sentences, sentence, selection.start_utf16, &selection.text,
             )?;
-            (cached.language, projected.text.into_owned(), projected.context.into_owned())
+            let layout = crate::document_layout::detached_pdf_document(
+                cached.text, self.detached_pdf_ocr(id, page)?.map(|ocr| ocr.lines),
+            );
+            let (source, context) = cleaned(&layout, sentence, projected);
+            (cached.language, source, context)
         } else {
             let document = self.translation_document(id)?;
             let sentence = resolve(&document.sentences, document.current_revision_id.as_deref(), selection)?;
             let projected = word_break::project_canonical_selection(
                 self, &document, sentence, selection.start_utf16, &selection.text,
             )?;
-            (document.language, projected.text.into_owned(), projected.context.into_owned())
+            let (source, context) = cleaned(&document, sentence, projected);
+            (document.language, source, context)
         };
+        if source.is_empty() {
+            return Ok(None);
+        }
         if language == "fr" && target == "uk" {
             if let Some(number) = crate::french_cardinals::compound(&source) {
                 let text = crate::tts::uk_numbers::cardinal(number).replace('\'', "’");

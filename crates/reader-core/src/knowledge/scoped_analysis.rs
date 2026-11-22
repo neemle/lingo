@@ -289,7 +289,17 @@ impl Store {
             }
             AnalysisScope::Sentence { .. } => return Ok(None),
         };
-        let context = WordContext { sentence: sentence.text.clone(), start_utf16: offset };
+        let layout = crate::document_layout::detached_pdf_document(
+            cached.text, self.detached_pdf_ocr(document_id, page)?.map(|ocr| ocr.lines),
+        );
+        let mask = crate::document_layout::mask_pdf_note_references;
+        let spelling = crate::ocr::byte_at_utf16(&sentence.text, offset)
+            .and_then(|offset| mask(&layout, word, sentence.start_utf8 + offset));
+        let word = spelling.as_deref().unwrap_or(word).trim_end();
+        let context = WordContext {
+            sentence: mask(&layout, &sentence.text, sentence.start_utf8).unwrap_or_else(|| sentence.text.clone()),
+            start_utf16: offset,
+        };
         let mut lookup = self.lookup_word(&cached.language, word, Some(&context))?;
         if let Some(lookup) = &mut lookup {
             lookup.bind_expression_tokens(|start| token_id(&cached.revision, &sentence.id, start));

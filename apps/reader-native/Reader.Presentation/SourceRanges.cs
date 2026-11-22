@@ -1,4 +1,5 @@
 using System.Globalization;
+using Reader.Contracts;
 
 namespace Reader.Presentation;
 
@@ -52,6 +53,43 @@ public sealed class SourceRanges(string text)
             var originalEnd = after < originalStarts.Length ? originalStarts[after] : originalLength;
             boundary(originalStart, originalEnd - originalStart);
         };
+
+    public static TextSelection? TrimFootnoteReference(TextSelection selection,
+        IReadOnlyList<DocumentBlock> blocks)
+    {
+        var end = selection.StartUtf16 + selection.LengthUtf16;
+        foreach (var block in blocks)
+        {
+            if (block.StartUtf16 >= end) break;
+            if (block.EndUtf16 <= selection.StartUtf16) continue;
+            foreach (var marker in block.FootnoteReferences)
+            {
+                if (marker.StartUtf16 >= end || marker.EndUtf16 < end) continue;
+                if (marker.StartUtf16 <= selection.StartUtf16) return null;
+                var length = marker.StartUtf16 - selection.StartUtf16;
+                return selection with { LengthUtf16 = length, Text = selection.Text[..length] };
+            }
+        }
+        return selection;
+    }
+
+    public static string MaskFootnoteReferences(string text, int start, IReadOnlyList<DocumentBlock> blocks)
+    {
+        var end = start + text.Length;
+        char[]? masked = null;
+        foreach (var block in blocks)
+        {
+            if (block.StartUtf16 >= end) break;
+            if (block.EndUtf16 <= start) continue;
+            foreach (var marker in block.FootnoteReferences)
+            {
+                if (marker.StartUtf16 < start || marker.EndUtf16 > end || marker.StartUtf16 >= marker.EndUtf16) continue;
+                masked ??= text.ToCharArray();
+                masked.AsSpan(marker.StartUtf16 - start, marker.EndUtf16 - marker.StartUtf16).Fill(' ');
+            }
+        }
+        return masked is null ? text : new string(masked);
+    }
 
     public static TextSelection? Selection(string source, int start, int length) =>
         new SourceRanges(source).Selection(start, length);

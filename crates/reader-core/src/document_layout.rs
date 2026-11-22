@@ -570,7 +570,7 @@ fn pdf_note_references(text: &str, numbers: &[u32]) -> Vec<Range<usize>> {
 
 pub(crate) fn mask_pdf_note_references(document: &Document, text: &str, start: usize) -> Option<String> {
     if document.format != "pdf" { return None; }
-    let end = start + text.len();
+    let end = start.checked_add(text.len())?;
     let first = document.blocks.partition_point(|block| block.end_utf8 <= start);
     let refs = document.blocks[first..].iter().take_while(|block| block.start_utf8 < end)
         .flat_map(|block| &block.footnote_references)
@@ -580,12 +580,12 @@ pub(crate) fn mask_pdf_note_references(document: &Document, text: &str, start: u
     for reference in refs {
         let range = reference.start_utf8 - start..reference.end_utf8 - start;
         let marker = text.get(range.clone())?;
-        clean.push_str(&text[copied..range.start]);
+        clean.push_str(text.get(copied..range.start)?);
         clean.extend(std::iter::repeat_n(' ', marker.encode_utf16().count()));
         copied = range.end;
     }
     if copied == 0 { return None; }
-    clean.push_str(&text[copied..]);
+    clean.push_str(text.get(copied..)?);
     Some(clean)
 }
 

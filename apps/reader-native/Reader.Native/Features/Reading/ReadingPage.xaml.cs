@@ -455,7 +455,10 @@ public partial class ReadingPage : ContentPage
     private async Task ShowWordAsync(TextSelection selected, (VisualElement View, Point Point)? pdfAnchor = null)
     {
         var session = AppState.Session;
-        if (session.Document is not { } doc) return;
+        if (session.Document is not { } doc ||
+            Reader.Presentation.SourceRanges.TrimFootnoteReference(selected, doc.Blocks) is not { } lexical)
+            return;
+        selected = lexical;
         dictionaryFocus = null;
         RecordReadingActivity();
         if (selection != selected)
@@ -497,7 +500,9 @@ public partial class ReadingPage : ContentPage
             else if (index >= 0 && index != doc.Position)
                 await session.SelectSentenceAsync(index);
 
-            var context = index < 0 ? null : new WordContext(doc.Sentences[index].Text,
+            var context = index < 0 ? null : new WordContext(
+                Reader.Presentation.SourceRanges.MaskFootnoteReferences(
+                    doc.Sentences[index].Text, doc.Sentences[index].StartUtf16, doc.Blocks),
                 selected.StartUtf16 - doc.Sentences[index].StartUtf16);
             var lookup = anchored is { SentenceStartUtf16: int offset, TokenLengthUtf16: int length }
                 && doc.Sentences.ElementAtOrDefault(anchored.Position) is { } canonical

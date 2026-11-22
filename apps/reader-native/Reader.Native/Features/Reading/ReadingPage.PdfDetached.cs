@@ -116,7 +116,9 @@ public partial class ReadingPage
     private async Task ShowDetachedSelectionAsync(TextSelection selected,
         (VisualElement View, Point Point)? pdfAnchor = null)
     {
-        if (detachedAddress is not { } address || loadingDetachedSentence) return;
+        if (detachedAddress is not { } address || loadingDetachedSentence ||
+            SourceRanges.TrimFootnoteReference(selected, DetachedPdfText.Blocks) is not { } lexical) return;
+        selected = lexical;
         if (detachedSentence?.Sentence is not { } active || selected.StartUtf16 < active.StartUtf16 ||
             selected.StartUtf16 >= active.EndUtf16)
             await LoadDetachedSentenceAsync(address, position: null, sourceOffset: selected.StartUtf16);
