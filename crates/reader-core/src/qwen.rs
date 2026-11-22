@@ -3,6 +3,7 @@ use crate::{
     knowledge::{annotation_cache, resolve_text_selection, select_words, AnalysisScope},
     optional_models::OptionalModelJob,
     pdf_detached_pages::word_break,
+    resources::ModelBudget,
     Result, Sentence, Store,
 };
 use llama_cpp_2::{
@@ -24,6 +25,16 @@ use std::{
 };
 
 pub(crate) const HINT_GENERATION_MODEL: &str = "qwen-2b";
+
+// CPU maps the 1.2 GiB quantized model. Metal needs additional unified memory for offload.
+pub(crate) const CPU_BUDGET: ModelBudget = ModelBudget {
+    working_mib: 1536,
+    minimum_total_mib: 6144,
+};
+const METAL_BUDGET: ModelBudget = ModelBudget {
+    working_mib: 2560,
+    ..CPU_BUDGET
+};
 
 const CONTEXT_TOKENS: u32 = 768;
 const RESPONSE_TOKENS: usize = 160;
@@ -878,20 +889,19 @@ fn with_prompt_context<T>(
 ) -> Result<T> {
     let backend = backend()?;
     let path = directory.join("model.gguf");
-    let mut layers = if cfg!(target_vendor = "apple") && backend.supports_gpu_offload() { 99 } else { 0 };
-    loop {
-        check()?;
-        match load_model(backend, &path, layers) {
-            Ok(model) => match model.new_context(backend, context_parameters()) {
-                Ok(mut context) => return run(&model, &mut context),
-                Err(error) if layers == 0 => return Err(runtime_error(error)),
-                Err(_) => {}
-            },
-            Err(error) if layers == 0 => return Err(error),
-            Err(_) => {}
+    check()?;
+    if cfg!(target_vendor = "apple") && METAL_BUDGET.readiness().ready && backend.supports_gpu_offload() {
+        if let Ok(model) = load_model(backend, &path, 99) {
+            if let Ok(mut context) = model.new_context(backend, context_parameters(true)) {
+                return run(&model, &mut context);
+            }
         }
-        layers = 0;
+        check()?;
     }
+
+    let model = load_model(backend, &path, 0)?;
+    let mut context = model.new_context(backend, context_parameters(false)).map_err(runtime_error)?;
+    run(&model, &mut context)
 }
 
 /// One short CPU decode verifies the staged GGUF and runtime without generating an explanation.
@@ -908,7 +918,7 @@ pub(crate) fn smoke(directory: &Path, interrupted: &dyn Fn() -> bool) -> Result<
     let model = load_model(backend, &directory.join("model.gguf"), 0)?;
     check()?;
     let mut context = model
-        .new_context(backend, context_parameters())
+        .new_context(backend, context_parameters(false))
         .map_err(runtime_error)?;
     let tokens = model.vocab().tokenize(b"Hello", false, false);
     if tokens.is_empty() || tokens.len() > 16 {
@@ -946,9 +956,11 @@ fn load_model(backend: &LlamaBackend, path: &Path, layers: u32) -> Result<LlamaM
     LlamaModel::load_from_file(backend, path, &params).map_err(runtime_error)
 }
 
-fn context_parameters() -> LlamaContextParams {
+fn context_parameters(gpu: bool) -> LlamaContextParams {
     let threads = std::thread::available_parallelism().map_or(1, |count| count.get().min(3)) as i32;
     LlamaContextParams::default()
+        .with_offload_kqv(gpu)
+        .with_op_offload(gpu)
         .with_n_ctx(NonZeroU32::new(CONTEXT_TOKENS))
         .with_n_batch(BATCH as u32)
         .with_n_ubatch(BATCH as u32)

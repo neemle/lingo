@@ -67,10 +67,7 @@ const MODELS: &[Model] = &[
         license: "Apache-2.0",
         repo: "unsloth/Qwen3.5-2B-GGUF",
         revision: "f6d5376be1edb4d416d56da11e5397a961aca8ae",
-        budget: ModelBudget {
-            working_mib: 2560,
-            minimum_total_mib: 6144,
-        },
+        budget: crate::qwen::CPU_BUDGET,
         assets: &[Asset {
             name: "model.gguf",
             remote_path: "Qwen3.5-2B-Q4_K_M.gguf",
@@ -403,9 +400,9 @@ fn verify_inference_assets(directory: &Path, model: &Model, checkpoint: &impl Fn
 
 fn check_memory(model: &Model) -> Result<()> {
     let memory = model.budget.readiness();
-    if memory.available_mib.is_none() {
+    let Some(available) = memory.available_mib else {
         return Err("Не вдалося визначити доступну пам’ять. Модель пропущено.".into());
-    }
+    };
     if memory
         .total_mib
         .is_some_and(|total| total < memory.minimum_total_mib)
@@ -417,7 +414,7 @@ fn check_memory(model: &Model) -> Result<()> {
     }
     if !memory.ready {
         return Err(format!(
-            "Для {} потрібно {} МіБ доступної пам’яті.",
+            "Для {} потрібно {} МіБ доступної пам’яті. Зараз доступно {available} МіБ.",
             model.name, memory.required_mib
         ));
     }

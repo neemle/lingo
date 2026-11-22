@@ -65,12 +65,6 @@ public partial class ReadingPage
                 return;
             }
             if (!isCurrent()) return;
-            if (selected.Memory?.Ready == false)
-            {
-                result.IsVisible = true;
-                result.Text = "Для Qwen 2B зараз бракує пам’яті.";
-                return;
-            }
             result.IsVisible = true;
             result.Text = $"{selected.Name} готує пояснення…";
             var explanation = await explain(selected.Id, false);
@@ -102,7 +96,8 @@ public partial class ReadingPage
     private static void ShowExplanation(Label result, string model, WordExplanation explanation)
     {
         result.IsVisible = true;
-        var label = explanation.Cached ? "Збережене пояснення" : "Припущення";
-        result.Text = $"{label} {model} · {explanation.Explanation}";
+        var detail = explanation.Explanation.Replace(" У цьому реченні — ", $"{Environment.NewLine}Граматична роль: ");
+        var label = explanation.Cached ? "Збережена підказка" : "Локальна підказка";
+        result.Text = $"{detail}{Environment.NewLine}{label} · {model}";
     }
 }

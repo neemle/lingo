@@ -221,11 +221,6 @@ public partial class ReadingPage
                     hints.Text = "Установіть Qwen 2B у налаштуваннях. Підказки мовного пакета залишаються доступними.";
                     return;
                 }
-                if (available.Memory?.Ready == false)
-                {
-                    hints.Text = "Для Qwen 2B зараз бракує пам’яті.";
-                    return;
-                }
                 hints.Text = $"{available.Name} перевіряє текст…";
                 if (await review(available.Id, false) is { } result) ShowReview(available.Name, result);
             }
