@@ -309,6 +309,11 @@ public sealed class CoreClient : IDisposable
         Call<PracticeProgress>(new { version = 1, operation = "practice" });
     public PracticeProgress SetPractice(PracticeProgress progress) =>
         Call<PracticeProgress>(new { version = 1, operation = "set_practice", progress });
+    public PracticeQueue NextPracticeQuestion(ulong revision, PracticeSettings? settings) =>
+        Call<PracticeQueue>(new { version = 1, operation = "next_practice_question", revision, settings });
+
+    public PracticeAnswer AnswerPracticeQuestion(ulong revision, string? answer, uint elapsedMs) =>
+        Call<PracticeAnswer>(new { version = 1, operation = "answer_practice_question", revision, answer, elapsedMs });
     public void GradePractice(ulong revision, byte grade) =>
         Call<PracticeProgress>(new { version = 1, operation = "grade_practice", revision, grade });
     public void Restore(Backup backup) => Call<JsonElement>(new { version = 1, operation = "restore", backup });

@@ -14,11 +14,19 @@ pub struct PracticeProgress {
     pub collection: Option<PracticeCollection>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PracticeCollection {
     pub document_id: String,
     pub source_hash: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PracticeSettings {
+    direction: String,
+    mode: u8,
+    collection: Option<PracticeCollection>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +48,14 @@ pub struct PracticeQueue {
     pub progress: PracticeProgress,
     pub due_count: usize,
     pub total_cards: usize,
+    pub matches_dictionary: Option<bool>,
+}
+
+impl SavedQuestion {
+    fn dictionary_match(&self) -> Option<bool> {
+        let answer = answer_key(self.given_answer.as_deref()?);
+        Some(self.answers.iter().any(|candidate| answer_key(candidate) == answer))
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -275,12 +291,31 @@ impl Store {
 
     /// Select a due card in the saved direction and collection, or resume the open question.
     pub fn next_practice_question(&mut self, revision: u64) -> Result<PracticeQueue> {
+        self.practice_queue(revision, None)
+    }
+
+    pub fn practice_queue(&mut self, revision: u64, settings: Option<PracticeSettings>) -> Result<PracticeQueue> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
         let mut progress = read(&tx)?.unwrap_or_default();
         assert_revision(revision, progress.revision)?;
+        let mut changed = false;
+        if let Some(settings) = settings {
+            let mut proposed = PracticeProgress {
+                revision, direction: settings.direction, mode: settings.mode,
+                question: None, collection: settings.collection,
+            };
+            proposed.validate()?;
+            align_question(&tx, &mut proposed)?;
+            if proposed.direction != progress.direction || proposed.mode != progress.mode
+                || proposed.collection != progress.collection
+            {
+                progress = proposed;
+                changed = true;
+            }
+        }
         let collection = progress
             .collection
             .as_ref()
@@ -315,12 +350,16 @@ impl Store {
                     given_answer: None,
                     elapsed_ms: None,
                 });
-                progress.advance()?;
-                write(&tx, &progress)?;
+                changed = true;
             }
+        }
+        if changed {
+            progress.advance()?;
+            write(&tx, &progress)?;
         }
         tx.commit().map_err(|error| error.to_string())?;
         Ok(PracticeQueue {
+            matches_dictionary: progress.question.as_ref().and_then(SavedQuestion::dictionary_match),
             progress,
             due_count,
             total_cards: cards.len(),
@@ -359,12 +398,10 @@ impl Store {
         if progress.mode != 0 && normalized.is_none() || invalid_choice {
             return Err("Введіть відповідь або виберіть один із варіантів.".into());
         }
-        let matches_dictionary = normalized.map(|key| {
-            question.answers.iter().any(|candidate| answer_key(candidate) == key)
-        });
         question.revealed = true;
         question.given_answer = answer.map(str::to_owned);
         question.elapsed_ms = elapsed_ms;
+        let matches_dictionary = question.dictionary_match();
         progress.advance()?;
         write(&tx, &progress)?;
         tx.commit().map_err(|error| error.to_string())?;

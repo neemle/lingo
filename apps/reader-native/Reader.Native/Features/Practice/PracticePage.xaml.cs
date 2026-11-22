@@ -2,8 +2,6 @@ using System.Diagnostics;
 using System.Text;
 using Reader.Contracts;
 using Reader.Native.Services;
-using Reader.Presentation;
-using VocabularyCard = Reader.Contracts.Vocabulary;
 
 namespace Reader.Native.Features.Practice;
 
@@ -17,8 +15,8 @@ public partial class PracticePage : ContentPage
     private readonly Stopwatch responseTimer = new();
     private ulong? timedRevision;
     private CollectionChoice[] collections = [AllCards];
-    private VocabularyCard[] vocabulary = [];
     private PracticeProgress? progress;
+    private PracticeQueue? queue;
     private int loadVersion;
     private bool loading;
     private bool renderingSettings;
@@ -45,7 +43,8 @@ public partial class PracticePage : ContentPage
         base.OnDisappearing();
     }
 
-    private async Task LoadAsync(bool refreshLibrary = false, CollectionChoice? selected = null)
+    private async Task LoadAsync(bool refreshLibrary = false, CollectionChoice? selected = null,
+        PracticeSettings? settings = null)
     {
         var request = ++loadVersion;
         var session = AppState.Session;
@@ -63,18 +62,12 @@ public partial class PracticePage : ContentPage
                 SetCollections(sources);
             }
 
-            var state = session.GetPractice();
-            var scope = selected is null ? state.Collection : selected.Scope;
-            var collection = collections.FirstOrDefault(choice => SameCollection(choice.Scope, scope))?.Scope ?? scope;
-            var cards = collection is null ? session.Snapshot.Vocabulary
-                : await session.DictionaryCollectionAsync(collection.DocumentId);
+            var state = await session.GetPracticeAsync();
             if (request != loadVersion) return;
-
-            var changed = selected is not null && !SameCollection(state.Collection, scope);
-            if (changed || state.Question is { } question && !cards.Any(card => card.Id == question.CardId))
-                OpenQuestion(state with { Collection = scope, Question = null }, cards, settingsChanged: true);
-            else
-                OpenQuestion(state, cards);
+            if (selected is not null && !SameCollection(state.Collection, selected.Scope))
+                settings = new PracticeSettings(state.Direction, state.Mode, selected.Scope);
+            var next = await session.NextPracticeQuestionAsync(state.Revision, settings);
+            if (request == loadVersion) OpenQuestion(next);
         }
         catch (Exception error)
         {
@@ -162,26 +155,13 @@ public partial class PracticePage : ContentPage
         else responseTimer.Stop();
     }
 
-    private void OpenQuestion(PracticeProgress state, VocabularyCard[] cards, bool settingsChanged = false)
+    private void OpenQuestion(PracticeQueue next)
     {
-        var session = AppState.Session;
-        var reverse = state.Direction == "reverse";
-        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var due = cards.Where(card => (reverse ? card.Reverse : card.Forward).DueAt <= now).ToArray();
-        if (state.Question is null && due.FirstOrDefault() is { } card)
-        {
-            var question = PracticeQuestion.Create(card, cards, reverse, state.Mode == 2);
-            state = session.SetPractice(state with
-            {
-                Question = new SavedQuestion(card.Id, question.Prompt, question.Answers, question.Options),
-            });
-        }
-        else if (settingsChanged) state = session.SetPractice(state);
-
+        var state = next.Progress;
+        queue = next;
         progress = state;
-        vocabulary = cards;
         ShowSelectedCollection(state.Collection);
-        Render(state, due.Length);
+        Render(next);
         var revision = state.Question is { Revealed: false } ? state.Revision : (ulong?)null;
         if (revision != timedRevision)
         {
@@ -191,8 +171,9 @@ public partial class PracticePage : ContentPage
         UpdateControls();
     }
 
-    private void Render(PracticeProgress state, int due)
+    private void Render(PracticeQueue next)
     {
+        var state = next.Progress;
         renderingSettings = true;
         try
         {
@@ -208,12 +189,12 @@ public partial class PracticePage : ContentPage
         var saved = state.Question;
         var session = AppState.Session;
         var allCards = state.Collection is null;
-        var noCards = vocabulary.Length == 0;
+        var noCards = next.TotalCards == 0;
         var emptyTitle = allCards ? "Знайдімо ваші перші слова" : "У добірці немає карток";
         var emptyHint = allCards ? "Збережіть кілька слів під час читання, щоб почати практику."
             : "Оберіть іншу добірку або додайте слова з документа.";
         Prompt.Text = saved?.Prompt ?? (noCards ? emptyTitle : "На сьогодні все");
-        var card = saved is null ? null : vocabulary.FirstOrDefault(entry => entry.Id == saved.CardId);
+        var card = saved is null ? null : session.Snapshot.Vocabulary.FirstOrDefault(entry => entry.Id == saved.CardId);
         var context = saved is null
             ? noCards ? emptyHint : "Усі картки цього напряму повторено. Можна змінити напрям або повернутися до читання."
             : state.Direction == "reverse" ? "Згадайте слово мовою оригіналу."
@@ -234,7 +215,7 @@ public partial class PracticePage : ContentPage
         TypedAnswer.Text = "";
         Feedback.IsVisible = false;
         Choices.Children.Clear();
-        QueueStatus.Text = saved is null ? "" : $"До повторення · {due}";
+        QueueStatus.Text = saved is null ? "" : $"До повторення · {next.DueCount}";
         Grades.IsVisible = saved?.Revealed == true;
         Reveal.IsVisible = saved is { Revealed: false } && state.Mode == 0;
         Choices.IsVisible = saved is { Revealed: false, Options.Length: > 0 } && state.Mode == 2;
@@ -248,8 +229,7 @@ public partial class PracticePage : ContentPage
             Answer.Text = string.Join(" · ", saved.Answers);
             if (saved.GivenAnswer is { } attempt)
             {
-                var question = new PracticeQuestion(saved.Prompt, saved.Answers, saved.Options);
-                var result = question.Matches(attempt)
+                var result = next.MatchesDictionary == true
                     ? "Відповідь збігається зі словником."
                     : "Порівняйте свою відповідь зі словником і оцініть себе.";
                 Feedback.Text = $"Ваша відповідь: {attempt}\n{result}";
@@ -262,37 +242,49 @@ public partial class PracticePage : ContentPage
         foreach (var option in saved.Options)
         {
             var button = new Button { Text = option };
-            button.Clicked += (_, _) => ShowAnswer(option);
+            button.Clicked += async (_, _) => await ShowAnswerAsync(option);
             Choices.Children.Add(button);
         }
     }
 
-    private void RevealClicked(object? sender, EventArgs args) => ShowAnswer(null);
+    private async void RevealClicked(object? sender, EventArgs args) => await ShowAnswerAsync(null);
 
-    private void CheckTyped(object? sender, EventArgs args)
+    private async void CheckTyped(object? sender, EventArgs args)
     {
         if (!Typing.IsVisible || string.IsNullOrWhiteSpace(TypedAnswer.Text)) return;
-        ShowAnswer(TypedAnswer.Text.Trim());
+        await ShowAnswerAsync(TypedAnswer.Text.Trim());
     }
 
-    private void ShowAnswer(string? attempt)
+    private async Task ShowAnswerAsync(string? attempt)
     {
-        if (!visible || loading || grading || progress is not { Question: { Revealed: false } question } state) return;
+        if (!visible || loading || grading || queue is not { Progress.Question.Revealed: false } current) return;
         if (attempt is not null && Encoding.UTF8.GetByteCount(attempt) > MaxAnswerBytes)
         {
             QueueStatus.Text = "Відповідь перевищує 2000 байтів. Скоротіть її та спробуйте ще раз.";
             return;
         }
-        var elapsed = Math.Min(responseTimer.ElapsedMilliseconds, MaxElapsedMs);
+        var elapsed = checked((uint)Math.Min(responseTimer.ElapsedMilliseconds, MaxElapsedMs));
+        var request = ++loadVersion;
+        loading = true;
+        UpdateControls();
         try
         {
-            var saved = AppState.Session.SetPractice(state with
-            {
-                Question = question with { Revealed = true, GivenAnswer = attempt, ElapsedMs = elapsed },
-            });
-            OpenQuestion(saved, vocabulary);
+            var answer = await AppState.Session.AnswerPracticeQuestionAsync(current.Progress.Revision, attempt, elapsed);
+            if (request == loadVersion)
+                OpenQuestion(current with { Progress = answer.Progress, MatchesDictionary = answer.MatchesDictionary });
         }
-        catch (Exception error) { QueueStatus.Text = error.Message; }
+        catch (Exception error)
+        {
+            if (request == loadVersion) QueueStatus.Text = error.Message;
+        }
+        finally
+        {
+            if (request == loadVersion)
+            {
+                loading = false;
+                UpdateControls();
+            }
+        }
     }
 
     private async void GradeClicked(object? sender, EventArgs args)
@@ -307,7 +299,11 @@ public partial class PracticePage : ContentPage
         try
         {
             await session.GradePracticeAsync(state.Revision, grade);
-            if (visible) await LoadAsync();
+            if (visible)
+            {
+                if (session.Error.Length == 0) await LoadAsync();
+                else QueueStatus.Text = session.Error;
+            }
         }
         finally
         {
@@ -331,19 +327,8 @@ public partial class PracticePage : ContentPage
     private async Task ChangePracticeSettingsAsync(string? direction)
     {
         if (renderingSettings || loading || grading || progress is not { } state || Mode.SelectedIndex < 0 || direction is null) return;
-        try
-        {
-            OpenQuestion(state with
-            {
-                Direction = direction,
-                Mode = (byte)Mode.SelectedIndex,
-                Question = null,
-            }, vocabulary, settingsChanged: true);
-        }
-        catch (Exception error)
-        {
-            await LoadAsync();
-            if (visible) QueueStatus.Text = error.Message;
-        }
+        var mode = (byte)Mode.SelectedIndex;
+        if (direction == state.Direction && mode == state.Mode) return;
+        await LoadAsync(settings: new PracticeSettings(direction, mode, state.Collection));
     }
 }

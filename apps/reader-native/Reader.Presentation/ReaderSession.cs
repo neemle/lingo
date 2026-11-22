@@ -444,6 +444,12 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
 
     public PracticeProgress GetPractice() => client.GetPractice();
     public PracticeProgress SetPractice(PracticeProgress progress) => client.SetPractice(progress);
+    public Task<PracticeProgress> GetPracticeAsync() => Task.Run(client.GetPractice);
+    public Task<PracticeQueue> NextPracticeQuestionAsync(ulong revision, PracticeSettings? settings = null) =>
+        Task.Run(() => client.NextPracticeQuestion(revision, settings));
+
+    public Task<PracticeAnswer> AnswerPracticeQuestionAsync(ulong revision, string? answer, uint elapsedMs) =>
+        Task.Run(() => client.AnswerPracticeQuestion(revision, answer, elapsedMs));
 
     public Task GradePracticeAsync(ulong revision, byte grade) => RunAsync(() =>
     {

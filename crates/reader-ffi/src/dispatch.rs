@@ -306,7 +306,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             grade,
         } => value(store.review(&id, &direction, grade)),
         Command::Practice => value(store.practice()),
-        Command::NextPracticeQuestion { revision } => value(store.next_practice_question(revision)),
+        Command::NextPracticeQuestion { revision, settings } => value(store.practice_queue(revision, settings)),
         Command::AnswerPracticeQuestion { revision, answer, elapsed_ms } => {
             value(store.answer_practice_question(revision, answer.as_deref(), elapsed_ms))
         }

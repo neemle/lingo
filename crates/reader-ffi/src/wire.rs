@@ -440,6 +440,7 @@ pub enum Command {
     Practice,
     NextPracticeQuestion {
         revision: u64,
+        settings: Option<reader_core::practice::PracticeSettings>,
     },
     AnswerPracticeQuestion {
         revision: u64,
