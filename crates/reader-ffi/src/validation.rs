@@ -49,6 +49,10 @@ fn validate(command: &Command) -> Result<()> {
                 "Import must contain 1..20MiB and a bounded filename",
             ))
         }
+        Command::PrepareUkrainianSpeech { text } if text.len() > 64 * 1024 => Err(Error::new(
+            "invalid_argument",
+            "Speech input exceeds 64 KiB",
+        )),
         Command::DetectLanguage { text } if text.len() > 32_000 => Err(Error::new(
             "invalid_argument",
             "Language sample is too long",

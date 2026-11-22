@@ -41,6 +41,9 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::Snapshot => value(store.snapshot()),
         Command::RecentReadingSessions => value(store.recent_reading_sessions()),
         Command::CheckpointReading { session } => value(store.checkpoint_reading(session)),
+        Command::PrepareUkrainianSpeech { text } => {
+            value(Ok(reader_core::tts::ukrainian_stress(&text)))
+        }
         Command::DetectLanguage { text } => {
             value(Ok(reader_core::language_detection::detect(&text)))
         }

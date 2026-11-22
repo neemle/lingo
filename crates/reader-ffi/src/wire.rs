@@ -22,6 +22,9 @@ pub enum Command {
     CheckpointReading {
         session: reader_core::reading_history::ReadingSession,
     },
+    PrepareUkrainianSpeech {
+        text: String,
+    },
     DetectLanguage {
         text: String,
     },

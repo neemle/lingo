@@ -201,7 +201,8 @@ pub(crate) fn smoke(directory: &Path, interrupted: &dyn Fn() -> bool) -> Result<
 
 pub(crate) const STRESS_MARK: char = '\u{301}';
 
-pub(crate) fn ukrainian_stress(text: &str) -> std::borrow::Cow<'_, str> {
+/// Adds contextual acute marks for local Ukrainian voices without changing source text.
+pub fn ukrainian_stress(text: &str) -> std::borrow::Cow<'_, str> {
     let mut spoken = String::new();
     let mut copied = 0;
     let mut previous = (0, "");
@@ -237,24 +238,42 @@ pub(crate) fn ukrainian_stress(text: &str) -> std::borrow::Cow<'_, str> {
         // Two, three, and four retain the genitive singular stress in this plural form.
         let count =
             |token: &str| matches!(token, "два" | "обидва" | "три" | "чотири" | "2" | "3" | "4");
-        let plural_adjective = |token: &str| {
+        let genitive_preposition = |token: &str| {
             matches!(
                 token,
-                "відчинені" | "зачинені" | "великі" | "малі" | "нові" | "старі"
+                "біля" | "поблизу" | "навколо" | "до" | "від" | "без" | "коло" | "після"
+            )
+        };
+        let plural_modifier = |token: &str| {
+            matches!(
+                token,
+                "відчинені"
+                    | "зачинені"
+                    | "великі"
+                    | "малі"
+                    | "нові"
+                    | "старі"
+                    | "ці"
+                    | "ті"
+                    | "усі"
+                    | "всі"
+                    | "мої"
+                    | "твої"
+                    | "свої"
+                    | "наші"
+                    | "ваші"
+                    | "їхні"
             )
         };
         let stressed_end = match (earlier.as_str(), prior.as_str()) {
-            (_, "біля" | "поблизу" | "навколо" | "до" | "від" | "без")
-            | ("біля" | "поблизу" | "навколо", "цього" | "того" | "свого" | "якого") => {
+            (_, token) if genitive_preposition(token) || count(token) => word.len(),
+            (preposition, modifier)
+                if genitive_preposition(preposition) && modifier.ends_with("ого") =>
+            {
                 word.len()
             }
-            (_, token) if count(token) => word.len(),
-            (number, token) if count(number) && plural_adjective(token) => word.len(),
-            (_, token)
-                if plural_adjective(token) || matches!(token, "ці" | "ті" | "усі" | "всі") =>
-            {
-                word.chars().take(2).map(char::len_utf8).sum()
-            }
+            (number, token) if count(number) && plural_modifier(token) => word.len(),
+            (_, token) if plural_modifier(token) => word.chars().take(2).map(char::len_utf8).sum(),
             _ => continue,
         } + offset;
         spoken.push_str(&text[copied..stressed_end]);
@@ -467,6 +486,14 @@ mod tests {
                 "Є чотири великі вікна́, а ці ві́кна старі.",
             ),
             ("Є 3 вікна; біля\n\nВікна", "Є 3 вікна́; біля\n\nВікна"),
+            (
+                "Наші вікна виходять у сад. Стіл біля великого вікна.",
+                "Наші ві́кна виходять у сад. Стіл біля великого вікна́.",
+            ),
+            (
+                "До нашого вікна; біля, великого вікна; якого вікна?",
+                "До нашого вікна́; біля, великого вікна; якого вікна?",
+            ),
         ] {
             assert_eq!(ukrainian_stress(source), spoken, "{source}");
         }
