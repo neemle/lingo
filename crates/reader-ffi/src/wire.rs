@@ -347,6 +347,8 @@ pub enum Command {
         id: String,
         #[serde(rename = "sentenceId")]
         sentence_id: String,
+        #[serde(default, rename = "pronunciationOnly")]
+        pronunciation_only: bool,
     },
     SetSpeechResume {
         id: String,

@@ -326,8 +326,8 @@ public sealed class CoreClient : IDisposable
         Call<bool>(new { version = 1, operation = "delete_document", id });
     public void RenameDocument(string id, string title) =>
         Call<JsonElement>(new { version = 1, operation = "rename_document", id, title });
-    public string? SpeechNarration(string id, string sentenceId) =>
-        Call<string?>(new { version = 1, operation = "speech_narration", id, sentenceId });
+    public string? SpeechNarration(string id, string sentenceId, bool pronunciationOnly = false) =>
+        Call<string?>(new { version = 1, operation = "speech_narration", id, sentenceId, pronunciationOnly });
     public SpeechResume? SpeechResume(string id) =>
         Call<SpeechResume?>(new { version = 1, operation = "speech_resume", id });
     public void SetSpeechResume(string id, string sentenceId, string textHash, int? offsetUtf16) =>

@@ -192,6 +192,20 @@ impl Store {
         word_break::canonical_narration(&self.connection, &document, sentence)
     }
 
+    pub fn speech_pronunciation(&self, document_id: &str, sentence_id: &str) -> Result<Option<String>> {
+        let document = self.speech_document(document_id)?;
+        let Some(sentence) = document.sentences.iter().find(|sentence| sentence.id == sentence_id) else {
+            return Ok(None);
+        };
+        if document.speech_text_overrides.contains_key(sentence_id) ||
+            crate::document_layout::sentence_in_footnote(&document.blocks, sentence)
+        {
+            return Ok(None);
+        }
+        let narration = word_break::canonical_narration(&self.connection, &document, sentence)?;
+        Ok(without_pdf_note_markers(&document, sentence, narration.as_deref().unwrap_or(&sentence.text)))
+    }
+
     fn first_canonical_on_page(
         &self, document: &Document, page: u16, start: usize,
     ) -> Result<Option<(String, SpeechSource)>> {
@@ -211,9 +225,90 @@ impl Store {
         let text = if crate::document_layout::sentence_in_footnote(&document.blocks, sentence) {
             String::new()
         } else {
-            word_break::canonical_narration(&self.connection, document, sentence)?
-                .unwrap_or_else(|| document.speech_text(sentence).to_owned())
+            let narration = word_break::canonical_narration(&self.connection, document, sentence)?
+                .unwrap_or_else(|| document.speech_text(sentence).to_owned());
+            if document.speech_text_overrides.contains_key(&sentence.id) {
+                narration
+            } else {
+                without_pdf_note_markers(document, sentence, &narration).unwrap_or(narration)
+            }
         };
         Ok((sentence.id.clone(), SpeechSource { language: document.language.clone(), text }))
+    }
+}
+
+
+/// Blanks confirmed references in the reading input while preserving UTF-16 offsets.
+pub(crate) fn without_pdf_note_markers(document: &Document, sentence: &Sentence, text: &str) -> Option<String> {
+    if document.format != "pdf" || !text.chars().any(char::is_numeric) {
+        return None;
+    }
+    let block = document.blocks.partition_point(|block| block.start_utf8 <= sentence.start_utf8);
+    let page = document.blocks.get(block.checked_sub(1)?)?.page?;
+    let mut numbers = document.blocks.iter().filter(|block| block.footnote && block.page == Some(page))
+        .filter_map(|block| {
+            let note = document.text.get(block.start_utf8..block.end_utf8)?;
+            note.split_whitespace().next()?.parse::<u32>().ok()
+        }).peekable();
+    numbers.peek()?;
+    let numbers: Vec<_> = numbers.collect();
+
+    let mut clean = String::with_capacity(text.len());
+    let mut previous_letter_count = 0;
+    let mut lower_word = true;
+    let mut chars = text.chars().peekable();
+    let mut changed = false;
+    while let Some(ch) = chars.next() {
+        if let Some((digit, superscript)) = note_digit(ch) {
+            let mut run = String::from(ch);
+            let mut number = digit;
+            while let Some(next) = chars.peek().and_then(|&ch| note_digit(ch).filter(|&(_, sup)| sup == superscript)) {
+                run.push(chars.next().expect("peeked digit"));
+                number = number.saturating_mul(10).saturating_add(next.0);
+            }
+            let follows_word = previous_letter_count > 0 &&
+                (superscript || previous_letter_count >= 3 && lower_word);
+            if follows_word && chars.peek().is_none_or(|ch| !ch.is_alphanumeric()) && numbers.contains(&number) {
+                clean.extend(std::iter::repeat_n(' ', run.encode_utf16().count()));
+                changed = true;
+            } else {
+                clean.push_str(&run);
+            }
+        } else {
+            clean.push(ch);
+        }
+        if ch.is_alphabetic() {
+            previous_letter_count += 1;
+            lower_word &= ch.is_lowercase();
+        } else {
+            previous_letter_count = 0;
+            lower_word = true;
+        }
+    }
+    changed.then_some(clean)
+}
+
+fn note_digit(ch: char) -> Option<(u32, bool)> {
+    if let Some(digit) = ch.to_digit(10) {
+        return Some((digit, false));
+    }
+    "⁰¹²³⁴⁵⁶⁷⁸⁹".chars().position(|digit| digit == ch).map(|index| (index as u32, true))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_same_page_footnote_markers_are_silent_with_original_offsets() {
+        let source = "Le marin voit les mâts1 et le quai², au niveau B2 en 1815.";
+        let text = format!("{source}\n1 Mât : pièce du navire.\n2 Quai : bord du port.");
+        let document = crate::document_layout::detached_pdf_document(text, None);
+        let sentence = crate::segment_pdf_with_titles(source, "pdf").remove(0);
+        let pronunciation = without_pdf_note_markers(&document, &sentence, source).unwrap();
+        assert_eq!(pronunciation, "Le marin voit les mâts  et le quai , au niveau B2 en 1815.");
+        assert_eq!(pronunciation.encode_utf16().count(), source.encode_utf16().count());
+        let unrelated = "Le marin voit B2 et les mâts3.";
+        assert!(without_pdf_note_markers(&document, &sentence, unrelated).is_none());
     }
 }

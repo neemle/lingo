@@ -693,7 +693,8 @@ public partial class ReadingPage
             else
             {
                 detachedSpeech.PreferredVoice = voice?.Id == SystemDefaultVoice ? null : voice?.Id;
-                var pronounced = await PrepareSystemSpeechAsync(session, current.Language, speechText);
+                var pronunciation = current.SpeechText ?? current.PronunciationText ?? speechText;
+                var pronounced = await PrepareSystemSpeechAsync(session, current.Language, pronunciation);
                 if (run != detachedAudioRun) return false;
                 if (speechText != sentence.Text)
                     status = await detachedSpeech.SpeakAsync(pronounced, current.Language);

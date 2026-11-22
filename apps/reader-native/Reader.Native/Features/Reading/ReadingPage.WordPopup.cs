@@ -114,13 +114,14 @@ public partial class ReadingPage
         if (DetachedWordCard.IsVisible)
         {
             if (detachedSentence is { Footnote: false } current)
-                await SpeakWordDetailAsync(current.SpeechText ?? current.NarrationText ?? current.Sentence.Text, current.Language);
+                await SpeakWordDetailAsync(current.SpeechText ?? current.PronunciationText ?? current.NarrationText ?? current.Sentence.Text, current.Language);
         }
         else if (selection is { } selected && AppState.Session.Document is { } document)
         {
             var sentence = Array.Find(document.Sentences, item =>
                 item.StartUtf16 <= selected.StartUtf16 && item.EndUtf16 > selected.StartUtf16);
-            if (sentence is not null) await SpeakWordDetailAsync(EffectiveSpeechText(document, sentence), document.Language);
+            if (sentence is not null)
+                await SpeakWordDetailAsync(PdfPronunciation(document, sentence, EffectiveSpeechText(document, sentence)), document.Language);
         }
     }
 

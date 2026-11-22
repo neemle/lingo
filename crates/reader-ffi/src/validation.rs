@@ -243,7 +243,7 @@ fn validate(command: &Command) -> Result<()> {
             Err(Error::new("invalid_argument", "Invalid PDF sentence address"))
         }
         Command::SetDetachedPdfSpeechResume { id, sentence_id, .. }
-        | Command::SpeechNarration { id, sentence_id } if !valid_token_address(id, sentence_id) =>
+        | Command::SpeechNarration { id, sentence_id, .. } if !valid_token_address(id, sentence_id) =>
         {
             Err(Error::new("invalid_argument", "Invalid PDF speech checkpoint address"))
         }

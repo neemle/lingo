@@ -36,6 +36,12 @@ public partial class ReadingPage
         return text;
     }
 
+    private static string PdfPronunciation(Document document, Sentence sentence, string speechText) =>
+        document.Format == "pdf" && speechText.Any(char.IsNumber) &&
+            !document.SpeechTextOverrides.ContainsKey(sentence.Id)
+            ? AppState.Session.GetSpeechNarration(document.Id, sentence.Id, pronunciationOnly: true) ?? speechText
+            : speechText;
+
     private static async Task<string> PrepareSystemSpeechAsync(ReaderSession session, string language, string text)
     {
         // Longer text can still be read by the platform voice without the optional pronunciation hints.

@@ -157,6 +157,8 @@ pub struct DetachedPdfSentence {
     pub speech_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub narration_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pronunciation_text: Option<String>,
 }
 
 pub(crate) struct CachedSentences {
@@ -205,11 +207,14 @@ impl Store {
         }
         let layout = self.detached_speech_layout(id, page, text)?;
         let footnote = crate::document_layout::sentence_in_footnote(&layout.blocks, &sentence);
+        let pronunciation_text = if !footnote && speech_text.is_none() {
+            crate::speech::without_pdf_note_markers(&layout, &sentence, narration_text.as_deref().unwrap_or(&sentence.text))
+        } else { None };
         let (bookmarked, note) = annotations::read(&self.connection, id, page, sentence.start_utf16)?;
         let reviewed_translations = annotations::reviewed(&self.connection, id, page, sentence.start_utf16)?;
         Ok(Some(DetachedPdfSentence {
             sentence, position, total, language, revision_id: revision, bookmarked, note, footnote,
-            reviewed_translations, speech_resume: speech_resume.filter(|_| !footnote), speech_text, narration_text,
+            reviewed_translations, speech_resume: speech_resume.filter(|_| !footnote), speech_text, narration_text, pronunciation_text,
         }))
     }
     pub(crate) fn detached_pdf_speech_source(
@@ -223,7 +228,7 @@ impl Store {
         }
         let start = position + usize::from(next);
         let layout = self.detached_speech_layout(id, page, text)?;
-        self.speech_on_detached_page(id, page, language, &sentences, &layout.blocks, start, next)
+        self.speech_on_detached_page(id, page, language, &sentences, &layout, start, next)
     }
 
     pub(crate) fn first_detached_pdf_speech_source(
@@ -233,7 +238,7 @@ impl Store {
             return Ok(None);
         };
         let layout = self.detached_speech_layout(id, page, text)?;
-        self.speech_on_detached_page(id, page, language, &sentences, &layout.blocks, 0, true)
+        self.speech_on_detached_page(id, page, language, &sentences, &layout, 0, true)
     }
 
     fn detached_speech_layout(&self, id: &str, page: u16, text: String) -> Result<crate::Document> {
@@ -243,15 +248,18 @@ impl Store {
 
     fn speech_on_detached_page(
         &self, id: &str, page: u16, language: String, sentences: &[Sentence],
-        blocks: &[crate::document_layout::DocumentBlock], start: usize, skip_consumed: bool,
+        layout: &crate::Document, start: usize, skip_consumed: bool,
     ) -> Result<Option<(String, crate::speech::SpeechSource)>> {
         for (position, sentence) in sentences.iter().enumerate().skip(start) {
-            if crate::document_layout::sentence_in_footnote(blocks, sentence) {
+            if crate::document_layout::sentence_in_footnote(&layout.blocks, sentence) {
                 if !skip_consumed { break; }
                 continue;
             }
             let (speech, narration) = narration_text(&self.connection, id, page, sentences, position)?;
-            let text = speech.or(narration).unwrap_or_else(|| sentence.text.clone());
+            let text = speech.unwrap_or_else(|| {
+                let text = narration.unwrap_or_else(|| sentence.text.clone());
+                crate::speech::without_pdf_note_markers(layout, sentence, &text).unwrap_or(text)
+            });
             if !text.is_empty() {
                 return Ok(Some((sentence.id.clone(), crate::speech::SpeechSource { language, text })));
             }

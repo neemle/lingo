@@ -896,7 +896,7 @@ public partial class ReadingPage : ContentPage
             {
                 var fallbackReason = status != LocalSpeech.CompletedStatus ? status : null;
                 systemUsesSpeechOverride = hasSpeechOverride;
-                var pronounced = await PrepareSystemSpeechAsync(session, doc.Language, speechText);
+                var pronounced = await PrepareSystemSpeechAsync(session, doc.Language, PdfPronunciation(doc, sentence, speechText));
                 if (request != speechRequest || activeSpeechSource is not { } active ||
                     !IsSpeechSourceCurrent(session, active)) return;
                 status = hasSpeechOverride

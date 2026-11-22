@@ -246,11 +246,10 @@ impl Store {
                         ).map_err(database_error)?;
                     }
                     super::speech_resume::remove(&tx, id, page, sentence_id)?;
-                    current.speech_text = replacement.map(str::to_owned);
-                    current.speech_resume = None;
                 }
                 tx.commit().map_err(database_error)?;
-                return Ok(current);
+                return self.select_detached_pdf_sentence(id, page, None, Some(sentence_id))?
+                    .ok_or_else(|| "Текст сторінки PDF недоступний.".into());
             }
             DetachedPdfAnnotationChange::Translation { target, text } => {
                 crate::valid_language(&target)?;

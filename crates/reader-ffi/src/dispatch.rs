@@ -199,7 +199,9 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::DeleteDocument { id } => value(store.delete_document(&id)),
         Command::RenameDocument { id, title } => value(store.rename_document(&id, &title)),
         Command::SpeechResume { id } => value(store.speech_resume(&id)),
-        Command::SpeechNarration { id, sentence_id } => value(store.speech_narration(&id, &sentence_id)),
+        Command::SpeechNarration { id, sentence_id, pronunciation_only } =>
+            value(if pronunciation_only { store.speech_pronunciation(&id, &sentence_id) }
+                else { store.speech_narration(&id, &sentence_id) }),
         Command::SetSpeechResume {
             id,
             sentence_id,
