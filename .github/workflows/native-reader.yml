@@ -53,6 +53,11 @@ jobs:
           dotnet build apps/reader-native/Reader.Native/Reader.Native.csproj
           -f net10.0-maccatalyst -c Release -p:RuntimeIdentifier=maccatalyst-arm64
           -p:EnableCodeSigning=false -p:CreatePackage=false --nologo
+      - name: Verify the bundled Catalyst ONNX Runtime entry point
+        run: |
+          app="$(find apps/reader-native/Reader.Native/bin/Release/net10.0-maccatalyst -type d -name '*.app' -print -quit)"
+          executable="$(plutil -extract CFBundleExecutable raw -o - "$app/Contents/Info.plist")"
+          nm -gU "$app/Contents/MacOS/$executable" | awk '$NF == "_OrtGetApiBase" { found = 1 } END { exit !found }'
   windows:
     runs-on: windows-2022
     steps:
@@ -96,7 +101,7 @@ jobs:
           $zip = [IO.Compression.ZipFile]::OpenRead($msix.FullName)
           try {
             $entries = @($zip.Entries.FullName)
-            foreach ($name in 'AppxManifest.xml', 'AppxSignature.p7x', 'Reader.Native.exe', 'reader_ffi.dll', 'coreclr.dll', 'Microsoft.UI.Xaml.dll', 'Microsoft.WindowsAppRuntime.dll') {
+            foreach ($name in 'AppxManifest.xml', 'AppxSignature.p7x', 'Reader.Native.exe', 'reader_ffi.dll', 'onnxruntime.dll', 'onnxruntime_providers_shared.dll', 'coreclr.dll', 'Microsoft.UI.Xaml.dll', 'Microsoft.WindowsAppRuntime.dll') {
               # Windows App SDK spells the WinUI payload Microsoft.ui.xaml.dll.
               if ($entries -notcontains $name) { throw "Missing $name in $($msix.Name)" }
             }

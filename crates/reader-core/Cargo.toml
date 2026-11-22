@@ -19,6 +19,9 @@ candle-transformers = "0.11.1"
 sentencepiece-rs = "0.2.2"
 tempfile = "3"
 llama-cpp-2 = { version = "=0.1.161", default-features = false }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "api-30", "alternative-backend"] }
+libloading = "0.8"
+tokenizers = { version = "0.23.2", default-features = false, features = ["fancy-regex"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", features = ["fs"] }

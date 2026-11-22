@@ -9,6 +9,7 @@ use std::{
 use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
 
+pub mod e5;
 pub mod knowledge;
 mod marian_provider;
 mod model_storage;

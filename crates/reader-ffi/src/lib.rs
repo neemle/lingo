@@ -53,6 +53,15 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         unsafe { std::slice::from_raw_parts(input, len as usize) }
     };
     let command = validation::decode(bytes)?;
+    if let Command::SemanticVocabulary { query } = &command {
+        let job = registry::lock()?
+            .store(handle)?
+            .prepare_semantic_vocabulary(query)
+            .map_err(gateway::domain)?;
+        let matches = job.run().map_err(gateway::domain)?;
+        return serde_json::to_value(matches)
+            .map_err(|_| Error::new("serialization_error", "Cannot encode core response"));
+    }
     if let Command::ExplainWord {
         model,
         document,

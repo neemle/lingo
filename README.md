@@ -139,7 +139,12 @@ Stopping a download keeps the partial files so the next attempt can resume. Each
 its pinned SHA-256 before the model is activated. An interrupted replacement preserves the previous files.
 Select a word and choose **Пояснити з Qwen** for a local, generated explanation. The app checks available
 memory before loading the model and labels the result with the model name. Qwen is optional for reading,
-translation and the vocabulary. Semantic search with E5 is pending.
+translation and the vocabulary.
+
+**Словник** supports text search over saved words, translations and context. Install Multilingual E5 Small,
+then choose **За змістом (E5)** to rank saved cards by meaning across languages, including when the query
+uses different words. ONNX Runtime runs locally and retains recently computed vectors in memory during
+the session. Text search is available without the E5 model.
 
 - [Qwen3.5-0.8B GGUF](https://huggingface.co/ggml-org/Qwen3.5-0.8B-GGUF/tree/004fd086eccea9f7cf867aa07ba328773beef81d), four-bit, Apache-2.0.
 - [Qwen3.5-2B GGUF](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/tree/f6d5376be1edb4d416d56da11e5397a961aca8ae), four-bit, Apache-2.0.

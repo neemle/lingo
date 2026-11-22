@@ -68,21 +68,10 @@ public sealed class CoreClient : IDisposable
         Call<JsonElement>(new { version = 1, operation = "set_bookmark", id, sentenceId, saved });
     public void SetReviewedTranslation(string id, string sentenceId, string target, string text) =>
         Call<JsonElement>(new { version = 1, operation = "set_reviewed_translation", id, sentenceId, target, text });
-    public WordExplanation ExplainWord(string model, string document, string sentence, string word)
-    {
-        var added = false;
-        try
-        {
-            lock (sync)
-            {
-                ObjectDisposedException.ThrowIf(disposed, this);
-                handle.DangerousAddRef(ref added);
-            }
-            return Invoke<WordExplanation>(handle.Value,
-                new { version = 1, operation = "explain_word", model, document, sentence, word });
-        }
-        finally { if (added) handle.DangerousRelease(); }
-    }
+    public WordExplanation ExplainWord(string model, string document, string sentence, string word) =>
+        CallIndependent<WordExplanation>(new { version = 1, operation = "explain_word", model, document, sentence, word });
+    public string[] SemanticVocabulary(string query) =>
+        CallIndependent<string[]>(new { version = 1, operation = "semantic_vocabulary", query });
 
     public OptionalModel[] OptionalModels() =>
         Call<OptionalModel[]>(new { version = 1, operation = "optional_models" });
@@ -142,6 +131,21 @@ public sealed class CoreClient : IDisposable
             }
             finally { if (added) handle.DangerousRelease(); }
         }
+    }
+
+    private T CallIndependent<T>(object request)
+    {
+        var added = false;
+        try
+        {
+            lock (sync)
+            {
+                ObjectDisposedException.ThrowIf(disposed, this);
+                handle.DangerousAddRef(ref added);
+            }
+            return Invoke<T>(handle.Value, request);
+        }
+        finally { if (added) handle.DangerousRelease(); }
     }
 
     private static T Invoke<T>(ulong id, object request)

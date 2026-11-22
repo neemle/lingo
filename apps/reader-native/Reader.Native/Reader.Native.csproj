@@ -7,6 +7,8 @@
     <UseMaui>true</UseMaui>
     <SingleProject>true</SingleProject>
     <MauiVersion>10.0.0</MauiVersion>
+    <OnnxRuntimeVersion>1.30.0</OnnxRuntimeVersion>
+    <OnnxRuntimePath>$(NuGetPackageRoot)microsoft.ml.onnxruntime/$(OnnxRuntimeVersion)</OnnxRuntimePath>
     <ApplicationTitle>Читай</ApplicationTitle>
     <ApplicationId>dev.lingoreader.native</ApplicationId>
     <ApplicationDisplayVersion>0.1</ApplicationDisplayVersion>
@@ -33,6 +35,9 @@
     <MauiIcon Include="Resources/AppIcon/appicon.svg" Color="#63725C" />
     <MauiSplashScreen Include="Resources/Splash/splash.svg" Color="#F6F3EC" BaseSize="128,128" />
     <MauiAsset Include="Resources/InferenceLicenses.txt" LogicalName="InferenceLicenses.txt" />
+    <PackageDownload Include="Microsoft.ML.OnnxRuntime" Version="[$(OnnxRuntimeVersion)]" />
+    <MauiAsset Include="$(OnnxRuntimePath)/LICENSE" LogicalName="OnnxRuntimeLicense.txt" />
+    <MauiAsset Include="$(OnnxRuntimePath)/ThirdPartyNotices.txt" LogicalName="OnnxRuntimeThirdPartyNotices.txt" />
     <PackageReference Include="Microsoft.Maui.Controls" Version="10.0.0" />
   </ItemGroup>
   <ItemGroup Condition="$(TargetFramework.Contains('maccatalyst'))">
@@ -41,9 +46,18 @@
       <Frameworks>Accelerate Foundation Metal</Frameworks>
       <LinkerFlags>-lc++ -u _reader_abi_version -u _reader_call -u _reader_close -u _reader_release</LinkerFlags>
     </NativeReference>
+    <NativeReference Include="$(OnnxRuntimePath)/runtimes/ios/native/onnxruntime.xcframework.zip">
+      <Kind>Static</Kind><SmartLink>false</SmartLink>
+      <WeakFrameworks>CoreML</WeakFrameworks>
+      <LinkerFlags>-u _OrtGetApiBase</LinkerFlags>
+    </NativeReference>
   </ItemGroup>
   <ItemGroup Condition="$(TargetFramework.Contains('windows'))">
     <Content Include="../../../target/x86_64-pc-windows-msvc/release/reader_ffi.dll"
       Link="reader_ffi.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(OnnxRuntimePath)/runtimes/win-x64/native/onnxruntime.dll"
+      Link="onnxruntime.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(OnnxRuntimePath)/runtimes/win-x64/native/onnxruntime_providers_shared.dll"
+      Link="onnxruntime_providers_shared.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

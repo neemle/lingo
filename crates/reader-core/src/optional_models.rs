@@ -74,7 +74,7 @@ const MODELS: &[Model] = &[
         repo: "intfloat/multilingual-e5-small",
         revision: "614241f622f53c4eeff9890bdc4f31cfecc418b3",
         budget: ModelBudget {
-            working_mib: 1024,
+            working_mib: 1536,
             minimum_total_mib: 0,
         },
         assets: &[
@@ -176,6 +176,10 @@ pub struct OptionalModelJob {
 }
 
 impl OptionalModelJob {
+    pub(crate) fn revision(&self) -> &'static str {
+        self.model.revision
+    }
+
     /// Keep the installed weights stable throughout a bounded inference call.
     /// Providers should check the yield callback between batches and tokens.
     pub fn run<T>(

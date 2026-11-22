@@ -7,11 +7,17 @@
  x:Class="Reader.Native.Features.Vocabulary.VocabularyPage" Title="Словник">
  <Grid Padding="32" RowDefinitions="Auto,Auto,*" RowSpacing="18">
   <Label Text="Слова, які залишаються з вами" FontSize="30" FontAttributes="Bold" />
-  <Label Grid.Row="1" Text="Збережені вами переклади та контекст. Обидва напрями повторюються окремо."
-   TextColor="#63725C" />
-  <CollectionView Grid.Row="2" ItemsSource="{Binding Snapshot.Vocabulary}">
+  <VerticalStackLayout Grid.Row="1" Spacing="6">
+   <Label Text="Збережені вами переклади та контекст. Обидва напрями повторюються окремо." TextColor="#63725C" />
+   <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+    <SearchBar x:Name="VocabularyQuery" Placeholder="Слово, переклад або контекст" MaxLength="240" TextChanged="QueryChanged" />
+    <Button Grid.Column="1" x:Name="SemanticSearch" Text="За змістом (E5)" IsEnabled="False" Clicked="SemanticClicked" />
+   </Grid>
+   <Label x:Name="SearchStatus" IsVisible="False" />
+  </VerticalStackLayout>
+  <CollectionView Grid.Row="2" x:Name="VocabularyList">
    <CollectionView.EmptyView>
-    <Label Text="Виділіть слово під час читання, щоб додати його сюди." />
+    <Label x:Name="EmptyVocabulary" Text="Виділіть слово під час читання, щоб додати його сюди." />
    </CollectionView.EmptyView>
    <CollectionView.ItemTemplate><DataTemplate x:DataType="models:Vocabulary">
     <Border Padding="20" Margin="0,0,0,12" Stroke="#D9DCCF" BackgroundColor="#FFFDFA"

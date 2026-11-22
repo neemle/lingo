@@ -86,6 +86,9 @@ pub enum Command {
         target: String,
         text: String,
     },
+    SemanticVocabulary {
+        query: String,
+    },
     ExplainWord {
         model: String,
         document: String,
