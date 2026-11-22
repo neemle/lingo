@@ -141,6 +141,7 @@ public partial class ReadingPage
         {
             detachedWordTranslation = null;
             ResetDetachedMeanings();
+            ResetDetachedSyntax();
         }
         detachedSelection = selected;
         DetachedWordExplanationText.IsVisible = false;
@@ -787,6 +788,7 @@ public partial class ReadingPage
         DetachedNote.Text = detachedSentence?.Note is null ? "Нотатка…" : "Редагувати нотатку…";
         DetachedAnalyzeSelection.IsVisible = DetachedAnalyzeSelection.IsEnabled =
             !loadingDetachedSentence && detachedSelection is not null;
+        DetachedOpenSyntax.IsVisible = DetachedAnalyzeSelection.IsVisible;
         DetachedTranslateSelection.IsVisible = DetachedAnalyzeSelection.IsVisible && TargetCode is not null;
         DetachedShareSelection.IsVisible = detachedSelection is { } selected && CanShareDetachedSelection(selected);
         UpdateDetachedExplainButton();

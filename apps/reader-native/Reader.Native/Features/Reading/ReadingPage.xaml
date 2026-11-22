@@ -509,6 +509,8 @@
      <VerticalStackLayout x:Name="DetachedMeanings" IsVisible="False" Spacing="7" />
      <VerticalStackLayout x:Name="DetachedWordDetails" IsVisible="False" Spacing="8">
      <FlexLayout Wrap="Wrap" AlignItems="Center">
+       <Button x:Name="DetachedOpenSyntax" Text="Синтаксис" IsVisible="False"
+        Clicked="OpenSyntaxClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedAnalyzeSelection" Text="Аналіз виділення" IsVisible="False"
         Clicked="DetachedAnalyzeSelectionClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedExplainWord" Text="Пояснити з Qwen" IsVisible="False"
@@ -519,6 +521,7 @@
         Clicked="DetachedShareSelectionClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}"
         SemanticProperties.Description="Поширити виділений уривок сторінки PDF" />
      </FlexLayout>
+     <Label x:Name="DetachedSyntaxDetails" Style="{StaticResource ReaderMeta}" IsVisible="False" />
      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="7">
       <ActivityIndicator x:Name="DetachedWordExplanationBusy" IsVisible="False" WidthRequest="18" HeightRequest="18"
        VerticalOptions="Start" Color="{StaticResource Sage}" />
