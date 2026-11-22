@@ -19,6 +19,12 @@ pub struct ModelEdge {
     pub quality: Option<u16>,
 }
 
+impl ModelEdge {
+    fn same_package(&self, other: &Self) -> bool {
+        self.source == other.source && self.target == other.target && self.revision == other.revision
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum Route {
     Direct(ModelEdge),
@@ -31,6 +37,18 @@ impl Route {
             Self::Direct(_) => None,
             Self::Pivot { first, .. } => Some(&first.target),
         }
+    }
+
+    fn without_quality(&self) -> Self {
+        let mut route = self.clone();
+        match &mut route {
+            Self::Direct(edge) => edge.quality = None,
+            Self::Pivot { first, second } => {
+                first.quality = None;
+                second.quality = None;
+            }
+        }
+        route
     }
 }
 
@@ -147,7 +165,7 @@ pub(crate) fn route_readiness(
         .map(|(first, second)| {
             let missing: Vec<_> = [first, second]
                 .into_iter()
-                .filter(|edge| !installed.contains(edge))
+                .filter(|edge| !installed.iter().any(|present| present.same_package(edge)))
                 .map(pair)
                 .collect();
             (first.target.clone(), missing)
@@ -343,12 +361,13 @@ impl CacheRoutes {
         target: &str,
     ) -> Result<Self> {
         let preferred = resolve_route(installed, source, target)?;
+        let preferred_identity = preferred.as_ref().map(Route::without_quality);
         let candidates = preferred
             .iter()
             .cloned()
             .chain(
                 catalog_routes(catalog, source, target)
-                    .filter(|route| Some(route) != preferred.as_ref()),
+                    .filter(|route| Some(route) != preferred_identity.as_ref()),
             )
             .collect();
         Ok(Self {
@@ -1325,7 +1344,7 @@ fn cache_key(
         }
     };
     let version = if deadline_revision { 5 } else { 4 };
-    let input = serde_json::to_vec(&(version, route, segments, context, settings))
+    let input = serde_json::to_vec(&(version, route.without_quality(), segments, context, settings))
         .map_err(|error| error.to_string())?;
     Ok(format!("{:x}", Sha256::digest(input)))
 }

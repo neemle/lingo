@@ -121,11 +121,11 @@ impl TranslationPackageVerification {
     }
 }
 
-/// A synthetic direct-translation probe independent of the store connection.
+/// A direct-translation quality probe independent of the store connection.
 pub struct TranslationPackageValidation {
     directory: PathBuf,
     package: &'static Package,
-    input: &'static str,
+    samples: [&'static str; 4],
 }
 
 #[derive(serde::Serialize)]
@@ -137,6 +137,9 @@ pub struct TranslationPackageValidationResult {
     pub revision: &'static str,
     pub input: &'static str,
     pub output: String,
+    /// Character overlap on the bundled reference sentences, from 0 to 1000.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<u16>,
 }
 
 impl TranslationPackageValidation {
@@ -152,17 +155,18 @@ impl TranslationPackageValidation {
                 .ok_or("Пакет перекладу не встановлено або він неповний.")?;
             (package_path, before)
         };
-        let segments = [self.input.to_owned()];
-        let output = provider
-            .translate(
-                &self.package.edge(),
-                &segments,
-                None,
-                TranslationSettings::default(),
-            )?
-            .pop()
-            .ok_or("Модель не повернула пробний переклад.")?;
-        if !contains_book_term(self.package.target, &output) {
+        let segments = self.samples.map(str::to_owned);
+        let outputs = provider.translate(
+            &self.package.edge(),
+            &segments,
+            None,
+            TranslationSettings::default(),
+        )?;
+        let quality = probe_evidence::score(self.package.target, &outputs)
+            .ok_or("Модель повернула неповний або завеликий пробний переклад.")?;
+        let mut outputs = outputs.into_iter();
+        let output = outputs.next().ok_or("Модель не повернула пробний переклад.")?;
+        if probe_input(self.package.target).is_some() && !contains_book_term(self.package.target, &output) {
             return Err("У пробному перекладі немає очікуваного слова цільовою мовою.".into());
         }
 
@@ -171,8 +175,9 @@ impl TranslationPackageValidation {
             target: self.package.target,
             repository: self.package.repository,
             revision: self.package.revision,
-            input: self.input,
+            input: self.samples[0],
             output,
+            quality: Some(quality),
         };
 
         // The translation acquires its own shared lock. Only attach this
@@ -183,7 +188,7 @@ impl TranslationPackageValidation {
         if current != package_path || fingerprint.as_ref() != Some(&before) {
             return Err("Пакет перекладу змінився під час перевірки.".into());
         }
-        probe_evidence::write(&current, &validation, before)?;
+        probe_evidence::write(&current, &validation, outputs.collect(), before)?;
         Ok(validation)
     }
 }
@@ -506,9 +511,9 @@ impl Store {
         source: &str,
         target: &str,
     ) -> Result<TranslationPackageValidation> {
-        let input = probe_input(source)
-            .filter(|_| probe_input(target).is_some())
-            .ok_or("Пробний переклад доступний для української, французької й англійської мов.")?;
+        let samples = probe_evidence::samples(source)
+            .filter(|_| probe_evidence::samples(target).is_some())
+            .ok_or("Для цієї мовної пари немає еталонних речень.")?;
         let package = catalog::PACKAGES
             .iter()
             .find(|package| package.source == source && package.target == target)
@@ -516,7 +521,7 @@ impl Store {
         Ok(TranslationPackageValidation {
             directory: self.model_directory.clone(),
             package,
-            input,
+            samples,
         })
     }
 
@@ -725,7 +730,12 @@ impl TranslationProvider for MarianProvider<'_> {
         Ok(catalog::PACKAGES
             .iter()
             .filter(|model| self.files_present(model))
-            .map(Package::edge)
+            .map(|model| {
+                let mut edge = model.edge();
+                edge.quality = probe_evidence::read(&self.read_path(model), model)
+                    .and_then(|validation| validation.quality);
+                edge
+            })
             .collect())
     }
 
