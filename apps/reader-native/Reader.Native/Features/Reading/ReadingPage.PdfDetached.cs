@@ -710,6 +710,7 @@ public partial class ReadingPage
         DetachedAnalyzeSelection.IsVisible = DetachedAnalyzeSelection.IsEnabled =
             !loadingDetachedSentence && detachedSelection is not null;
         DetachedTranslateSelection.IsVisible = DetachedAnalyzeSelection.IsVisible && TargetCode is not null;
+        DetachedShareSelection.IsVisible = detachedSelection is { } selected && CanShareDetachedSelection(selected);
         UpdateDetachedExplainButton();
         DetachedSaveWord.IsVisible = DetachedAnalyzeSelection.IsVisible;
         DetachedSaveWord.IsEnabled = DetachedSaveWord.IsVisible && !savingDetachedWord

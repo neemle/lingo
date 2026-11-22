@@ -1,3 +1,4 @@
+using Reader.Contracts;
 using Reader.Native.Services;
 using Reader.Presentation;
 
@@ -33,10 +34,7 @@ public partial class ReadingPage
     {
         if (sharingReaderText) return;
         if (AppState.Session.Document is not { } document || selection is not { } selected
-            || selected.StartUtf16 < 0 || selected.LengthUtf16 <= 0
-            || selected.StartUtf16 > document.Text.Length - selected.LengthUtf16
-            || !document.Text.AsSpan(selected.StartUtf16, selected.LengthUtf16).SequenceEqual(selected.Text)
-            || string.IsNullOrWhiteSpace(selected.Text))
+            || !ShareableSelection(document.Text, selected))
         {
             await DisplayAlertAsync("Поширити уривок", "Виділіть уривок у відкритому документі.", "Гаразд");
             return;
@@ -44,6 +42,23 @@ public partial class ReadingPage
 
         await ShareReaderTextAsync("Виділений уривок", selected.Text);
     }
+
+    private async void DetachedShareSelectionClicked(object? sender, EventArgs args)
+    {
+        if (sharingReaderText || detachedSelection is not { } selected || !CanShareDetachedSelection(selected)) return;
+        await ShareReaderTextAsync("Виділений уривок", selected.Text);
+    }
+
+    private bool CanShareDetachedSelection(TextSelection selected) =>
+        !loadingDetachedSentence && detachedAddress is { } address && DetachedPdfReader.IsVisible &&
+        AppState.Session.Document?.Id == address.Document && DetachedPdfText.Text == address.Text &&
+        ShareableSelection(address.Text, selected);
+
+    private static bool ShareableSelection(string text, TextSelection selected) =>
+        selected.StartUtf16 >= 0 && selected.LengthUtf16 > 0 &&
+        selected.StartUtf16 <= text.Length - selected.LengthUtf16 &&
+        !string.IsNullOrWhiteSpace(selected.Text) &&
+        text.AsSpan(selected.StartUtf16, selected.LengthUtf16).SequenceEqual(selected.Text);
 
     private async void ShareTranslationPairClicked(object? sender, EventArgs args)
     {
