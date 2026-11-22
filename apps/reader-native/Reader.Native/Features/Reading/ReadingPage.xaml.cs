@@ -195,6 +195,7 @@ public partial class ReadingPage : ContentPage
             : ReadinessMessage();
         SegmentTranslation.Text = text ?? machine?.Text ?? "";
         ActiveTranslationCard.IsVisible = SegmentTranslation.Text.Length > 0;
+        ShareTranslationPair.IsVisible = DisplayedTranslationPair() is not null;
         EditTranslation.Text = text is null ? "Додати свій переклад" : "Змінити переклад";
         EditTranslation.IsEnabled = active && !session.Busy && !translating;
         var canExtend = document is not null && window is not null && document.Position != window.Anchor

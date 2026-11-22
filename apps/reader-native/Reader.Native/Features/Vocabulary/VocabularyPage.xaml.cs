@@ -1,5 +1,6 @@
 using Reader.Contracts;
 using Reader.Native.Services;
+using Reader.Presentation;
 using VocabularyCard = Reader.Contracts.Vocabulary;
 
 namespace Reader.Native.Features.Vocabulary;
@@ -20,6 +21,8 @@ public partial class VocabularyPage : ContentPage
     private int appearance;
     private int collectionRevision;
     private int queryRevision;
+
+    private bool sharingCard;
 
     private CollectionChoice ActiveCollection =>
         CollectionPicker.SelectedIndex >= 0 && CollectionPicker.SelectedIndex < choices.Length
@@ -239,6 +242,24 @@ public partial class VocabularyPage : ContentPage
             searching = false;
             UpdateControls();
         }
+    }
+
+    private async void ShareCardClicked(object? sender, EventArgs args)
+    {
+        if (sharingCard || sender is not Button { CommandParameter: VocabularyCard card }) return;
+        sharingCard = true;
+        try
+        {
+            var source = DocumentLanguages.Name(card.Language);
+            var target = DocumentLanguages.Name(card.TargetLanguage);
+            var heading = $"{card.Word} → {card.Translation}";
+            var text = $"{heading}{Environment.NewLine}{source} → {target}";
+            if (!string.IsNullOrWhiteSpace(card.Context))
+                text += $"{Environment.NewLine}{Environment.NewLine}{card.Context}";
+            await Share.Default.RequestAsync(new ShareTextRequest(text, "Словникова картка"));
+        }
+        catch (Exception error) { ShowArchiveStatus(error.Message); }
+        finally { sharingCard = false; }
     }
 
     private async void ExportClicked(object? sender, EventArgs args)

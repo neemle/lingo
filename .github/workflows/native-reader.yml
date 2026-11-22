@@ -58,6 +58,35 @@ jobs:
           app="$(find apps/reader-native/Reader.Native/bin/Release/net10.0-maccatalyst -type d -name '*.app' -print -quit)"
           executable="$(plutil -extract CFBundleExecutable raw -o - "$app/Contents/Info.plist")"
           xcrun dyld_info -exports "$app/Contents/MacOS/$executable" | awk '$NF == "_OrtGetApiBase" { found = 1 } END { exit !found }'
+      - name: Install and launch the Catalyst package
+        run: |
+          app="$(find apps/reader-native/Reader.Native/bin/Release/net10.0-maccatalyst -type d -name '*.app' -print -quit)"
+          executable="$(plutil -extract CFBundleExecutable raw -o - "$app/Contents/Info.plist")"
+          bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist")"
+          component="$RUNNER_TEMP/Lingo.app"
+          package="$RUNNER_TEMP/lingo-catalyst.pkg"
+          ditto "$app" "$component"
+          pkgbuild --component "$component" --identifier "$bundle_id.pkg" --install-location /Applications "$package"
+          pkgutil --payload-files "$package" | awk -v entry="./Lingo.app/Contents/MacOS/$executable" \
+            '$0 == entry { found = 1 } END { exit !found }'
+          sudo installer -pkg "$package" -target /
+          app="/Applications/Lingo.app"
+          open -n "$app"
+          bundle_home="$HOME/Library/Containers/$bundle_id/Data"
+          for attempt in {1..30}; do
+            for library in "$bundle_home/Library" "$HOME/Library"; do
+              db="$library/reader-native.db"
+              if [[ -s "$db" && "$(head -c 15 "$db")" == 'SQLite format 3' ]] &&
+                ps -axo command= | awk -v exe="$app/Contents/MacOS/$executable" \
+                  '$0 == exe || index($0, exe " ") == 1 { found = 1 } END { exit !found }'; then
+                echo 'Packaged reader started and initialized its SQLite database'
+                exit 0
+              fi
+            done
+            sleep 1
+          done
+          echo 'The Catalyst app did not initialize its local SQLite database' >&2
+          exit 1
   windows:
     runs-on: windows-2022
     steps:

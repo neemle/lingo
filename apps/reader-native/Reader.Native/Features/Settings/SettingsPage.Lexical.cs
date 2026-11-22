@@ -15,6 +15,7 @@ public partial class SettingsPage
         {
             var previousLanguage = SelectedLexicalPackage()?.Language;
             lexicalPackages = await AppState.Session.LexicalPackagesAsync();
+            lexicalInventoryRead = true;
             LexicalChoice.ItemsSource = lexicalPackages.Select(package =>
                 $"{DocumentLanguages.Name(package.Language)} · {package.Bytes / 1_000_000d:F0} МБ · " +
                 (package.Installed ? "встановлено" : DocumentLanguages.Name(package.GlossLanguage) + " у визначеннях"))
@@ -22,8 +23,14 @@ public partial class SettingsPage
             LexicalChoice.SelectedIndex = lexicalPackages.Length == 0 ? -1 :
                 Math.Max(0, Array.FindIndex(lexicalPackages, package => package.Language == previousLanguage));
             UpdateLexicalControls();
+            UpdateCapabilityMatrix();
         }
-        catch (Exception error) { LexicalStatus.Text = error.Message; }
+        catch (Exception error)
+        {
+            lexicalInventoryRead = false;
+            LexicalStatus.Text = error.Message;
+            UpdateCapabilityMatrix();
+        }
     }
 
     private LexicalPackage? SelectedLexicalPackage() =>

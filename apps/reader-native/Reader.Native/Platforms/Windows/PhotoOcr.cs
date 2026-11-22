@@ -1,4 +1,6 @@
 using System.Runtime.InteropServices;
+using Reader.Presentation;
+using Windows.Globalization;
 using Windows.Graphics.Imaging;
 using Windows.Storage.Streams;
 using OcrEngine = Windows.Media.Ocr.OcrEngine;
@@ -11,15 +13,23 @@ internal static class PhotoOcr
     [DllImport("kernel32.dll", ExactSpelling = true)]
     private static extern int GetCurrentPackageFullName(ref uint length, IntPtr buffer);
 
+    internal const string PackageRequired = "Для OCR у Windows потрібна версія Читай, встановлена з пакета MSIX.";
+
+    internal static bool HasPackageIdentity()
+    {
+        const int noPackage = 15700;
+        uint length = 0;
+        return GetCurrentPackageFullName(ref length, IntPtr.Zero) != noPackage;
+    }
+
+    internal static IReadOnlyList<Language> AvailableRecognitionLanguages() => OcrEngine.AvailableRecognizerLanguages;
+
     internal static async Task<OcrLine[]> RecognizeAsync(byte[] bytes, string language)
     {
-        uint length = 0;
-        if (GetCurrentPackageFullName(ref length, IntPtr.Zero) == 15700)
-            throw new InvalidOperationException("Для OCR у Windows потрібна версія Читай, встановлена з пакета MSIX.");
+        if (!HasPackageIdentity()) throw new InvalidOperationException(PackageRequired);
 
-        var selected = OcrEngine.AvailableRecognizerLanguages.FirstOrDefault(item =>
-            item.LanguageTag.Equals(language, StringComparison.OrdinalIgnoreCase) ||
-            item.LanguageTag.StartsWith(language + "-", StringComparison.OrdinalIgnoreCase));
+        var selected = AvailableRecognitionLanguages().FirstOrDefault(item =>
+            SpeechVoice.MatchesLanguage(item.LanguageTag, language));
         var engine = selected is null ? null : OcrEngine.TryCreateFromLanguage(selected);
         if (engine is null)
             throw new InvalidOperationException($"Додайте розпізнавання тексту для мови «{language}» у Windows.");

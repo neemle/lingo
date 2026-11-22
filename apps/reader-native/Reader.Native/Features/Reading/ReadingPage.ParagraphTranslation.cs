@@ -47,11 +47,14 @@ public partial class ReadingPage
         return matching.FirstOrDefault(window => window.IsParagraph) ?? matching.FirstOrDefault();
     }
 
-    private MachineTranslation? ActiveMachine(Document document, string target)
+    private MachineTranslation? ActiveMachine(Document document, string target) =>
+        ActiveMachineAlignment(document, target)?.Translation;
+
+    private (AlignedUnit Unit, MachineTranslation Translation)? ActiveMachineAlignment(Document document, string target)
     {
         foreach (var window in MatchingTranslationWindows(document, target))
             if (window.UnitFor(document.Position) is { } unit && MachineFor(document, window, unit) is { } machine)
-                return machine;
+                return (unit, machine);
         return null;
     }
 

@@ -3,6 +3,7 @@ using Foundation;
 using UIKit;
 using ImageIO;
 using Reader.Contracts;
+using Reader.Presentation;
 using Vision;
 
 namespace Reader.Native.Services;
@@ -34,19 +35,33 @@ internal static class PhotoOcr
         }) ?? throw new InvalidDataException("macOS не може прочитати це зображення.");
     }
 
+    internal static string[] RecognitionLanguageTags()
+    {
+        using var pool = new NSAutoreleasePool();
+        using var request = CreateRecognitionRequest();
+        return ReadRecognitionLanguageTags(request);
+    }
+
+    private static VNRecognizeTextRequest CreateRecognitionRequest() => new((_, _) => { })
+    {
+        RecognitionLevel = VNRequestTextRecognitionLevel.Accurate,
+        UsesLanguageCorrection = true,
+    };
+
+    private static string[] ReadRecognitionLanguageTags(VNRecognizeTextRequest request)
+    {
+        var languages = request.GetSupportedRecognitionLanguages(out var error);
+        if (error is not null) throw new InvalidOperationException(error.LocalizedDescription);
+        return languages?.Select(tag => tag.ToString()).ToArray() ?? [];
+    }
+
     internal static OcrLine[] Recognize(byte[] bytes, string language)
     {
         using var pool = new NSAutoreleasePool();
         using var image = Decode(bytes, 4096);
-        using var request = new VNRecognizeTextRequest((_, _) => { })
-        {
-            RecognitionLevel = VNRequestTextRecognitionLevel.Accurate,
-            UsesLanguageCorrection = true,
-        };
-        var languages = request.GetSupportedRecognitionLanguages(out var languageError);
-        if (languageError is not null) throw new InvalidOperationException(languageError.LocalizedDescription);
-        var selected = languages?.Select(tag => tag.ToString()).FirstOrDefault(tag => tag.Equals(language, StringComparison.OrdinalIgnoreCase)
-            || tag.StartsWith(language + "-", StringComparison.OrdinalIgnoreCase));
+        using var request = CreateRecognitionRequest();
+        var selected = ReadRecognitionLanguageTags(request).FirstOrDefault(tag =>
+            SpeechVoice.MatchesLanguage(tag, language));
         if (selected is null) throw new InvalidOperationException($"OCR мовою «{language}» недоступний у цій macOS.");
         request.RecognitionLanguages = [selected];
 

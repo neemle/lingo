@@ -26,6 +26,7 @@ public partial class SettingsPage
         {
             var previous = SelectedOptionalModel?.Id;
             optionalModels = await AppState.Session.OptionalModelsAsync();
+            optionalInventoryRead = true;
             OptionalModelChoice.ItemsSource = optionalModels.Select(model =>
                 $"{model.Name} · {model.Assets.Sum(asset => asset.Bytes) / 1_000_000d:F0} МБ · {model.License} · " +
                 (model.FilesPresent ? "файли на місці" : model.HasLocalFiles ? "пошкоджені або неповні файли" : "доступно"))
@@ -33,8 +34,14 @@ public partial class SettingsPage
             OptionalModelChoice.SelectedIndex = optionalModels.Length == 0 ? -1
                 : Math.Max(0, Array.FindIndex(optionalModels, model => model.Id == previous));
             UpdateOptionalModelControls();
+            UpdateCapabilityMatrix();
         }
-        catch (Exception error) { OptionalModelStatus.Text = error.Message; }
+        catch (Exception error)
+        {
+            optionalInventoryRead = false;
+            OptionalModelStatus.Text = error.Message;
+            UpdateCapabilityMatrix();
+        }
     }
 
     private void OptionalModelChanged(object? sender, EventArgs args) => UpdateOptionalModelControls();

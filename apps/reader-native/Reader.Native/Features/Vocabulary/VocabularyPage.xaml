@@ -102,6 +102,9 @@
          <Label Text="{Binding Reverse.Reviews, StringFormat='Зворотний · {0}'}" HorizontalTextAlignment="End"
           SemanticProperties.Description="{Binding Reverse.Reviews, StringFormat='Повторень у зворотному напрямі: {0}'}"
           TextColor="{StaticResource Muted}" FontSize="11" />
+         <Button Text="Поширити" FontSize="11" HorizontalOptions="End" Style="{StaticResource OutlineButton}"
+          Clicked="ShareCardClicked" CommandParameter="{Binding .}"
+          SemanticProperties.Description="{Binding Word, StringFormat='Поширити картку {0}'}" />
         </VerticalStackLayout>
        </Grid>
        <BoxView Grid.Row="1" Color="{StaticResource BorderTone}" />

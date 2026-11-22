@@ -34,10 +34,15 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
     protected override async void OnAppearing()
     {
         base.OnAppearing();
+        nativeCapabilities = null;
+        capabilityReport = null;
+        ExportCapabilities.IsEnabled = false;
         await RefreshTranslationPackagesAsync();
         await RefreshKnowledgePackagesAsync();
         await RefreshLexicalPackagesAsync();
         await RefreshOptionalModelsAsync();
+        nativeCapabilities = NativeLanguageCapabilities.Read();
+        UpdateCapabilityMatrix();
     }
 
     private async Task RefreshKnowledgePackagesAsync()
@@ -45,13 +50,20 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         try
         {
             var packages = await AppState.Session.KnowledgePackagesAsync();
+            knowledgeInventory = packages;
             KnowledgePackages.Text = string.Join(Environment.NewLine, packages.Select(package =>
                 $"{DocumentLanguages.Name(package.Language)} · {package.Name} {package.Version} · {package.License} · " +
                 (package.ExpressionsAvailable ? "встановлено" : package.Installed
                     ? "доступне оновлення індексу" : "доступно для завантаження")));
             InstallKnowledge.IsVisible = packages.Any(package => !package.ExpressionsAvailable);
+            UpdateCapabilityMatrix();
         }
-        catch (Exception error) { KnowledgeStatus.Text = error.Message; }
+        catch (Exception error)
+        {
+            knowledgeInventory = null;
+            KnowledgeStatus.Text = error.Message;
+            UpdateCapabilityMatrix();
+        }
     }
 
     private async void InstallKnowledgeClicked(object? sender, EventArgs args)
@@ -85,6 +97,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         try
         {
             var packages = await AppState.Session.TranslationPackagesAsync();
+            translationInventory = packages;
             TranslationPackages.Text = string.Join(Environment.NewLine, packages.Select(package =>
                 $"{DocumentLanguages.Name(package.Source)} → {DocumentLanguages.Name(package.Target)}: " +
                 (package.FilesPresent ? "файли на місці" : package.HasLocalFiles ? "лишилися файли пакета" : "пакет відсутній")));
@@ -101,8 +114,14 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
                 : Math.Max(0, Array.FindIndex(downloadChoices, package => package.Source == previous?.Source &&
                     package.Target == previous?.Target));
             UpdateTranslationControls();
+            UpdateCapabilityMatrix();
         }
-        catch (Exception error) { TranslationPackages.Text = error.Message; }
+        catch (Exception error)
+        {
+            translationInventory = null;
+            TranslationPackages.Text = error.Message;
+            UpdateCapabilityMatrix();
+        }
     }
 
     private void UpdateTranslationControls()
