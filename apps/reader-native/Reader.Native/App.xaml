@@ -3,16 +3,52 @@
  xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml" x:Class="Reader.Native.App">
  <Application.Resources>
   <ResourceDictionary>
-   <Color x:Key="Paper">#F6F3EC</Color><Color x:Key="Ink">#2D312B</Color>
-   <Color x:Key="Sage">#63725C</Color><Color x:Key="Accent">#A65F43</Color>
-   <Style TargetType="ContentPage"><Setter Property="BackgroundColor" Value="{StaticResource Paper}" /></Style>
-   <Style TargetType="Label"><Setter Property="TextColor" Value="{StaticResource Ink}" /></Style>
-   <Style TargetType="Button">
-    <Setter Property="BackgroundColor" Value="{StaticResource Sage}" />
-    <Setter Property="TextColor" Value="White" /><Setter Property="CornerRadius" Value="12" />
-    <Setter Property="MinimumHeightRequest" Value="44" />
+   <Color x:Key="Paper">#F7F6F2</Color>
+   <Color x:Key="Ink">#30342E</Color>
+   <Color x:Key="Sage">#63714C</Color>
+   <Color x:Key="Accent">#C86742</Color>
+   <Color x:Key="AccentSoft">#F4E8DF</Color>
+   <Color x:Key="BorderTone">#E7E6DE</Color>
+   <Color x:Key="Panel">#FDFDF9</Color>
+   <Color x:Key="Muted">#697063</Color>
+   <Color x:Key="Rail">#EEEEE8</Color>
+   <Color x:Key="RailSelected">#E3E4D9</Color>
+   <Style TargetType="ContentPage">
+    <Setter Property="BackgroundColor" Value="{StaticResource Paper}" />
    </Style>
-   <Style TargetType="Entry"><Setter Property="TextColor" Value="{StaticResource Ink}" /></Style>
+   <Style TargetType="Label">
+    <Setter Property="TextColor" Value="{StaticResource Ink}" />
+   </Style>
+   <Style x:Key="SerifTitle" TargetType="Label">
+    <Setter Property="FontFamily" Value="Georgia" />
+    <Setter Property="FontSize" Value="38" />
+    <Setter Property="TextColor" Value="{StaticResource Ink}" />
+   </Style>
+   <Style x:Key="OutlineButton" TargetType="Button">
+    <Setter Property="MinimumHeightRequest" Value="38" />
+    <Setter Property="Padding" Value="14,8" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="TextColor" Value="{StaticResource Ink}" />
+    <Setter Property="BackgroundColor" Value="{StaticResource Panel}" />
+    <Setter Property="BorderWidth" Value="1" />
+    <Setter Property="BorderColor" Value="{StaticResource BorderTone}" />
+   </Style>
+   <Style TargetType="Button" BasedOn="{StaticResource OutlineButton}" />
+   <Style x:Key="AccentButton" TargetType="Button" BasedOn="{StaticResource OutlineButton}">
+    <Setter Property="TextColor" Value="#21170E" />
+    <Setter Property="BackgroundColor" Value="{StaticResource Accent}" />
+    <Setter Property="BorderWidth" Value="0" />
+    <Setter Property="FontAttributes" Value="Bold" />
+   </Style>
+   <Style TargetType="Entry">
+    <Setter Property="TextColor" Value="{StaticResource Ink}" />
+    <Setter Property="PlaceholderColor" Value="{StaticResource Muted}" />
+   </Style>
+   <Style TargetType="Picker">
+    <Setter Property="TextColor" Value="{StaticResource Ink}" />
+    <Setter Property="TitleColor" Value="{StaticResource Muted}" />
+   </Style>
   </ResourceDictionary>
  </Application.Resources>
 </Application>

@@ -67,11 +67,14 @@ impl Store {
         let mut statement = self
             .connection
             .prepare(
-                "WITH source_ids(id) AS (
-                 SELECT ?1
+                "WITH selected_hash(hash) AS (
+                 SELECT source_hash FROM documents WHERE id = ?1
                  UNION
-                 SELECT s.document_id FROM dictionary_sources s
-                 JOIN documents d ON d.source_hash = s.source_hash WHERE d.id = ?1
+                 SELECT source_hash FROM dictionary_sources WHERE document_id = ?1
+             ), source_ids(id) AS (
+                 SELECT ?1
+                 UNION SELECT id FROM documents WHERE source_hash IN selected_hash
+                 UNION SELECT document_id FROM dictionary_sources WHERE source_hash IN selected_hash
              )
              SELECT v.body FROM vocabulary v
              WHERE ?1 IS NULL
@@ -88,6 +91,14 @@ impl Store {
             .map_err(error)?;
         rows.map(|row| serde_json::from_str(&row.map_err(error)?).map_err(error))
             .collect()
+    }
+
+    pub fn dictionary_sources(&self) -> Result<Vec<DictionarySource>> {
+        let tx = self.connection.unchecked_transaction().map_err(error)?;
+        let entries = self.dictionary_collection(None)?;
+        let sources = sources_for(&tx, &entries)?;
+        tx.commit().map_err(error)?;
+        Ok(sources)
     }
 
     pub fn export_dictionary(&self, document_id: Option<&str>) -> Result<DictionaryArchive> {
@@ -124,6 +135,11 @@ pub(crate) fn export_details(
         .filter(|review| ids.contains(review.event.entry_id.as_str()))
         .collect();
 
+    Ok((sources_for(db, entries)?, reviews))
+}
+
+fn sources_for(db: &Connection, entries: &[Vocabulary]) -> Result<Vec<DictionarySource>> {
+    let ids: BTreeSet<_> = entries.iter().map(|card| card.id.as_str()).collect();
     let mut memberships = BTreeMap::<String, BTreeSet<String>>::new();
     for card in entries {
         for document_id in card_documents(card) {
@@ -147,7 +163,7 @@ pub(crate) fn export_details(
             }
         }
     }
-    let sources = memberships
+    memberships
         .into_iter()
         .map(|(document_id, cards)| {
             let (title, source_hash) = source_metadata(db, &document_id)?.unwrap_or_default();
@@ -158,8 +174,7 @@ pub(crate) fn export_details(
                 entry_ids: cards.into_iter().collect(),
             })
         })
-        .collect::<Result<_>>()?;
-    Ok((sources, reviews))
+        .collect()
 }
 
 fn restore_archive(

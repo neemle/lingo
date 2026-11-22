@@ -7,13 +7,18 @@ public static class NativeFiles
     public static async Task<byte[]> ReadBoundedAsync(FileResult file, int maximum)
     {
         await using var stream = await file.OpenReadAsync();
+        return await ReadBoundedAsync(stream, maximum);
+    }
+
+    internal static async Task<byte[]> ReadBoundedAsync(Stream stream, int maximum)
+    {
         using var copy = new MemoryStream();
         var buffer = new byte[64 * 1024];
         int count;
-        while ((count = await stream.ReadAsync(buffer)) != 0)
+        while ((count = await stream.ReadAsync(buffer).ConfigureAwait(false)) != 0)
         {
             if (copy.Length + count > maximum) throw new InvalidDataException("Файл перевищує допустимий розмір.");
-            await copy.WriteAsync(buffer.AsMemory(0, count));
+            await copy.WriteAsync(buffer.AsMemory(0, count)).ConfigureAwait(false);
         }
         return copy.ToArray();
     }

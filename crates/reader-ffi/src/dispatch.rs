@@ -97,6 +97,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         }
         Command::KnowledgePackages => value(Ok(store.knowledge_packages())),
         Command::LexicalPackages => value(Ok(store.lexical_packages())),
+        Command::DictionarySources => value(store.dictionary_sources()),
         Command::DictionaryCollection { document_id } => {
             value(store.dictionary_collection(document_id.as_deref()))
         }

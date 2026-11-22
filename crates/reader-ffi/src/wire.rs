@@ -88,6 +88,8 @@ pub enum Command {
     },
     SemanticVocabulary {
         query: String,
+        #[serde(rename = "documentId")]
+        document_id: Option<String>,
     },
     ExplainWord {
         model: String,
@@ -123,6 +125,7 @@ pub enum Command {
         language: String,
         path: String,
     },
+    DictionarySources,
     DictionaryCollection {
         #[serde(rename = "documentId")]
         document_id: Option<String>,

@@ -4,38 +4,91 @@
  xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
  x:DataType="state:ReaderSession"
  x:Class="Reader.Native.Features.Practice.PracticePage" Title="Практика">
+ <ContentPage.Resources>
+  <Style x:Key="DirectionOption" TargetType="Button" BasedOn="{StaticResource OutlineButton}">
+   <Setter Property="BackgroundColor" Value="Transparent" />
+   <Setter Property="BorderWidth" Value="0" />
+   <Setter Property="MinimumHeightRequest" Value="40" />
+   <Setter Property="TextColor" Value="{StaticResource Muted}" />
+  </Style>
+  <Style x:Key="SelectedDirection" TargetType="Button" BasedOn="{StaticResource DirectionOption}">
+   <Setter Property="BackgroundColor" Value="{StaticResource Panel}" />
+   <Setter Property="TextColor" Value="{StaticResource Sage}" />
+   <Setter Property="FontAttributes" Value="Bold" />
+  </Style>
+  <Style x:Key="Rating" TargetType="Button" BasedOn="{StaticResource OutlineButton}">
+   <Setter Property="Padding" Value="5,8" />
+   <Setter Property="BackgroundColor" Value="#F3F3EB" />
+   <Setter Property="BorderColor" Value="#E6E8DC" />
+   <Setter Property="TextColor" Value="{StaticResource Muted}" />
+  </Style>
+ </ContentPage.Resources>
  <ScrollView>
- <VerticalStackLayout Padding="40" Spacing="24" MaximumWidthRequest="760">
-  <Picker x:Name="Direction" SelectedIndexChanged="PracticeSettingChanged" Title="Напрям повторення" SelectedIndex="0">
-   <Picker.Items><x:String>Слово → український переклад</x:String>
-    <x:String>Український переклад → слово</x:String></Picker.Items>
-  </Picker>
-  <Picker x:Name="Mode" SelectedIndexChanged="PracticeSettingChanged" Title="Режим практики" SelectedIndex="0">
-   <Picker.Items><x:String>Показ відповіді</x:String><x:String>Введення відповіді</x:String>
-    <x:String>Вибір варіанта</x:String></Picker.Items>
-  </Picker>
-  <Label x:Name="QueueStatus" TextColor="#63725C" />
-  <Border Padding="40" Stroke="#D9DCCF" BackgroundColor="#FFFDFA" StrokeShape="RoundRectangle 18">
-   <VerticalStackLayout Spacing="24">
-    <Label x:Name="Prompt" FontSize="36" HorizontalTextAlignment="Center" />
-    <Grid x:Name="Typing" ColumnDefinitions="*,Auto" ColumnSpacing="12" IsVisible="False">
-     <Entry x:Name="TypedAnswer" Placeholder="Введіть відповідь" ReturnType="Done" Completed="CheckTyped"
-      SemanticProperties.Description="Ваша відповідь" />
-     <Button Grid.Column="1" Text="Перевірити" Clicked="CheckTyped" />
-    </Grid>
-    <VerticalStackLayout x:Name="Choices" Spacing="8" IsVisible="False" />
-    <Label x:Name="Feedback" IsVisible="False" />
-    <Label x:Name="Answer" FontSize="25" HorizontalTextAlignment="Center" TextColor="#63725C" />
-    <Button x:Name="Reveal" Text="Показати відповідь" Clicked="RevealClicked" IsVisible="False" />
+  <VerticalStackLayout Padding="40,34,40,42" Spacing="24" MaximumWidthRequest="920" HorizontalOptions="Fill">
+   <VerticalStackLayout Spacing="8" Margin="0,0,0,5">
+    <Label Text="Час для практики" Style="{StaticResource SerifTitle}" SemanticProperties.HeadingLevel="Level1" />
+    <Label Text="Повторюйте картки у вибраному напрямі." TextColor="{StaticResource Muted}" FontSize="14" />
    </VerticalStackLayout>
-  </Border>
-  <HorizontalStackLayout x:Name="Grades" Spacing="12" IsVisible="False">
-   <Button Text="Ще раз" CommandParameter="0" Clicked="GradeClicked" />
-   <Button Text="Важко" CommandParameter="1" Clicked="GradeClicked" />
-   <Button Text="Добре" CommandParameter="2" Clicked="GradeClicked" />
-   <Button Text="Легко" CommandParameter="3" Clicked="GradeClicked" />
-  </HorizontalStackLayout>
-  <Label Text="{Binding Error}" TextColor="#A65F43" />
- </VerticalStackLayout>
+
+   <FlexLayout Wrap="Wrap" AlignItems="Center" JustifyContent="SpaceBetween">
+    <Border x:Name="Direction" Padding="4" Margin="0,0,8,8" BackgroundColor="#EAECE2"
+     StrokeThickness="0" StrokeShape="RoundRectangle 8">
+     <Grid ColumnDefinitions="Auto,Auto" ColumnSpacing="4">
+      <Button x:Name="ForwardDirection" Text="Слово → переклад" CommandParameter="forward"
+       Clicked="PracticeDirectionClicked" Style="{StaticResource SelectedDirection}" />
+      <Button x:Name="ReverseDirection" Grid.Column="1" Text="Переклад → слово" CommandParameter="reverse"
+       Clicked="PracticeDirectionClicked" Style="{StaticResource DirectionOption}" />
+     </Grid>
+    </Border>
+    <Picker x:Name="Mode" SelectedIndexChanged="PracticeSettingChanged" Title="Режим практики"
+     SelectedIndex="0" Margin="0,0,0,8" MinimumWidthRequest="176">
+     <Picker.Items>
+      <x:String>Показ відповіді</x:String><x:String>Введення відповіді</x:String><x:String>Вибір варіанта</x:String>
+     </Picker.Items>
+    </Picker>
+   </FlexLayout>
+
+   <Border Padding="30,40" Stroke="{StaticResource BorderTone}" BackgroundColor="{StaticResource Panel}"
+    StrokeShape="RoundRectangle 13" MinimumHeightRequest="400" MaximumWidthRequest="760" HorizontalOptions="Fill">
+    <VerticalStackLayout Spacing="18" VerticalOptions="Center">
+     <Label x:Name="QueueStatus" TextColor="{StaticResource Muted}" FontSize="12" CharacterSpacing="0.7"
+      HorizontalTextAlignment="Center" />
+     <Label x:Name="Prompt" Style="{StaticResource SerifTitle}" FontSize="42" TextColor="{StaticResource Sage}"
+      HorizontalTextAlignment="Center" SemanticProperties.HeadingLevel="Level2" />
+     <Label x:Name="QuestionContext" Style="{StaticResource SerifTitle}" FontSize="17" FontAttributes="Italic"
+      TextColor="{StaticResource Muted}" HorizontalTextAlignment="Center" LineHeight="1.2" IsVisible="False" />
+     <Grid x:Name="Typing" ColumnDefinitions="*,Auto" ColumnSpacing="10" IsVisible="False"
+      MaximumWidthRequest="460" HorizontalOptions="Fill">
+      <Entry x:Name="TypedAnswer" Placeholder="Ваша відповідь…" ReturnType="Done" Completed="CheckTyped"
+       SemanticProperties.Description="Ваша відповідь" />
+      <Button Grid.Column="1" Text="Перевірити" Clicked="CheckTyped" Style="{StaticResource AccentButton}" />
+     </Grid>
+     <VerticalStackLayout x:Name="Choices" Spacing="8" IsVisible="False"
+      MaximumWidthRequest="460" HorizontalOptions="Fill" />
+     <Label x:Name="Feedback" IsVisible="False" HorizontalTextAlignment="Center" TextColor="{StaticResource Muted}" />
+     <Label x:Name="Answer" Style="{StaticResource SerifTitle}" IsVisible="False" FontSize="30"
+      HorizontalTextAlignment="Center" TextColor="{StaticResource Accent}" />
+     <Button x:Name="Reveal" Text="Показати відповідь" Clicked="RevealClicked" IsVisible="False"
+      Style="{StaticResource AccentButton}" HorizontalOptions="Center" />
+     <Button x:Name="EmptyAction" Text="Продовжити читати" Clicked="ReturnToReadingClicked" IsVisible="False"
+      Style="{StaticResource AccentButton}" HorizontalOptions="Center" />
+
+     <VerticalStackLayout x:Name="Grades" Spacing="12" IsVisible="False">
+      <Label Text="Як легко було згадати?" HorizontalTextAlignment="Center" TextColor="{StaticResource Muted}" />
+      <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="7" MaximumWidthRequest="520" HorizontalOptions="Fill">
+       <Button Text="Ще раз" CommandParameter="0" Clicked="GradeClicked" Style="{StaticResource Rating}"
+        BackgroundColor="{StaticResource AccentSoft}" TextColor="#91462B" BorderColor="#EDDFD2" />
+       <Button Grid.Column="1" Text="Складно" CommandParameter="1" Clicked="GradeClicked" Style="{StaticResource Rating}" />
+       <Button Grid.Column="2" Text="Добре" CommandParameter="2" Clicked="GradeClicked" Style="{StaticResource Rating}" />
+       <Button Grid.Column="3" Text="Легко" CommandParameter="3" Clicked="GradeClicked" Style="{StaticResource Rating}"
+        BackgroundColor="#EEF2E5" TextColor="{StaticResource Sage}" BorderColor="#E1E8D4" />
+      </Grid>
+     </VerticalStackLayout>
+    </VerticalStackLayout>
+   </Border>
+   <Label Text="Для кожного напряму свій розклад. Прогрес зберігається на цьому пристрої."
+    TextColor="{StaticResource Muted}" HorizontalTextAlignment="Center" FontSize="12" />
+   <Label Text="{Binding Error}" TextColor="{StaticResource Accent}" />
+  </VerticalStackLayout>
  </ScrollView>
 </ContentPage>

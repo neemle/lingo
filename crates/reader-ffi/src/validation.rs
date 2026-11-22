@@ -40,7 +40,7 @@ fn validate(command: &Command) -> Result<()> {
                 "Import must contain 1..20MiB and a bounded filename",
             ))
         }
-        Command::SemanticVocabulary { query } if query.len() > 960 => Err(Error::new(
+        Command::SemanticVocabulary { query, .. } if query.len() > 960 => Err(Error::new(
             "invalid_argument",
             "Semantic vocabulary query exceeds its wire bound",
         )),

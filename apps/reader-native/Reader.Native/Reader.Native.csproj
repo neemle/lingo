@@ -20,6 +20,9 @@
       Condition="$(TargetFramework.Contains('windows'))">10.0.17763.0</SupportedOSPlatformVersion>
     <TargetPlatformMinVersion Condition="$(TargetFramework.Contains('windows'))">10.0.17763.0</TargetPlatformMinVersion>
   </PropertyGroup>
+  <PropertyGroup Condition="$(TargetFramework.Contains('windows'))">
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+  </PropertyGroup>
   <PropertyGroup Condition="$(TargetFramework.Contains('windows')) and '$(LingoMsix)' == 'true'">
     <WindowsPackageType>MSIX</WindowsPackageType>
     <GenerateAppxPackageOnBuild>true</GenerateAppxPackageOnBuild>
@@ -33,6 +36,7 @@
   <ItemGroup>
     <ProjectReference Include="../Reader.Presentation/Reader.Presentation.csproj" />
     <MauiIcon Include="Resources/AppIcon/appicon.svg" Color="#63725C" />
+    <MauiImage Include="Resources/Images/Navigation/*.svg" />
     <MauiSplashScreen Include="Resources/Splash/splash.svg" Color="#F6F3EC" BaseSize="128,128" />
     <MauiAsset Include="Resources/InferenceLicenses.txt" LogicalName="InferenceLicenses.txt" />
     <PackageDownload Include="Microsoft.ML.OnnxRuntime" Version="[$(OnnxRuntimeVersion)]" />

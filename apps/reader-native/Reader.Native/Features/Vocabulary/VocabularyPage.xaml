@@ -5,64 +5,110 @@
  xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
  x:DataType="state:ReaderSession"
  x:Class="Reader.Native.Features.Vocabulary.VocabularyPage" Title="Словник">
- <Grid Padding="32" RowDefinitions="Auto,Auto,*" RowSpacing="18">
-  <Label Text="Слова, які залишаються з вами" FontSize="30" FontAttributes="Bold" />
-  <VerticalStackLayout Grid.Row="1" Spacing="6">
-   <Label Text="Збережені вами переклади та контекст. Обидва напрями повторюються окремо." TextColor="#63725C" />
-   <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-    <SearchBar x:Name="VocabularyQuery" Placeholder="Слово, переклад або контекст" MaxLength="240" TextChanged="QueryChanged" />
-    <Button Grid.Column="1" x:Name="SemanticSearch" Text="За змістом (E5)" IsEnabled="False" Clicked="SemanticClicked" />
-   </Grid>
-   <Label x:Name="SearchStatus" IsVisible="False" />
-  </VerticalStackLayout>
-  <CollectionView Grid.Row="2" x:Name="VocabularyList">
-   <CollectionView.EmptyView>
-    <Label x:Name="EmptyVocabulary" Text="Виділіть слово під час читання, щоб додати його сюди." />
-   </CollectionView.EmptyView>
-   <CollectionView.ItemTemplate><DataTemplate x:DataType="models:Vocabulary">
-    <Border Padding="20" Margin="0,0,0,12" Stroke="#D9DCCF" BackgroundColor="#FFFDFA"
-     StrokeShape="RoundRectangle 12">
-     <VerticalStackLayout Spacing="8">
-      <Label Text="{Binding Word}" FontSize="22" FontAttributes="Bold" />
-      <Label Text="{Binding Translation}" FontSize="18" TextColor="#63725C" />
-      <Label Text="{Binding Context}" FontSize="14" LineBreakMode="WordWrap" />
-      <VerticalStackLayout Spacing="4">
-       <VerticalStackLayout.Triggers>
-        <DataTrigger TargetType="VerticalStackLayout" Binding="{Binding Analysis}" Value="{x:Null}">
-         <Setter Property="IsVisible" Value="False" />
-        </DataTrigger>
-       </VerticalStackLayout.Triggers>
-       <Label Text="{Binding Analysis.Surface, StringFormat='У тексті: {0}'}" FontSize="13" />
-       <Label Text="{Binding Analysis.Context}" FontSize="14" LineBreakMode="WordWrap">
-        <Label.Triggers>
-         <DataTrigger TargetType="Label" Binding="{Binding Analysis.Context}" Value="{x:Null}">
-          <Setter Property="IsVisible" Value="False" />
-         </DataTrigger>
-        </Label.Triggers>
-       </Label>
-       <Label Text="{Binding Analysis.Source, StringFormat='Граматичний розбір: {0}'}" FontSize="12" />
-      </VerticalStackLayout>
-      <VerticalStackLayout Spacing="4">
-       <VerticalStackLayout.Triggers>
-        <DataTrigger TargetType="VerticalStackLayout" Binding="{Binding Expression}" Value="{x:Null}">
-         <Setter Property="IsVisible" Value="False" />
-        </DataTrigger>
-       </VerticalStackLayout.Triggers>
-       <Label Text="{Binding Expression.Surface, StringFormat='У тексті: {0}'}" FontSize="13" />
-       <Label Text="{Binding Expression.Context}" FontSize="14" LineBreakMode="WordWrap">
-        <Label.Triggers>
-         <DataTrigger TargetType="Label" Binding="{Binding Expression.Context}" Value="{x:Null}">
-          <Setter Property="IsVisible" Value="False" />
-         </DataTrigger>
-        </Label.Triggers>
-       </Label>
-       <Label Text="{Binding Expression.Source, StringFormat='Джерело виразу: {0}'}" FontSize="12" />
-      </VerticalStackLayout>
-      <Label Text="{Binding Forward.Reviews, StringFormat='Прямий напрям: {0} повторень'}" FontSize="12" />
-      <Label Text="{Binding Reverse.Reviews, StringFormat='Зворотний напрям: {0} повторень'}" FontSize="12" />
-     </VerticalStackLayout>
+ <Grid Padding="36,30,36,20" RowDefinitions="Auto,Auto,*" RowSpacing="17">
+  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+   <VerticalStackLayout Spacing="5">
+    <HorizontalStackLayout Spacing="12">
+     <Label Text="Мій словник" Style="{StaticResource SerifTitle}" FontSize="42" SemanticProperties.HeadingLevel="Level1" />
+     <Border Padding="9,4" StrokeThickness="0" StrokeShape="RoundRectangle 14"
+      BackgroundColor="#E9EDDF" VerticalOptions="Center" MinimumWidthRequest="30">
+      <Label x:Name="CollectionCount" Text="0" FontSize="12" HorizontalTextAlignment="Center"
+       TextColor="{StaticResource Sage}" />
+     </Border>
+    </HorizontalStackLayout>
+    <Label Text="Збережені переклади й контекст" TextColor="{StaticResource Muted}" FontSize="14" />
+   </VerticalStackLayout>
+   <Button Grid.Column="1" Text="Повторити слова" Style="{StaticResource AccentButton}" VerticalOptions="Center" Clicked="PracticeClicked" />
+  </Grid>
+  <VerticalStackLayout Grid.Row="1" Spacing="8">
+   <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+    <Border Padding="6,0" Stroke="{StaticResource BorderTone}" StrokeShape="RoundRectangle 8" BackgroundColor="{StaticResource Panel}">
+     <Picker x:Name="CollectionPicker" Title="Добірка за документом" IsEnabled="False"
+      SelectedIndexChanged="CollectionChanged" SemanticProperties.Description="Добірка за документом" />
     </Border>
-   </DataTemplate></CollectionView.ItemTemplate>
-  </CollectionView>
+    <Button Grid.Column="1" x:Name="ExportDictionary" Text="Експорт словника" Style="{StaticResource OutlineButton}"
+     IsEnabled="False" Clicked="ExportClicked" />
+    <Button Grid.Column="2" x:Name="ImportDictionary" Text="Імпорт словника" Style="{StaticResource OutlineButton}" Clicked="ImportClicked" />
+   </Grid>
+   <Label x:Name="ArchiveStatus" TextColor="{StaticResource Sage}" IsVisible="False" />
+   <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+    <Border Stroke="{StaticResource BorderTone}" StrokeShape="RoundRectangle 8" BackgroundColor="{StaticResource Panel}">
+     <SearchBar x:Name="VocabularyQuery" Placeholder="Знайти слово, переклад або контекст" MaxLength="240"
+      TextChanged="QueryChanged" BackgroundColor="Transparent" />
+    </Border>
+    <Button Grid.Column="1" x:Name="SemanticSearch" Text="За змістом (E5)" Style="{StaticResource OutlineButton}"
+     IsEnabled="False" Clicked="SemanticClicked" />
+   </Grid>
+   <Label x:Name="SearchStatus" TextColor="{StaticResource Sage}" IsVisible="False" />
+  </VerticalStackLayout>
+  <Border Grid.Row="2" Stroke="{StaticResource BorderTone}" StrokeShape="RoundRectangle 10" BackgroundColor="{StaticResource Panel}">
+   <CollectionView x:Name="VocabularyList">
+    <CollectionView.EmptyView>
+     <Label x:Name="EmptyVocabulary" Text="Виділіть слово під час читання, щоб додати його сюди."
+      TextColor="{StaticResource Muted}" FontSize="14" Margin="24,27" />
+    </CollectionView.EmptyView>
+    <CollectionView.ItemTemplate>
+     <DataTemplate x:DataType="models:Vocabulary">
+      <Grid RowDefinitions="Auto,1">
+       <Grid Padding="20,17" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14">
+        <Border Padding="6,3" Stroke="#DCE1D3" StrokeShape="RoundRectangle 4" BackgroundColor="#E9ECE2" VerticalOptions="Start" Margin="0,4,0,0">
+         <Label Text="{Binding Language}" TextTransform="Uppercase" FontAttributes="Bold" FontSize="10"
+          TextColor="{StaticResource Sage}" CharacterSpacing="0.5" />
+        </Border>
+        <VerticalStackLayout Grid.Column="1" Spacing="5">
+         <Label Text="{Binding Word}" Style="{StaticResource SerifTitle}" FontSize="26" />
+         <Label Text="{Binding Translation}" FontSize="15" TextColor="{StaticResource Sage}" />
+         <Label Text="{Binding Context}" FontFamily="Georgia" FontAttributes="Italic" FontSize="14"
+          TextColor="{StaticResource Muted}" LineBreakMode="WordWrap" Margin="0,3,0,0" />
+         <VerticalStackLayout Spacing="3" Margin="0,5,0,0">
+          <VerticalStackLayout.Triggers>
+           <DataTrigger TargetType="VerticalStackLayout" Binding="{Binding Analysis}" Value="{x:Null}">
+            <Setter Property="IsVisible" Value="False" />
+           </DataTrigger>
+          </VerticalStackLayout.Triggers>
+          <Label Text="{Binding Analysis.Surface, StringFormat='У тексті: {0}'}" FontSize="12" />
+          <Label Text="{Binding Analysis.Context}" FontSize="13" LineBreakMode="WordWrap">
+           <Label.Triggers>
+            <DataTrigger TargetType="Label" Binding="{Binding Analysis.Context}" Value="{x:Null}">
+             <Setter Property="IsVisible" Value="False" />
+            </DataTrigger>
+           </Label.Triggers>
+          </Label>
+          <Label Text="{Binding Analysis.Source, StringFormat='Граматичний розбір: {0}'}" TextColor="{StaticResource Muted}" FontSize="11" />
+         </VerticalStackLayout>
+         <VerticalStackLayout Spacing="3" Margin="0,5,0,0">
+          <VerticalStackLayout.Triggers>
+           <DataTrigger TargetType="VerticalStackLayout" Binding="{Binding Expression}" Value="{x:Null}">
+            <Setter Property="IsVisible" Value="False" />
+           </DataTrigger>
+          </VerticalStackLayout.Triggers>
+          <Label Text="{Binding Expression.Surface, StringFormat='У тексті: {0}'}" FontSize="12" />
+          <Label Text="{Binding Expression.Context}" FontSize="13" LineBreakMode="WordWrap">
+           <Label.Triggers>
+            <DataTrigger TargetType="Label" Binding="{Binding Expression.Context}" Value="{x:Null}">
+             <Setter Property="IsVisible" Value="False" />
+            </DataTrigger>
+           </Label.Triggers>
+          </Label>
+          <Label Text="{Binding Expression.Source, StringFormat='Джерело виразу: {0}'}" TextColor="{StaticResource Muted}" FontSize="11" />
+         </VerticalStackLayout>
+        </VerticalStackLayout>
+        <VerticalStackLayout Grid.Column="2" Spacing="5" Margin="0,4,0,0">
+         <Label Text="{Binding TargetLanguage, StringFormat='→ {0}'}" TextTransform="Uppercase" HorizontalTextAlignment="End"
+          FontSize="11" TextColor="{StaticResource Sage}" />
+         <Label Text="{Binding Forward.Reviews, StringFormat='Прямий · {0}'}" HorizontalTextAlignment="End"
+          SemanticProperties.Description="{Binding Forward.Reviews, StringFormat='Повторень у прямому напрямі: {0}'}"
+          TextColor="{StaticResource Muted}" FontSize="11" />
+         <Label Text="{Binding Reverse.Reviews, StringFormat='Зворотний · {0}'}" HorizontalTextAlignment="End"
+          SemanticProperties.Description="{Binding Reverse.Reviews, StringFormat='Повторень у зворотному напрямі: {0}'}"
+          TextColor="{StaticResource Muted}" FontSize="11" />
+        </VerticalStackLayout>
+       </Grid>
+       <BoxView Grid.Row="1" Color="{StaticResource BorderTone}" />
+      </Grid>
+     </DataTemplate>
+    </CollectionView.ItemTemplate>
+   </CollectionView>
+  </Border>
  </Grid>
 </ContentPage>

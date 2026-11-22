@@ -61,18 +61,34 @@ public partial class PracticePage : ContentPage
         renderingSettings = true;
         try
         {
-            Direction.SelectedIndex = state.Direction == "reverse" ? 1 : 0;
+            var reverse = state.Direction == "reverse";
+            ForwardDirection.Style = (Style)Resources[reverse ? "DirectionOption" : "SelectedDirection"];
+            ReverseDirection.Style = (Style)Resources[reverse ? "SelectedDirection" : "DirectionOption"];
+            SemanticProperties.SetDescription(ForwardDirection, reverse ? "Слово → переклад" : "Слово → переклад, вибрано");
+            SemanticProperties.SetDescription(ReverseDirection, reverse ? "Переклад → слово, вибрано" : "Переклад → слово");
             Mode.SelectedIndex = state.Mode;
         }
         finally { renderingSettings = false; }
 
         var saved = state.Question;
-        Prompt.Text = saved?.Prompt ?? "Немає карток для повторення";
+        var session = AppState.Session;
+        var noCards = session.Snapshot.Vocabulary.Length == 0;
+        Prompt.Text = saved?.Prompt ?? (noCards ? "Знайдімо ваші перші слова" : "На сьогодні все");
+        var context = saved is null
+            ? noCards ? "Збережіть кілька слів під час читання, щоб почати практику."
+                : "Усі картки цього напряму повторено. Можна змінити напрям або повернутися до читання."
+            : state.Direction == "reverse" ? "Згадайте слово мовою оригіналу."
+                : session.Snapshot.Vocabulary.FirstOrDefault(card => card.Id == saved.CardId)?.Context;
+        QuestionContext.Text = context;
+        QuestionContext.IsVisible = !string.IsNullOrWhiteSpace(context);
+        EmptyAction.Text = session.Document is null ? "Відкрити бібліотеку" : "Продовжити читати";
+        EmptyAction.IsVisible = saved is null;
         Answer.Text = "";
+        Answer.IsVisible = saved?.Revealed == true;
         TypedAnswer.Text = "";
         Feedback.IsVisible = false;
         Choices.Children.Clear();
-        QueueStatus.Text = $"Готові до повторення: {due}.";
+        QueueStatus.Text = saved is null ? "" : $"До повторення · {due}";
         Grades.IsVisible = saved?.Revealed == true;
         Reveal.IsVisible = saved is { Revealed: false } && state.Mode == 0;
         Choices.IsVisible = saved is { Revealed: false, Options.Length: > 0 } && state.Mode == 2;
@@ -148,14 +164,25 @@ public partial class PracticePage : ContentPage
         }
     }
 
-    private void PracticeSettingChanged(object? sender, EventArgs args)
+    private void PracticeSettingChanged(object? sender, EventArgs args) => ChangePracticeSettings(progress?.Direction);
+
+    private void PracticeDirectionClicked(object? sender, EventArgs args)
     {
-        if (renderingSettings || grading || progress is not { } state || Mode.SelectedIndex < 0) return;
+        if (sender is Button { CommandParameter: string direction } && direction != progress?.Direction)
+            ChangePracticeSettings(direction);
+    }
+
+    private async void ReturnToReadingClicked(object? sender, EventArgs args) =>
+        await Shell.Current.GoToAsync(AppState.Session.Document is null ? "//library" : "//reading");
+
+    private void ChangePracticeSettings(string? direction)
+    {
+        if (renderingSettings || grading || progress is not { } state || Mode.SelectedIndex < 0 || direction is null) return;
         try
         {
             OpenQuestion(state with
             {
-                Direction = Direction.SelectedIndex == 1 ? "reverse" : "forward",
+                Direction = direction,
                 Mode = (byte)Mode.SelectedIndex,
                 Question = null,
             }, settingsChanged: true);

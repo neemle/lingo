@@ -232,7 +232,7 @@ impl Engine {
         }
         let text_len = ids.len();
         let ids = tensor([1, text_len], ids)?;
-        let mask = tensor([1, 1, text_len], vec![1.0; text_len])?;
+        let mask = tensor([1, 1, text_len], vec![1.0_f32; text_len])?;
 
         let duration = self
             .duration
@@ -271,7 +271,7 @@ impl Engine {
             latent_shape,
             initial_noise(tagged.as_bytes(), latent_len * LATENT_CHANNELS),
         )?;
-        let latent_mask = tensor([1, 1, latent_len], vec![1.0; latent_len])?;
+        let latent_mask = tensor([1, 1, latent_len], vec![1.0_f32; latent_len])?;
         let total_steps = tensor([1], vec![STEPS as f32])?;
         for step in 0..STEPS {
             check_interrupted(should_yield)?;

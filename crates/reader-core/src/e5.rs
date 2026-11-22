@@ -1,4 +1,4 @@
-use crate::{optional_models::OptionalModelJob, Result, Store, Vocabulary};
+use crate::{optional_models::OptionalModelJob, Result, Store};
 use ort::{session::Session, value::Tensor};
 use sha2::{Digest, Sha256};
 use std::{
@@ -30,21 +30,23 @@ struct Passage {
 
 impl Store {
     pub fn prepare_semantic_vocabulary(&self, query: &str) -> Result<SemanticVocabularyJob> {
+        self.prepare_semantic_vocabulary_in(query, None)
+    }
+
+    pub fn prepare_semantic_vocabulary_in(
+        &self,
+        query: &str,
+        document_id: Option<&str>,
+    ) -> Result<SemanticVocabularyJob> {
         let query = query.trim();
         if query.is_empty() || query.chars().count() > 240 || query.chars().any(char::is_control) {
             return Err("Введіть пошуковий запит до 240 символів.".into());
         }
         let model = self.prepare_optional_model("multilingual-e5-small")?;
-        let mut statement = self
-            .connection
-            .prepare("SELECT body FROM vocabulary ORDER BY rowid DESC")
-            .map_err(e5_error)?;
-        let passages = statement
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(e5_error)?
-            .map(|row| {
-                let card: Vocabulary =
-                    serde_json::from_str(&row.map_err(e5_error)?).map_err(e5_error)?;
+        let passages = self
+            .dictionary_collection(document_id)?
+            .into_iter()
+            .map(|card| {
                 let word: String = card.word.chars().take(100).collect();
                 let translation: String = card.translation.chars().take(160).collect();
                 let context: String = card.context.chars().take(400).collect();
@@ -54,13 +56,13 @@ impl Store {
                 hash.update([0]);
                 hash.update(text.as_bytes());
                 let key = hash.finalize().into();
-                Ok(Passage {
+                Passage {
                     id: card.id,
                     text,
                     key,
-                })
+                }
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect();
         Ok(SemanticVocabularyJob {
             model,
             query: format!("query: {query}"),

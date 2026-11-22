@@ -11,7 +11,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         UseCookies = false,
     }));
     private TranslationPackageStatus[] downloadChoices = [];
-    private TranslationPackageStatus[] removablePackages = [];
+    private IGrouping<string, TranslationPackageStatus>[] removablePackages = [];
     private TranslationPair[] requestedPackages = [];
     private CancellationTokenSource? activeDownload;
     private bool changingTranslationFiles;
@@ -36,6 +36,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         base.OnAppearing();
         await RefreshTranslationPackagesAsync();
         await RefreshKnowledgePackagesAsync();
+        await RefreshLexicalPackagesAsync();
         await RefreshOptionalModelsAsync();
     }
 
@@ -88,15 +89,17 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
                 $"{DocumentLanguages.Name(package.Source)} → {DocumentLanguages.Name(package.Target)}: " +
                 (package.FilesPresent ? "файли на місці" : package.HasLocalFiles ? "лишилися файли пакета" : "пакет відсутній")));
             var previous = ModelChoice.SelectedIndex >= 0 && ModelChoice.SelectedIndex < downloadChoices.Length
-                ? downloadChoices[ModelChoice.SelectedIndex].Revision : null;
+                ? downloadChoices[ModelChoice.SelectedIndex] : null;
             downloadChoices = packages.Where(package => !package.FilesPresent).ToArray();
-            removablePackages = packages.Where(package => package.HasLocalFiles).ToArray();
+            removablePackages = packages.Where(package => package.HasLocalFiles)
+                .GroupBy(package => package.Repository ?? $"{package.Source}-{package.Target}").ToArray();
             ModelChoice.ItemsSource = downloadChoices.Select(package =>
                 $"{DocumentLanguages.Name(package.Source)} → {DocumentLanguages.Name(package.Target)} " +
                 $"({package.Assets.Sum(asset => asset.Bytes) / 1_000_000d:F0} МБ)").ToArray();
             var requested = RequestedPackageIndex();
             ModelChoice.SelectedIndex = downloadChoices.Length == 0 ? -1 : requested >= 0 ? requested
-                : Math.Max(0, Array.FindIndex(downloadChoices, package => package.Revision == previous));
+                : Math.Max(0, Array.FindIndex(downloadChoices, package => package.Source == previous?.Source &&
+                    package.Target == previous?.Target));
             UpdateTranslationControls();
         }
         catch (Exception error) { TranslationPackages.Text = error.Message; }
@@ -166,9 +169,9 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         TranslationPackageStatus? selected = null;
         try
         {
-            var choices = removablePackages.ToDictionary(package =>
-                $"{DocumentLanguages.Name(package.Source)} → {DocumentLanguages.Name(package.Target)} " +
-                $"({package.Assets.Sum(asset => asset.Bytes) / 1_000_000d:F0} МБ)");
+            var choices = removablePackages.ToDictionary(group =>
+                $"{DescribeRoutes(group)} ({group.First().Assets.Sum(asset => asset.Bytes) / 1_000_000d:F0} МБ)",
+                group => group.First());
             var choice = await DisplayActionSheetAsync("Завантажити пакет повторно", "Скасувати", null, choices.Keys.ToArray());
             if (choice is not null) choices.TryGetValue(choice, out selected);
         }
@@ -238,6 +241,10 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         catch (UnauthorizedAccessException) { ModelStatus.Text += " Не вдалося видалити тимчасові файли."; }
     }
 
+    private static string DescribeRoutes(IEnumerable<TranslationPackageStatus> packages) =>
+        string.Join(", ", packages.Select(package =>
+            $"{DocumentLanguages.Name(package.Source)} → {DocumentLanguages.Name(package.Target)}"));
+
     private async void RemoveTranslationClicked(object? sender, EventArgs args)
     {
         if (changingTranslationFiles || activeDownload is not null || removablePackages.Length == 0) return;
@@ -245,8 +252,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         UpdateTranslationControls();
         try
         {
-            var choices = removablePackages.ToDictionary(package =>
-                $"{DocumentLanguages.Name(package.Source)} → {DocumentLanguages.Name(package.Target)}");
+            var choices = removablePackages.ToDictionary(group => DescribeRoutes(group), group => group.First());
             var choice = await DisplayActionSheetAsync("Видалити пакет перекладу", "Скасувати", null, choices.Keys.ToArray());
             if (choice is null || !choices.TryGetValue(choice, out var package)) return;
             if (!await DisplayAlertAsync($"Видалити {choice}?",

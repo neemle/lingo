@@ -70,8 +70,8 @@ public sealed class CoreClient : IDisposable
         Call<JsonElement>(new { version = 1, operation = "set_reviewed_translation", id, sentenceId, target, text });
     public WordExplanation ExplainWord(string model, string document, string sentence, string word) =>
         CallIndependent<WordExplanation>(new { version = 1, operation = "explain_word", model, document, sentence, word });
-    public string[] SemanticVocabulary(string query) =>
-        CallIndependent<string[]>(new { version = 1, operation = "semantic_vocabulary", query });
+    public string[] SemanticVocabulary(string query, string? documentId = null) =>
+        CallIndependent<string[]>(new { version = 1, operation = "semantic_vocabulary", query, documentId });
 
     public OptionalModel[] OptionalModels() =>
         Call<OptionalModel[]>(new { version = 1, operation = "optional_models" });
@@ -110,6 +110,8 @@ public sealed class CoreClient : IDisposable
         Call<LexicalPackage[]>(new { version = 1, operation = "lexical_packages" });
     public LexicalPackage InstallLexicalPackage(string language, string path) =>
         CallIndependent<LexicalPackage>(new { version = 1, operation = "install_lexical_package", language, path });
+    public DictionarySource[] DictionarySources() =>
+        Call<DictionarySource[]>(new { version = 1, operation = "dictionary_sources" });
     public Vocabulary[] DictionaryCollection(string? documentId = null) =>
         Call<Vocabulary[]>(new { version = 1, operation = "dictionary_collection", documentId });
     public DictionaryArchive ExportDictionary(string? documentId = null) =>

@@ -5,13 +5,59 @@
  xmlns:reading="clr-namespace:Reader.Native.Features.Reading"
  xmlns:words="clr-namespace:Reader.Native.Features.Vocabulary"
  xmlns:practice="clr-namespace:Reader.Native.Features.Practice"
- xmlns:settings="clr-namespace:Reader.Native.Features.Settings" Title="Читай"
- Shell.TabBarBackgroundColor="#F6F3EC" Shell.TabBarForegroundColor="#63725C">
- <TabBar>
-  <ShellContent Title="Бібліотека" Route="library" ContentTemplate="{DataTemplate library:LibraryPage}" />
-  <ShellContent Title="Читання" Route="reading" ContentTemplate="{DataTemplate reading:ReadingPage}" />
-  <ShellContent Title="Словник" Route="vocabulary" ContentTemplate="{DataTemplate words:VocabularyPage}" />
-  <ShellContent Title="Практика" Route="practice" ContentTemplate="{DataTemplate practice:PracticePage}" />
-  <ShellContent Title="Налаштування" Route="settings" ContentTemplate="{DataTemplate settings:SettingsPage}" />
- </TabBar>
+ xmlns:settings="clr-namespace:Reader.Native.Features.Settings"
+ Title="Читай" FlyoutBehavior="Locked" FlyoutWidth="230"
+ FlyoutBackgroundColor="{StaticResource Rail}"
+ BackgroundColor="{StaticResource Paper}" ForegroundColor="{StaticResource Ink}"
+ TitleColor="{StaticResource Ink}">
+ <Shell.FlyoutHeader>
+  <VerticalStackLayout Padding="22,34,22,15" Spacing="26">
+   <HorizontalStackLayout Spacing="9" VerticalOptions="Center">
+    <Border Padding="7" BackgroundColor="{StaticResource Accent}" StrokeThickness="0"
+     StrokeShape="RoundRectangle 9" Rotation="-5" VerticalOptions="Center">
+     <Image Source="brand_book.png" HeightRequest="22" WidthRequest="22" />
+    </Border>
+    <Label FontSize="32" FontAttributes="Bold" VerticalTextAlignment="Center">
+     <Label.FormattedText><FormattedString><Span Text="lingo" /><Span Text="." TextColor="{StaticResource Accent}" /></FormattedString></Label.FormattedText>
+    </Label>
+   </HorizontalStackLayout>
+   <Label Text="ВАШ МОВНИЙ ПРОСТІР" FontSize="9" CharacterSpacing="1.8" TextColor="{StaticResource Muted}" />
+  </VerticalStackLayout>
+ </Shell.FlyoutHeader>
+ <Shell.ItemTemplate>
+  <DataTemplate x:DataType="BaseShellItem">
+   <Border Margin="16,2" Padding="12,9" StrokeThickness="0" StrokeShape="RoundRectangle 8">
+    <VisualStateManager.VisualStateGroups>
+     <VisualStateGroup Name="CommonStates">
+      <VisualState Name="Normal"><VisualState.Setters><Setter Property="BackgroundColor" Value="Transparent" /></VisualState.Setters></VisualState>
+      <VisualState Name="Selected"><VisualState.Setters><Setter Property="BackgroundColor" Value="{StaticResource RailSelected}" /></VisualState.Setters></VisualState>
+     </VisualStateGroup>
+    </VisualStateManager.VisualStateGroups>
+    <Grid ColumnDefinitions="21,*" ColumnSpacing="11" HeightRequest="26">
+     <Image Source="{Binding FlyoutIcon}" HeightRequest="20" WidthRequest="20" VerticalOptions="Center" />
+     <Label Grid.Column="1" Text="{Binding Title}" FontSize="13" VerticalTextAlignment="Center" />
+    </Grid>
+   </Border>
+  </DataTemplate>
+ </Shell.ItemTemplate>
+ <Shell.FlyoutFooter>
+  <VerticalStackLayout Padding="21,12,21,18" Spacing="10">
+   <BoxView HeightRequest="1" Color="#DDDED4" />
+   <Label x:Name="RecentHeading" Text="НЕЩОДАВНО ВІДКРИТІ" FontSize="9" CharacterSpacing="1.5"
+    TextColor="{StaticResource Muted}" IsVisible="False" />
+   <VerticalStackLayout x:Name="RecentBooks" Spacing="4" />
+   <Border Margin="0,9,0,0" Padding="13" BackgroundColor="#E6E8DC" Stroke="#DBDFCF" StrokeShape="RoundRectangle 9">
+    <VerticalStackLayout Spacing="5">
+     <Label Text="Локальна бібліотека" FontAttributes="Bold" TextColor="{StaticResource Sage}" FontSize="12" />
+     <Label Text="Тексти й прогрес на цьому пристрої." TextColor="{StaticResource Muted}" FontSize="11" />
+    </VerticalStackLayout>
+   </Border>
+  </VerticalStackLayout>
+ </Shell.FlyoutFooter>
+
+ <ShellContent Title="Бібліотека" Route="library" Icon="nav_grid.png" ContentTemplate="{DataTemplate library:LibraryPage}" />
+ <ShellContent Title="Читання" Route="reading" Icon="nav_book.png" ContentTemplate="{DataTemplate reading:ReadingPage}" />
+ <ShellContent Title="Мій словник" Route="vocabulary" Icon="nav_cards.png" ContentTemplate="{DataTemplate words:VocabularyPage}" />
+ <ShellContent Title="Практика" Route="practice" Icon="nav_spark.png" ContentTemplate="{DataTemplate practice:PracticePage}" />
+ <ShellContent Title="Мови та ресурси" Route="settings" Icon="nav_settings.png" ContentTemplate="{DataTemplate settings:SettingsPage}" />
 </Shell>

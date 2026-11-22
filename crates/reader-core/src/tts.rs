@@ -120,7 +120,8 @@ impl SpeechJob {
                     .try_extract_tensor::<f32>()
                     .map_err(speech_error)?;
                 match shape.as_ref() {
-                    [1, 1, count] if *count > 0 && *count as usize == samples.len() => {}
+                    [1, 1, 1, count]
+                        if *count > 0 && *count as usize == samples.len() => {}
                     _ => return Err("Некоректний формат аудіо голосового пакета".into()),
                 }
                 let silence = if waveform.is_empty() { 0 } else { SAMPLE_RATE as usize / 20 };

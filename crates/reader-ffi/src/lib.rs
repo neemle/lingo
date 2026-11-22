@@ -54,10 +54,10 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
     };
     let command = validation::decode(bytes)?;
     match &command {
-        Command::SemanticVocabulary { query } => {
+        Command::SemanticVocabulary { query, document_id } => {
             let job = registry::lock()?
                 .store(handle)?
-                .prepare_semantic_vocabulary(query)
+                .prepare_semantic_vocabulary_in(query, document_id.as_deref())
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }

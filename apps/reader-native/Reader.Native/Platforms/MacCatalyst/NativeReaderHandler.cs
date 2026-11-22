@@ -16,14 +16,15 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
             [nameof(NativeReaderView.HighlightStart)] = MapText,
             [nameof(NativeReaderView.HighlightLength)] = MapText,
             [nameof(NativeReaderView.SpokenWord)] = MapSpokenWord,
+            [nameof(NativeReaderView.ReadingFontSize)] = MapText,
         };
     public NativeReaderHandler() : base(ReaderMapper) { }
 
     protected override UITextView CreatePlatformView() => new()
     {
         Editable = false, Selectable = true, ScrollEnabled = true,
-        BackgroundColor = UIColor.FromRGB(246, 243, 236),
-        TextContainerInset = new UIEdgeInsets(24, 24, 24, 24),
+        BackgroundColor = UIColor.FromRGB(253, 253, 249),
+        TextContainerInset = new UIEdgeInsets(14, 16, 16, 16),
         AccessibilityLabel = "Текст документа. Виділіть слово або торкніться його.",
     };
 
@@ -67,14 +68,17 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
     {
         var preserveSelection = handler.PlatformView.Text == view.Text;
         var selected = handler.PlatformView.SelectedRange;
+        using var paragraph = new NSMutableParagraphStyle { LineSpacing = 6 };
         using var text = new NSMutableAttributedString(view.Text, new UIStringAttributes
         {
-            Font = UIFont.SystemFontOfSize(22), ForegroundColor = UIColor.FromRGB(45, 49, 43),
+            Font = UIFont.FromName("Georgia", view.ReadingFontSize) ?? UIFont.SystemFontOfSize(view.ReadingFontSize),
+            ForegroundColor = UIColor.FromRGB(72, 75, 64),
+            ParagraphStyle = paragraph,
         });
         var selection = Reader.Presentation.SourceRanges.Selection(view.Text,
             view.HighlightStart, view.HighlightLength);
         if (selection is not null) text.AddAttribute(UIStringAttributeKey.BackgroundColor,
-            UIColor.FromRGB(222, 230, 213), new NSRange(selection.StartUtf16, selection.LengthUtf16));
+            UIColor.FromRGB(245, 240, 229), new NSRange(selection.StartUtf16, selection.LengthUtf16));
         handler.updating = true;
         try
         {
@@ -94,7 +98,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
         if (handler.PlatformView.Text != view.Text) return;
         var storage = handler.PlatformView.TextStorage;
         if (handler.spokenWord is { } previous)
-            storage.AddAttribute(UIStringAttributeKey.BackgroundColor, UIColor.FromRGB(222, 230, 213),
+            storage.AddAttribute(UIStringAttributeKey.BackgroundColor, UIColor.FromRGB(245, 240, 229),
                 new NSRange(previous.StartUtf16, previous.LengthUtf16));
 
         var word = view.SpokenWord;

@@ -19,14 +19,18 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, RichEdit
             [nameof(NativeReaderView.HighlightStart)] = MapText,
             [nameof(NativeReaderView.HighlightLength)] = MapText,
             [nameof(NativeReaderView.SpokenWord)] = MapSpokenWord,
+            [nameof(NativeReaderView.ReadingFontSize)] = MapFont,
         };
     public NativeReaderHandler() : base(ReaderMapper) { }
 
     protected override RichEditBox CreatePlatformView() => new()
     {
         IsReadOnly = true, FontSize = 22, TextWrapping = Microsoft.UI.Xaml.TextWrapping.Wrap,
-        Background = new WinBrush(WinColor.FromArgb(255, 246, 243, 236)),
-        Padding = new Microsoft.UI.Xaml.Thickness(24),
+        FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Georgia"),
+        Foreground = new WinBrush(WinColor.FromArgb(255, 72, 75, 64)),
+        Background = new WinBrush(WinColor.FromArgb(255, 253, 253, 249)),
+        BorderThickness = new Microsoft.UI.Xaml.Thickness(0),
+        Padding = new Microsoft.UI.Xaml.Thickness(16, 14, 16, 16),
     };
 
     protected override void ConnectHandler(RichEditBox platformView)
@@ -68,21 +72,37 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, RichEdit
                 handler.sourceText = view.Text;
                 handler.textMap = new Reader.Presentation.WindowsTextMap(view.Text);
                 handler.PlatformView.Document.SetText(TextSetOptions.None, handler.textMap.Text);
+                MapFont(handler, view);
             }
             handler.PlatformView.Document.GetRange(0, handler.textMap.Text.Length)
-                .CharacterFormat.BackgroundColor = WinColor.FromArgb(255, 246, 243, 236);
+                .CharacterFormat.BackgroundColor = WinColor.FromArgb(255, 253, 253, 249);
             var selected = Reader.Presentation.SourceRanges.Selection(view.Text,
                 view.HighlightStart, view.HighlightLength);
             if (selected is not null) handler.PlatformView.Document.GetRange(
                 handler.textMap.NativeOffset(selected.StartUtf16),
                 handler.textMap.NativeOffset(selected.StartUtf16 + selected.LengthUtf16))
                     .CharacterFormat.BackgroundColor =
-                    WinColor.FromArgb(255, 222, 230, 213);
+                    WinColor.FromArgb(255, 245, 240, 229);
             handler.spokenWord = null;
             MapSpokenWord(handler, view);
         }
         finally { handler.updating = false; }
     }
+    private static void MapFont(NativeReaderHandler handler, NativeReaderView view)
+    {
+        var wasUpdating = handler.updating;
+        handler.updating = true;
+        try
+        {
+            handler.PlatformView.FontSize = view.ReadingFontSize;
+            if (handler.textMap.Text.Length == 0) return;
+            var format = handler.PlatformView.Document.GetRange(0, handler.textMap.Text.Length).CharacterFormat;
+            format.Name = "Georgia";
+            format.Size = view.ReadingFontSize;
+        }
+        finally { handler.updating = wasUpdating; }
+    }
+
     private static void MapSpokenWord(NativeReaderHandler handler, NativeReaderView view)
     {
         if (handler.sourceText != view.Text) return;
@@ -91,7 +111,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, RichEdit
         try
         {
             if (handler.spokenWord is { } previous)
-                PaintWord(handler, previous, WinColor.FromArgb(255, 222, 230, 213));
+                PaintWord(handler, previous, WinColor.FromArgb(255, 245, 240, 229));
             var word = view.SpokenWord;
             handler.spokenWord = null;
             if (word is not null && word.StartUtf16 >= view.HighlightStart &&

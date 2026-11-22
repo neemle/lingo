@@ -134,8 +134,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public Task<WordExplanation> ExplainWordAsync(string model, string document, string sentence, string word) =>
         Task.Run(() => client.ExplainWord(model, document, sentence, word));
 
-    public Task<string[]> SemanticVocabularyAsync(string query) =>
-        Task.Run(() => client.SemanticVocabulary(query));
+    public Task<string[]> SemanticVocabularyAsync(string query, string? documentId = null) =>
+        Task.Run(() => client.SemanticVocabulary(query, documentId));
 
     public Task<OptionalModel[]> OptionalModelsAsync() => Task.Run(client.OptionalModels);
     public Task CheckOptionalModelSpaceAsync(string id, string stagingRoot) =>
@@ -171,6 +171,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public Task<LexicalPackage[]> LexicalPackagesAsync() => Task.Run(client.LexicalPackages);
     public Task<LexicalPackage> InstallLexicalPackageAsync(string language, string path) =>
         Task.Run(() => client.InstallLexicalPackage(language, path));
+    public Task<DictionarySource[]> DictionarySourcesAsync() => Task.Run(client.DictionarySources);
     public Task<Vocabulary[]> DictionaryCollectionAsync(string? documentId = null) =>
         Task.Run(() => client.DictionaryCollection(documentId));
     public Task<DictionaryArchive> ExportDictionaryAsync(string? documentId = null) =>
@@ -221,6 +222,22 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     });
 
     private (Snapshot Data, string? Selected) Read() => (client.Snapshot(), selectedId);
+
+    public async Task WaitUntilIdleAsync()
+    {
+        if (!busy) return;
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnChanged(object? sender, PropertyChangedEventArgs args)
+        {
+            if (args.PropertyName == nameof(Busy) && !busy) completed.TrySetResult();
+        }
+        PropertyChanged += OnChanged;
+        try
+        {
+            if (busy) await completed.Task;
+        }
+        finally { PropertyChanged -= OnChanged; }
+    }
 
     private async Task RunAsync(Func<(Snapshot Data, string? Selected)> operation)
     {

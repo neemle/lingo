@@ -12,9 +12,9 @@ public partial class ReadingPage : ContentPage
     private string? lastSourceLanguage;
     private bool updatingTargets;
     private bool stacked;
+    private bool translationVisible = true;
     private bool translating;
-    private (string Document, string Sentence, string Source, string Target, string Text)? machineKey;
-    private Reader.Contracts.MachineTranslation? machineTranslation;
+    private (string Document, string Sentence, string Source, string Target, string Text)? statusKey;
     private string? machineStatus;
     private (string Source, string Target)? readinessPair;
     private TranslationReadiness? readiness;
@@ -44,8 +44,6 @@ public partial class ReadingPage : ContentPage
     private bool speechPreferencesReady;
     private const string RatePreference = "reader.speech.rate";
     private const string ContinuousPreference = "reader.speech.continuous";
-    private SpeechVoice[] availableVoices = [];
-    private string? voiceLanguage;
     public ReadingPage() => InitializeComponent();
 
     protected override void OnAppearing()
@@ -71,6 +69,7 @@ public partial class ReadingPage : ContentPage
     protected override void OnDisappearing()
     {
         StopSpeech();
+        voiceCatalogRevision++;
         readinessRequest++;
         selection = null;
         WordCard.IsVisible = false;
@@ -87,6 +86,8 @@ public partial class ReadingPage : ContentPage
             UpdateHighlight();
             UpdateTranslation();
             RefreshVoices();
+            if (activeSpeechSource is { } source && !IsSpeechSourceCurrent(AppState.Session, source))
+                StopSpeech();
             if (!utteranceActive)
             {
                 SaveSpeechResume();
@@ -98,7 +99,13 @@ public partial class ReadingPage : ContentPage
     }
     private void UpdateHighlight()
     {
+        var document = AppState.Session.Document;
         var sentence = AppState.Session.Sentence;
+        PlayerProgress.Progress = document is { Sentences.Length: > 0 }
+            ? (double)(document.Position + 1) / document.Sentences.Length : 0;
+        SourceLanguageBadge.IsVisible = document is not null;
+        SourceLanguageCode.Text = document?.Language.ToUpperInvariant() ?? "";
+        SourceLanguageName.Text = document is null ? "" : DocumentLanguages.Name(document.Language);
         SourceText.HighlightLength = sentence is null ? 0 : sentence.EndUtf16 - sentence.StartUtf16;
         if (documentId == AppState.Session.Document?.Id) return;
         documentId = AppState.Session.Document?.Id;
@@ -110,14 +117,40 @@ public partial class ReadingPage : ContentPage
     protected override void OnSizeAllocated(double width, double height)
     {
         base.OnSizeAllocated(width, height);
-        if (ReadingColumns is null || TranslationPane is null || width <= 0 || stacked == (width < 800)) return;
+        if (ReadingColumns is null || TranslationPane is null || width <= 0 || stacked == (width < 720)) return;
+        stacked = width < 720;
+        ArrangeReadingColumns();
+    }
 
-        stacked = width < 800;
-        ReadingColumns.ColumnDefinitions[1].Width = stacked ? 0 : new GridLength(2, GridUnitType.Star);
-        ReadingColumns.RowDefinitions[1].Height = stacked ? new GridLength(1, GridUnitType.Star) : 0;
-        ReadingColumns.RowSpacing = stacked ? 12 : 0;
+    private void ArrangeReadingColumns()
+    {
+        TranslationPane.IsVisible = translationVisible;
+        ReadingColumns.ColumnDefinitions[1].Width = stacked || !translationVisible
+            ? 0 : new GridLength(1, GridUnitType.Star);
+        ReadingColumns.RowDefinitions[1].Height = stacked && translationVisible
+            ? new GridLength(1, GridUnitType.Star) : 0;
+        ReadingColumns.ColumnSpacing = !stacked && translationVisible ? 1 : 0;
+        ReadingColumns.RowSpacing = stacked && translationVisible ? 1 : 0;
         Grid.SetColumn(TranslationPane, stacked ? 0 : 1);
         Grid.SetRow(TranslationPane, stacked ? 1 : 0);
+    }
+
+    private void ToggleTranslationClicked(object? sender, EventArgs args)
+    {
+        translationVisible = !translationVisible;
+        ToggleTranslation.Text = translationVisible ? "Переклад ✓" : "Переклад";
+        ArrangeReadingColumns();
+    }
+
+    private void DecreaseReaderFont(object? sender, EventArgs args) => ChangeReadingSize(-1);
+    private void IncreaseReaderFont(object? sender, EventArgs args) => ChangeReadingSize(1);
+
+    private void ChangeReadingSize(int change)
+    {
+        var size = Math.Clamp(SourceText.ReadingFontSize + change, 18, 30);
+        SourceText.ReadingFontSize = size;
+        SegmentTranslation.FontSize = size - 2;
+        UpdateTranslation();
     }
 
     private void UpdateTranslation()
@@ -145,21 +178,34 @@ public partial class ReadingPage : ContentPage
         var key = ActiveTranslationKey();
         if (key is { } current && readinessPair != (current.Source, current.Target))
             RefreshReadiness((current.Source, current.Target));
-        var machine = key is not null && key == machineKey ? machineTranslation : null;
+        var document = session.Document;
+        var window = active && document is not null && TargetCode is { } targetCode
+            ? FindTranslationWindow(document, targetCode) : null;
+        var unit = document is not null && window is not null ? window.UnitFor(document.Position) : null;
+        var machine = active && document is not null && TargetCode is { } machineTarget
+            ? ActiveMachine(document, machineTarget) : null;
         var machineLabel = machine?.JoinedLines == true
             ? "Машинний переклад об’єднаних рядків" : "Машинний переклад";
         TranslationNotice.Text = !active ? "Відкрийте документ для читання."
+            : translating && key == statusKey ? "Перекладаємо абзац…"
             : text is not null ? "Ваш переклад активного речення"
             : machine?.PivotLanguage is { } pivot ? $"{machineLabel} через {DocumentLanguages.Name(pivot)}"
             : machine is not null ? machineLabel
-            : key == machineKey && machineStatus is not null ? machineStatus
+            : key == statusKey && machineStatus is not null ? machineStatus
             : ReadinessMessage();
         SegmentTranslation.Text = text ?? machine?.Text ?? "";
+        ActiveTranslationCard.IsVisible = SegmentTranslation.Text.Length > 0;
         EditTranslation.Text = text is null ? "Додати свій переклад" : "Змінити переклад";
         EditTranslation.IsEnabled = active && !session.Busy && !translating;
-        TranslateOffline.IsEnabled = active && !session.Busy && !translating && text is null && readiness?.Ready == true;
+        var canExtend = document is not null && window is not null && document.Position != window.Anchor
+            && (window.MoreBefore || window.MoreAfter);
+        TranslateOffline.IsEnabled = active && !session.Busy && !translating && readiness?.Ready == true
+            && (window is null || !window.IsParagraph || canExtend
+                || document is not null && HasUntranslatedUnits(document, window));
         OpenTranslationPackages.IsVisible = active && readiness is { Missing.Length: > 0 };
         TargetLanguage.IsEnabled = active && !session.Busy;
+        UpdateSourceLocation(document, session.Sentence);
+        UpdateParagraphPreview(document, window, unit);
     }
 
     private string ReadinessMessage()
@@ -214,29 +260,6 @@ public partial class ReadingPage : ContentPage
             : null;
     }
 
-    private async void TranslateOfflineClicked(object? sender, EventArgs args)
-    {
-        var session = AppState.Session;
-        if (translating || session.Busy || readiness?.Ready != true || ActiveTranslationKey() is not { } key) return;
-        translating = true;
-        machineKey = key;
-        machineTranslation = null;
-        machineStatus = "Переклад виконується…";
-        UpdateTranslation();
-        try
-        {
-            machineTranslation = await session.TranslateSentenceAsync(key.Document, key.Sentence, key.Target);
-            machineStatus = null;
-            if (machineTranslation is null) readinessPair = null;
-        }
-        catch (Exception error) { machineStatus = error.Message; }
-        finally
-        {
-            translating = false;
-            UpdateTranslation();
-        }
-    }
-
     private void TargetChanged(object? sender, EventArgs args)
     {
         if (TranslationNotice is not null && !updatingTargets) UpdateTranslation();
@@ -253,8 +276,7 @@ public partial class ReadingPage : ContentPage
         var text = await DisplayPromptAsync("Переклад речення",
             existing is null ? sentence.Text : "Очистьте поле, щоб видалити цей переклад.",
             accept: "Зберегти", cancel: "Скасувати", maxLength: 4000,
-            initialValue: existing ?? (ActiveTranslationKey() == machineKey && machineTranslation is { JoinedLines: false }
-                ? machineTranslation.Text : null) ?? "");
+            initialValue: existing ?? IndependentMachineText(document, target) ?? "");
         if (text is not null && session.Document?.Id == document.Id && session.Sentence?.Id == sentence.Id
             && TargetCode == target && !session.Busy)
             await session.SetReviewedTranslationAsync(document.Id, sentence.Id, target, text);
@@ -271,6 +293,7 @@ public partial class ReadingPage : ContentPage
         vocabularyReadings = [];
         VocabularyReading.IsVisible = false;
         SelectedWord.Text = selected.Text;
+        ShowMeanings(null);
         KnowledgeAnalysis.Text = "Пошук у мовному пакеті…";
         WordCard.IsVisible = true;
         var index = Array.FindIndex(doc.Sentences, sentence => selected.StartUtf16 >= sentence.StartUtf16
@@ -282,9 +305,10 @@ public partial class ReadingPage : ContentPage
                 selected.StartUtf16 - doc.Sentences[index].StartUtf16);
             var lookup = await session.LookupWordAsync(doc.Language, selected.Text, context);
             if (selection != selected || session.Document?.Id != doc.Id || !WordCard.IsVisible) return;
+            ShowMeanings(lookup);
             if (lookup is null)
             {
-                KnowledgeAnalysis.Text = "Пакет граматичного аналізу для цієї мови відсутній.";
+                KnowledgeAnalysis.Text = "Встановіть мовний пакет у налаштуваннях.";
                 return;
             }
             var source = $"{lookup.Package.Name} {lookup.Package.Version} · {lookup.Package.License}";
@@ -404,54 +428,6 @@ public partial class ReadingPage : ContentPage
         StopSpeech(); await AppState.Session.SelectSentenceAsync(SentencePicker.SelectedIndex);
     }
 
-    private static string VoicePreference(string language) => $"reader.speech.voice.{language}";
-
-    private void RefreshVoices(bool force = false)
-    {
-        var language = AppState.Session.Document?.Language;
-        if (!force && voiceLanguage == language) return;
-        voiceLanguage = language;
-        loadingSpeechPreferences = true;
-        try
-        {
-            availableVoices = language is null ? [] : LocalSpeech.VoicesForLanguage(language);
-            VoicePicker.ItemsSource = new[] { "Системний вибір" }.Concat(availableVoices.Select(voice =>
-                $"{voice.Name} ({voice.Language})")).ToArray();
-            var saved = language is null ? "" : Preferences.Get(VoicePreference(language), "");
-            var chosen = Array.FindIndex(availableVoices, voice => voice.Id == saved);
-            VoicePicker.SelectedIndex = chosen + 1;
-            VoicePicker.IsEnabled = availableVoices.Length > 0;
-            var status = language is null ? ""
-                : availableVoices.Length == 0 ? "Для цієї мови немає встановленого голосу."
-                : chosen < 0 && saved.Length > 0 ? "Збережений голос недоступний. Використано системний вибір." : "";
-            SetVoiceStatus(status);
-        }
-        catch (Exception error)
-        {
-            availableVoices = [];
-            VoicePicker.ItemsSource = Array.Empty<string>();
-            VoicePicker.IsEnabled = false;
-            SetVoiceStatus($"Не вдалося отримати список голосів: {error.Message}");
-        }
-        finally { loadingSpeechPreferences = false; }
-    }
-
-    private void SetVoiceStatus(string status)
-    {
-        VoiceStatus.Text = status;
-        VoiceStatus.IsVisible = status.Length > 0;
-    }
-
-    private void VoiceChanged(object? sender, EventArgs args)
-    {
-        if (loadingSpeechPreferences || voiceLanguage is null || VoicePicker.SelectedIndex < 0) return;
-        Preferences.Set(VoicePreference(voiceLanguage), SelectedVoiceId() ?? "");
-        SetVoiceStatus("");
-    }
-
-    private string? SelectedVoiceId() => VoicePicker.SelectedIndex > 0 && VoicePicker.SelectedIndex <= availableVoices.Length
-        ? availableVoices[VoicePicker.SelectedIndex - 1].Id : null;
-
     private void SpeechPreferencesChanged(object? sender, EventArgs args)
     {
         if (!speechPreferencesReady || loadingSpeechPreferences || Rate.SelectedIndex < 0) return;
@@ -464,7 +440,8 @@ public partial class ReadingPage : ContentPage
         resumeSpeechOffset = null;
         ResumeSpeech.IsVisible = false;
         var session = AppState.Session;
-        if (session.Busy || session.Document is not { } document || session.Sentence is not { } sentence) return;
+        if (session.Busy || SelectedVoice()?.Engine is not null ||
+            session.Document is not { } document || session.Sentence is not { } sentence) return;
 
         try
         {
@@ -505,44 +482,79 @@ public partial class ReadingPage : ContentPage
     private async Task SpeakAsync(int offset)
     {
         var session = AppState.Session;
-        if (session.Busy || session.Document is not { } initial || session.Sentence is null) return;
+        if (session.Busy || session.Document is not { } initial || session.Sentence is not { } sentence) return;
+        var source = SpeechSourceFor(initial, sentence);
         SaveSpeechResume();
         var request = ++speechRequest;
-        var receivedCue = false;
-        var status = LocalSpeech.CompletedStatus;
-        RefreshVoices(force: true);
-        speech.PreferredVoice = SelectedVoiceId();
-        speech.Rate = Rate.SelectedIndex switch { 0 => .75f, 2 => 1.25f, _ => 1f };
+        speech.Stop();
+        CancelModelSpeech();
+        speechPaused = false;
+        utteranceActive = false;
+        activeSpeechSource = null;
+        PauseSpeech.IsEnabled = false;
 
-        while (request == speechRequest && session.Document is { } doc && doc.Id == initial.Id &&
+        await loadingVoices;
+        if (request != speechRequest || !IsSpeechSourceCurrent(session, source) || session.Busy) return;
+        using var run = new CancellationTokenSource();
+        modelSpeechRun = run;
+        try { await SpeakRunAsync(session, initial.Id, offset, request, run.Token); }
+        finally
+        {
+            if (ReferenceEquals(modelSpeechRun, run)) CancelModelSpeech();
+        }
+    }
+
+    private async Task SpeakRunAsync(ReaderSession session, string documentId, int offset, int request, CancellationToken token)
+    {
+        var voice = SelectedVoice();
+        var modelVoice = voice?.Engine is not null;
+        var rate = Rate.SelectedIndex switch { 0 => .75f, 2 => 1.25f, _ => 1f };
+        speech.PreferredVoice = modelVoice ? null : voice?.Id;
+        speech.Rate = rate;
+        var receivedCue = false;
+        string? status = LocalSpeech.CompletedStatus;
+
+        while (request == speechRequest && session.Document is { } doc && doc.Id == documentId &&
             session.Sentence is { } sentence)
         {
-            var startAt = offset;
+            var startAt = modelVoice ? 0 : offset;
             offset = 0;
             var textHash = SpeechProgress.TextHash(sentence);
             lastSpeechSave = 0;
             SourceText.SpokenWord = null;
             speechPaused = false;
             utteranceActive = true;
+            activeSpeechSource = SpeechSourceFor(doc, sentence);
             ResumeSpeech.IsVisible = false;
             PauseSpeech.Text = "Пауза";
-            PauseSpeech.IsEnabled = true;
-            SpeechStatus.Text = "Озвучення поточного речення…";
-            status = await speech.SpeakAsync(sentence.Text[startAt..], doc.Language, (start, length) => Dispatcher.Dispatch(() =>
+            PauseSpeech.IsEnabled = !modelVoice;
+            SpeechStatus.Text = modelVoice ? "Готуємо локальне озвучення…" : "Озвучення поточного речення…";
+
+            if (modelVoice)
             {
-                if (request == speechRequest && utteranceActive && !speechPaused &&
-                    session.Document?.Id == doc.Id && session.Sentence?.Id == sentence.Id &&
-                    session.Sentence?.Text == sentence.Text &&
-                    HighlightSpokenWord(sentence, startAt + start, length) is int spokenOffset)
+                status = await PlayModelAsync(session, doc, sentence, voice!, rate, request, token);
+                if (request != speechRequest) return;
+                if (status is not null && status != LocalSpeech.CompletedStatus)
                 {
-                    receivedCue = true;
-                    pendingSpeechResume = (doc.Id, new(sentence.Id, textHash, spokenOffset));
-                    if (lastSpeechSave == 0 || Stopwatch.GetElapsedTime(lastSpeechSave) >= TimeSpan.FromSeconds(2))
-                        SaveSpeechResume();
+                    CancelModelSpeech();
+                    modelVoice = false;
+                    SetVoiceStatus("Локальний голос недоступний. Використовуємо системний голос.");
+                    PauseSpeech.IsEnabled = true;
+                    SpeechStatus.Text = "Озвучення поточного речення…";
                 }
-            }));
+            }
+            if (!modelVoice)
+            {
+                var fallbackReason = status != LocalSpeech.CompletedStatus ? status : null;
+                status = await PlaySystemSentenceAsync(session, doc, sentence, startAt, textHash, request,
+                    () => receivedCue = true);
+                if (fallbackReason is not null && status is not null && status != LocalSpeech.CompletedStatus)
+                    status = $"{fallbackReason} {status}";
+            }
+
             if (request != speechRequest) return;
             utteranceActive = false;
+            activeSpeechSource = null;
             SourceText.SpokenWord = null;
             PauseSpeech.IsEnabled = false;
             if (status == LocalSpeech.CompletedStatus)
@@ -567,16 +579,33 @@ public partial class ReadingPage : ContentPage
                 break;
             }
         }
+
         if (request != speechRequest) return;
         // Invalidate any late cue posted by an engine just before completion.
         speechRequest++;
         SourceText.SpokenWord = null;
         PauseSpeech.IsEnabled = false;
         if (status is not null)
-            SpeechStatus.Text = status == LocalSpeech.CompletedStatus && !receivedCue
+            SpeechStatus.Text = status == LocalSpeech.CompletedStatus && !modelVoice && !receivedCue
                 ? $"{status} Межі слів від голосу не отримано." : status;
         RefreshSpeechResume();
     }
+
+    private Task<string?> PlaySystemSentenceAsync(ReaderSession session, Document document, Sentence sentence,
+        int startAt, string textHash, int request, Action receivedCue) =>
+        speech.SpeakAsync(sentence.Text[startAt..], document.Language, (start, length) => Dispatcher.Dispatch(() =>
+        {
+            if (request == speechRequest && utteranceActive && !speechPaused &&
+                session.Document?.Id == document.Id && session.Sentence?.Id == sentence.Id &&
+                session.Sentence?.Text == sentence.Text &&
+                HighlightSpokenWord(sentence, startAt + start, length) is int spokenOffset)
+            {
+                receivedCue();
+                pendingSpeechResume = (document.Id, new(sentence.Id, textHash, spokenOffset));
+                if (lastSpeechSave == 0 || Stopwatch.GetElapsedTime(lastSpeechSave) >= TimeSpan.FromSeconds(2))
+                    SaveSpeechResume();
+            }
+        }));
 
     private int? HighlightSpokenWord(Sentence sentence, int start, int length)
     {
@@ -604,8 +633,10 @@ public partial class ReadingPage : ContentPage
     {
         speechRequest++;
         speech.Stop();
+        CancelModelSpeech();
         speechPaused = false;
         utteranceActive = false;
+        activeSpeechSource = null;
         SourceText.SpokenWord = null;
         PauseSpeech.IsEnabled = false;
         PauseSpeech.Text = "Пауза";

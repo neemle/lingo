@@ -82,8 +82,16 @@ Speech uses installed system voices, supports pause/resume, and can advance thro
 The reader remembers the voice per source language, speed, and continuous reading setting.
 If the voice supplies word boundaries, **Продовжити зі збереженого слова** resumes at the last saved word
 after reopening. The checkpoint is included in backups and discarded if the sentence text changes.
-Individual words are highlighted only when the voice provides matching boundary events. Additional offline translation pairs,
-mobile releases, signed installers and the 4 GiB hardware target remain unverified or unimplemented.
+Install Piper or Supertonic in **Мови та ресурси → Додаткові локальні моделі** to choose a model voice
+in the reader. Piper provides three Ukrainian voices and Supertonic covers the 12 starting languages.
+Model voices highlight the active sentence and prepare the next sentence during continuous reading.
+System voices with matching boundary events also highlight individual words.
+
+## Open and bring in documents
+
+Use **Open With** in Finder or File Explorer, or drop a supported file on the Library import area.
+The same flow imports files by picker or takes pasted text. The app records the language you choose and
+preserves the original file. On Windows, opening from File Explorer requires the installed MSIX.
 
 ## Photo and PDF OCR
 
@@ -132,6 +140,10 @@ through English. The translation panel marks that route. Installing French → U
 Translation can join consecutive wrapped lines in a PDF or OCR transcript. The pane marks joined input,
 and the source text, bookmarks, and current reading position remain intact.
 
+The full download catalogue covers 24 directions across all 12 starting languages, including English pivot
+routes. In the reader, **Перекласти абзац офлайн** keeps translated text linked to its source sentences.
+When multiple directions share a package, removing the package disables all of those directions.
+
 ## Optional local model files
 
 In **Налаштування → Додаткові локальні моделі**, choose a model to download, verify or remove.
@@ -150,6 +162,9 @@ the session. Text search is available without the E5 model.
 - [Qwen3.5-2B GGUF](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/tree/f6d5376be1edb4d416d56da11e5397a961aca8ae), four-bit, Apache-2.0.
 - [Multilingual E5 Small ONNX](https://huggingface.co/intfloat/multilingual-e5-small/tree/614241f622f53c4eeff9890bdc4f31cfecc418b3/onnx), MIT.
 
+The Vocabulary page filters by source document and exports or imports portable dictionary JSON, with
+review history. Text and E5 search respect the current collection.
+
 ## Offline word analysis
 
 In **Налаштування**, select **Встановити або оновити пакет аналізу** and choose a language. The reader verifies the
@@ -167,6 +182,9 @@ and its sentence even after the language index is replaced.
 In **Форма для словникової картки**, choose the reading you intend to save. Equivalent inflections
 of the same lemma, part of speech and reviewed translation share one card and its review history.
 The card retains the recorded form, source sentence and the grammatical data available when saved.
+
+Install a separate Wiktionary package in **Словникові значення** to see attributed meanings and available
+examples for Ukrainian, French, or English. A verified local GZ archive can be installed without a network.
 
 The initial indexes use the training annotations from Universal Dependencies 2.18 and omit corpus passages.
 They can be reinstalled independently of documents and backup data.

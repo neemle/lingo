@@ -20,6 +20,10 @@ public static class AppState
         await Session.SelectAsync(id);
         if (Session.Error.Length > 0 || Session.Document?.Id != id) return;
         Preferences.Set("lastDocument", id);
+        var recent = Preferences.Get("recentDocuments", "").Split(';').Prepend(id)
+            .Where(value => value.Length != 0).Distinct().Take(3);
+        Preferences.Set("recentDocuments", string.Join(";", recent));
+        (Shell.Current as AppShell)?.RefreshRecent();
         await Shell.Current.GoToAsync("//reading");
     }
 }
