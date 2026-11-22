@@ -77,6 +77,8 @@ pub struct Document {
     pub current_revision_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocks: Vec<document_layout::DocumentBlock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) docx_layout_version: Option<u8>,
     pub sentences: Vec<Sentence>,
     pub position: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -677,8 +679,10 @@ impl Store {
                 })?;
                 return Ok(updated);
             }
-            if existing.blocks.is_empty() {
-                // Rebuild missing reflow for older imports. OCR corrections keep their own transcript.
+            let upgrade_docx = |document: &Document| document.format == "docx"
+                && document.docx_layout_version.unwrap_or(0) < document_layout::DOCX_LAYOUT_VERSION;
+            if existing.blocks.is_empty() || upgrade_docx(&existing) {
+                // Recover layout from the original, preserving annotations on existing text.
                 let parsed = if let Some(parsed) = parsed {
                     Some(parsed)
                 } else {
@@ -688,9 +692,8 @@ impl Store {
                     let id = existing.id.clone();
                     self.edit_document(&id, |document, tx| {
                         let text_changed = document.text != parsed.text;
-                        if !document.blocks.is_empty()
-                            || (text_changed
-                                && (document.ocr_lines.is_some() || ocr_lines.is_some()))
+                        if (!document.blocks.is_empty() && (!upgrade_docx(document) || text_changed))
+                            || (text_changed && (document.ocr_lines.is_some() || ocr_lines.is_some()))
                         {
                             existing = document.clone();
                             return Ok(false);
@@ -704,6 +707,9 @@ impl Store {
                         }
                         document.pdf_page_starts = parsed.pdf_page_starts;
                         document.blocks = parsed.blocks;
+                        if document.format == "docx" {
+                            document.docx_layout_version = Some(document_layout::DOCX_LAYOUT_VERSION);
+                        }
                         ocr::refresh_provenance(document);
                         if text_changed {
                             document_revisions::append(document, tx)?;
@@ -777,6 +783,8 @@ impl Store {
             text,
             current_revision_id: None,
             blocks,
+            docx_layout_version: Path::new(name).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("docx"))
+                .then_some(document_layout::DOCX_LAYOUT_VERSION),
             position: 0,
             reading_token_utf16: None,
             speech_resume: None,

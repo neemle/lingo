@@ -1,13 +1,15 @@
 use crate::{Document, Result, MAX_IMPORT};
 use pdf_extract::{MediaBox, OutputDev, OutputError, PlainTextOutput, Transform};
-use quick_xml::{events::Event, name::ResolveResult, NsReader};
 use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
-    io::{Cursor, Read},
     ops::Range,
     path::Path,
 };
+
+mod docx;
+
+pub(crate) use docx::DOCX_LAYOUT_VERSION;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +31,26 @@ pub struct DocumentBlock {
     pub page: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heading_level: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list: Option<DocxList>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table_cell: Option<DocxTableCell>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocxList {
+    pub id: u32,
+    pub level: u8,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocxTableCell {
+    pub table: u32,
+    pub row: u32,
+    pub column: u32,
+    pub column_span: u32,
 }
 
 pub(crate) struct Extracted {
@@ -37,10 +59,13 @@ pub(crate) struct Extracted {
     pub pdf_page_starts: Option<Vec<Option<usize>>>,
 }
 
+#[derive(Default)]
 struct BlockRange {
     offset: Range<usize>,
     page: Option<usize>,
     heading: Option<u8>,
+    list: Option<DocxList>,
+    table_cell: Option<DocxTableCell>,
 }
 
 impl Document {
@@ -90,7 +115,7 @@ pub(crate) fn parse(name: &str, bytes: &[u8]) -> Result<Extracted> {
                 .to_owned();
             from_transcript(text, None)
         }
-        "docx" => parse_docx(bytes)?,
+        "docx" => docx::parse(bytes)?,
         "pdf" => parse_pdf(bytes)?,
         _ => return Err("Формат документа не підтримується.".into()),
     };
@@ -109,7 +134,7 @@ pub(crate) fn from_transcript(text: String, page_starts: Option<Vec<Option<usize
             paragraph_ranges(&text, range, false).map(|offset| BlockRange {
                 offset,
                 page,
-                heading: None,
+                ..BlockRange::default()
             }),
         );
     });
@@ -249,162 +274,11 @@ fn materialize_blocks(text: &str, ranges: Vec<BlockRange>) -> Vec<DocumentBlock>
                 end_utf16: utf16,
                 page: range.page,
                 heading_level: range.heading,
+                list: range.list,
+                table_cell: range.table_cell,
             })
         })
         .collect()
-}
-
-fn parse_docx(bytes: &[u8]) -> Result<Extracted> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|_| "Некоректний DOCX")?;
-    let member = archive
-        .by_name("word/document.xml")
-        .map_err(|_| "У DOCX немає текстового документа")?;
-    if member.size() > MAX_IMPORT as u64 {
-        return Err("Розпакований документ завеликий".into());
-    }
-    let mut xml = String::new();
-    member
-        .take(MAX_IMPORT as u64 + 1)
-        .read_to_string(&mut xml)
-        .map_err(|error| error.to_string())?;
-    if xml.len() > MAX_IMPORT {
-        return Err("Розпакований документ завеликий".into());
-    }
-    let mut reader = NsReader::from_str(&xml);
-    let mut text = String::new();
-    let mut ranges = Vec::new();
-    let mut paragraphs = Vec::new();
-    let mut in_text = false;
-    let mut in_properties = false;
-    let mut start = 0;
-    loop {
-        let decoder = reader.decoder();
-        let (namespace, event) = reader
-            .read_resolved_event()
-            .map_err(|error| format!("Некоректний XML: {error}"))?;
-        let word_namespace = matches!(namespace, ResolveResult::Bound(uri)
-            if matches!(uri.as_ref(),
-                b"http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-                | b"http://purl.oclc.org/ooxml/wordprocessingml/main"));
-        let empty = matches!(event, Event::Empty(_));
-        match event {
-            Event::Start(ref event) | Event::Empty(ref event)
-                if word_namespace || event.name().as_ref().starts_with(b"w:") =>
-            {
-                match event.local_name().as_ref() {
-                    b"p" if !empty => {
-                        if let Some(heading) = paragraphs.last().copied() {
-                            ranges.push(BlockRange {
-                                offset: start..text.len(),
-                                page: None,
-                                heading,
-                            });
-                            start = text.len();
-                        }
-                        paragraphs.push(None);
-                    }
-                    b"pPr" if !empty => in_properties = true,
-                    b"t" if !empty => in_text = true,
-                    b"tab" if empty => text.push('\t'),
-                    b"br" if empty => text.push('\n'),
-                    b"pStyle" if in_properties => {
-                        if let Some(heading) = paragraphs.last_mut() {
-                            let value = docx_attribute(event, decoder)?;
-                            *heading = value.as_deref().and_then(|style| {
-                                if style == "Title" {
-                                    return Some(1);
-                                }
-                                style
-                                    .strip_prefix("Heading")?
-                                    .parse::<u8>()
-                                    .ok()
-                                    .filter(|level| (1..=9).contains(level))
-                            });
-                        }
-                    }
-                    b"outlineLvl" if in_properties => {
-                        if let Some(heading) = paragraphs.last_mut() {
-                            *heading = docx_attribute(event, decoder)?
-                                .and_then(|value| value.parse::<u8>().ok())
-                                .filter(|level| *level < 9)
-                                .map(|level| level + 1);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            Event::End(event) if word_namespace || event.name().as_ref().starts_with(b"w:") => {
-                match event.local_name().as_ref() {
-                    b"p" => {
-                        ranges.push(BlockRange {
-                            offset: start..text.len(),
-                            page: None,
-                            heading: paragraphs.pop().flatten(),
-                        });
-                        text.push('\n');
-                        start = text.len();
-                    }
-                    b"pPr" => in_properties = false,
-                    b"t" => in_text = false,
-                    _ => {}
-                }
-            }
-            Event::Text(event) if in_text => {
-                text.push_str(&event.decode().map_err(|error| error.to_string())?)
-            }
-            Event::GeneralRef(event) if in_text => {
-                let reference = event.decode().map_err(|error| error.to_string())?;
-                if let Some(value) = quick_xml::escape::resolve_predefined_entity(&reference) {
-                    text.push_str(value);
-                } else if let Some(ch) = reference
-                    .strip_prefix("#x")
-                    .and_then(|value| u32::from_str_radix(value, 16).ok())
-                    .or_else(|| {
-                        reference
-                            .strip_prefix('#')
-                            .and_then(|value| value.parse::<u32>().ok())
-                    })
-                    .and_then(char::from_u32)
-                {
-                    text.push(ch);
-                }
-            }
-            Event::Eof => break,
-            _ => {}
-        }
-        if text.len() > MAX_IMPORT {
-            return Err("Витягнутий текст завеликий".into());
-        }
-    }
-    if start < text.len() {
-        ranges.push(BlockRange {
-            offset: start..text.len(),
-            page: None,
-            heading: None,
-        });
-    }
-    let blocks = materialize_blocks(&text, ranges);
-    Ok(Extracted {
-        text,
-        blocks,
-        pdf_page_starts: None,
-    })
-}
-
-fn docx_attribute(
-    event: &quick_xml::events::BytesStart<'_>,
-    decoder: quick_xml::encoding::Decoder,
-) -> Result<Option<String>> {
-    for attribute in event.attributes() {
-        let attribute = attribute.map_err(|error| error.to_string())?;
-        if attribute.key.local_name().as_ref() == b"val" {
-            return attribute
-                .decode_and_unescape_value(decoder)
-                .map(|value| Some(value.into_owned()))
-                .map_err(|error| error.to_string());
-        }
-    }
-    Ok(None)
 }
 
 type PdfBuffer = RefCell<String>;
@@ -540,7 +414,7 @@ fn parse_pdf(bytes: &[u8]) -> Result<Extracted> {
             paragraph_ranges(&text, span, false).map(|offset| BlockRange {
                 offset,
                 page: Some(page),
-                heading: None,
+                ..BlockRange::default()
             }),
         );
     }

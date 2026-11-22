@@ -85,6 +85,10 @@ pub(crate) fn merge_existing_document(
     } else {
         return Ok(true);
     };
+    if identical_sentences && local.format == "docx" && incoming.docx_layout_version > local.docx_layout_version {
+        local.blocks.clone_from(&incoming.blocks);
+        local.docx_layout_version = incoming.docx_layout_version;
+    }
     if !incoming.bookmarks.is_empty() {
         local.bookmarks.extend(
             incoming
@@ -510,6 +514,7 @@ pub(crate) fn prepare_layout(
         false
     };
     d.blocks = parsed.blocks;
+    d.docx_layout_version = (d.format == "docx").then_some(document_layout::DOCX_LAYOUT_VERSION);
     d.pdf_page_starts = parsed.pdf_page_starts;
     ocr::refresh_provenance(&mut d);
     if history.is_empty() || text_changed {

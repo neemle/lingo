@@ -3,7 +3,14 @@ using System.Text.Json.Serialization;
 namespace Reader.Contracts;
 
 public sealed record DocumentBlock(string Kind, int StartUtf8, int EndUtf8,
-    int StartUtf16, int EndUtf16, int? Page, int? HeadingLevel);
+    int StartUtf16, int EndUtf16, int? Page, int? HeadingLevel)
+{
+    public DocxList? List { get; init; }
+    public DocxTableCell? TableCell { get; init; }
+}
+
+public sealed record DocxList(uint Id, int Level);
+public sealed record DocxTableCell(uint Table, uint Row, uint Column, uint ColumnSpan);
 
 public sealed record CachedTranslation(ParagraphTranslation Paragraph, MachineTranslation? Sentence);
 public sealed record ParagraphTranslation(ParagraphUnit[] Units, string? PivotLanguage,

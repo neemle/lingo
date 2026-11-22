@@ -449,6 +449,7 @@ impl Store {
             text,
             current_revision_id: None,
             blocks: extracted.blocks,
+            docx_layout_version: None,
             position: 0,
             reading_token_utf16: None,
             speech_resume: None,

@@ -1,0 +1,395 @@
+use super::{materialize_blocks, BlockRange, DocxList, DocxTableCell, Extracted};
+use crate::{Result, MAX_IMPORT};
+use quick_xml::{
+    encoding::Decoder,
+    events::{BytesStart, Event},
+    name::ResolveResult,
+    NsReader,
+};
+use std::{
+    collections::{HashMap, HashSet},
+    io::{Cursor, Read},
+};
+
+pub(crate) const DOCX_LAYOUT_VERSION: u8 = 2;
+
+#[derive(Clone, Default)]
+struct ParagraphProperties {
+    style: Option<String>,
+    outline: Option<u8>,
+    list_id: Option<u32>,
+    list_level: Option<u8>,
+}
+
+impl ParagraphProperties {
+    fn read(&mut self, event: &BytesStart<'_>, decoder: Decoder) -> Result<()> {
+        match event.local_name().as_ref() {
+            b"pStyle" => self.style = attribute(event, decoder, b"val")?,
+            b"outlineLvl" => self.outline = value(event, decoder)?.filter(|level| *level <= 9),
+            b"numId" => self.list_id = value(event, decoder)?,
+            b"ilvl" => self.list_level = value(event, decoder)?.filter(|level| *level < 9),
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+struct Style {
+    properties: ParagraphProperties,
+    base: Option<String>,
+}
+
+#[derive(Default)]
+struct Styles {
+    paragraphs: HashMap<String, Style>,
+    default: Option<String>,
+}
+
+impl Styles {
+    fn resolve(&self, direct: &ParagraphProperties) -> (Option<u8>, Option<DocxList>) {
+        let mut outline = direct.outline;
+        let mut list_id = direct.list_id;
+        let mut list_level = direct.list_level;
+        let mut style = direct.style.as_deref().or(self.default.as_deref());
+        let mut visited = HashSet::new();
+        while let Some(id) = style.filter(|id| visited.insert(*id)) {
+            let definition = self.paragraphs.get(id);
+            if let Some(style) = definition {
+                outline = outline.or(style.properties.outline);
+                list_id = list_id.or(style.properties.list_id);
+                list_level = list_level.or(style.properties.list_level);
+            }
+            outline = outline.or_else(|| builtin_heading(id));
+            style = definition.and_then(|style| style.base.as_deref());
+        }
+        (
+            outline.filter(|level| *level < 9).map(|level| level + 1),
+            list_id.filter(|id| *id != 0).map(|id| DocxList {
+                id,
+                level: list_level.unwrap_or(0),
+            }),
+        )
+    }
+}
+
+// Word uses zero-based outline levels; 9 explicitly means body text.
+fn builtin_heading(id: &str) -> Option<u8> {
+    if id.eq_ignore_ascii_case("Title") {
+        return Some(0);
+    }
+    id.strip_prefix("Heading")?
+        .parse::<u8>()
+        .ok()
+        .filter(|level| (1..=9).contains(level))
+        .map(|level| level - 1)
+}
+
+fn parse_styles(xml: &str) -> Result<Styles> {
+    let mut reader = NsReader::from_str(xml);
+    let mut styles = Styles::default();
+    let mut current = None;
+    let mut in_properties = false;
+    loop {
+        let decoder = reader.decoder();
+        let (namespace, event) = reader.read_resolved_event().map_err(xml_error)?;
+        let empty = matches!(event, Event::Empty(_));
+        match event {
+            Event::Start(ref event) | Event::Empty(ref event)
+                if word_element(&namespace, event.name().as_ref()) =>
+            {
+                match event.local_name().as_ref() {
+                    b"style" if !empty => {
+                        let kind = attribute(event, decoder, b"type")?;
+                        let id = attribute(event, decoder, b"styleId")?;
+                        current = id
+                            .filter(|_| kind.as_deref() == Some("paragraph"))
+                            .map(|id| {
+                                (
+                                    id,
+                                    Style {
+                                        properties: ParagraphProperties::default(),
+                                        base: None,
+                                    },
+                                )
+                            });
+                        if let Some((id, _)) = &current {
+                            if matches!(
+                                attribute(event, decoder, b"default")?.as_deref(),
+                                Some("1" | "true" | "on")
+                            ) {
+                                styles.default = Some(id.clone());
+                            }
+                        }
+                    }
+                    b"basedOn" => {
+                        if let Some((_, style)) = &mut current {
+                            style.base = attribute(event, decoder, b"val")?;
+                        }
+                    }
+                    b"pPr" if !empty => in_properties = true,
+                    _ if in_properties => {
+                        if let Some((_, style)) = &mut current {
+                            style.properties.read(event, decoder)?;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(event) if word_element(&namespace, event.name().as_ref()) => {
+                match event.local_name().as_ref() {
+                    b"pPr" => in_properties = false,
+                    b"style" => {
+                        if let Some((id, style)) = current.take() {
+                            styles.paragraphs.insert(id, style);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(styles)
+}
+
+#[derive(Default)]
+struct TableCursor {
+    index: u32,
+    row: u32,
+    next_row: u32,
+    column: u32,
+    span: Option<u32>,
+}
+
+impl TableCursor {
+    fn cell(&self) -> Option<DocxTableCell> {
+        Some(DocxTableCell {
+            table: self.index,
+            row: self.row,
+            column: self.column,
+            column_span: self.span?,
+        })
+    }
+}
+
+#[derive(Default)]
+struct Paragraph {
+    properties: ParagraphProperties,
+    cell: Option<DocxTableCell>,
+}
+
+pub(super) fn parse(bytes: &[u8]) -> Result<Extracted> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|_| "Некоректний DOCX")?;
+    let styles = xml_part(&mut archive, "word/styles.xml")
+        .ok()
+        .flatten()
+        .and_then(|xml| parse_styles(&xml).ok())
+        .unwrap_or_default();
+    let xml =
+        xml_part(&mut archive, "word/document.xml")?.ok_or("У DOCX немає текстового документа")?;
+    parse_body(&xml, &styles)
+}
+
+fn parse_body(xml: &str, styles: &Styles) -> Result<Extracted> {
+    let mut reader = NsReader::from_str(xml);
+    let mut text = String::new();
+    let mut ranges = Vec::new();
+    let mut paragraphs: Vec<Paragraph> = Vec::new();
+    let mut tables: Vec<TableCursor> = Vec::new();
+    let mut next_table = 0;
+    let mut in_text = false;
+    let mut in_properties = false;
+    let mut start = 0;
+    loop {
+        let decoder = reader.decoder();
+        let (namespace, event) = reader.read_resolved_event().map_err(xml_error)?;
+        let empty = matches!(event, Event::Empty(_));
+        match event {
+            Event::Start(ref event) | Event::Empty(ref event)
+                if word_element(&namespace, event.name().as_ref()) =>
+            {
+                match event.local_name().as_ref() {
+                    b"p" if !empty => {
+                        if let Some(paragraph) = paragraphs.last() {
+                            ranges.push(block(start..text.len(), paragraph, styles));
+                            start = text.len();
+                        }
+                        paragraphs.push(Paragraph {
+                            cell: tables.last().and_then(TableCursor::cell),
+                            ..Paragraph::default()
+                        });
+                    }
+                    b"tbl" if !empty => {
+                        tables.push(TableCursor {
+                            index: next_table,
+                            ..TableCursor::default()
+                        });
+                        next_table += 1;
+                    }
+                    b"tr" if !empty => {
+                        if let Some(table) = tables.last_mut() {
+                            table.row = table.next_row;
+                            table.next_row += 1;
+                            table.column = 0;
+                            table.span = None;
+                        }
+                    }
+                    b"tc" if !empty => {
+                        if let Some(table) = tables.last_mut() {
+                            table.span = Some(1);
+                        }
+                    }
+                    b"gridBefore" => {
+                        if let Some(table) = tables.last_mut() {
+                            if table.span.is_none() && table.column == 0 {
+                                table.column = value(event, decoder)?.unwrap_or(0);
+                            }
+                        }
+                    }
+                    b"gridSpan" => {
+                        if let Some(table) = tables.last_mut() {
+                            if table.span.is_some() {
+                                table.span = Some(
+                                    value(event, decoder)?.filter(|span| *span > 0).unwrap_or(1),
+                                );
+                            }
+                        }
+                    }
+                    b"pPr" if !empty => in_properties = true,
+                    b"t" if !empty => in_text = true,
+                    b"tab" if empty => text.push('\t'),
+                    b"br" if empty => text.push('\n'),
+                    _ if in_properties => {
+                        if let Some(paragraph) = paragraphs.last_mut() {
+                            paragraph.properties.read(event, decoder)?;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(event) if word_element(&namespace, event.name().as_ref()) => {
+                match event.local_name().as_ref() {
+                    b"p" => {
+                        ranges.push(block(
+                            start..text.len(),
+                            &paragraphs.pop().unwrap_or_default(),
+                            styles,
+                        ));
+                        text.push('\n');
+                        start = text.len();
+                    }
+                    b"tbl" => {
+                        tables.pop();
+                    }
+                    b"tc" => {
+                        if let Some(table) = tables.last_mut() {
+                            table.column =
+                                table.column.saturating_add(table.span.take().unwrap_or(1));
+                        }
+                    }
+                    b"pPr" => in_properties = false,
+                    b"t" => in_text = false,
+                    _ => {}
+                }
+            }
+            Event::Text(event) if in_text => {
+                text.push_str(&event.decode().map_err(xml_error)?);
+            }
+            Event::GeneralRef(event) if in_text => {
+                let reference = event.decode().map_err(xml_error)?;
+                if let Some(value) = quick_xml::escape::resolve_predefined_entity(&reference) {
+                    text.push_str(value);
+                } else if let Some(ch) = reference
+                    .strip_prefix("#x")
+                    .and_then(|value| u32::from_str_radix(value, 16).ok())
+                    .or_else(|| {
+                        reference
+                            .strip_prefix('#')
+                            .and_then(|value| value.parse::<u32>().ok())
+                    })
+                    .and_then(char::from_u32)
+                {
+                    text.push(ch);
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        if text.len() > MAX_IMPORT {
+            return Err("Витягнутий текст завеликий".into());
+        }
+    }
+    if start < text.len() {
+        ranges.push(BlockRange {
+            offset: start..text.len(),
+            ..BlockRange::default()
+        });
+    }
+    let blocks = materialize_blocks(&text, ranges);
+    Ok(Extracted {
+        text,
+        blocks,
+        pdf_page_starts: None,
+    })
+}
+
+fn block(offset: std::ops::Range<usize>, paragraph: &Paragraph, styles: &Styles) -> BlockRange {
+    let (heading, list) = styles.resolve(&paragraph.properties);
+    BlockRange {
+        offset,
+        heading,
+        list,
+        table_cell: paragraph.cell,
+        page: None,
+    }
+}
+
+fn word_element(namespace: &ResolveResult<'_>, name: &[u8]) -> bool {
+    matches!(namespace, ResolveResult::Bound(uri)
+        if matches!(uri.as_ref(),
+            b"http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            | b"http://purl.oclc.org/ooxml/wordprocessingml/main"))
+        || name.starts_with(b"w:")
+}
+
+fn xml_part(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<Option<String>> {
+    let member = match archive.by_name(name) {
+        Ok(member) => member,
+        Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    if member.size() > MAX_IMPORT as u64 {
+        return Err("Розпакований документ завеликий".into());
+    }
+    let mut xml = String::new();
+    member
+        .take(MAX_IMPORT as u64 + 1)
+        .read_to_string(&mut xml)
+        .map_err(xml_error)?;
+    if xml.len() > MAX_IMPORT {
+        return Err("Розпакований документ завеликий".into());
+    }
+    Ok(Some(xml))
+}
+
+fn value<T: std::str::FromStr>(event: &BytesStart<'_>, decoder: Decoder) -> Result<Option<T>> {
+    Ok(attribute(event, decoder, b"val")?.and_then(|value| value.parse().ok()))
+}
+
+fn attribute(event: &BytesStart<'_>, decoder: Decoder, name: &[u8]) -> Result<Option<String>> {
+    for attribute in event.attributes() {
+        let attribute = attribute.map_err(xml_error)?;
+        if attribute.key.local_name().as_ref() == name {
+            return attribute
+                .decode_and_unescape_value(decoder)
+                .map(|value| Some(value.into_owned()))
+                .map_err(xml_error);
+        }
+    }
+    Ok(None)
+}
+
+fn xml_error(error: impl std::fmt::Display) -> String {
+    format!("Некоректний XML: {error}")
+}

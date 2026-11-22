@@ -78,6 +78,7 @@ pub(crate) fn parser_version(document: &Document) -> &'static str {
         document.ocr_lines.is_some(),
         document.pdf_page_starts.is_some(),
     ) {
+        ("docx", _, _) if document.docx_layout_version.is_some() => "docx-reflow/2",
         ("docx", _, _) => "docx-reflow/1",
         ("pdf", true, true) => "pdf-mixed-reflow/1",
         ("pdf", true, false) => "pdf-ocr-reflow/1",
