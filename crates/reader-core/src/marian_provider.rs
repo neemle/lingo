@@ -858,7 +858,10 @@ impl TranslationProvider for MarianProvider<'_> {
                     && decoded.len() > 0
                 {
                     let mut alternatives = vec![translated.clone()];
-                    for text in decoded.filter_map(|tokens| decode_text(&tokens).ok()) {
+                    for text in decoded
+                        .by_ref()
+                        .filter_map(|tokens| decode_text(&tokens).ok())
+                    {
                         if !alternatives.contains(&text) {
                             alternatives.push(text);
                         }
@@ -895,6 +898,26 @@ impl TranslationProvider for MarianProvider<'_> {
                         if let Ok(candidate) = reference(&retry.input, settings.beam_size) {
                             if retry.accepts(&candidate) {
                                 translated = candidate;
+                            }
+                        }
+                    }
+                }
+                if package.source == "uk"
+                    && package.target == "fr"
+                    && start == 0
+                    && end == source_pieces.len()
+                    && segment.len() <= 768
+                    && units.len() == 1
+                {
+                    if let Some(deadline) = crate::marian_deadline::find(segment) {
+                        if !deadline.accepts(&translated) {
+                            let alternative = decoded
+                                .filter_map(|tokens| decode_text(&tokens).ok())
+                                .find(|text| deadline.preserves_clause(&translated, text));
+                            if let Some(text) =
+                                alternative.or_else(|| deadline.restore_comparison(&translated))
+                            {
+                                translated = text;
                             }
                         }
                     }

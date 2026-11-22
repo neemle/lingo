@@ -907,12 +907,26 @@ fn unit_cache_key(route: &Route, text: &str) -> Result<String> {
 
 fn cache_key(
     route: &Route,
-    segments: &[impl Serialize],
+    segments: &[impl Serialize + AsRef<str>],
     context: Option<&str>,
     settings: TranslationSettings,
 ) -> Result<String> {
     // Decoder/tokenizer and contextual reranking revisions must not reuse older outputs.
-    let input = serde_json::to_vec(&(4, route, segments, context, settings))
+    let from_uk_to_fr = |edge: &ModelEdge| edge.source == "uk" && edge.target == "fr";
+    let can_retry = || {
+        segments.iter().any(|text| {
+            let text = text.as_ref();
+            text.len() <= 768 && crate::marian_deadline::find(text).is_some()
+        })
+    };
+    let deadline_revision = match route {
+        Route::Direct(edge) => from_uk_to_fr(edge) && can_retry(),
+        Route::Pivot { first, second } => {
+            from_uk_to_fr(first) && can_retry() || from_uk_to_fr(second)
+        }
+    };
+    let version = if deadline_revision { 5 } else { 4 };
+    let input = serde_json::to_vec(&(version, route, segments, context, settings))
         .map_err(|error| error.to_string())?;
     Ok(format!("{:x}", Sha256::digest(input)))
 }

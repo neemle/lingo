@@ -18,6 +18,7 @@ pub mod document_revisions;
 pub mod e5;
 pub mod knowledge;
 pub mod language_detection;
+mod marian_deadline;
 mod marian_provider;
 mod model_storage;
 pub mod ocr;
