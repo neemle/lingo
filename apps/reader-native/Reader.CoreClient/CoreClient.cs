@@ -133,7 +133,7 @@ public sealed class CoreClient : IDisposable
     public void CheckTranslationArchiveSpace(string directory, long bytes) =>
         Call<JsonElement>(new { version = 1, operation = "check_translation_archive_space", directory, bytes });
     public ParagraphTranslation TranslateParagraph(string id, string sentenceId, string target) =>
-        Call<ParagraphTranslation>(new { version = 1, operation = "translate_paragraph", id, sentenceId, target });
+        CallIndependent<ParagraphTranslation>(new { version = 1, operation = "translate_paragraph", id, sentenceId, target });
     public LexicalPackage[] LexicalPackages() =>
         Call<LexicalPackage[]>(new { version = 1, operation = "lexical_packages" });
     public LexicalPackage InstallLexicalPackage(string language, string path) =>
@@ -150,7 +150,7 @@ public sealed class CoreClient : IDisposable
         CallIndependent<SpeechAudio>(new { version = 1, operation = "synthesize_speech", id, sentenceId, engine, speaker, rate });
 
     public MachineTranslation? TranslateSentence(string id, string sentenceId, string target) =>
-        Call<MachineTranslation?>(new { version = 1, operation = "translate_sentence", id, sentenceId, target });
+        CallIndependent<MachineTranslation?>(new { version = 1, operation = "translate_sentence", id, sentenceId, target });
     public Vocabulary SaveWord(Vocabulary entry) =>
         Call<Vocabulary>(new { version = 1, operation = "save_word", entry });
     public Vocabulary SetVocabularyVariants(string id, string[] acceptedTranslations) =>

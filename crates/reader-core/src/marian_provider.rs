@@ -9,6 +9,7 @@ use std::{
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::marian::{Config, MTModel};
+use rusqlite::{Connection, OpenFlags};
 use sentencepiece_rs::SentencePieceProcessor;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -94,7 +95,65 @@ struct MarianProvider<'a> {
     directory: &'a Path,
 }
 
+/// Owned settings for reading a document and updating its translation cache off the main store.
+pub struct TranslationWorker {
+    database: PathBuf,
+    model_directory: PathBuf,
+    optional_model_directory: PathBuf,
+    knowledge_directory: PathBuf,
+}
+
+impl TranslationWorker {
+    fn open(self) -> Result<Store> {
+        let connection = Connection::open_with_flags(
+            &self.database,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(Store {
+            connection,
+            model_directory: self.model_directory,
+            optional_model_directory: self.optional_model_directory,
+            knowledge_directory: self.knowledge_directory,
+        })
+    }
+
+    pub fn translate_sentence(
+        self,
+        document_id: &str,
+        sentence_id: &str,
+        target: &str,
+    ) -> Result<Option<AlignedTranslation>> {
+        self.open()?
+            .translate_installed_sentence(document_id, sentence_id, target)
+    }
+
+    pub fn translate_paragraph(
+        self,
+        document_id: &str,
+        sentence_id: &str,
+        target: &str,
+    ) -> Result<ParagraphTranslation> {
+        self.open()?
+            .translate_installed_paragraph(document_id, sentence_id, target)
+    }
+}
+
 impl Store {
+    pub fn prepare_translation_worker(&self) -> Option<TranslationWorker> {
+        // SQLite resolves the file name and reports an empty name for temporary and in-memory databases.
+        let database = Path::new(self.connection.path()?);
+        if !database.is_absolute() {
+            return None;
+        }
+        Some(TranslationWorker {
+            database: database.to_owned(),
+            model_directory: self.model_directory.clone(),
+            optional_model_directory: self.optional_model_directory.clone(),
+            knowledge_directory: self.knowledge_directory.clone(),
+        })
+    }
+
     pub fn check_translation_download_space(
         &self,
         source: &str,

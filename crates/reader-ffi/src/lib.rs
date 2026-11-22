@@ -54,6 +54,31 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
     };
     let command = validation::decode(bytes)?;
     match &command {
+        Command::TranslateParagraph {
+            id,
+            sentence_id,
+            target,
+        }
+        | Command::TranslateSentence {
+            id,
+            sentence_id,
+            target,
+        } => {
+            let worker = registry::lock()?
+                .store(handle)?
+                .prepare_translation_worker();
+            if let Some(worker) = worker {
+                return if matches!(&command, Command::TranslateParagraph { .. }) {
+                    encode_job(worker.translate_paragraph(id, sentence_id, target))
+                } else {
+                    dispatch::sentence_translation(worker.translate_sentence(
+                        id,
+                        sentence_id,
+                        target,
+                    ))
+                };
+            }
+        }
         Command::SemanticVocabulary { query, document_id } => {
             let job = registry::lock()?
                 .store(handle)?

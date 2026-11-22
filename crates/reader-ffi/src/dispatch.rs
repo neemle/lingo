@@ -10,6 +10,20 @@ fn value<T: Serialize>(result: std::result::Result<T, String>) -> Result<Value> 
         .map_err(|_| Error::new("serialization_error", "Cannot encode core response"))
 }
 
+pub fn sentence_translation(
+    result: reader_core::Result<Option<reader_core::translation::AlignedTranslation>>,
+) -> Result<Value> {
+    value(result.map(|translated| {
+        translated.map(|result| {
+            serde_json::json!({
+                "text": result.segments[0],
+                "pivotLanguage": result.route.pivot_language(),
+                "joinedLines": result.joined_lines,
+            })
+        })
+    }))
+}
+
 pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
     match command {
         Command::Open { .. } => Err(Error::new("invalid_handle", "Open requires handle zero")),
@@ -169,19 +183,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             id,
             sentence_id,
             target,
-        } => value(
-            store
-                .translate_installed_sentence(&id, &sentence_id, &target)
-                .map(|translated| {
-                    translated.map(|result| {
-                        serde_json::json!({
-                            "text": result.segments[0],
-                            "pivotLanguage": result.route.pivot_language(),
-                            "joinedLines": result.joined_lines,
-                        })
-                    })
-                }),
-        ),
+        } => sentence_translation(store.translate_installed_sentence(&id, &sentence_id, &target)),
         Command::SaveWord { entry } => value(store.save_word(entry)),
         Command::SetVocabularyVariants {
             id,
