@@ -31,11 +31,13 @@ public partial class LibraryPage
             var selected = Array.IndexOf(choices, choice);
             if (selected < 0) return;
             var item = items[selected];
-            var actions = item.Kind == "damaged" ? Array.Empty<string>() : ["Продовжити імпорт"];
+            string[] actions = item.Kind == "damaged" ? [] : item.PhotoLanguage is null
+                ? ["Продовжити імпорт"] : ["Продовжити імпорт", "Змінити мову OCR"];
             var action = await DisplayActionSheetAsync(item.Name, "Скасувати", "Видалити копію", actions);
             if (action == "Видалити копію" && await DisplayAlertAsync("Видалити вхідний матеріал?", item.Name, "Видалити", "Скасувати"))
                 await RemoveShareItemAsync(item);
-            if (action == "Продовжити імпорт") await ImportExternalAsync(item);
+            if (action is "Продовжити імпорт" or "Змінити мову OCR")
+                await ImportExternalAsync(item, choosePhotoLanguage: action == "Змінити мову OCR");
         }
         catch (Exception error) { await DisplayAlertAsync("Вхідні матеріали", error.Message, "Гаразд"); }
         finally
@@ -45,7 +47,7 @@ public partial class LibraryPage
         }
     }
 
-    internal async Task ImportExternalAsync(ShareInboxItem item)
+    internal async Task ImportExternalAsync(ShareInboxItem item, bool choosePhotoLanguage = false)
     {
         await loading;
         if (!ShareInbox.Contains(item)) return;
@@ -56,7 +58,7 @@ public partial class LibraryPage
             var id = item.Kind switch
             {
                 "file" => await ImportFileAsync(new DesktopFile(item.Name, () => Task.FromResult(bytes)),
-                    scanPdf: false, external: true, pdfStaged: () => RemoveShareItemAsync(item)),
+                    scanPdf: false, staged: item, choosePhotoLanguage: choosePhotoLanguage),
                 "text" => await ImportPastedTextCoreAsync(Encoding.UTF8.GetString(bytes)),
                 "url" => await ImportArticleCoreAsync(WebArticles.Address(Encoding.UTF8.GetString(bytes))
                     ?? throw new InvalidDataException("Збережене вебпосилання недійсне.")),

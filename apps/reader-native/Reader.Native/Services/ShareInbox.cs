@@ -1,6 +1,7 @@
 namespace Reader.Native.Services;
 
-internal sealed record ShareInboxItem(Guid Id, string Kind, string Name, DateTimeOffset ReceivedAt, long Bytes)
+internal sealed record ShareInboxItem(Guid Id, string Kind, string Name, DateTimeOffset ReceivedAt, long Bytes,
+    string? PhotoLanguage = null)
 {
     internal string Label => $"{Name} · {ReceivedAt.LocalDateTime:g}";
 }
@@ -12,7 +13,8 @@ internal static class ShareInbox
     private static readonly SemaphoreSlim Staging = new(1, 1);
     private static readonly Lazy<string> Storage = new(Initialize);
 
-    internal static async Task<ShareInboxItem> StageAsync(string kind, string name, Stream source)
+    internal static async Task<ShareInboxItem> StageAsync(string kind, string name, Stream source,
+        string? photoLanguage = null)
     {
         var id = Guid.NewGuid();
         var maximum = Limit(kind);
@@ -35,12 +37,8 @@ internal static class ShareInbox
                     if (length == 0) throw new InvalidDataException("Вхідний матеріал порожній.");
                     target.Flush(flushToDisk: true);
                 }
-                var item = new ShareInboxItem(id, kind, name, DateTimeOffset.UtcNow, length);
-                using (var metadata = new FileStream(Path.Combine(temporary, "item.json"), FileMode.CreateNew))
-                {
-                    metadata.Write(NativeFiles.Encode(item));
-                    metadata.Flush(flushToDisk: true);
-                }
+                var item = new ShareInboxItem(id, kind, name, DateTimeOffset.UtcNow, length, photoLanguage);
+                WriteMetadata(Path.Combine(temporary, "item.json"), item);
                 Directory.Move(temporary, Folder(id));
                 return item;
             }
@@ -61,6 +59,14 @@ internal static class ShareInbox
     }
 
     internal static bool Contains(ShareInboxItem item) => Directory.Exists(Folder(item.Id));
+
+    internal static void SavePhotoLanguage(ShareInboxItem item, string language)
+    {
+        var folder = Folder(item.Id);
+        var replacement = Path.Combine(folder, "item.pending.json");
+        WriteMetadata(replacement, item with { PhotoLanguage = language });
+        File.Move(replacement, Path.Combine(folder, "item.json"), overwrite: true);
+    }
 
     internal static void Remove(ShareInboxItem item)
     {
@@ -92,12 +98,20 @@ internal static class ShareInbox
 
     private static string Folder(Guid id) => Path.Combine(Storage.Value, id.ToString("N"));
 
+    private static void WriteMetadata(string path, ShareInboxItem item)
+    {
+        using var metadata = new FileStream(path, FileMode.Create);
+        metadata.Write(NativeFiles.Encode(item));
+        metadata.Flush(flushToDisk: true);
+    }
+
     private static ShareInboxItem ReadItem(string folder)
     {
         var id = Guid.ParseExact(Path.GetFileName(folder), "N");
         try
         {
-            using var source = File.OpenRead(Path.Combine(folder, "item.json"));
+            using var source = new FileStream(Path.Combine(folder, "item.json"), FileMode.Open,
+                FileAccess.Read, FileShare.Read | FileShare.Delete);
             using var bytes = new MemoryStream();
             NativeFiles.CopyBoundedAsync(source, bytes, MaxMetadataBytes).GetAwaiter().GetResult();
             var item = NativeFiles.Decode<ShareInboxItem>(bytes.ToArray());

@@ -110,7 +110,7 @@ public partial class LibraryPage : ContentPage
                 try
                 {
                     var id = await ImportFileAsync(new DesktopFile(file.FileName,
-                        () => NativeFiles.ReadBoundedAsync(file, Reader.CoreClient.CoreClient.MaxImportBytes)), scanPdf, external: false);
+                        () => NativeFiles.ReadBoundedAsync(file, Reader.CoreClient.CoreClient.MaxImportBytes)), scanPdf);
                     lastDocument = id ?? lastDocument;
                 }
                 catch (Exception error) { await DisplayAlertAsync(file.FileName, error.Message, "Гаразд"); }
@@ -123,16 +123,19 @@ public partial class LibraryPage : ContentPage
             importing = false;
             ImportStatus.Text = "";
             DesktopImport.Gate.Release();
+            await RefreshShareInboxAsync();
         }
     }
 
-    private async Task<string?> ImportFileAsync(DesktopFile file, bool scanPdf, bool external,
-        Func<Task>? pdfStaged = null)
+    private async Task<string?> ImportFileAsync(DesktopFile file, bool scanPdf, ShareInboxItem? staged = null,
+        bool choosePhotoLanguage = false)
     {
         var extension = Path.GetExtension(file.Name);
         var isPdf = extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase);
         if (scanPdf && !isPdf) throw new InvalidDataException("Виберіть файл PDF для розпізнавання.");
         var bytes = await file.Read();
+        if (ImageExtensions.Contains(extension))
+            return await ImportPhotoAsync(file.Name, bytes, staged, choosePhotoLanguage);
         var session = AppState.Session;
         await session.WaitUntilIdleAsync();
         var suggestion = extension.ToLowerInvariant() switch
@@ -141,7 +144,7 @@ public partial class LibraryPage : ContentPage
             ".docx" or ".pdf" when !scanPdf => await session.DetectDocumentLanguageAsync(file.Name, bytes),
             _ => null,
         };
-        var language = await ChooseLanguageAsync(external ? $"Мова оригіналу · {file.Name}" : "Мова оригіналу", suggestion);
+        var language = await ChooseLanguageAsync(staged is null ? "Мова оригіналу" : $"Мова оригіналу · {file.Name}", suggestion);
         if (language is null) return null;
         if (isPdf)
         {
@@ -152,24 +155,45 @@ public partial class LibraryPage : ContentPage
             if (missing.Length > 0)
             {
                 var checkpoint = await Task.Run(() => PdfOcrCheckpoint.Create(file.Name, bytes, language, pages, missing));
-                if (pdfStaged is not null) await pdfStaged();
+                if (staged is not null) await RemoveShareItemAsync(staged);
                 ImportStatus.Text = "";
                 return await RunPdfOcrAsync(checkpoint, bytes);
             }
             await session.WaitUntilIdleAsync();
             await session.ImportMixedPdfAsync(file.Name, bytes, language, [], pages);
         }
-        else if (ImageExtensions.Contains(extension))
-        {
-            ImportStatus.Text = "Розпізнавання тексту на пристрої…";
-            var lines = await PhotoOcr.RecognizeAsync(bytes, language);
-            if (lines.Length == 0) throw new InvalidDataException("На зображенні не знайдено тексту.");
-            await session.WaitUntilIdleAsync();
-            await session.ImportImageAsync(file.Name, bytes, language, lines);
-        }
         else await session.ImportAsync(file.Name, bytes, language);
         if (session.Error.Length != 0) throw new InvalidDataException(session.Error);
         return session.Document?.Id;
+    }
+
+    private async Task<string?> ImportPhotoAsync(string name, byte[] bytes, ShareInboxItem? staged,
+        bool chooseLanguage)
+    {
+        var savedLanguage = staged?.PhotoLanguage;
+        var language = !chooseLanguage && DocumentLanguages.All.Any(item => item.Code == savedLanguage)
+            ? savedLanguage : await ChooseLanguageAsync($"Мова оригіналу · {name}");
+        if (language is null) return null;
+
+        var pending = staged;
+        if (pending is null)
+        {
+            using var source = new MemoryStream(bytes, writable: false);
+            pending = await ShareInbox.StageAsync("file", name, source, photoLanguage: language);
+        }
+        else if (pending.PhotoLanguage != language)
+            await Task.Run(() => ShareInbox.SavePhotoLanguage(pending, language));
+
+        ImportStatus.Text = "Розпізнавання тексту на пристрої…";
+        var lines = await PhotoOcr.RecognizeAsync(bytes, language);
+        if (lines.Length == 0) throw new InvalidDataException("На зображенні не знайдено тексту.");
+        var session = AppState.Session;
+        await session.WaitUntilIdleAsync();
+        await session.ImportImageAsync(pending.Name, bytes, language, lines);
+        if (session.Error.Length != 0) throw new InvalidDataException(session.Error);
+        if (session.Document?.Id is not { } documentId) return null;
+        if (staged is null) await RemoveShareItemAsync(pending);
+        return documentId;
     }
 
     private async Task<string?> ChooseLanguageAsync(string title, string? suggested = null)
