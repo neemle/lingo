@@ -659,12 +659,9 @@ impl Store {
         sentence_id: &str,
         target: &str,
     ) -> Result<Option<AlignedTranslation>> {
-        self.translate_sentence(
-            &self.model_directory.clone(),
-            document_id,
-            sentence_id,
-            target,
-        )
+        let (document, selected) = self.translation_selection(document_id, sentence_id)?;
+        let (text, sentence_ids) = sentence_translation_input(&document, selected);
+        self.translate_machine_sentence(&document.language, target, text, sentence_ids)
     }
 
     pub fn translate_detached_pdf_sentence(
@@ -673,16 +670,8 @@ impl Store {
         let current = self.detached_pdf_sentence(id, page, None)?
             .filter(|current| current.sentence.id == sentence_id)
             .ok_or("Позиція читання сторінки PDF змінилася.")?;
-        let directory = self.model_directory.clone();
-        self.translate_aligned(
-            &mut MarianProvider::interactive(&directory),
-            TranslationRequest {
-                source: &current.language,
-                target,
-                segments: &[current.sentence.text],
-                context: None,
-                settings: TranslationSettings::default(),
-            },
+        self.translate_machine_sentence(
+            &current.language, target, current.sentence.text, vec![current.sentence.id],
         )
     }
 
@@ -751,7 +740,7 @@ impl Store {
         search_cached_translation(self, &installed, &catalog, &document, target, query, start)
     }
 
-    pub(crate) fn detached_translation_routes(
+    pub(crate) fn translation_cache_routes(
         &self, source: &str, target: &str,
     ) -> Result<crate::translation::CacheRoutes> {
         let installed = MarianProvider::interactive(&self.model_directory).installed_models()?;
@@ -795,31 +784,32 @@ impl Store {
         route_readiness(&catalog, &provider.installed_models()?, source, target)
     }
 
-    fn translate_sentence(
+    fn translate_machine_sentence(
         &mut self,
-        package_dir: &Path,
-        document_id: &str,
-        sentence_id: &str,
+        source: &str,
         target: &str,
+        text: String,
+        sentence_ids: Vec<String>,
     ) -> Result<Option<AlignedTranslation>> {
-        let (document, selected) = self.translation_selection(document_id, sentence_id)?;
-        let (text, sentence_ids) = sentence_translation_input(&document, selected);
-        self.translate_aligned(
-            &mut MarianProvider::interactive(package_dir),
+        let directory = self.model_directory.clone();
+        let translated = self.translate_aligned(
+            &mut MarianProvider::interactive(&directory),
             TranslationRequest {
-                source: &document.language,
+                source,
                 target,
-                segments: &[text],
+                segments: std::slice::from_ref(&text),
                 context: None,
                 settings: TranslationSettings::default(),
             },
-        )
-        .map(|translation| {
-            translation.map(|mut translation| {
-                translation.attach_source_sentences(sentence_ids);
-                translation
-            })
-        })
+        )?;
+        let result = match translated {
+            Some(translated) => Some(translated),
+            None => self.translation_cache_routes(source, target)?.cached_sentence(self, &text, target)?,
+        };
+        Ok(result.map(|mut translation| {
+            translation.attach_source_sentences(sentence_ids);
+            translation
+        }))
     }
 }
 

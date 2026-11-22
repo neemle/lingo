@@ -380,12 +380,31 @@ impl CacheRoutes {
     pub(crate) fn cached_standalone(
         &self, store: &Store, text: &str, target: &str,
     ) -> Result<Option<(String, Option<String>)>> {
+        Ok(self.cached_sentence(store, text, target)?.map(|cached| {
+            (
+                cached.segments.into_iter().next().expect("one cached segment"),
+                cached.route.pivot_language().map(str::to_owned),
+            )
+        }))
+    }
+
+    pub(crate) fn cached_sentence(
+        &self,
+        store: &Store,
+        text: &str,
+        target: &str,
+    ) -> Result<Option<AlignedTranslation>> {
         if text.len() > MAX_BATCH_BYTES {
             return Ok(None);
         }
         for route in &self.candidates {
-            if let Some(mut segments) = store.cached_segments(&unit_cache_key(route, text)?, 1, target)? {
-                return Ok(Some((segments.remove(0), route.pivot_language().map(str::to_owned))));
+            if let Some(segments) = store.cached_segments(&unit_cache_key(route, text)?, 1, target)? {
+                return Ok(Some(AlignedTranslation {
+                    route: route.clone(),
+                    segments,
+                    joined_lines: false,
+                    alignment: None,
+                }));
             }
         }
         Ok(None)

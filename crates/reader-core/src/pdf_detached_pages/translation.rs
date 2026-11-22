@@ -63,7 +63,7 @@ impl Store {
         let projection =
             self.project_pdf_translation_page(id, page, target, text, sentences, language)?;
         if cached_only {
-            let routes = self.detached_translation_routes(&projection.document.language, target)?;
+            let routes = self.translation_cache_routes(&projection.document.language, target)?;
             return cached_page_translation(self, &routes, &projection, selected, target);
         }
         let position = projection.physical.start + selected;

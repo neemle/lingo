@@ -57,7 +57,7 @@ impl Store {
             ).optional().map_err(database_error)?;
             let Some(source) = source else { return Ok(result); };
             if source == target { return Ok(result); }
-            let resolved = self.detached_translation_routes(&source, target)?;
+            let resolved = self.translation_cache_routes(&source, target)?;
             Some((target, source, resolved))
         } else {
             None
