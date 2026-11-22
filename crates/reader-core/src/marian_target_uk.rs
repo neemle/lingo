@@ -11,6 +11,15 @@ pub(super) fn clearly_ukrainian(text: &str) -> bool {
 
 fn distinguish(text: &str) -> Option<Lang> {
     let sample = outside_quotes(text);
+    // An independent affirmative is distinctive even when the rest is made
+    // up of shared vocabulary. Keep ambiguous words and quotations untouched.
+    let opening = sample.trim_start_matches(|ch: char| ch.is_whitespace() || matches!(ch, '–' | '—' | '-'));
+    let mut characters = opening.chars().flat_map(char::to_lowercase);
+    if characters.next() == Some('д') && characters.next() == Some('а') &&
+        characters.next().is_some_and(|ch| matches!(ch, ',' | '.' | '!' | '?' | '…'))
+    {
+        return Some(Lang::Rus);
+    }
     if sample
         .unicode_words()
         .filter(|word| {
@@ -70,6 +79,15 @@ mod tests {
         assert!(!clearly_ukrainian(wrong));
         assert!(clearly_ukrainian(right));
         assert!(!clearly_russian(right));
+    }
+
+    #[test]
+    fn rejects_russian_affirmatives_in_short_ukrainian_translations() {
+        assert!(clearly_russian("Да, в узурпаторе."));
+        assert!(clearly_russian("— ДА!"));
+        assert!(!clearly_russian("Так, в узурпатора."));
+        assert!(!clearly_russian("Давня історія."));
+        assert!(!clearly_russian("«Да!» — відповів він."));
     }
 
     #[test]
