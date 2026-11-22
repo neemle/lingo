@@ -27,6 +27,11 @@
  </ContentPage.Resources>
  <ContentPage.MenuBarItems>
   <MenuBarItem Text="Читання">
+   <MenuFlyoutItem Text="Знайти в документі…" Clicked="FindInDocumentClicked" IsEnabled="{Binding CanBookmark}">
+    <MenuFlyoutItem.KeyboardAccelerators>
+     <KeyboardAccelerator Modifiers="{OnPlatform MacCatalyst=Cmd, WinUI=Ctrl}" Key="F" />
+    </MenuFlyoutItem.KeyboardAccelerators>
+   </MenuFlyoutItem>
    <MenuFlyoutItem Text="Попереднє речення" Clicked="PreviousClicked" IsEnabled="{Binding CanInteract}">
     <MenuFlyoutItem.KeyboardAccelerators>
      <KeyboardAccelerator Modifiers="{OnPlatform MacCatalyst=Cmd, WinUI=Ctrl}" Key="[" />
@@ -69,7 +74,7 @@
     SemanticProperties.Description="Переглянути оригінал документа" />
   </Grid>
 
-  <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8">
+  <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
    <Picker x:Name="SentencePicker" Title="Перейти до речення"
     ItemsSource="{Binding Document.Sentences}" ItemDisplayBinding="{Binding Text, x:DataType=models:Sentence}"
     SelectedIndex="{Binding Document.Position, Mode=OneWay}" SelectedIndexChanged="SentenceChanged" />
@@ -79,6 +84,8 @@
     IsEnabled="{Binding HasBookmarks}" Clicked="OpenBookmarksClicked" />
    <Button Grid.Column="3" Text="Нотатки" Style="{StaticResource OutlineButton}"
     IsEnabled="{Binding CanBookmark}" Clicked="OpenNotesClicked" />
+   <Button Grid.Column="4" Text="Знайти" Style="{StaticResource OutlineButton}" Clicked="FindInDocumentClicked"
+    IsEnabled="{Binding CanBookmark}" SemanticProperties.Description="Знайти в документі" />
   </Grid>
 
   <Border Grid.Row="2" BackgroundColor="{StaticResource Panel}" Stroke="{StaticResource BorderTone}"
