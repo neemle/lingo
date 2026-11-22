@@ -1,5 +1,5 @@
 use super::{
-    expressions::ExpressionMatch, ocr_suggestions::SpellingSuggestion, versioned_index,
+    expressions::ExpressionMatch, ocr_suggestions::SpellingSuggestion, syntax_parse, versioned_index,
     KnowledgePackage, WordAnalysis, WordContext, PACKS,
 };
 use crate::{
@@ -40,6 +40,7 @@ pub struct LinguisticAnalysis {
     words: Vec<AnalyzedWord>,
     expressions: Vec<ExpressionMatch>,
     syntax_candidates: Vec<SyntaxCandidate>,
+    syntax_parse: Option<syntax_parse::SyntaxParse>,
     next_start: Option<usize>,
 }
 
@@ -97,6 +98,12 @@ impl Store {
             pack.describe(lookup_index.map_or(0, |(_, _, version)| version))
         });
         let id_at = |offset| token_id(revision, sentence_id, offset);
+        let syntax_parse = match (&scope, lookup_index) {
+            (AnalysisScope::Sentence { start: 0 }, Some((_, db, version))) if version >= 5 => {
+                Some(syntax_parse::analyze(db, &sentence.text, id_at)?)
+            }
+            _ => None,
+        };
         let members = match &scope {
             AnalysisScope::Expression { member_starts_utf16 } => Some(member_starts_utf16),
             _ => None,
@@ -184,6 +191,7 @@ impl Store {
                 })
                 .collect(),
             next_start,
+            syntax_parse,
         })
     }
 }

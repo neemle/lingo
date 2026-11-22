@@ -4,13 +4,22 @@ use rusqlite::{params, Connection, Statement};
 use serde::Serialize;
 use std::{cmp::Reverse, collections::VecDeque};
 
-const WINDOW: usize = 6;
+pub(super) const WINDOW: usize = 6;
 const MAX_HINTS: usize = 5;
 
 pub(super) const SCHEMA: &str = "CREATE TABLE syntax_links (
     dependent TEXT NOT NULL, head TEXT NOT NULL, dependent_first INTEGER NOT NULL,
     distance INTEGER NOT NULL, relation TEXT NOT NULL, observations INTEGER NOT NULL,
     PRIMARY KEY(dependent,head,dependent_first,distance,relation)
+) WITHOUT ROWID;
+CREATE TABLE syntax_pos_links (
+    dependent TEXT NOT NULL, head TEXT NOT NULL, dependent_first INTEGER NOT NULL,
+    distance INTEGER NOT NULL, relation TEXT NOT NULL, observations INTEGER NOT NULL,
+    PRIMARY KEY(dependent,head,dependent_first,distance,relation)
+) WITHOUT ROWID;
+CREATE TABLE syntax_roots (
+    pos TEXT NOT NULL, term TEXT NOT NULL, observations INTEGER NOT NULL,
+    PRIMARY KEY(pos,term)
 ) WITHOUT ROWID;";
 
 #[derive(Debug, Serialize)]
@@ -27,24 +36,33 @@ struct Token {
     id: u32,
     head: u32,
     key: String,
+    pos: String,
+    root: bool,
     relation: Option<String>,
 }
 
 pub(super) struct Indexer<'a> {
     upsert: Statement<'a>,
+    pos_upsert: Statement<'a>,
+    root_upsert: Statement<'a>,
     tokens: Vec<Token>,
 }
 
 impl<'a> Indexer<'a> {
     pub(super) fn new(db: &'a Connection) -> Result<Self> {
-        let upsert = db
-            .prepare(
+        Ok(Self {
+            upsert: db.prepare(
                 "INSERT INTO syntax_links VALUES (?1,?2,?3,?4,?5,1)
                  ON CONFLICT DO UPDATE SET observations=observations+1",
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(Self {
-            upsert,
+            ).map_err(|error| error.to_string())?,
+            pos_upsert: db.prepare(
+                "INSERT INTO syntax_pos_links VALUES (?1,?2,?3,?4,?5,1)
+                 ON CONFLICT DO UPDATE SET observations=observations+1",
+            ).map_err(|error| error.to_string())?,
+            root_upsert: db.prepare(
+                "INSERT INTO syntax_roots VALUES (?1,?2,1)
+                 ON CONFLICT DO UPDATE SET observations=observations+1",
+            ).map_err(|error| error.to_string())?,
             tokens: Vec::new(),
         })
     }
@@ -81,6 +99,10 @@ impl<'a> Indexer<'a> {
                 | "nummod"
                 | "obj"
                 | "obl"
+                | "parataxis"
+                | "discourse"
+                | "vocative"
+                | "dep"
                 | "xcomp"
         )
         .then(|| relation.to_owned());
@@ -88,6 +110,8 @@ impl<'a> Indexer<'a> {
             id,
             head,
             key: word_key(form),
+            pos: pos.to_owned(),
+            root: head == 0 && base == "root",
             relation,
         });
     }
@@ -96,6 +120,10 @@ impl<'a> Indexer<'a> {
         let mut tokens = std::mem::take(&mut self.tokens);
         tokens.sort_unstable_by_key(|token| token.id);
         for (dependent_index, dependent) in tokens.iter().enumerate() {
+            if dependent.root {
+                self.root_upsert.execute(params![dependent.pos, dependent.key])
+                    .map_err(|error| error.to_string())?;
+            }
             let Some(relation) = &dependent.relation else {
                 continue;
             };
@@ -106,12 +134,17 @@ impl<'a> Indexer<'a> {
                 continue;
             };
             let distance = dependent_index.abs_diff(index);
-            if distance > WINDOW {
-                continue;
-            }
             let head = &tokens[index];
-            self.upsert
-                .execute(params![
+            self.pos_upsert.execute(params![
+                dependent.pos,
+                head.pos,
+                dependent.id < head.id,
+                distance.min(WINDOW + 1) as u32,
+                relation,
+            ])
+            .map_err(|error| error.to_string())?;
+            if distance <= WINDOW {
+                self.upsert.execute(params![
                     dependent.key,
                     head.key,
                     dependent.id < head.id,
@@ -119,6 +152,7 @@ impl<'a> Indexer<'a> {
                     relation
                 ])
                 .map_err(|error| error.to_string())?;
+            }
         }
         tokens.clear();
         self.tokens = tokens;

@@ -16,12 +16,13 @@ mod lexicon;
 mod ocr_suggestions;
 mod scoped_analysis;
 mod syntax;
+mod syntax_parse;
 
 pub use scoped_analysis::{AnalysisScope, LinguisticAnalysis};
 
 pub use lexicon::{LexicalPackage, LexicalPackageInstall, WordMeaning};
 
-const INDEX_VERSION: u32 = 4;
+const INDEX_VERSION: u32 = 5;
 
 struct Pack {
     language: &'static str,
@@ -83,6 +84,7 @@ pub struct KnowledgePackage {
     context_available: bool,
     expressions_available: bool,
     syntax_available: bool,
+    dependency_parse_available: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -164,6 +166,7 @@ impl Pack {
             context_available: index_version >= 2,
             expressions_available: index_version >= 3,
             syntax_available: index_version >= 4,
+            dependency_parse_available: index_version >= 5,
         }
     }
 }
