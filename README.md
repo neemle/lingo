@@ -3,8 +3,8 @@
 Native desktop language reader with a Ukrainian interface: MAUI XAML/C# on Windows (WinUI 3) and
 macOS (Mac Catalyst), backed by Rust and local SQLite. Requirements and work tracking live in LeaseVibe MCP.
 
-The reader imports UTF-8 TXT, DOCX, PDFs and supported photographs up to 20 MiB, retains originals, restores sentence progress,
-and saves manual translations with context. Forward/reverse practice states and JSON backups use the same Rust core.
+The reader imports UTF-8 TXT, DOCX and supported photographs up to 20 MiB, and PDFs up to 4 GiB on Mac.
+It retains originals, restores sentence progress, and saves translations with context. Forward/reverse practice states and JSON backups use the same Rust core.
 Translation and grammar packages are optional and installed separately. The app reports unavailable OCR and missing packages.
 
 ## Build and run
@@ -82,9 +82,8 @@ dotnet build apps/reader-native/Reader.Presentation/Reader.Presentation.csproj
 ```
 
 Headless interop has exercised document imports, original bytes, restart progress, vocabulary, independent review
-directions and backup/restore. Native C#/XAML compilation has passed locally for Catalyst; full local packaging is
-blocked by absent Xcode. Native CI builds and launched Windows/macOS selection, accessibility and speech checks
-remain separate gates. The explicit text/voice probe is available in Settings.
+directions and backup/restore. The Mac Catalyst workflow builds, packages and launches the app on macOS.
+The explicit text and voice probe is available in Settings.
 Practice restores the active question, mode, direction, choice order, and submitted answer after reopening.
 Grading clears that question in the same transaction that records the review. A backup restores an unfinished
 question into a fresh library.
@@ -100,24 +99,26 @@ System voices with matching boundary events also highlight individual words.
 
 ## Open and bring in documents
 
-Use **Open With** in Finder or File Explorer, or drop a supported file on the Library import area.
-The same flow imports files by picker or takes pasted text. The app records the language you choose and
-preserves the original file. On Windows, opening from File Explorer requires the installed MSIX.
+In the library, choose **Додати документ** to open a file, paste content or import an article by URL.
+You can also drag content onto the library or use **Open With** in Finder or File Explorer.
+The app uses a reliable local language match automatically and offers a language list when it needs your input.
+Use **Мова** on a library card to change the source language. On Windows, File Explorer integration requires the installed MSIX.
 
 ## Photo and PDF OCR
 
-Choose the photo's language in the library, then open a JPEG, PNG, WebP or HEIF image supported
-by the operating system. The app reads the image on-device, saves the recognized text, and keeps the
-original. The **Оригінал** action shows a preview with optional line overlays. Archive restore preserves the
+Open a JPEG, PNG, WebP or HEIF image supported by the operating system. On Mac, the reader uses Apple Vision
+to sample the image when detecting its language. It saves the recognized text and keeps the original. The **Оригінал** action shows a preview with optional line overlays. Archive restore preserves the
 recognized text and line positions. In the preview, choose a recognized line and select **Виправити**
 or **Скинути**. Line corrections change the reading text while retaining the original image/PDF,
 recognition confidence, and raw OCR output. An edit that would detach an annotated sentence is rejected.
 With a grammar package installed, **Підказки** shows observed alternatives for unfamiliar words in the selected
 line. Select a replacement to apply it. The reader checks for common OCR confusions and one-character edits.
 
-Import a scanned or mixed PDF from the library, or use **Розпізнати PDF** to pick one directly.
-The reader extracts embedded text and runs OCR only on pages without it. You can pause and resume OCR
-from the library. The reader preserves the original and opens the source page for the active sentence.
+Import a scanned or mixed PDF from the library using **Додати документ → Розпізнати сканований PDF**
+or the regular file picker. The reader detects the language from embedded text or an OCR sample of the
+first two pages. On Mac, reading recognizes the current page and available adjacent pages as needed,
+and saves the results. Open **Оригінал** to view the source page or select recognized text in the reader
+and choose **Поширити виділене**.
 
 Mac Catalyst uses Apple Vision. The installed Windows MSIX uses the system recognition language for OCR.
 The unpackaged Windows build can read and preview photos restored from a backup.
