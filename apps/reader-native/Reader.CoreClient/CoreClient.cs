@@ -68,6 +68,17 @@ public sealed class CoreClient : IDisposable
         Call<JsonElement>(new { version = 1, operation = "set_bookmark", id, sentenceId, saved });
     public void SetReviewedTranslation(string id, string sentenceId, string target, string text) =>
         Call<JsonElement>(new { version = 1, operation = "set_reviewed_translation", id, sentenceId, target, text });
+    public OptionalModel[] OptionalModels() =>
+        Call<OptionalModel[]>(new { version = 1, operation = "optional_models" });
+    public void CheckOptionalModelSpace(string id, string stagingRoot) =>
+        Call<JsonElement>(new { version = 1, operation = "check_optional_model_space", id, stagingRoot });
+    public void InstallOptionalModel(string id, string stagingRoot) =>
+        Call<JsonElement>(new { version = 1, operation = "install_optional_model", id, stagingRoot });
+    public void VerifyOptionalModel(string id) =>
+        Call<JsonElement>(new { version = 1, operation = "verify_optional_model", id });
+    public bool RemoveOptionalModel(string id) =>
+        Call<bool>(new { version = 1, operation = "remove_optional_model", id });
+
     public TranslationPackageStatus[] TranslationPackages() =>
         Call<TranslationPackageStatus[]>(new { version = 1, operation = "translation_packages" });
     public TranslationReadiness GetTranslationReadiness(string source, string target) =>

@@ -75,6 +75,15 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             target,
             text,
         } => value(store.set_reviewed_translation(&id, &sentence_id, &target, &text)),
+        Command::OptionalModels => value(Ok(store.optional_models())),
+        Command::CheckOptionalModelSpace { id, staging_root } => {
+            value(store.check_optional_model_space(&id, std::path::Path::new(&staging_root)))
+        }
+        Command::InstallOptionalModel { id, staging_root } => {
+            value(store.install_optional_model(&id, std::path::Path::new(&staging_root)))
+        }
+        Command::VerifyOptionalModel { id } => value(store.verify_optional_model(&id)),
+        Command::RemoveOptionalModel { id } => value(store.remove_optional_model(&id)),
         Command::TranslationPackages => value(Ok(store.translation_packages())),
         Command::TranslationReadiness { source, target } => {
             value(store.translation_readiness(&source, &target))

@@ -36,6 +36,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         base.OnAppearing();
         await RefreshTranslationPackagesAsync();
         await RefreshKnowledgePackagesAsync();
+        await RefreshOptionalModelsAsync();
     }
 
     private async Task RefreshKnowledgePackagesAsync()

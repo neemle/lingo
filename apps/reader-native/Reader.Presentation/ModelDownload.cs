@@ -6,7 +6,7 @@ using Reader.Contracts;
 
 namespace Reader.Presentation;
 
-/// <summary>Downloads pinned translation and linguistic resources.</summary>
+/// <summary>Downloads pinned local model and linguistic resources.</summary>
 public sealed class ModelDownload(HttpClient http)
 {
     private const long AssetLimit = 400_000_000;
@@ -45,6 +45,42 @@ public sealed class ModelDownload(HttpClient http)
         }
     }
 
+    public async Task FetchOptionalModelAsync(OptionalModel model, string stagingRoot,
+        IProgress<long>? progress, CancellationToken cancellationToken)
+    {
+        ValidateOptionalModel(model);
+        var directory = Path.Combine(stagingRoot, model.Revision);
+        Directory.CreateDirectory(directory);
+        using var gate = OpenGate(stagingRoot, model.Revision);
+        long completed = 0;
+        foreach (var asset in model.Assets)
+        {
+            var path = Path.Combine(directory, asset.Name);
+            await FetchAssetAsync(new Uri(asset.DownloadUrl),
+                new TranslationAsset(asset.Name, asset.Bytes, asset.Sha256), path, completed, progress, cancellationToken);
+            completed += asset.Bytes;
+            progress?.Report(completed);
+        }
+    }
+
+    public static void ClearOptionalStaging(OptionalModel model, string stagingRoot)
+    {
+        ValidateOptionalModel(model);
+        ClearStaging(stagingRoot, model.Revision, model.Assets.Select(asset => asset.Name));
+    }
+
+    private static void ValidateOptionalModel(OptionalModel model)
+    {
+        if (!Hex(model.Revision, 40) || model.Assets.Length is < 1 or > 3 ||
+            model.Assets.Select(asset => asset.Name).Distinct(StringComparer.Ordinal).Count() != model.Assets.Length ||
+            model.Assets.Any(asset => asset.Name is not ("model.gguf" or "model.onnx" or "tokenizer.json") ||
+                asset.Bytes is <= 0 or > 2_000_000_000 || !Hex(asset.Sha256, 64) ||
+                !Uri.TryCreate(asset.DownloadUrl, UriKind.Absolute, out var url) ||
+                url.Scheme != Uri.UriSchemeHttps || url.Host != "huggingface.co" ||
+                !url.AbsolutePath.Contains($"/resolve/{model.Revision}/", StringComparison.Ordinal)))
+            throw new InvalidDataException("Некоректний каталог додаткових моделей.");
+    }
+
     public async Task<string> FetchKnowledgeAsync(KnowledgePackage package, string stagingRoot,
         CancellationToken cancellationToken)
     {
@@ -67,11 +103,17 @@ public sealed class ModelDownload(HttpClient http)
     public static void ClearStaging(TranslationPackageStatus package, string stagingRoot)
     {
         Validate(package);
-        var directory = Path.Combine(stagingRoot, package.Revision);
-        using var gate = OpenGate(stagingRoot, package.Revision);
-        foreach (var asset in package.Assets)
-            File.Delete(Path.Combine(directory, asset.Name));
-        if (Directory.Exists(directory)) Directory.Delete(directory);
+        ClearStaging(stagingRoot, package.Revision, package.Assets.Select(asset => asset.Name));
+    }
+
+    private static void ClearStaging(string stagingRoot, string revision, IEnumerable<string> assetNames)
+    {
+        var directory = Path.Combine(stagingRoot, revision);
+        if (!Directory.Exists(directory)) return;
+        using var gate = OpenGate(stagingRoot, revision);
+        foreach (var name in assetNames)
+            File.Delete(Path.Combine(directory, name));
+        Directory.Delete(directory);
     }
 
     private static FileStream OpenGate(string root, string revision) =>
@@ -158,9 +200,10 @@ public sealed class ModelDownload(HttpClient http)
         return Convert.ToHexString(hash).Equals(asset.Sha256, StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool Hex(string text, int length) => text.Length == length && text.All(Uri.IsHexDigit);
+
     private static void Validate(TranslationPackageStatus package)
     {
-        static bool Hex(string text, int length) => text.Length == length && text.All(Uri.IsHexDigit);
         if (package.Source.Length != 2 || package.Target.Length != 2 ||
             !(package.Source + package.Target).All(char.IsAsciiLetterLower) || !Hex(package.Revision, 40) ||
             !package.Assets.Select(asset => asset.Name).Order(StringComparer.Ordinal).SequenceEqual(AssetNames.Order(StringComparer.Ordinal)) ||

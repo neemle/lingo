@@ -11,7 +11,9 @@ use uuid::Uuid;
 
 pub mod knowledge;
 mod marian_provider;
+mod model_storage;
 pub mod ocr;
+pub mod optional_models;
 pub mod pdf_layers;
 pub mod practice;
 mod space;
@@ -384,6 +386,7 @@ pub fn parse_file(name: &str, bytes: &[u8]) -> Result<String> {
 pub struct Store {
     connection: Connection,
     model_directory: std::path::PathBuf,
+    optional_model_directory: std::path::PathBuf,
     knowledge_directory: std::path::PathBuf,
 }
 impl Store {
@@ -397,6 +400,7 @@ impl Store {
         Ok(Self {
             connection,
             model_directory: path.with_file_name("translation-models"),
+            optional_model_directory: path.with_file_name("optional-models"),
             knowledge_directory: path.with_file_name("languages"),
         })
     }

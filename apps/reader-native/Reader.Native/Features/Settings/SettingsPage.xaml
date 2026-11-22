@@ -33,6 +33,16 @@
   <Label x:Name="KnowledgePackages" />
   <Button x:Name="InstallKnowledge" Text="Встановити або оновити пакет аналізу" Clicked="InstallKnowledgeClicked" />
   <Label x:Name="KnowledgeStatus" TextColor="#63725C" />
+  <Label Text="Додаткові локальні моделі" FontSize="22" FontAttributes="Bold" />
+  <Picker x:Name="OptionalModelChoice" Title="Додаткова модель" SelectedIndexChanged="OptionalModelChanged" />
+  <FlexLayout Wrap="Wrap" JustifyContent="Start">
+   <Button x:Name="DownloadOptionalModel" Text="Завантажити" Clicked="DownloadOptionalModelClicked" IsEnabled="False" Margin="0,0,8,0" />
+   <Button x:Name="VerifyOptionalModel" Text="Перевірити файли" Clicked="VerifyOptionalModelClicked" IsEnabled="False" Margin="0,0,8,0" />
+   <Button x:Name="RemoveOptionalModel" Text="Видалити файли" Clicked="RemoveOptionalModelClicked" IsEnabled="False" Margin="0,0,8,0" />
+   <Button x:Name="StopOptionalModel" Text="Зупинити завантаження" Clicked="StopOptionalModelClicked" IsVisible="False" />
+  </FlexLayout>
+  <ProgressBar x:Name="OptionalProgress" IsVisible="False" />
+  <Label x:Name="OptionalModelStatus" />
   <Label Text="Розпізнавання фотографій використовує доступні мови системи." />
   <Label Text="Озвучення використовує голоси операційної системи. Встановіть потрібну мову в системних налаштуваннях.
 Читай підсвічує слова, коли голос передає їхні межі." />

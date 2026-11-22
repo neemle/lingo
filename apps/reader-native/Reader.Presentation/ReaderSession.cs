@@ -131,6 +131,14 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
             return Read();
         });
 
+    public Task<OptionalModel[]> OptionalModelsAsync() => Task.Run(client.OptionalModels);
+    public Task CheckOptionalModelSpaceAsync(string id, string stagingRoot) =>
+        Task.Run(() => client.CheckOptionalModelSpace(id, stagingRoot));
+    public Task InstallOptionalModelAsync(string id, string stagingRoot) =>
+        Task.Run(() => client.InstallOptionalModel(id, stagingRoot));
+    public Task VerifyOptionalModelAsync(string id) => Task.Run(() => client.VerifyOptionalModel(id));
+    public Task<bool> RemoveOptionalModelAsync(string id) => Task.Run(() => client.RemoveOptionalModel(id));
+
     public Task<TranslationPackageStatus[]> TranslationPackagesAsync() => Task.Run(client.TranslationPackages);
     public Task<TranslationReadiness> TranslationReadinessAsync(string source, string target) =>
         Task.Run(() => client.GetTranslationReadiness(source, target));

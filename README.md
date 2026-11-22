@@ -128,6 +128,17 @@ through English. The translation panel marks that route. Installing French → U
 Translation can join consecutive wrapped lines in a PDF or OCR transcript. The pane marks joined input,
 and the source text, bookmarks, and current reading position remain intact.
 
+## Optional local model files
+
+In **Налаштування → Додаткові локальні моделі**, choose a model to download, verify or remove.
+Stopping a download keeps the partial files so the next attempt can resume. Each completed file must match
+its pinned SHA-256 before the model is activated. An interrupted replacement preserves the previous files.
+Inference with the Qwen and E5 files is pending. Reading, translation and the vocabulary work without them.
+
+- [Qwen3.5-0.8B GGUF](https://huggingface.co/ggml-org/Qwen3.5-0.8B-GGUF/tree/004fd086eccea9f7cf867aa07ba328773beef81d), four-bit, Apache-2.0.
+- [Qwen3.5-2B GGUF](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/tree/f6d5376be1edb4d416d56da11e5397a961aca8ae), four-bit, Apache-2.0.
+- [Multilingual E5 Small ONNX](https://huggingface.co/intfloat/multilingual-e5-small/tree/614241f622f53c4eeff9890bdc4f31cfecc418b3/onnx), MIT.
+
 ## Offline word analysis
 
 In **Налаштування**, select **Встановити або оновити пакет аналізу** and choose a language. The reader verifies the

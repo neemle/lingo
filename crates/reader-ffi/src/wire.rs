@@ -86,6 +86,23 @@ pub enum Command {
         target: String,
         text: String,
     },
+    OptionalModels,
+    CheckOptionalModelSpace {
+        id: String,
+        #[serde(rename = "stagingRoot")]
+        staging_root: String,
+    },
+    InstallOptionalModel {
+        id: String,
+        #[serde(rename = "stagingRoot")]
+        staging_root: String,
+    },
+    VerifyOptionalModel {
+        id: String,
+    },
+    RemoveOptionalModel {
+        id: String,
+    },
     TranslationPackages,
     TranslationReadiness {
         source: String,
