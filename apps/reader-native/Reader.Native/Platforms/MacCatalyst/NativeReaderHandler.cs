@@ -8,6 +8,9 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
 {
     private UITapGestureRecognizer? tap;
     private bool updating;
+    private string? renderedText;
+    private int renderedFontSize;
+    private Reader.Presentation.TextSelection? highlightedSentence;
     private Reader.Presentation.TextSelection? spokenWord;
     public static readonly IPropertyMapper<NativeReaderView, NativeReaderHandler> ReaderMapper =
         new PropertyMapper<NativeReaderView, NativeReaderHandler>(ViewMapper)
@@ -41,6 +44,9 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
     {
         platformView.SelectionChanged -= Selected;
         if (tap is not null) { platformView.RemoveGestureRecognizer(tap); tap.Dispose(); }
+        tap = null;
+        renderedText = null;
+        highlightedSentence = spokenWord = null;
         base.DisconnectHandler(platformView);
     }
 
@@ -66,36 +72,59 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
 
     private static void MapText(NativeReaderHandler handler, NativeReaderView view)
     {
-        var preserveSelection = handler.PlatformView.Text == view.Text;
-        var selected = handler.PlatformView.SelectedRange;
-        using var paragraph = new NSMutableParagraphStyle { LineSpacing = 6 };
-        using var text = new NSMutableAttributedString(view.Text, new UIStringAttributes
-        {
-            Font = UIFont.FromName("Georgia", view.ReadingFontSize) ?? UIFont.SystemFontOfSize(view.ReadingFontSize),
-            ForegroundColor = UIColor.FromRGB(72, 75, 64),
-            ParagraphStyle = paragraph,
-        });
-        var selection = Reader.Presentation.SourceRanges.Selection(view.Text,
-            view.HighlightStart, view.HighlightLength);
-        if (selection is not null) text.AddAttribute(UIStringAttributeKey.BackgroundColor,
-            UIColor.FromRGB(245, 240, 229), new NSRange(selection.StartUtf16, selection.LengthUtf16));
+        var source = view.Text;
+        var newText = handler.renderedText != source;
+        var newFont = handler.renderedFontSize != view.ReadingFontSize;
+        var sentence = view.HighlightedSpan();
+        var newSentence = newText || sentence != handler.highlightedSentence;
+        if (!newSentence && !newFont) return;
+
         handler.updating = true;
         try
         {
-            handler.PlatformView.AttributedText = text;
-            handler.spokenWord = null;
-            MapSpokenWord(handler, view);
-            if (preserveSelection && selected.Location <= view.Text.Length
-                && selected.Length <= view.Text.Length - selected.Location)
-                handler.PlatformView.SelectedRange = selected;
+            if (newText || newFont)
+            {
+                var font = UIFont.FromName("Georgia", view.ReadingFontSize)
+                    ?? UIFont.SystemFontOfSize(view.ReadingFontSize);
+                if (newText)
+                {
+                    using var paragraph = new NSMutableParagraphStyle { LineSpacing = 6 };
+                    using var text = new NSAttributedString(source, new UIStringAttributes
+                    {
+                        Font = font,
+                        ForegroundColor = UIColor.FromRGB(72, 75, 64),
+                        ParagraphStyle = paragraph,
+                    });
+                    handler.PlatformView.AttributedText = text;
+                    handler.renderedText = source;
+                }
+                else if (source.Length > 0)
+                    handler.PlatformView.TextStorage.AddAttribute(UIStringAttributeKey.Font, font,
+                        new NSRange(0, source.Length));
+                handler.renderedFontSize = view.ReadingFontSize;
+            }
+
+            if (newSentence)
+            {
+                var storage = handler.PlatformView.TextStorage;
+                if (!newText && handler.highlightedSentence is { } previous)
+                    storage.RemoveAttribute(UIStringAttributeKey.BackgroundColor,
+                        new NSRange(previous.StartUtf16, previous.LengthUtf16));
+                if (sentence is not null)
+                    storage.AddAttribute(UIStringAttributeKey.BackgroundColor, UIColor.FromRGB(245, 240, 229),
+                        new NSRange(sentence.StartUtf16, sentence.LengthUtf16));
+                handler.highlightedSentence = sentence;
+                handler.spokenWord = null;
+                MapSpokenWord(handler, view);
+            }
         }
         finally { handler.updating = false; }
-        if (selection is not null)
-            handler.PlatformView.ScrollRangeToVisible(new NSRange(selection.StartUtf16, selection.LengthUtf16));
+        if (newSentence && sentence is not null)
+            handler.PlatformView.ScrollRangeToVisible(new NSRange(sentence.StartUtf16, sentence.LengthUtf16));
     }
     private static void MapSpokenWord(NativeReaderHandler handler, NativeReaderView view)
     {
-        if (handler.PlatformView.Text != view.Text) return;
+        if (handler.renderedText != view.Text) return;
         var storage = handler.PlatformView.TextStorage;
         if (handler.spokenWord is { } previous)
             storage.AddAttribute(UIStringAttributeKey.BackgroundColor, UIColor.FromRGB(245, 240, 229),

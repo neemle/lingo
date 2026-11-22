@@ -4,6 +4,7 @@ namespace Reader.Native.Controls;
 
 public sealed class NativeReaderView : View
 {
+    private SourceRanges? sourceRanges;
     public static readonly BindableProperty TextProperty = BindableProperty.Create(
         nameof(Text), typeof(string), typeof(NativeReaderView), "");
     public static readonly BindableProperty HighlightStartProperty = BindableProperty.Create(
@@ -38,9 +39,19 @@ public sealed class NativeReaderView : View
     }
     public event EventHandler<TextSelection>? SourceSelected;
 
+    internal TextSelection? HighlightedSpan() => GetSourceRanges().Selection(HighlightStart, HighlightLength);
+
     public void SelectSource(int start, int length)
     {
-        var selection = length == 0 ? SourceRanges.WordAt(Text, start) : SourceRanges.Selection(Text, start, length);
+        var ranges = GetSourceRanges();
+        var selection = length == 0 ? ranges.WordAt(start) : ranges.Selection(start, length);
         if (selection is not null) SourceSelected?.Invoke(this, selection);
+    }
+
+    private SourceRanges GetSourceRanges()
+    {
+        var text = Text;
+        if (sourceRanges?.Text != text) sourceRanges = new SourceRanges(text);
+        return sourceRanges;
     }
 }

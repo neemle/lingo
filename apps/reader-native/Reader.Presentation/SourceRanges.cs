@@ -2,8 +2,12 @@ using System.Globalization;
 
 namespace Reader.Presentation;
 
-public static class SourceRanges
+public sealed class SourceRanges(string text)
 {
+    private int[]? boundaries;
+    public string Text { get; } = text;
+    private int[] Boundaries => boundaries ??= StringInfo.ParseCombiningCharacters(Text);
+
     public static (string Text, Action<int, int>? Boundary) PrepareSpeech(string source, Action<int, int>? boundary)
     {
         // AVSpeechSynthesizer can report offsets in composed text even when its input is decomposed.
@@ -17,38 +21,54 @@ public static class SourceRanges
         return (spoken, (start, length) =>
         {
             if (start < 0 || length <= 0 || start > spoken.Length - length) return;
-            var first = Array.BinarySearch(spokenStarts, start);
-            if (first < 0) first = ~first - 1;
-            var after = Array.BinarySearch(spokenStarts, start + length);
-            if (after < 0) after = ~after;
+            var first = FloorIndex(spokenStarts, start);
+            var after = CeilingIndex(spokenStarts, start + length);
             var originalStart = originalStarts[first];
             var originalEnd = after < originalStarts.Length ? originalStarts[after] : source.Length;
             boundary(originalStart, originalEnd - originalStart);
         });
     }
 
-    public static TextSelection? Selection(string source, int start, int length)
+    public static TextSelection? Selection(string source, int start, int length) =>
+        new SourceRanges(source).Selection(start, length);
+
+    public TextSelection? Selection(int start, int length)
     {
-        if (start < 0 || length <= 0 || start > source.Length - length) return null;
-        var boundaries = StringInfo.ParseCombiningCharacters(source);
-        var end = start + length;
-        start = boundaries.LastOrDefault(index => index <= start);
-        end = boundaries.FirstOrDefault(index => index >= end, source.Length);
-        return new TextSelection(start, end - start, source[start..end]);
+        if (start < 0 || length <= 0 || start > Text.Length - length) return null;
+        var starts = Boundaries;
+        var after = CeilingIndex(starts, start + length);
+        var alignedStart = starts[FloorIndex(starts, start)];
+        var alignedEnd = after < starts.Length ? starts[after] : Text.Length;
+        return new TextSelection(alignedStart, alignedEnd - alignedStart, Text[alignedStart..alignedEnd]);
     }
 
-    public static TextSelection? WordAt(string source, int offset)
+    public static TextSelection? WordAt(string source, int offset) => new SourceRanges(source).WordAt(offset);
+
+    public TextSelection? WordAt(int offset)
     {
-        if (offset < 0 || offset >= source.Length) return null;
-        var boundaries = StringInfo.ParseCombiningCharacters(source);
-        var index = Array.FindLastIndex(boundaries, item => item <= offset);
-        if (!IsWord(source, boundaries[index])) return null;
+        if (offset < 0 || offset >= Text.Length) return null;
+        var starts = Boundaries;
+        var index = FloorIndex(starts, offset);
+        if (!IsWord(Text, starts[index])) return null;
         var first = index;
         var last = index;
-        while (first > 0 && IsWord(source, boundaries[first - 1])) first--;
-        while (last + 1 < boundaries.Length && IsWord(source, boundaries[last + 1])) last++;
-        var end = last + 1 < boundaries.Length ? boundaries[last + 1] : source.Length;
-        return Selection(source, boundaries[first], end - boundaries[first]);
+        while (first > 0 && IsWord(Text, starts[first - 1])) first--;
+        while (last + 1 < starts.Length && IsWord(Text, starts[last + 1])) last++;
+        var start = starts[first];
+        var end = last + 1 < starts.Length ? starts[last + 1] : Text.Length;
+        return new TextSelection(start, end - start, Text[start..end]);
+    }
+
+    private static int FloorIndex(int[] starts, int offset)
+    {
+        var index = Array.BinarySearch(starts, offset);
+        return index >= 0 ? index : ~index - 1;
+    }
+
+    private static int CeilingIndex(int[] starts, int offset)
+    {
+        var index = Array.BinarySearch(starts, offset);
+        return index >= 0 ? index : ~index;
     }
 
     private static bool IsWord(string source, int offset) =>

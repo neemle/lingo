@@ -43,6 +43,9 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, RichEdit
     protected override void DisconnectHandler(RichEditBox platformView)
     {
         platformView.SelectionChanged -= Selected;
+        sourceText = "";
+        textMap = new Reader.Presentation.WindowsTextMap("");
+        highlightedSentence = spokenWord = null;
         base.DisconnectHandler(platformView);
     }
 
@@ -80,8 +83,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, RichEdit
                 handler.highlightedSentence = null;
                 handler.spokenWord = null;
             }
-            var selected = Reader.Presentation.SourceRanges.Selection(view.Text,
-                view.HighlightStart, view.HighlightLength);
+            var selected = view.HighlightedSpan();
             if (newDocument || selected != handler.highlightedSentence)
             {
                 if (handler.highlightedSentence is { } previous)
