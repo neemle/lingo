@@ -173,6 +173,21 @@ public sealed class CoreClient : IDisposable
         {
             version = 1, operation = "anchor_reading_selection", id, revisionId, startUtf16, lengthUtf16,
         });
+
+    public WordLookup? LookupSentenceToken(string id, string sentenceId, string revisionId, int startUtf16) =>
+        Call<WordLookup?>(new { version = 1, operation = "lookup_sentence_token", id, sentenceId, revisionId, startUtf16 });
+
+    public SentenceTokenPage SentenceTokens(string id, string sentenceId, int start) =>
+        Call<SentenceTokenPage>(new { version = 1, operation = "sentence_tokens", id, sentenceId, start });
+
+    public LinguisticAnalysis AnalyzeSentence(string id, string sentenceId, string revisionId, int start) =>
+        AnalyzeLinguistics(id, sentenceId, revisionId, new { kind = "sentence", start });
+
+    public LinguisticAnalysis AnalyzeExpression(string id, string sentenceId, string revisionId, int[] memberStartsUtf16) =>
+        AnalyzeLinguistics(id, sentenceId, revisionId, new { kind = "expression", memberStartsUtf16 });
+
+    private LinguisticAnalysis AnalyzeLinguistics(string id, string sentenceId, string revisionId, object scope) =>
+        CallIndependent<LinguisticAnalysis>(new { version = 1, operation = "analyze_linguistics", id, sentenceId, revisionId, scope });
     public void SetDocumentLanguage(string id, string language) =>
         Call<JsonElement>(new { version = 1, operation = "set_document_language", id, language });
     public bool DeleteDocument(string id) =>

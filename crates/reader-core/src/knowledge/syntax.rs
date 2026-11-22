@@ -27,7 +27,7 @@ CREATE TABLE syntax_roots (
 pub struct SyntaxEvidence {
     pub(super) relation: String,
     pub(super) selected_is_head: bool,
-    other_word: String,
+    pub(super) other_word: String,
     pub(super) other_start_utf16: usize,
     pub(super) observations: u32,
 }

@@ -12,6 +12,7 @@ const MAX_POS_TAGS: usize = 2;
 pub(super) struct SyntaxParse {
     status: ParseStatus,
     root_token_id: Option<String>,
+    root_text: Option<String>,
     links: Vec<Dependency>,
     unassigned_token_ids: Vec<String>,
 }
@@ -30,6 +31,8 @@ enum ParseStatus {
 struct Dependency {
     dependent_token_id: String,
     head_token_id: String,
+    dependent_text: String,
+    head_text: String,
     relation: String,
     basis: Evidence,
     observations: u32,
@@ -55,8 +58,9 @@ struct Edge {
     pattern: Pattern,
 }
 
-struct Token {
+struct Token<'a> {
     offset: usize,
+    text: &'a str,
     term: String,
     tags: Vec<String>,
 }
@@ -71,6 +75,7 @@ pub(super) fn analyze(
         return Ok(SyntaxParse {
             status: ParseStatus::TooLong,
             root_token_id: None,
+            root_text: None,
             links: Vec::new(),
             unassigned_token_ids: Vec::new(),
         });
@@ -109,12 +114,13 @@ pub(super) fn analyze(
                 roots.push((rank.saturating_sub(index as u32 * 6), tokens.len()));
             }
         }
-        tokens.push(Token { offset, term, tags: candidates });
+        tokens.push(Token { offset, text, term, tags: candidates });
     }
     let Some((_, root)) = roots.into_iter().max_by_key(|&(rank, index)| (rank, Reverse(index))) else {
         return Ok(SyntaxParse {
             status: ParseStatus::NoEvidence,
             root_token_id: None,
+            root_text: None,
             links: Vec::new(),
             unassigned_token_ids: tokens.iter().map(|token| id_at(token.offset)).collect(),
         });
@@ -178,6 +184,8 @@ pub(super) fn analyze(
         links.push(Dependency {
             dependent_token_id: id_at(tokens[edge.dependent].offset),
             head_token_id: id_at(tokens[edge.head].offset),
+            dependent_text: tokens[edge.dependent].text.to_owned(),
+            head_text: tokens[edge.head].text.to_owned(),
             relation: edge.pattern.relation.clone(),
             basis: edge.pattern.basis,
             observations: edge.pattern.observations,
@@ -189,6 +197,7 @@ pub(super) fn analyze(
     Ok(SyntaxParse {
         status: if unassigned_token_ids.is_empty() { ParseStatus::Complete } else { ParseStatus::Partial },
         root_token_id: Some(id_at(tokens[root].offset)),
+        root_text: Some(tokens[root].text.to_owned()),
         links,
         unassigned_token_ids,
     })

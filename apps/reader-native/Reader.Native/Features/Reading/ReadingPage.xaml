@@ -53,6 +53,7 @@
     </MenuFlyoutItem.KeyboardAccelerators>
    </MenuFlyoutItem>
    <MenuFlyoutItem Text="Вимова речення…" Clicked="EditSpeechTextClicked" IsEnabled="{Binding CanBookmark}" />
+   <MenuFlyoutItem Text="Аналіз речення…" Clicked="OpenSentenceAnalysisClicked" IsEnabled="{Binding CanBookmark}" />
    <MenuFlyoutItem Text="Зупинити озвучення" Clicked="StopClicked">
     <MenuFlyoutItem.KeyboardAccelerators>
      <KeyboardAccelerator Modifiers="{OnPlatform MacCatalyst=Cmd, WinUI=Ctrl}" Key="K" />
@@ -178,6 +179,8 @@
        Clicked="OpenSyntaxClicked" IsVisible="False" Margin="0,0,7,0" />
       <Button x:Name="OpenSpelling" Text="Правопис" Style="{StaticResource PlayerButton}"
        Clicked="OpenSpellingClicked" IsVisible="False" Margin="0,0,7,0" />
+      <Button x:Name="OpenExpressionAnalysis" Text="Аналіз виразу" Style="{StaticResource PlayerButton}"
+       Clicked="OpenExpressionAnalysisClicked" IsVisible="False" Margin="0,0,7,0" />
       <Button Text="Поширити виділене" Style="{StaticResource PlayerButton}" Clicked="ShareSelectionClicked"
        Margin="0,0,7,0" SemanticProperties.Description="Поширити виділений уривок оригіналу" />
       <Button x:Name="ExplainWord" Text="Пояснити з Qwen" Style="{StaticResource PlayerButton}" Clicked="ExplainWordClicked" />

@@ -94,9 +94,9 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
             knowledgeInventory = packages;
             KnowledgePackages.Text = string.Join(Environment.NewLine, packages.Select(package =>
                 $"{DocumentLanguages.Name(package.Language)} · {package.Name} {package.Version} · {package.License} · " +
-                (package.SyntaxAvailable && package.ExpressionsAvailable ? "встановлено" : package.Installed
+                (package.DependencyParseAvailable ? "встановлено" : package.Installed
                     ? "доступне оновлення індексу" : "доступно для завантаження")));
-            InstallKnowledge.IsVisible = packages.Any(package => !package.SyntaxAvailable || !package.ExpressionsAvailable);
+            InstallKnowledge.IsVisible = packages.Any(package => !package.DependencyParseAvailable);
             UpdateCapabilityMatrix();
         }
         catch (Exception error)
@@ -187,7 +187,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
     private async Task<KnowledgePackage?> ChooseKnowledgePackageAsync(bool download)
     {
         var packages = await AppState.Session.KnowledgePackagesAsync();
-        var choices = packages.Where(package => !download || !package.SyntaxAvailable || !package.ExpressionsAvailable)
+        var choices = packages.Where(package => !download || !package.DependencyParseAvailable)
             .ToDictionary(package =>
                 $"{DocumentLanguages.Name(package.Language)} · {package.License} · {package.Bytes / 1_000_000d:F0} МБ");
         if (choices.Count == 0) return null;

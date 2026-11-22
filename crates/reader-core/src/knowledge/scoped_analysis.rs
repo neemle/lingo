@@ -72,6 +72,8 @@ enum SpellingStatus {
 struct SyntaxCandidate {
     dependent_token_id: String,
     head_token_id: String,
+    dependent_text: String,
+    head_text: String,
     relation: String,
     observations: u32,
 }
@@ -149,14 +151,23 @@ impl Store {
                         if members.is_some_and(|members| members.binary_search(&edge.other_start_utf16).is_err()) {
                             continue;
                         }
-                        let (dependent, head) = if edge.selected_is_head {
-                            (edge.other_start_utf16, offset)
+                        let (dependent, head, dependent_text, head_text) = if edge.selected_is_head {
+                            (edge.other_start_utf16, offset, edge.other_word.as_str(), text)
                         } else {
-                            (offset, edge.other_start_utf16)
+                            (offset, edge.other_start_utf16, text, edge.other_word.as_str())
                         };
-                        dependencies.entry((dependent, head, edge.relation))
-                            .and_modify(|count: &mut u32| *count = (*count).max(edge.observations))
-                            .or_insert(edge.observations);
+                        dependencies.entry((dependent, head, edge.relation.clone()))
+                            .and_modify(|candidate: &mut SyntaxCandidate| {
+                                candidate.observations = candidate.observations.max(edge.observations);
+                            })
+                            .or_insert_with(|| SyntaxCandidate {
+                                dependent_token_id: id_at(dependent),
+                                head_token_id: id_at(head),
+                                dependent_text: dependent_text.to_owned(),
+                                head_text: head_text.to_owned(),
+                                relation: edge.relation,
+                                observations: edge.observations,
+                            });
                     }
                 }
             }
@@ -182,14 +193,7 @@ impl Store {
             package,
             words,
             expressions: expressions.into_values().collect(),
-            syntax_candidates: dependencies.into_iter()
-                .map(|((dependent, head, relation), observations)| SyntaxCandidate {
-                    dependent_token_id: id_at(dependent),
-                    head_token_id: id_at(head),
-                    relation,
-                    observations,
-                })
-                .collect(),
+            syntax_candidates: dependencies.into_values().collect(),
             next_start,
             syntax_parse,
         })

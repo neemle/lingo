@@ -237,6 +237,38 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
 
     public Task<ReadingCursor?> ReadingCursorAsync(string id) => Task.Run(() => client.ReadingCursor(id));
 
+    public Task<WordLookup?> LookupSentenceTokenAsync(string id, string sentenceId, string revisionId, int startUtf16) =>
+        Task.Run(() => client.LookupSentenceToken(id, sentenceId, revisionId, startUtf16));
+
+    public Task<LinguisticAnalysis> AnalyzeSentenceAsync(string id, string sentenceId, string revisionId, int start) =>
+        Task.Run(() => client.AnalyzeSentence(id, sentenceId, revisionId, start));
+
+    public Task<LinguisticAnalysis> AnalyzeExpressionAsync(
+        string id, string sentenceId, string revisionId, int[] memberStartsUtf16) =>
+        Task.Run(() => client.AnalyzeExpression(id, sentenceId, revisionId, memberStartsUtf16));
+
+    public Task<int[]> ReadExpressionMembersAsync(string id, string sentenceId, string revisionId, TextSelection selection) =>
+        Task.Run(() =>
+        {
+            var end = selection.StartUtf16 + selection.LengthUtf16;
+            var members = new List<int>(8);
+            int? start = 0;
+            while (start is int pageStart)
+            {
+                var page = client.SentenceTokens(id, sentenceId, pageStart);
+                if (page.RevisionId != revisionId) throw new InvalidOperationException("Текст документа змінився.");
+                foreach (var token in page.Tokens)
+                {
+                    if (token.Span.StartUtf16 >= end) return members.ToArray();
+                    if (token.Span.EndUtf16 <= selection.StartUtf16) continue;
+                    members.Add(token.SentenceStartUtf16);
+                    if (members.Count > 8) return members.ToArray();
+                }
+                start = page.NextStart;
+            }
+            return members.ToArray();
+        });
+
     public async Task<ReadingCursor?> AnchorReadingSelectionAsync(string id, string revisionId, TextSelection selection)
     {
         ReadingCursor? anchored = null;

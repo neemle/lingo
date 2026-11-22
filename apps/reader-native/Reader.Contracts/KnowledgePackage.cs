@@ -5,6 +5,7 @@ public sealed record KnowledgePackage(string Language, string Name, string Versi
     bool ContextAvailable, bool ExpressionsAvailable)
 {
     public bool SyntaxAvailable { get; init; }
+    public bool DependencyParseAvailable { get; init; }
 }
 
 public sealed record WordAnalysis(string Lemma, string PartOfSpeech, string Features, int Observations,
@@ -15,7 +16,11 @@ public sealed record WordAnalysis(string Lemma, string PartOfSpeech, string Feat
 
 public sealed record WordContext(string Sentence, int StartUtf16);
 
-public sealed record ExpressionMatch(string Text, string Canonical, string Kind, int Observations);
+public sealed record ExpressionMatch(string Text, string Canonical, string Kind, int Observations)
+{
+    public int[] PartStartsUtf16 { get; init; } = [];
+    public string[] TokenIds { get; init; } = [];
+}
 
 public sealed record SyntaxEvidence(string Relation, bool SelectedIsHead, string OtherWord,
     int OtherStartUtf16, int Observations);

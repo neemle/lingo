@@ -378,16 +378,19 @@ public partial class ReadingPage : ContentPage
         ShowMeanings(null);
         ShowLocalSyntax(null);
         ShowSpelling(null);
+        ShowExpressionOptions(null, selected);
         KnowledgeAnalysis.Text = "Пошук у мовному пакеті…";
         WordCard.IsVisible = true;
         var index = Array.FindIndex(doc.Sentences, sentence => selected.StartUtf16 >= sentence.StartUtf16
             && selected.StartUtf16 < sentence.EndUtf16);
         try
         {
+            ReadingCursor? anchored = null;
             if (index >= 0 && index != doc.Position) StopSpeech();
             if (doc.CurrentRevisionId is { } revision)
             {
                 var cursor = await session.AnchorReadingSelectionAsync(doc.Id, revision, selected);
+                anchored = cursor;
                 if (selection != selected || session.Document is not { } active || active.Id != doc.Id
                     || active.CurrentRevisionId != revision) return;
                 if (cursor is not null)
@@ -404,13 +407,18 @@ public partial class ReadingPage : ContentPage
 
             var context = index < 0 ? null : new WordContext(doc.Sentences[index].Text,
                 selected.StartUtf16 - doc.Sentences[index].StartUtf16);
-            var lookup = await session.LookupWordAsync(doc.Language, selected.Text, context);
+            var lookup = anchored is { SentenceStartUtf16: int offset, TokenLengthUtf16: int length }
+                && doc.Sentences.ElementAtOrDefault(anchored.Position) is { } canonical
+                && canonical.StartUtf16 + offset == selected.StartUtf16 && length == selected.LengthUtf16
+                ? await session.LookupSentenceTokenAsync(doc.Id, canonical.Id, anchored.RevisionId, offset)
+                : await session.LookupWordAsync(doc.Language, selected.Text, context);
             if (selection != selected || session.Document is not { } current || current.Id != doc.Id
                 || current.Language != doc.Language || current.CurrentRevisionId != doc.CurrentRevisionId
                 || !WordCard.IsVisible) return;
             ShowMeanings(lookup);
             ShowLocalSyntax(lookup);
             ShowSpelling(lookup);
+            ShowExpressionOptions(lookup, selected);
             if (lookup is null)
             {
                 KnowledgeAnalysis.Text = "Встановіть мовний пакет у налаштуваннях.";
