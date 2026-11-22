@@ -210,6 +210,13 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<DetachedPdfOcrPage?> DetachedPdfOcrAsync(string id, int page) =>
         Task.Run(() => client.DetachedPdfOcr(id, page));
 
+    public Task FocusDetachedPdfOcrWordAsync(string id, int page, string revision, TextSelection selection) =>
+        RunAsync(() =>
+        {
+            client.FocusDetachedPdfOcrWord(id, page, revision, selection.StartUtf16, selection.Text);
+            return Read();
+        });
+
     public Task<DetachedPdfOcrPage> CorrectDetachedPdfOcrAsync(
         string id, int page, string revision, int index, string? correction) =>
         Task.Run(() => client.CorrectDetachedPdfOcr(id, page, revision, index, correction));

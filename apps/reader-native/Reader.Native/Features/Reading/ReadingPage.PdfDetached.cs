@@ -126,6 +126,12 @@ public partial class ReadingPage
         if (!DetachedSaveWord.IsEnabled || detachedAddress is not { } address ||
             detachedSelection is not { } selected || TargetCode is not { } target) return;
 
+        await SaveDetachedWordAsync(address, selected, target);
+    }
+
+    private async Task SaveDetachedWordAsync(DetachedAddress address, TextSelection selected, string target)
+    {
+        if (savingDetachedWord) return;
         var session = AppState.Session;
         savingDetachedWord = true;
         UpdateDetachedControls();

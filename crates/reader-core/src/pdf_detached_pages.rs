@@ -94,12 +94,7 @@ impl Store {
             return Err("Речення в результатах пошуку змінилося.".into());
         }
         if requested.is_some() {
-            self.connection.execute(
-                "INSERT INTO pdf_detached_positions (document_id,page,sentence)
-                 SELECT document_id,page,?3 FROM pdf_detached_pages WHERE document_id=?1 AND page=?2
-                 ON CONFLICT(document_id,page) DO UPDATE SET sentence=excluded.sentence",
-                params![id, page, position],
-            ).map_err(database_error)?;
+            write_position(&self.connection, id, page, position)?;
         }
         let (bookmarked, note) = annotations::read(&self.connection, id, page, sentence.start_utf16)?;
         let reviewed_translations = annotations::reviewed(&self.connection, id, page, sentence.start_utf16)?;
@@ -134,6 +129,16 @@ impl Store {
         let sentences = crate::segment(&text, &sentence_prefix(id, page, &revision));
         Ok((!sentences.is_empty()).then_some(CachedSentences { language, text, saved, sentences, revision }))
     }
+}
+
+fn write_position(db: &Connection, id: &str, page: u16, position: usize) -> Result<()> {
+    db.execute(
+        "INSERT INTO pdf_detached_positions (document_id,page,sentence)
+         SELECT document_id,page,?3 FROM pdf_detached_pages WHERE document_id=?1 AND page=?2
+         ON CONFLICT(document_id,page) DO UPDATE SET sentence=excluded.sentence",
+        params![id, page, position],
+    ).map_err(database_error)?;
+    Ok(())
 }
 
 pub(crate) fn has_local_edits(db: &Connection, id: &str, page: u16) -> Result<bool> {

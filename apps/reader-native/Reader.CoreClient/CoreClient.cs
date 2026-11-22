@@ -141,6 +141,9 @@ public sealed class CoreClient : IDisposable
     public DetachedPdfOcrPage? DetachedPdfOcr(string id, int page) =>
         Call<DetachedPdfOcrPage?>(new { version = 1, operation = "detached_pdf_ocr", id, page });
 
+    public void FocusDetachedPdfOcrWord(string id, int page, string revision, int startUtf16, string word) =>
+        Call<JsonElement>(new { version = 1, operation = "focus_detached_pdf_ocr_word", id, page, revision, startUtf16, word });
+
     public DetachedPdfOcrPage CorrectDetachedPdfOcr(string id, int page, string revision, int index, string? correction) =>
         Call<DetachedPdfOcrPage>(new { version = 1, operation = "correct_detached_pdf_ocr", id, page, revision, index, correction });
 

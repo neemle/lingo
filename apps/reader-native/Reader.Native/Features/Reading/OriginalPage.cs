@@ -17,6 +17,7 @@ internal sealed class OriginalPage : ContentPage
     private readonly Button wordCard = new() { Text = "Картка слова" };
     private readonly Func<int, Task<PhotoPreview>> loadPage;
     private readonly Func<TextSelection, Task> showWord;
+    private readonly Func<int, TextSelection, Task>? showDetachedWord;
     private readonly Func<int, CancellationToken, Func<Task>, Task>? recognizeWindow;
     private readonly Grid editor;
     private CancellationTokenSource? pageOcr;
@@ -46,10 +47,12 @@ internal sealed class OriginalPage : ContentPage
     internal OriginalPage(string filename, int pageCount, int initialPage, bool isPdf,
         Func<int, Task<PhotoPreview>> loadPage, string documentId, ReaderSession session, OcrLine[] lines,
         TextSelection? selection, Func<TextSelection, Task> showWord,
-        Func<int, CancellationToken, Func<Task>, Task>? recognizeWindow = null)
+        Func<int, CancellationToken, Func<Task>, Task>? recognizeWindow = null,
+        Func<int, TextSelection, Task>? showDetachedWord = null)
     {
         this.loadPage = loadPage;
         this.showWord = showWord;
+        this.showDetachedWord = showDetachedWord;
         this.recognizeWindow = recognizeWindow;
         this.lines = lines;
         this.documentId = documentId;
@@ -94,6 +97,7 @@ internal sealed class OriginalPage : ContentPage
             var index = LineIndex();
             if (detachedOcr is not null && index >= 0 && lines[index].SourceSpan is { } span)
             {
+                activeWord = null;
                 focus = (span.StartUtf16, span.EndUtf16);
                 UpdateOverlay();
             }
@@ -251,8 +255,8 @@ internal sealed class OriginalPage : ContentPage
         detachedOcr = cached;
         lines = cached?.Lines ?? session.Document?.OcrLines ?? [];
         toggle.IsVisible = editor.IsVisible = editStatus.IsVisible = lines.Any(line => line.Page == pageIndex);
-        wordCard.IsVisible = cached is null &&
-            lines.Any(line => line.Page == pageIndex && line.Words is { Length: > 0 });
+        wordCard.IsVisible = (cached is null || showDetachedWord is not null) &&
+            lines.Any(line => line.Page == pageIndex && line.Words?.Any(word => word.SourceSpan is not null) == true);
         if (enteringDetachedOcr) overlay.IsVisible = true;
         if (!toggle.IsVisible) overlay.IsVisible = false;
         toggle.Text = OverlayLabel();
@@ -291,23 +295,28 @@ internal sealed class OriginalPage : ContentPage
         {
             var index = currentLineIndices[choice];
             var line = lines[index];
-            if (detachedOcr is not null)
-            {
-                if (x < line.X || x >= line.X + line.Width || y < line.Y || y >= line.Y + line.Height) continue;
-                overlay.IsVisible = true;
-                toggle.Text = OverlayLabel();
-                linePicker.SelectedIndex = choice;
-                return;
-            }
             foreach (var word in line.Words ?? [])
             {
                 if (x < word.X || x >= word.X + word.Width || y < word.Y || y >= word.Y + word.Height ||
                     CurrentWord(index, word) is not { } selected) continue;
+                linePicker.SelectedIndex = choice;
                 activeWord = (index, word, selected);
                 focus = (selected.StartUtf16, selected.StartUtf16 + selected.LengthUtf16);
                 overlay.IsVisible = true;
                 toggle.Text = OverlayLabel();
+                UpdateOverlay();
+                UpdateEditButtons();
+                return;
+            }
+
+            if (detachedOcr is not null && x >= line.X && x < line.X + line.Width &&
+                y >= line.Y && y < line.Y + line.Height)
+            {
                 linePicker.SelectedIndex = choice;
+                activeWord = null;
+                focus = line.SourceSpan is { } span ? (span.StartUtf16, span.EndUtf16) : null;
+                overlay.IsVisible = true;
+                toggle.Text = OverlayLabel();
                 UpdateOverlay();
                 UpdateEditButtons();
                 return;
@@ -317,15 +326,21 @@ internal sealed class OriginalPage : ContentPage
 
     private TextSelection? CurrentWord(int index, OcrWord word)
     {
-        if (detachedOcr is not null || session.Document is not { OcrLines: { } current } document ||
-            document.Id != documentId ||
-            index < 0 || index >= current.Length || current[index].Page != pageIndex ||
-            current[index].Words?.Contains(word) != true || word.SourceSpan is not { } span ||
-            span.StartUtf16 < 0 || span.EndUtf16 <= span.StartUtf16 || span.EndUtf16 > document.Text.Length)
+        if (session.Document is not { } document || document.Id != documentId ||
+            word.SourceSpan is not { } span || span.StartUtf16 < 0 || span.EndUtf16 <= span.StartUtf16)
             return null;
 
-        if (wordRanges is null || wordRanges.Text != document.Text) wordRanges = new SourceRanges(document.Text);
+        var current = detachedOcr?.Lines ?? document.OcrLines;
+        if (current is null || index < 0 || index >= current.Length || current[index].Page != pageIndex ||
+            current[index].Words?.Contains(word) != true) return null;
+
         var length = span.EndUtf16 - span.StartUtf16;
+        if (detachedOcr is not null)
+            return showDetachedWord is not null && length == word.Text.Length
+                ? new TextSelection(span.StartUtf16, length, word.Text) : null;
+
+        if (span.EndUtf16 > document.Text.Length) return null;
+        if (wordRanges is null || wordRanges.Text != document.Text) wordRanges = new SourceRanges(document.Text);
         var selected = wordRanges.Selection(span.StartUtf16, length);
         return selected is not null && selected.StartUtf16 == span.StartUtf16 &&
             selected.LengthUtf16 == length && selected.Text == word.Text
@@ -349,9 +364,28 @@ internal sealed class OriginalPage : ContentPage
         UpdateEditButtons();
         try
         {
-            await Navigation.PopAsync();
-            if (!session.Busy && CurrentWord(active.LineIndex, active.Word) == active.Selection)
-                await showWord(active.Selection);
+            if (detachedOcr is { } cached && showDetachedWord is { } showDetached)
+            {
+                pageOcr?.Cancel();
+                await session.FocusDetachedPdfOcrWordAsync(documentId, pageIndex, cached.Revision, active.Selection);
+                if (session.Error.Length > 0)
+                {
+                    status.Text = session.Error;
+                    activeWord = null;
+                    focus = null;
+                    ApplyOcrLines(await session.DetachedPdfOcrAsync(documentId, pageIndex));
+                    return;
+                }
+                if (Navigation.NavigationStack.LastOrDefault() != this || session.Document?.Id != documentId) return;
+                await Navigation.PopAsync();
+                await showDetached(pageIndex, active.Selection);
+            }
+            else
+            {
+                await Navigation.PopAsync();
+                if (!session.Busy && CurrentWord(active.LineIndex, active.Word) == active.Selection)
+                    await showWord(active.Selection);
+            }
         }
         catch (Exception error) { editStatus.Text = error.Message; }
         finally

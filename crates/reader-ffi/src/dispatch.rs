@@ -105,6 +105,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::SetDetachedPdfSpeechResume { id, page, sentence_id, resume } =>
             value(store.set_detached_pdf_speech_resume(&id, page, &sentence_id, resume)),
         Command::DetachedPdfOcr { id, page } => value(store.detached_pdf_ocr(&id, page)),
+        Command::FocusDetachedPdfOcrWord { id, page, revision, start_utf16, word } =>
+            value(store.focus_detached_pdf_ocr_word(&id, page, &revision, start_utf16, &word)),
         Command::CorrectDetachedPdfOcr { id, page, revision, index, correction } =>
             value(store.correct_detached_pdf_ocr(&id, page, &revision, index, correction)),
         Command::DetachedPdfAnnotations { id, page } => value(store.detached_pdf_annotations(&id, page)),

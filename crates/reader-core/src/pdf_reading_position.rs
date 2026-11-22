@@ -118,7 +118,7 @@ pub(crate) fn page_bounds(document: &Document, page: u16) -> Option<(usize, usiz
     Some((first.start_utf16, spans.last().unwrap_or(first).end_utf16))
 }
 
-fn set_page(db: &Connection, document: &Document, page: u16, force_schedule: bool) -> Result<()> {
+pub(crate) fn set_page(db: &Connection, document: &Document, page: u16, force_schedule: bool) -> Result<()> {
     if !contains_page(document, page) {
         return Err("Сторінку PDF не знайдено".into());
     }

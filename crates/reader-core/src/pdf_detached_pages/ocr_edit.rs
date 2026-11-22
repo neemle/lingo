@@ -18,6 +18,49 @@ impl Store {
             .transpose()
     }
 
+    pub fn focus_detached_pdf_ocr_word(
+        &mut self,
+        id: &str,
+        page: u16,
+        revision: &str,
+        start_utf16: usize,
+        word: &str,
+    ) -> Result<()> {
+        if word.is_empty() || word.len() > 4096 {
+            return Err("Слово з оригіналу PDF недоступне.".into());
+        }
+        self.edit_document(id, |document, tx| {
+            let (text, encoded) =
+                read_ocr(tx, id, page)?.ok_or("На сторінці PDF немає розпізнаних рядків.")?;
+            let frame = ocr_page(&text, &encoded)?;
+            if frame.revision != revision {
+                return Err("Розпізнаний текст сторінки змінився. Виберіть слово знову.".into());
+            }
+            let span = frame
+                .lines
+                .iter()
+                .flat_map(|line| &line.words)
+                .find_map(|candidate| {
+                    candidate
+                        .source_span
+                        .filter(|span| candidate.text == word && span.start_utf16 == start_utf16)
+                })
+                .ok_or("Слово більше не відповідає тексту сторінки PDF.")?;
+            let sentences = crate::segment(&text, "");
+            let position =
+                sentences.partition_point(|sentence| sentence.end_utf16 <= span.start_utf16);
+            if !sentences.get(position).is_some_and(|sentence| {
+                sentence.start_utf16 <= span.start_utf16 && span.end_utf16 <= sentence.end_utf16
+            }) {
+                return Err("Слово не вдалося прив’язати до речення PDF.".into());
+            }
+
+            crate::pdf_reading_position::set_page(tx, document, page, true)?;
+            super::write_position(tx, id, page, position)?;
+            Ok(false)
+        })
+    }
+
     pub fn correct_detached_pdf_ocr(
         &mut self,
         id: &str,
@@ -197,7 +240,11 @@ fn move_sentence_anchors(
                 }
             }
             if let Some(text) = item.speech_text {
-                if existing.speech_text.as_ref().is_some_and(|previous| previous != &text) {
+                if existing
+                    .speech_text
+                    .as_ref()
+                    .is_some_and(|previous| previous != &text)
+                {
                     return Err("Виправлення об’єднує речення з різними варіантами вимови.".into());
                 }
                 existing.speech_text = Some(text);
@@ -231,6 +278,7 @@ fn move_sentence_anchors(
     db.execute(
         "DELETE FROM pdf_detached_speech_text WHERE document_id=?1 AND page=?2",
         params![id, page],
-    ).map_err(database_error)?;
+    )
+    .map_err(database_error)?;
     annotations::merge(db, id, page, &moved.into_values().collect::<Vec<_>>())
 }

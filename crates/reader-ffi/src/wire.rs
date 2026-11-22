@@ -133,6 +133,14 @@ pub enum Command {
         resume: Option<reader_core::SpeechResume>,
     },
     DetachedPdfOcr { id: String, page: u16 },
+    FocusDetachedPdfOcrWord {
+        id: String,
+        page: u16,
+        revision: String,
+        #[serde(rename = "startUtf16")]
+        start_utf16: usize,
+        word: String,
+    },
     CorrectDetachedPdfOcr {
         id: String,
         page: u16,

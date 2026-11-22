@@ -208,6 +208,23 @@ public partial class ReadingPage
         }
     }
 
+    private async Task OpenDetachedOcrWordCardAsync(string documentId, int page, TextSelection selected)
+    {
+        await pdfWindowRead;
+        if (!readingPageActive || detachedAddress is not { } address || address.Document != documentId ||
+            address.Page != page) return;
+        await detachedInitialSentence;
+        if (!ReferenceEquals(detachedAddress, address) || detachedSentence is not { } current ||
+            selected.StartUtf16 < current.Sentence.StartUtf16 || selected.LengthUtf16 <= 0 ||
+            selected.StartUtf16 > current.Sentence.EndUtf16 - selected.LengthUtf16 ||
+            selected.StartUtf16 > address.Text.Length - selected.LengthUtf16 ||
+            !address.Text.AsSpan(selected.StartUtf16, selected.LengthUtf16).SequenceEqual(selected.Text) ||
+            TargetCode is not { } target) return;
+        detachedSelection = selected;
+        UpdateDetachedControls();
+        await SaveDetachedWordAsync(address, selected, target);
+    }
+
     private async Task<int?> PdfNarrationBoundaryAsync(string documentId, Sentence completed, CancellationToken token)
     {
         var session = AppState.Session;

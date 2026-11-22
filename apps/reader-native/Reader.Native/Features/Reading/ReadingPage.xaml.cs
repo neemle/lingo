@@ -578,6 +578,7 @@ public partial class ReadingPage : ContentPage
             int total;
             Func<int, Task<PhotoPreview>> preview;
             Func<int, CancellationToken, Func<Task>, Task>? recognizeWindow = null;
+            Func<int, TextSelection, Task>? showDetachedWord = null;
             int? savedPage = null;
 #if MACCATALYST
             var originalFile = isPdf ? await session.OriginalFileAsync(document.Id) : null;
@@ -591,6 +592,7 @@ public partial class ReadingPage : ContentPage
                 {
                     recognizeWindow = (page, token, onCached) =>
                         PdfPageOcr.RecognizeWindowAsync(session, document, originalFile.Path, page, token, onCached);
+                    showDetachedWord = (page, selected) => OpenDetachedOcrWordCardAsync(document.Id, page, selected);
                 }
             }
             else
@@ -618,7 +620,7 @@ public partial class ReadingPage : ContentPage
                         !active.Text.AsSpan(selected.StartUtf16, selected.LengthUtf16).SequenceEqual(selected.Text))
                         return Task.CompletedTask;
                     return ShowWordAsync(selected);
-                }, recognizeWindow));
+                }, recognizeWindow, showDetachedWord));
         }
         catch (Exception error) { await DisplayAlertAsync("Оригінал", error.Message, "Гаразд"); }
     }
