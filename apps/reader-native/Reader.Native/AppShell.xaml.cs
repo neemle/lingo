@@ -34,7 +34,7 @@ public partial class AppShell : Shell
             trackedSession = AppState.Session;
             var id = Preferences.Get("lastDocument", "");
             if (id.Length > 0) await trackedSession.SelectAsync(id);
-            if (!stopped && !DesktopImport.HasPending && previousRoute != LibraryRoute)
+            if (!stopped && !DesktopImport.HasIncoming && previousRoute != LibraryRoute)
                 await GoToAsync(previousRoute);
         }
         catch (Exception error)
@@ -82,9 +82,9 @@ public partial class AppShell : Shell
                 {
                     if (!listening) return;
                     if (CurrentPage is not LibraryPage) await GoToAsync(LibraryRoute);
-                    if (CurrentPage is not LibraryPage library || !DesktopImport.TryTake(out var item) || item is null)
+                    if (CurrentPage is not LibraryPage library || !DesktopImport.TryTake(out var items) || items is null)
                         return;
-                    await library.ImportExternalAsync(item);
+                    await library.ImportExternalBatchAsync(items);
                 }
                 finally { DesktopImport.Gate.Release(); }
             }

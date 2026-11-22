@@ -8,7 +8,7 @@ namespace Reader.Native;
 public class AppDelegate : MauiUIApplicationDelegate
 {
     public override bool OpenUrl(UIApplication app, NSUrl url, NSDictionary options) =>
-        DesktopFiles.QueueFile(url) || base.OpenUrl(app, url, options);
+        DesktopFiles.QueueFiles([url]) || base.OpenUrl(app, url, options);
 
 	protected override MauiApp CreateMauiApp() => MauiProgram.CreateMauiApp();
 }

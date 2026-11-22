@@ -22,8 +22,8 @@ public sealed class SceneDelegate : MauiUISceneDelegate
     private static bool QueueFiles(NSSet<UIOpenUrlContext>? urlContexts)
     {
         if (urlContexts is null) return false;
-        var handled = false;
-        foreach (var context in urlContexts) handled |= DesktopFiles.QueueFile(context.Url);
-        return handled;
+        var urls = new List<NSUrl>();
+        foreach (var context in urlContexts) urls.Add(context.Url);
+        return DesktopFiles.QueueFiles(urls);
     }
 }

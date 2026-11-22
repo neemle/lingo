@@ -22,10 +22,16 @@ internal static class DesktopFiles
         ["public.heif"] = ".heif",
     };
 
-    internal static bool QueueFile(NSUrl url)
+    internal static bool QueueFiles(IEnumerable<NSUrl> urls)
     {
-        if (FileName(url) is not { } name) return false;
-        _ = DesktopImport.ReceiveAsync(name, () => StageUrlAsync(url, name));
+        var inputs = new List<(string Name, Func<Task<ShareInboxItem>> Stage)>();
+        foreach (var url in urls)
+        {
+            if (FileName(url) is { } name)
+                inputs.Add((name, () => StageUrlAsync(url, name)));
+        }
+        if (inputs.Count == 0) return false;
+        _ = DesktopImport.ReceiveBatchAsync(inputs);
         return true;
     }
 
@@ -137,7 +143,7 @@ internal static class DesktopFiles
         }
         // Import prompts can change the current page. Open them after all providers have been staged.
         if (failure is { } failed) DesktopImport.ReportFailure(failed.Name, failed.Error);
-        foreach (var item in staged) DesktopImport.Publish(item);
+        DesktopImport.PublishBatch(staged);
         return staged.Count > 0 || failure is not null;
     }
 

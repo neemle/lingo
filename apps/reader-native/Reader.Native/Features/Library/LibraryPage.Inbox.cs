@@ -48,15 +48,23 @@ public partial class LibraryPage
         }
     }
 
-    internal async Task ImportExternalAsync(ShareInboxItem item, bool chooseLanguage = false)
+    private Task ImportExternalAsync(ShareInboxItem item, bool chooseLanguage = false) =>
+        ImportExternalBatchAsync([item], chooseLanguage);
+
+    internal async Task ImportExternalBatchAsync(ShareInboxItem[] items, bool chooseLanguage = false)
     {
         await loading;
         importing = true;
         try
         {
-            if (await ImportInboxItemAsync(item, chooseLanguage) is { } id) await AppState.OpenAsync(id);
+            string? lastDocument = null;
+            foreach (var item in items)
+            {
+                try { lastDocument = await ImportInboxItemAsync(item, chooseLanguage) ?? lastDocument; }
+                catch (Exception error) { await DisplayAlertAsync(item.Name, error.Message, "Гаразд"); }
+            }
+            if (lastDocument is not null) await AppState.OpenAsync(lastDocument);
         }
-        catch (Exception error) { await DisplayAlertAsync(item.Name, error.Message, "Гаразд"); }
         finally
         {
             importing = false;

@@ -12,37 +12,67 @@ internal static class DesktopFile
 internal static class DesktopImport
 {
     internal static readonly SemaphoreSlim Gate = new(1, 1);
-    private static readonly ConcurrentQueue<ShareInboxItem> Pending = new();
+    private static readonly ConcurrentQueue<ShareInboxItem[]> Pending = new();
+    private static int receiving;
     internal static event Action? Available;
     internal static bool HasPending => !Pending.IsEmpty;
-    internal static bool TryTake(out ShareInboxItem? item) => Pending.TryDequeue(out item);
+    internal static bool HasIncoming => HasPending || Volatile.Read(ref receiving) > 0;
+    internal static bool TryTake(out ShareInboxItem[]? items) => Pending.TryDequeue(out items);
 
-    internal static async Task ReceiveAsync(string name, Func<Task<ShareInboxItem>> stage)
+    internal static async Task ReceiveBatchAsync(IEnumerable<(string Name, Func<Task<ShareInboxItem>> Stage)> inputs)
     {
-        try { Publish(await stage().ConfigureAwait(false)); }
-        catch (Exception error) { ReportFailure(name, error); }
+        Interlocked.Increment(ref receiving);
+        try
+        {
+            var staged = new List<ShareInboxItem>();
+            (string Name, Exception Error)? firstFailure = null;
+            var rejected = 0;
+            foreach (var (name, stage) in inputs)
+            {
+                try { staged.Add(await stage().ConfigureAwait(false)); }
+                catch (Exception error)
+                {
+                    firstFailure ??= (name, error);
+                    rejected++;
+                }
+            }
+
+            if (firstFailure is { } failed)
+                RecordFailure(failed.Name, failed.Error, rejected);
+            PublishBatch(staged);
+            if (rejected > 0 && staged.Count == 0) Available?.Invoke();
+        }
+        finally { Interlocked.Decrement(ref receiving); }
     }
 
     private static string? failure;
 
     internal static void ReportFailure(string name, Exception error)
     {
-        Interlocked.Exchange(ref failure, $"{Path.GetFileName(name)} · {error.GetBaseException().Message}");
+        RecordFailure(name, error, 1);
         Available?.Invoke();
+    }
+
+    private static void RecordFailure(string name, Exception error, int rejected)
+    {
+        var detail = $"{Path.GetFileName(name)} · {error.GetBaseException().Message}";
+        Interlocked.Exchange(ref failure, rejected == 1 ? detail : $"Не збережено файлів: {rejected}. {detail}");
     }
 
     internal static string? TakeFailure() => Interlocked.Exchange(ref failure, null);
 
-    internal static void Publish(ShareInboxItem item)
+    internal static void PublishBatch(IEnumerable<ShareInboxItem> items)
     {
-        Pending.Enqueue(item);
+        var batch = items.ToArray();
+        if (batch.Length == 0) return;
+        Pending.Enqueue(batch);
         Available?.Invoke();
     }
 
     internal static async Task<bool> EnqueueDropTextAsync(Uri? address, string? text)
     {
         if (await StageDropTextAsync(address, text).ConfigureAwait(false) is not { } item) return false;
-        Publish(item);
+        PublishBatch([item]);
         return true;
     }
 
