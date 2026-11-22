@@ -170,8 +170,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         }
         Command::ReplacePdfTextLayer { id, page, revision_id, language, lines } =>
             value(store.replace_pdf_text_layer(&id, page, &revision_id, &language, lines)),
-        Command::ReconcilePdfOcrPage { id, page, revision_id, language, reference } =>
-            value(store.reconcile_pdf_ocr_page(&id, page, &revision_id, &language, &reference)),
+        Command::ReconcilePdfOcrPage { id, page, revision_id, language, reference, detached } =>
+            value(store.reconcile_pdf_ocr_page(&id, page, &revision_id, &language, &reference, detached)),
         Command::PdfOcrJob { job } => value(store.pdf_ocr_job(job)),
         Command::ImportMixedPdf {
             name,

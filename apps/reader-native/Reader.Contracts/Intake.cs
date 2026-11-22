@@ -11,7 +11,8 @@ public sealed record IntakeLink(string Kind, string Url);
 
 public sealed record PdfOcrRequest(int Page, string Token, long ExpiresAt, string? Language = null, bool ReadTextLayer = false);
 
-public sealed record PdfReadPage(int Page, string State, string Text, OcrSpan? Span, bool RefreshPending = false, DocumentBlock[]? Blocks = null);
+public sealed record PdfReadPage(int Page, string State, string Text, OcrSpan? Span, bool RefreshPending = false,
+    DocumentBlock[]? Blocks = null, bool HasOcr = false);
 
 public sealed record PdfReadWindow(int Center, int PageCount, PdfReadPage[] Pages, string Context, OcrSpan? ContextSpan);
 

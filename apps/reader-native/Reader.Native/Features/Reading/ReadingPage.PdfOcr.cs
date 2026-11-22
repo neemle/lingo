@@ -363,7 +363,7 @@ public partial class ReadingPage
         else if (pdfOcrError is not null && message is null)
             PdfPageStatus.Text += "Помилка OCR сусідньої сторінки";
         if (repairingPdfText is not null)
-            PdfPageStatus.Text = page?.State == "recognized" ? "Звіряємо текст" : "Розпізнаємо зображення";
+            PdfPageStatus.Text = page?.HasOcr == true ? "Звіряємо текст" : "Розпізнаємо зображення";
         ShowPdfPageNotice(message, page is { State: "detached" } ? page.Text : null);
         if (page is { State: "detached" } && pdfSnapshot is { } document)
             ShowDetachedPdfPage(document, page);
@@ -406,10 +406,10 @@ public partial class ReadingPage
         RetryPdfOcr.IsVisible = enabled && readerPdfOcr is null
             && pdfWindow?.Pages.Any(RequiresPdfOcr) == true;
         var pageState = pdfWindow is { } current
-            ? current.Pages.FirstOrDefault(page => page.Page == current.Center)?.State
+            ? current.Pages.FirstOrDefault(page => page.Page == current.Center)
             : null;
-        RepairPdfText.IsVisible = pageState is "textLayer" or "recognized";
-        RepairPdfText.Text = pageState == "recognized" ? "Звірити OCR" : "Розпізнати зі скану";
+        RepairPdfText.IsVisible = pageState is { State: "textLayer" } or { HasOcr: true };
+        RepairPdfText.Text = pageState?.HasOcr == true ? "Звірити OCR" : "Розпізнати зі скану";
         RepairPdfText.IsEnabled = enabled && RepairPdfText.IsVisible;
     }
 
@@ -482,7 +482,8 @@ public partial class ReadingPage
 #if MACCATALYST
         var session = AppState.Session;
         if (!RepairPdfText.IsEnabled || pdfWindow is not { } window ||
-            session.Document is not { CurrentRevisionId: { } revision } document) return;
+            session.Document is not { CurrentRevisionId: { } revision } document ||
+            window.Pages.FirstOrDefault(page => page.Page == window.Center) is not { } page) return;
 
         using var run = new CancellationTokenSource();
         repairingPdfText = run;
@@ -491,12 +492,19 @@ public partial class ReadingPage
         {
             if (await session.OriginalFileAsync(document.Id) is not { } original)
                 throw new InvalidDataException("Оригінал PDF для розпізнавання недоступний.");
-            if (window.Pages.Any(page => page.Page == window.Center && page.State == "recognized"))
+            if (page.HasOcr)
             {
+                var isDetached = page.State == "detached";
+                if (isDetached)
+                {
+                    var ocr = await session.DetachedPdfOcrAsync(document.Id, window.Center)
+                        ?? throw new InvalidDataException("Розпізнаний текст сторінки недоступний.");
+                    revision = ocr.Revision;
+                }
                 var reference = await PdfScan.ReadPageTextAsync(original.Path, window.Center, window.PageCount, run.Token);
                 run.Token.ThrowIfCancellationRequested();
                 var changed = reference.Length > 0 && await session.ReconcilePdfOcrPageAsync(
-                    document.Id, window.Center, revision, document.Language, reference);
+                    document.Id, window.Center, revision, document.Language, reference, isDetached);
                 if (!changed && readingPageActive && !run.IsCancellationRequested && session.Document?.Id == document.Id)
                 {
                     var message = reference.Length == 0 ? "Ця сторінка не має текстового шару."

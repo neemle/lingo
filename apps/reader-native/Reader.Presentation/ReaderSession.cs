@@ -272,8 +272,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task ReplacePdfTextLayerAsync(string id, int page, string revisionId, string language, OcrLine[] lines) =>
         Task.Run(() => client.ReplacePdfTextLayer(id, page, revisionId, language, lines));
 
-    public Task<bool> ReconcilePdfOcrPageAsync(string id, int page, string revisionId, string language, string reference) =>
-        Task.Run(() => client.ReconcilePdfOcrPage(id, page, revisionId, language, reference));
+    public Task<bool> ReconcilePdfOcrPageAsync(string id, int page, string revisionId, string language,
+        string reference, bool detached) =>
+        Task.Run(() => client.ReconcilePdfOcrPage(id, page, revisionId, language, reference, detached));
 
     public Task CachePdfOcrPageAsync(string id, PdfOcrRequest claim, OcrLine[] lines, string? textLayer = null) =>
         Task.Run(() => client.CachePdfOcrPage(id, claim, lines, textLayer));

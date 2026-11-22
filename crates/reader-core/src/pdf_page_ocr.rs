@@ -30,6 +30,7 @@ pub struct PdfReadPage {
     pub text: String,
     pub span: Option<ocr::OcrSpan>,
     pub refresh_pending: bool,
+    pub has_ocr: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub blocks: Vec<document_layout::DocumentBlock>,
 }
@@ -281,9 +282,10 @@ impl Store {
             let mut result = reading_page(&document, starts, &completed, page, file_backed)?;
             if file_backed && result.span.is_none() {
                 if let Some((text, language)) = pdf_detached_pages::read(&self.connection, id, result.page)? {
+                    let ocr = self.detached_pdf_ocr(id, result.page)?;
+                    result.has_ocr = ocr.is_some();
                     let detached = document_layout::detached_pdf_document(text,
-                        language.as_deref().unwrap_or(&document.language),
-                        self.detached_pdf_ocr(id, result.page)?.map(|cached| cached.lines));
+                        language.as_deref().unwrap_or(&document.language), ocr.map(|cached| cached.lines));
                     result.text = detached.text;
                     result.blocks = detached.blocks;
                     result.state = PdfReadPageState::Detached;
@@ -460,10 +462,13 @@ impl Store {
     }
 
     pub fn reconcile_pdf_ocr_page(
-        &mut self, id: &str, page: u16, revision: &str, language: &str, reference: &str,
+        &mut self, id: &str, page: u16, revision: &str, language: &str, reference: &str, detached: bool,
     ) -> Result<bool> {
         if reference.len() > crate::MAX_IMPORT || reference.contains('\0') {
             return Err("Некоректний текстовий шар сторінки PDF.".into());
+        }
+        if detached {
+            return self.reconcile_detached_pdf_ocr(id, page, revision, language, reference);
         }
         let mut changed = false;
         self.edit_document(id, |document, tx| {
@@ -682,7 +687,7 @@ impl Store {
     }
 }
 
-fn reconcile_ocr_with_layer(reference: &str, lines: &mut [ocr::OcrLine]) -> bool {
+pub(crate) fn reconcile_ocr_with_layer(reference: &str, lines: &mut [ocr::OcrLine]) -> bool {
     use crate::document_tokens::word_parts;
     const CONTEXT: usize = 4;
     const MAX_LAYER_WORDS: usize = 4096;
@@ -952,6 +957,7 @@ fn reading_page(
         span: None,
         blocks: Vec::new(),
         refresh_pending: file_backed && should_refresh(document, page),
+        has_ocr: false,
     };
     let Some(start_utf16) = starts[index] else {
         result.state = if document.pdf_pending_text_pages.contains(&page) {
@@ -974,7 +980,8 @@ fn reading_page(
         None => text.len(),
     };
     let content = text.get(start_utf8..end_utf8).ok_or(invalid_span)?.trim_end();
-    result.state = if has_ocr_lines(document, page) {
+    result.has_ocr = has_ocr_lines(document, page);
+    result.state = if result.has_ocr {
         PdfReadPageState::Recognized
     } else {
         PdfReadPageState::TextLayer

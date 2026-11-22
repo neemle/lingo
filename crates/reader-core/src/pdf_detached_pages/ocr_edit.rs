@@ -1,5 +1,5 @@
 use super::{annotations, database_error, page_revision, sqlite_offset};
-use crate::{ocr, Result, Sentence, Store};
+use crate::{ocr, pdf_page_ocr::reconcile_ocr_with_layer, Result, Sentence, Store};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -97,29 +97,61 @@ impl Store {
             correction.as_deref().unwrap_or(line.text.trim()),
         );
         line.correction = correction;
-        let text = ocr::recognized_lines(
-            &previous.lines,
-            page.checked_add(1).ok_or("Некоректна сторінка PDF.")?,
-        )?;
-        for line in &mut previous.lines {
-            line.source_span = None;
-            for word in &mut line.words {
-                word.source_span = None;
-            }
-        }
-        let encoded = serde_json::to_string(&previous.lines).map_err(database_error)?;
-        if old_text != text {
-            move_sentence_anchors(&tx, id, page, &old_text, &text, edit)?;
-        }
-        tx.execute(
-            "UPDATE pdf_detached_pages SET text=?3,lines=?4 WHERE document_id=?1 AND page=?2",
-            params![id, page, text, encoded],
-        )
-        .map_err(database_error)?;
-        let updated = ocr_page(&text, &encoded)?;
+        let updated = save_ocr_edits(&tx, id, page, &old_text, previous.lines, &[edit])?;
         tx.commit().map_err(database_error)?;
         Ok(updated)
     }
+
+    pub(crate) fn reconcile_detached_pdf_ocr(
+        &mut self, id: &str, page: u16, revision: &str, language: &str, reference: &str,
+    ) -> Result<bool> {
+        let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(database_error)?;
+        let (old_text, encoded) =
+            read_ocr(&tx, id, page)?.ok_or("На сторінці PDF немає розпізнаних рядків.")?;
+        let mut previous = ocr_page(&old_text, &encoded)?;
+        let current_language: String = tx.query_row(
+            "SELECT json_extract(body, '$.language') FROM documents WHERE id=?1",
+            [id], |row| row.get(0),
+        ).map_err(database_error)?;
+        if previous.revision != revision || current_language != language {
+            return Err("Текст або мова PDF змінилися. Відкрийте сторінку знову.".into());
+        }
+        let uncorrected: Vec<_> = previous.lines.iter().map(|line| line.correction.is_none()).collect();
+        if !reconcile_ocr_with_layer(reference, &mut previous.lines) {
+            return Ok(false);
+        }
+        let edits = previous.lines.iter().zip(uncorrected)
+            .filter(|(line, was_raw)| *was_raw && line.correction.is_some())
+            .map(|(line, _)| {
+                let start = line.source_span.ok_or("Розпізнаний рядок не має позиції в тексті.")?.start_utf16;
+                Ok(Edit::between(start, line.text.trim(), line.reading_text()))
+            }).collect::<Result<Vec<_>>>()?;
+        save_ocr_edits(&tx, id, page, &old_text, previous.lines, &edits)?;
+        tx.commit().map_err(database_error)?;
+        Ok(true)
+    }
+}
+
+fn save_ocr_edits(
+    db: &Connection, id: &str, page: u16, old_text: &str, mut lines: Vec<ocr::OcrLine>, edits: &[Edit],
+) -> Result<DetachedPdfOcrPage> {
+    let text = ocr::recognized_lines(&lines, page.checked_add(1).ok_or("Некоректна сторінка PDF.")?)?;
+    for line in &mut lines {
+        line.source_span = None;
+        for word in &mut line.words {
+            word.source_span = None;
+        }
+    }
+    let encoded = serde_json::to_string(&lines).map_err(database_error)?;
+    if old_text != text {
+        move_sentence_anchors(db, id, page, old_text, &text, edits)?;
+    }
+    db.execute(
+        "UPDATE pdf_detached_pages SET text=?3,lines=?4 WHERE document_id=?1 AND page=?2",
+        params![id, page, text, encoded],
+    ).map_err(database_error)?;
+    ocr_page(&text, &encoded)
 }
 
 fn read_ocr(db: &Connection, id: &str, page: u16) -> Result<Option<(String, String)>> {
@@ -191,8 +223,9 @@ fn move_sentence_anchors(
     page: u16,
     old: &str,
     new: &str,
-    edit: Edit,
+    edits: &[Edit],
 ) -> Result<()> {
+    let map_start = |offset| edits.iter().rev().fold(offset, |offset, edit| edit.map_start(offset));
     let layout = super::page_layout(db, id, page)?;
     let old_sentences = layout.segment(old, "");
     let new_sentences = layout.segment(new, "");
@@ -209,7 +242,7 @@ fn move_sentence_anchors(
             .get(position)
             .or_else(|| old_sentences.last())
             .map_or(0, |sentence| sentence.start_utf16);
-        let position = sentence_at(&new_sentences, edit.map_start(old_start)).unwrap_or(0);
+        let position = sentence_at(&new_sentences, map_start(old_start)).unwrap_or(0);
         db.execute(
             "UPDATE pdf_detached_positions SET sentence=?3 WHERE document_id=?1 AND page=?2",
             params![id, page, sqlite_offset(position)?],
@@ -223,7 +256,7 @@ fn move_sentence_anchors(
     }
     let mut moved: BTreeMap<usize, annotations::ArchivedAnnotation> = BTreeMap::new();
     for mut item in items {
-        let index = sentence_at(&new_sentences, edit.map_start(item.start_utf16))
+        let index = sentence_at(&new_sentences, map_start(item.start_utf16))
             .ok_or("Після виправлення примітка залишилася без речення.")?;
         let start = new_sentences[index].start_utf16;
         item.start_utf16 = start;

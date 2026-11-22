@@ -289,6 +289,8 @@ pub enum Command {
         revision_id: String,
         language: String,
         reference: String,
+        #[serde(default)]
+        detached: bool,
     },
     PdfOcrJob {
         job: reader_core::ocr_jobs::JobRequest,
