@@ -90,14 +90,15 @@ public partial class ReadingPage
     {
         var session = AppState.Session;
         if (!readingPageActive || restoringTranslationCache || translating || session.Busy ||
-            readiness is not { Ready: true } route || ActiveTranslationKey() is not { } key ||
+            (readiness is null && readinessError is null) || ActiveTranslationKey() is not { } key ||
             readinessPair != (key.Source, key.Target) || session.Document is not { } document)
             return;
 
         var request = new CachedWindowRequest(key, document.CurrentRevisionId, readinessRequest);
         if (lastCacheRestore == request) return;
-        if (FindTranslationWindow(document, key.Target) is { IsParagraph: true } &&
-            (ActiveMachine(document, key.Target) is not null || ReviewedFor(document, key.Target, key.Sentence) is not null))
+        if (FindTranslationWindow(document, key.Target) is { IsParagraph: true } existing && IsPreferredRoute(existing) &&
+            (ActiveMachineAlignment(document, key.Target, preferredOnly: true) is not null ||
+                ReviewedFor(document, key.Target, key.Sentence) is not null))
             return;
 
         lastCacheRestore = request;
@@ -106,23 +107,22 @@ public partial class ReadingPage
         {
             var cached = await session.ReadCachedTranslationAsync(key.Document, key.Sentence, key.Target);
             if (!readingPageActive || translating || ActiveTranslationKey() != key ||
-                request.ReadinessRequest != readinessRequest || readiness?.PivotLanguage != route.PivotLanguage ||
+                request.ReadinessRequest != readinessRequest ||
                 session.Document is not { } current || current.Position != document.Position ||
                 current.CurrentRevisionId != request.Revision || current.Text != document.Text)
                 return;
 
             var scope = new TranslationScope(key.Document, key.Source, key.Target);
-            if (cached.Paragraph.PivotLanguage == route.PivotLanguage)
-            {
-                var window = BuildParagraphWindow(current, scope, cached.Paragraph);
-                if (window.Units.Any(unit => MachineFor(current, window, unit) is not null) &&
-                    !MatchingTranslationWindows(current, key.Target).Any(previous =>
-                        previous.IsParagraph && previous.Anchor == window.Anchor))
-                    RememberWindow(window, background: true);
-            }
+            var window = BuildParagraphWindow(current, scope, cached.Paragraph);
+            var matching = MatchingTranslationWindows(current, key.Target);
+            if (window.Units.Any(unit => MachineFor(current, window, unit) is not null) &&
+                !matching.Any(previous => previous.IsParagraph && previous.Anchor == window.Anchor
+                    && previous.Pivot == window.Pivot))
+                RememberWindow(window, background: true);
 
-            if (cached.Sentence is { } sentence && sentence.PivotLanguage == route.PivotLanguage &&
-                ReviewedFor(current, key.Target, key.Sentence) is null && ActiveMachine(current, key.Target) is null)
+            if (cached.Sentence is { } sentence && ReviewedFor(current, key.Target, key.Sentence) is null &&
+                !matching.Any(previous => previous.Pivot == sentence.PivotLanguage
+                    && previous.UnitFor(current.Position) is { } unit && MachineFor(current, previous, unit) is not null))
                 RememberWindow(BuildSentenceWindow(current, scope, sentence), background: true);
         }
         catch (CoreException) { } // Cache lookup can race a library change. Manual translation stays available.
@@ -162,8 +162,9 @@ public partial class ReadingPage
 
         var session = AppState.Session;
         if (session.Busy || session.Document is not { } document ||
-            FindTranslationWindow(document, active.Target) is not { IsParagraph: true } ||
-            (ReviewedFor(document, active.Target, active.Sentence) is null && ActiveMachine(document, active.Target) is null))
+            FindTranslationWindow(document, active.Target) is not { IsParagraph: true } window || !IsPreferredRoute(window) ||
+            (ReviewedFor(document, active.Target, active.Sentence) is null &&
+                ActiveMachineAlignment(document, active.Target, preferredOnly: true) is null))
             return null;
 
         for (var index = document.Position + 1; index < Math.Min(document.Sentences.Length, document.Position + 3); index++)
@@ -253,35 +254,38 @@ public partial class ReadingPage
         public AlignedUnit? UnitFor(int position) => Array.Find(Units, unit => unit.Contains(position));
     }
 
+    private bool IsPreferredRoute(TranslationWindow window) =>
+        readiness is { Ready: true } current && readinessPair == (window.Scope.Source, window.Scope.Target)
+            && window.Pivot == current.PivotLanguage;
+
     private IEnumerable<TranslationWindow> MatchingTranslationWindows(Document document, string target, int? position = null)
     {
-        if (readiness is not { Ready: true } || readinessPair != (document.Language, target)) return [];
         var scope = new TranslationScope(document.Id, document.Language, target);
         var index = position ?? document.Position;
-        return translationWindows.Where(window => window.Scope == scope && window.Pivot == readiness.PivotLanguage
+        return translationWindows.Where(window => window.Scope == scope
             && window.UnitFor(index) is { } unit && unit.Matches(document));
     }
 
-    private TranslationWindow? FindTranslationWindow(Document document, string target)
-    {
-        var matching = MatchingTranslationWindows(document, target);
-        return matching.FirstOrDefault(window => window.IsParagraph) ?? matching.FirstOrDefault();
-    }
+    private TranslationWindow? FindTranslationWindow(Document document, string target) =>
+        MatchingTranslationWindows(document, target).OrderByDescending(IsPreferredRoute)
+            .ThenByDescending(window => window.IsParagraph).FirstOrDefault();
 
     private MachineTranslation? ActiveMachine(Document document, string target) =>
         ActiveMachineAlignment(document, target)?.Translation;
 
-    private (AlignedUnit Unit, MachineTranslation Translation)? ActiveMachineAlignment(Document document, string target)
+    private (TranslationWindow Window, AlignedUnit Unit, MachineTranslation Translation)? ActiveMachineAlignment(
+        Document document, string target, bool preferredOnly = false)
     {
-        foreach (var window in MatchingTranslationWindows(document, target))
-            if (window.UnitFor(document.Position) is { } unit && MachineFor(document, window, unit) is { } machine)
-                return (unit, machine);
+        foreach (var window in MatchingTranslationWindows(document, target).OrderByDescending(IsPreferredRoute))
+            if ((!preferredOnly || IsPreferredRoute(window)) && window.UnitFor(document.Position) is { } unit
+                && MachineFor(document, window, unit) is { } machine)
+                return (window, unit, machine);
         return null;
     }
 
     private bool HasMachineAt(Document document, string target, int position) =>
         MatchingTranslationWindows(document, target, position).Any(window =>
-            window.UnitFor(position) is { } unit && MachineFor(document, window, unit) is not null);
+            IsPreferredRoute(window) && window.UnitFor(position) is { } unit && MachineFor(document, window, unit) is not null);
 
     private static string? ReviewedFor(Document document, string target, string sentenceId) =>
         document.ReviewedTranslations.GetValueOrDefault(target)?.GetValueOrDefault(sentenceId);
@@ -305,7 +309,8 @@ public partial class ReadingPage
     private void RememberWindow(TranslationWindow window, bool background = false)
     {
         translationWindows.RemoveAll(previous => previous.Scope == window.Scope
-            && previous.Anchor == window.Anchor && previous.IsParagraph == window.IsParagraph);
+            && previous.Anchor == window.Anchor && previous.IsParagraph == window.IsParagraph
+            && previous.Pivot == window.Pivot);
         var index = background ? Math.Min(translationWindows.Count, TranslationWindowLimit - 1) : 0;
         translationWindows.Insert(index, window);
         if (translationWindows.Count > TranslationWindowLimit)
@@ -442,9 +447,11 @@ public partial class ReadingPage
                         AddPreviewRow(document.Id, unit.First + i, unit.Sources[i].Id, 1, review, reviewed: true);
         }
         if (ParagraphPreview.Children.Count == 0) return;
-        var caption = window.Pivot is { } pivot
-            ? $"Переклади поруч · машинні через {DocumentLanguages.Name(pivot)}." : "Переклади поруч.";
-        if (window.MoreBefore || window.MoreAfter)
+        var caption = IsPreferredRoute(window) ? "Переклади поруч" : "Збережені переклади поруч";
+        if (window.Pivot is { } pivot)
+            caption += $" · машинні через {DocumentLanguages.Name(pivot)}";
+        caption += ".";
+        if (IsPreferredRoute(window) && (window.MoreBefore || window.MoreAfter))
             caption += " Виберіть інше речення, щоб перекласти ще частину абзацу.";
         ParagraphPreview.Children.Insert(0, new Label { Text = caption, FontSize = 13 });
         ParagraphPreview.IsVisible = true;

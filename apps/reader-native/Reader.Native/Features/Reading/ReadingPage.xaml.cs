@@ -237,13 +237,17 @@ public partial class ReadingPage : ContentPage
         var machine = alignment?.Translation;
         var machineLabel = alignment?.Unit.Sources.Length > 1 ? "Машинний переклад групи речень"
             : machine?.JoinedLines == true ? "Машинний переклад об’єднаних рядків" : "Машинний переклад";
+        if (machine?.PivotLanguage is { } pivot)
+            machineLabel += $" через {DocumentLanguages.Name(pivot)}";
+        var currentStatus = key == statusKey ? machineStatus : null;
+        if (alignment is { } result && !IsPreferredRoute(result.Window))
+            machineLabel = $"Збережено раніше · {machineLabel}. {currentStatus ?? ReadinessMessage()}";
+
         TranslationNotice.Text = !active ? "Відкрийте документ для читання."
-            : translating && key == statusKey ? machineStatus
+            : translating && currentStatus is not null ? currentStatus
             : text is not null ? "Ваш переклад активного речення"
-            : machine?.PivotLanguage is { } pivot ? $"{machineLabel} через {DocumentLanguages.Name(pivot)}"
             : machine is not null ? machineLabel
-            : key == statusKey && machineStatus is not null ? machineStatus
-            : ReadinessMessage();
+            : currentStatus ?? ReadinessMessage();
         SegmentTranslation.Text = text ?? machine?.Text ?? "";
         ActiveTranslationCard.IsVisible = SegmentTranslation.Text.Length > 0;
         ShareTranslationPair.IsVisible = DisplayedTranslationPair() is not null;
@@ -252,7 +256,7 @@ public partial class ReadingPage : ContentPage
         var canExtend = document is not null && window is not null && document.Position != window.Anchor
             && (window.MoreBefore || window.MoreAfter);
         TranslateOffline.IsEnabled = active && !session.Busy && !translating && readiness?.Ready == true
-            && (window is null || !window.IsParagraph || canExtend
+            && (window is null || !window.IsParagraph || !IsPreferredRoute(window) || canExtend
                 || alignment is not null && !ReferenceEquals(unit, alignment.Value.Unit)
                 || document is not null && HasUntranslatedUnits(document, window));
         TranslateSentence.IsEnabled = active && !session.Busy && !translating && readiness?.Ready == true && text is null;
