@@ -295,6 +295,56 @@ pub(crate) fn refresh_provenance(document: &mut crate::Document) {
     }
 }
 
+/// Match only sentences at the same page-relative source offset with identical text.
+pub(crate) fn corresponding_pdf_sentences<'a>(
+    from: &'a crate::Document,
+    to: &'a crate::Document,
+) -> Option<std::collections::HashMap<&'a str, &'a str>> {
+    let old_starts = from.pdf_page_starts.as_deref()?;
+    let new_starts = to.pdf_page_starts.as_deref()?;
+    if from.format != "pdf" || to.format != "pdf" || old_starts.len() != new_starts.len() {
+        return None;
+    }
+    let old_pages = page_anchors(old_starts);
+    Some(from.sentences.iter().filter_map(|old| {
+        let index = match_page_sentence(&old_pages, new_starts, &to.sentences, old)?;
+        Some((old.id.as_str(), to.sentences[index].id.as_str()))
+    }).collect())
+}
+
+fn page_anchors(starts: &[Option<usize>]) -> Vec<(usize, usize)> {
+    starts
+        .iter()
+        .enumerate()
+        .filter_map(|(page, start)| start.map(|start| (start, page)))
+        .collect()
+}
+
+fn match_page_sentence(
+    old_pages: &[(usize, usize)],
+    starts: &[Option<usize>],
+    sentences: &[crate::Sentence],
+    old: &crate::Sentence,
+) -> Option<usize> {
+    let (old_start, page) = old_pages
+        .partition_point(|(start, _)| *start <= old.start_utf16)
+        .checked_sub(1)
+        .and_then(|index| old_pages.get(index).copied())?;
+    let new_start = starts
+        .get(page)
+        .copied()
+        .flatten()?
+        .checked_add(old.start_utf16.checked_sub(old_start)?)?;
+    let index = sentences
+        .binary_search_by_key(&new_start, |sentence| sentence.start_utf16)
+        .ok()?;
+    // Identical text on the following page must not inherit this page's annotations.
+    let next_page = starts[page + 1..].iter().flatten().next();
+    (sentences[index].text == old.text
+        && next_page.is_none_or(|start| new_start < *start))
+        .then_some(index)
+}
+
 /// Rebuild derived sentences without dropping or guessing user annotations.
 pub(crate) fn update_transcript(document: &mut crate::Document, text: String) -> Result<()> {
     update_transcript_with_page_starts(document, text, None)
@@ -310,26 +360,11 @@ pub(crate) fn update_transcript_with_page_starts(
     let sentences = crate::segment(&text, &document.id);
     let old_pages = document
         .pdf_page_starts
-        .iter()
-        .flatten()
-        .enumerate()
-        .filter_map(|(page, start)| start.map(|start| (start, page)))
-        .collect::<Vec<_>>();
+        .as_deref()
+        .map(page_anchors)
+        .unwrap_or_default();
     let page_match = |old: &crate::Sentence| {
-        let starts = starts?;
-        let (old_start, page) = old_pages
-            .partition_point(|(start, _)| *start <= old.start_utf16)
-            .checked_sub(1)
-            .and_then(|index| old_pages.get(index).copied())?;
-        let new_start = starts
-            .get(page)
-            .copied()
-            .flatten()?
-            .checked_add(old.start_utf16.checked_sub(old_start)?)?;
-        sentences
-            .binary_search_by_key(&new_start, |sentence| sentence.start_utf16)
-            .ok()
-            .filter(|&index| sentences[index].text == old.text)
+        match_page_sentence(&old_pages, starts?, &sentences, old)
     };
     let by_id: HashMap<_, _> = sentences
         .iter()

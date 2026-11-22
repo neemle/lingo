@@ -1,7 +1,7 @@
 //! On-demand OCR for PDFs whose original file was already imported.
 
 use crate::{document_layout, document_revisions, ocr, pdf_layers, Document, Result, Store};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -195,30 +195,88 @@ impl Store {
             let existing = document.ocr_lines.get_or_insert_with(Vec::new);
             let insertion = existing.partition_point(|line| line.page < page);
             existing.splice(insertion..insertion, lines);
-            let (text, starts) = pdf_layers::merge_page_text(pages, existing)?;
-            let parsed = document_layout::from_transcript(text, Some(starts));
-            let changed = parsed.text != document.text;
-            document.speech_resume = Self::read_speech_resume(tx, id)?;
-            ocr::update_transcript_with_page_starts(
-                document,
-                parsed.text,
-                parsed.pdf_page_starts.as_deref(),
-            )?;
-            document.pdf_page_starts = parsed.pdf_page_starts;
-            document.blocks = parsed.blocks;
-            ocr::refresh_provenance(document);
-            if changed {
-                document_revisions::append(document, tx)?;
-            }
-            if let Some(resume) = document.speech_resume.take() {
-                Self::write_speech_resume(tx, id, &resume)?;
-            }
-            Self::discard_changed_speech_resume(tx, document)?;
+            reflow_pdf_document(tx, document, pages)?;
             updated = Some(document.clone());
             Ok(true)
         })?;
         updated.ok_or_else(|| "Не вдалося оновити сторінку PDF".to_owned())
     }
+}
+
+/// Bring in previously unseen OCR pages for the same file-backed PDF.
+pub(crate) fn merge_backup_cache(
+    db: &Connection,
+    incoming: &Document,
+    incoming_pages: &[String],
+    completed: &[u16],
+) -> Result<()> {
+    let matched: Option<(String, String)> = db
+        .query_row(
+            "SELECT documents.body, file_originals.pdf_page_text
+             FROM documents JOIN file_originals ON file_originals.document_id=documents.id
+             WHERE documents.source_hash=?1",
+            [&incoming.source_hash],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(database_error)?;
+    let Some((body, page_text)) = matched else {
+        return Ok(());
+    };
+    let mut local: Document = serde_json::from_str(&body).map_err(database_error)?;
+    let pages: Vec<String> = serde_json::from_str(&page_text).map_err(database_error)?;
+    if local.language != incoming.language || pages.as_slice() != incoming_pages {
+        return Ok(());
+    }
+
+    for &page in completed {
+        mark_completed(db, &local.id, page)?;
+    }
+    let added: Vec<_> = incoming
+        .ocr_lines
+        .iter()
+        .flatten()
+        .filter(|line| !has_ocr_lines(&local, line.page))
+        .cloned()
+        .collect();
+    if added.is_empty() {
+        return Ok(());
+    }
+
+    let lines = local.ocr_lines.get_or_insert_with(Vec::new);
+    lines.extend(added);
+    lines.sort_by_key(|line| line.page);
+    reflow_pdf_document(db, &mut local, pages)?;
+    let body = serde_json::to_string(&local).map_err(database_error)?;
+    db.execute(
+        "UPDATE documents SET body=?1 WHERE id=?2",
+        params![body, local.id],
+    )
+    .map_err(database_error)?;
+    Ok(())
+}
+
+fn reflow_pdf_document(db: &Connection, document: &mut Document, pages: Vec<String>) -> Result<()> {
+    let lines = document.ocr_lines.as_deref().unwrap_or_default();
+    let (text, starts) = pdf_layers::merge_page_text(pages, lines)?;
+    let parsed = document_layout::from_transcript(text, Some(starts));
+    let changed = parsed.text != document.text;
+    document.speech_resume = Store::read_speech_resume(db, &document.id)?;
+    ocr::update_transcript_with_page_starts(
+        document,
+        parsed.text,
+        parsed.pdf_page_starts.as_deref(),
+    )?;
+    document.pdf_page_starts = parsed.pdf_page_starts;
+    document.blocks = parsed.blocks;
+    ocr::refresh_provenance(document);
+    if changed {
+        document_revisions::append(document, db)?;
+    }
+    if let Some(resume) = document.speech_resume.take() {
+        Store::write_speech_resume(db, &document.id, &resume)?;
+    }
+    Store::discard_changed_speech_resume(db, document)
 }
 
 fn reading_page(

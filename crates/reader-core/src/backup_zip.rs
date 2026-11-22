@@ -161,6 +161,9 @@ pub(crate) fn restore(store: &mut Store, file: File) -> Result<Vec<BackupResourc
         documents.into_iter().zip(&backup.originals).enumerate()
     {
         let hash = document.source_hash.clone();
+        if let Some(pages) = entry.pdf_page_text.as_deref() {
+            pdf_page_ocr::merge_backup_cache(&tx, &document, pages, &entry.ocr_completed_pages)?;
+        }
         let Some(id) = restore_document(&tx, document, history)? else {
             continue;
         };

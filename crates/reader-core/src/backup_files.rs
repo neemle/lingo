@@ -63,29 +63,28 @@ pub(crate) fn merge_existing_document(
         return Ok(false);
     };
     let mut local: Document = serde_json::from_str(&body).map_err(archive_error)?;
-    if local.language != incoming.language
-        || local.text != incoming.text
-        || local.sentences.len() != incoming.sentences.len()
-        || local
-            .sentences
-            .iter()
-            .zip(&incoming.sentences)
-            .any(|(local, incoming)| {
-                local.start_utf8 != incoming.start_utf8
-                    || local.end_utf8 != incoming.end_utf8
-                    || local.text != incoming.text
-            })
-    {
-        // A different OCR transcript or sentence segmentation can refer to different text.
+    if local.language != incoming.language {
         return Ok(true);
     }
-
-    let ids: HashMap<_, _> = incoming
-        .sentences
-        .iter()
-        .zip(&local.sentences)
-        .map(|(incoming, local)| (incoming.id.as_str(), local.id.as_str()))
-        .collect();
+    let identical_sentences = local.text == incoming.text
+        && local.sentences.len() == incoming.sentences.len()
+        && local.sentences.iter().zip(&incoming.sentences).all(|(local, incoming)| {
+            local.start_utf8 == incoming.start_utf8
+                && local.end_utf8 == incoming.end_utf8
+                && local.text == incoming.text
+        });
+    let ids: HashMap<_, _> = if identical_sentences {
+        incoming
+            .sentences
+            .iter()
+            .zip(&local.sentences)
+            .map(|(incoming, local)| (incoming.id.as_str(), local.id.as_str()))
+            .collect()
+    } else if let Some(ids) = ocr::corresponding_pdf_sentences(incoming, &local) {
+        ids
+    } else {
+        return Ok(true);
+    };
     if !incoming.bookmarks.is_empty() {
         local.bookmarks.extend(
             incoming
@@ -113,7 +112,14 @@ pub(crate) fn merge_existing_document(
         );
     }
     if local.position == 0 {
-        local.position = incoming.position;
+        if let Some(position) = incoming
+            .sentences
+            .get(incoming.position)
+            .and_then(|sentence| ids.get(sentence.id.as_str()))
+            .and_then(|id| local.sentences.iter().position(|sentence| sentence.id == *id))
+        {
+            local.position = position;
+        }
     }
     let speech_resume = speech_resume.and_then(|mut resume| {
         resume.sentence_id = (*ids.get(resume.sentence_id.as_str())?).to_owned();
