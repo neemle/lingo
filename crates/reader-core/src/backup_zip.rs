@@ -6,11 +6,11 @@ use crate::{
     backup_limits::{LimitedReader, LimitedWriter},
     document_layout,
     document_revisions::DocumentRevision,
-    file_originals, pdf_layers, pdf_page_ocr, Backup, BackupInspection, BackupResource, Document,
+    file_originals, pdf_detached_pages, pdf_layers, pdf_page_ocr, Backup, BackupInspection, BackupResource, Document,
     Original,
     Result, Store, MAX_IMPORT,
 };
-use rusqlite::{params, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -26,9 +26,13 @@ use zip::{
     CompressionMethod, ZipArchive, ZipWriter,
 };
 
+mod detached_archive;
+
 const VERSION: u32 = 2;
+const PAGE_CACHE_VERSION: u32 = 3;
 const MANIFEST: &str = "manifest.json";
 const MAX_DOCUMENTS: usize = 32_768;
+const MAX_ARCHIVE_ENTRIES: usize = u16::MAX as usize - 1;
 const MAX_DIRECTORY_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
@@ -41,6 +45,8 @@ struct OriginalEntry {
     pdf_page_text: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     ocr_completed_pages: Vec<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detached_cache: Option<detached_archive::Metadata>,
 }
 
 type Manifest = Backup<Vec<OriginalEntry>>;
@@ -93,15 +99,22 @@ pub(crate) fn write(store: &Store, output: &mut File) -> Result<()> {
             size,
             pdf_page_text: page_text,
             ocr_completed_pages,
+            detached_cache: None,
         });
         paths.push(path);
     }
     let mut backup = assemble(store, &tx, snapshot, sources)?;
     backup.version = VERSION;
-    validate_manifest(&backup)?;
-
     let mut zip = ZipWriter::new(BufWriter::with_capacity(64 * 1024, output));
     let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    for (index, (entry, document)) in backup.originals.iter_mut().zip(&backup.snapshot.documents).enumerate() {
+        if entry.pdf_page_text.is_some() && pdf_detached_pages::has_cached_pages(&tx, &document.id)? {
+            zip.start_file(detached_archive::entry_name(index), stored.large_file(true)).map_err(archive_error)?;
+            entry.detached_cache = Some(detached_archive::write(&tx, document, &mut zip)?);
+            backup.version = PAGE_CACHE_VERSION;
+        }
+    }
+    validate_manifest(&backup)?;
     zip.start_file(MANIFEST, stored).map_err(archive_error)?;
     serde_json::to_writer(LimitedWriter::new(&mut zip, MAX_BACKUP_FILE_BYTES), &backup)
         .map_err(archive_error)?;
@@ -165,6 +178,10 @@ pub(crate) fn restore(store: &mut Store, file: File) -> Result<Vec<BackupResourc
             pdf_page_ocr::merge_backup_cache(&tx, &document, pages, &entry.ocr_completed_pages)?;
         }
         let Some(id) = restore_document(&tx, document, history)? else {
+            if entry.detached_cache.is_some() {
+                let local = existing_file_pdf(&tx, &hash)?;
+                restore_detached_cache(&mut zip, &tx, index, entry, &backup.snapshot.documents[index], local.as_ref())?;
+            }
             continue;
         };
         if let Some(staged) = staged {
@@ -176,6 +193,10 @@ pub(crate) fn restore(store: &mut Store, file: File) -> Result<Vec<BackupResourc
             .map_err(archive_error)?;
             for &page in &entry.ocr_completed_pages {
                 pdf_page_ocr::mark_completed(&tx, &id, page)?;
+            }
+            let archive_document = &backup.snapshot.documents[index];
+            if entry.detached_cache.is_some() {
+                restore_detached_cache(&mut zip, &tx, index, entry, archive_document, Some(archive_document))?;
             }
             file_originals::verify_root(root)?;
             let path = file_originals::original_path(root, &id)?;
@@ -197,6 +218,32 @@ pub(crate) fn restore(store: &mut Store, file: File) -> Result<Vec<BackupResourc
     tx.commit().map_err(archive_error)?;
     published.paths.clear();
     Ok(resources)
+}
+
+fn existing_file_pdf(db: &Connection, hash: &str) -> Result<Option<Document>> {
+    let body: Option<String> = db.query_row(
+        "SELECT documents.body FROM documents JOIN file_originals ON file_originals.document_id=documents.id
+         WHERE documents.source_hash=?1",
+        [hash],
+        |row| row.get(0),
+    ).optional().map_err(archive_error)?;
+    body.as_deref().map(serde_json::from_str).transpose().map_err(archive_error)
+}
+
+fn restore_detached_cache(
+    zip: &mut ZipArchive<BufReader<File>>,
+    db: &Connection,
+    index: usize,
+    entry: &OriginalEntry,
+    archive_document: &Document,
+    local: Option<&Document>,
+) -> Result<()> {
+    read_detached_cache(zip, index, entry, archive_document, |page| {
+        if let Some(document) = local.filter(|document| document.language == archive_document.language) {
+            pdf_detached_pages::adopt_cached_page(db, document, page)?;
+        }
+        Ok(())
+    })
 }
 
 #[derive(Default)]
@@ -239,15 +286,23 @@ fn open(mut file: File) -> Result<(ZipArchive<BufReader<File>>, Manifest)> {
         .map_err(archive_error)?
     };
     validate_manifest(&backup)?;
-    if zip.len() != backup.originals.len() + 1 {
+    if zip.len() != archive_entry_count(&backup) {
         return Err("Файли в ZIP не відповідають маніфесту.".into());
     }
     Ok((zip, backup))
 }
 
+fn archive_entry_count(backup: &Manifest) -> usize {
+    1 + backup.originals.len()
+        + backup.originals.iter().filter(|entry| entry.detached_cache.is_some()).count()
+}
+
 fn validate_manifest(backup: &Manifest) -> Result<()> {
-    if backup.version != VERSION {
+    if !matches!(backup.version, VERSION | PAGE_CACHE_VERSION) {
         return Err("Невідома версія резервної копії.".into());
+    }
+    if archive_entry_count(backup) > MAX_ARCHIVE_ENTRIES {
+        return Err("У резервній копії забагато записів.".into());
     }
     validate_resources(&backup.resources)?;
     backup.reader_preferences.validate()?;
@@ -274,6 +329,16 @@ fn validate_manifest(backup: &Manifest) -> Result<()> {
             || entry.size == 0
         {
             return Err("Некоректний запис оригіналу в резервній копії.".into());
+        }
+        if let Some(cache) = &entry.detached_cache {
+            if backup.version != PAGE_CACHE_VERSION || entry.pdf_page_text.is_none()
+                || cache.count == 0 || u16::try_from(doc.pdf_page_starts.as_ref().map_or(0, Vec::len))
+                    .map_or(true, |pages| cache.count > pages)
+                || cache.bytes == 0 || cache.sha256.len() != 64
+                || !cache.sha256.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            {
+                return Err("Некоректний опис кешу сторінок PDF.".into());
+            }
         }
         if let Some(pages) = &entry.pdf_page_text {
             if entry.size > file_originals::MAX_PDF_BYTES
@@ -350,12 +415,39 @@ fn validate_entries(
             let prepared = prepare_document(doc, &original, history)?;
             (prepared.document, prepared.history, None)
         };
+        if staging.is_none() && entry.detached_cache.is_some() {
+            read_detached_cache(zip, index, entry, &prepared.0, |_| Ok(()))?;
+        }
         // Preview validates every document but does not retain staged copies or documents.
         if staging.is_some() {
             documents.push(prepared);
         }
     }
     Ok(documents)
+}
+
+fn read_detached_cache(
+    zip: &mut ZipArchive<BufReader<File>>,
+    index: usize,
+    entry: &OriginalEntry,
+    document: &Document,
+    mut visit: impl FnMut(pdf_detached_pages::ArchivedPage) -> Result<()>,
+) -> Result<()> {
+    let Some(metadata) = &entry.detached_cache else { return Ok(()); };
+    let pages = entry.pdf_page_text.as_deref().ok_or("У PDF немає розмітки сторінок.")?;
+    let data = checked_entry(zip, &detached_archive::entry_name(index))?;
+    if data.size() != metadata.bytes {
+        return Err("Розмір кешу сторінок PDF не відповідає маніфесту.".into());
+    }
+    let ocr_pages: HashSet<_> = document.ocr_lines.iter().flatten().map(|line| line.page).collect();
+    detached_archive::validate(data, metadata, document, |page| {
+        if !pages.get(usize::from(page.page)).is_some_and(|text| text.trim().is_empty())
+            || ocr_pages.contains(&page.page)
+        {
+            return Err("Кешована сторінка PDF дублює текст документа.".into());
+        }
+        visit(page)
+    })
 }
 
 fn checked_entry<'a>(
@@ -478,7 +570,7 @@ fn check_directory(file: &mut File) -> Result<(u64, usize)> {
         (offset, size, inline_count, end)
     };
     if count == 0
-        || count > MAX_DOCUMENTS as u64 + 1
+        || count > MAX_ARCHIVE_ENTRIES as u64
         || !(1..=MAX_DIRECTORY_BYTES).contains(&bytes)
         || start.checked_add(bytes) != Some(directory_end)
         || read_at::<4>(file, start)? != *b"PK\x01\x02"

@@ -1,5 +1,6 @@
 use crate::{ocr, Result, Sentence, Store};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use unicode_segmentation::UnicodeSegmentation;
 use sha2::{Digest, Sha256};
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -117,6 +118,113 @@ fn write(
         params![id, page, language, text, lines],
     )
     .map_err(database_error)?;
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ArchivedPage {
+    pub page: u16,
+    pub text: String,
+    pub language: Option<String>,
+    pub lines: Option<Vec<ocr::OcrLine>>,
+    pub position: Option<usize>,
+}
+
+impl ArchivedPage {
+    pub(crate) fn validate(&self, document: &crate::Document, page_count: u16) -> Result<()> {
+        if self.page >= page_count || self.text.trim().is_empty()
+            || self.text.len() > crate::MAX_IMPORT || self.text.contains('\0')
+            || document.pdf_page_starts.as_ref().and_then(|starts| starts.get(usize::from(self.page)))
+                != Some(&None)
+            || self.position.is_some_and(|position| !has_sentence(&self.text, position))
+        {
+            return Err("Некоректна окрема сторінка PDF у резервній копії.".into());
+        }
+
+        match (&self.language, &self.lines) {
+            (None, None) => Ok(()),
+            (Some(language), Some(lines))
+                if lines.iter().all(|line| line.page == self.page && line.correction.is_none()) =>
+            {
+                crate::valid_language(language)?;
+                if ocr::recognized_lines(lines, page_count)? != self.text {
+                    return Err("Текст сторінки PDF не відповідає збереженому OCR.".into());
+                }
+                Ok(())
+            }
+            _ => Err("Некоректне джерело тексту сторінки PDF.".into()),
+        }
+    }
+}
+
+fn has_sentence(text: &str, position: usize) -> bool {
+    text.split_sentence_bounds().filter(|part| !part.trim().is_empty()).nth(position).is_some()
+}
+
+pub(crate) fn has_cached_pages(db: &Connection, id: &str) -> Result<bool> {
+    db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pdf_detached_pages WHERE document_id=?1)",
+        [id],
+        |row| row.get(0),
+    )
+    .map_err(database_error)
+}
+
+pub(crate) fn visit_cached_pages(
+    db: &Connection, id: &str, mut visit: impl FnMut(ArchivedPage) -> Result<()>,
+) -> Result<()> {
+    let mut query = db.prepare(
+        "SELECT p.page,p.text,p.ocr_language,p.lines,c.sentence
+         FROM pdf_detached_pages p
+         LEFT JOIN pdf_detached_positions c ON c.document_id=p.document_id AND c.page=p.page
+         WHERE p.document_id=?1 ORDER BY p.page",
+    ).map_err(database_error)?;
+    let mut rows = query.query([id]).map_err(database_error)?;
+    while let Some(row) = rows.next().map_err(database_error)? {
+        let encoded: Option<String> = row.get(3).map_err(database_error)?;
+        let text: String = row.get(1).map_err(database_error)?;
+        let position: Option<usize> = row.get(4).map_err(database_error)?;
+        visit(ArchivedPage {
+            page: row.get(0).map_err(database_error)?,
+            position: position.filter(|&position| has_sentence(&text, position)),
+            text,
+            language: row.get(2).map_err(database_error)?,
+            lines: encoded.as_deref().map(serde_json::from_str).transpose().map_err(database_error)?,
+        })?;
+    }
+    Ok(())
+}
+
+/// Keep a local page and cursor when present. A cursor only transfers to identical text.
+pub(crate) fn adopt_cached_page(db: &Connection, document: &crate::Document, page: ArchivedPage) -> Result<()> {
+    if document.pdf_page_starts.as_ref().and_then(|starts| starts.get(usize::from(page.page)))
+        != Some(&None)
+    {
+        return Ok(());
+    }
+    if let Some((text, _)) = read(db, &document.id, page.page)? {
+        if text != page.text {
+            return Ok(());
+        }
+    } else {
+        let payload = page.lines.as_ref().map(serde_json::to_string).transpose().map_err(database_error)?;
+        write(db, &document.id, page.page, &page.text, page.language.as_deref(), payload.as_deref())?;
+        db.execute(
+            "DELETE FROM pdf_ocr_completed_pages WHERE document_id=?1 AND page=?2",
+            params![document.id, page.page],
+        ).map_err(database_error)?;
+        db.execute(
+            "DELETE FROM pdf_ocr_requests WHERE document_id=?1 AND page=?2",
+            params![document.id, page.page],
+        ).map_err(database_error)?;
+    }
+    if let Some(position) = page.position {
+        db.execute(
+            "INSERT OR IGNORE INTO pdf_detached_positions (document_id,page,sentence) VALUES (?1,?2,?3)",
+            params![document.id, page.page, position],
+        ).map_err(database_error)?;
+    }
     Ok(())
 }
 
