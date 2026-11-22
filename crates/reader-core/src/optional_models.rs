@@ -19,6 +19,10 @@ use std::{
 mod archive;
 pub use archive::OptionalModelArchiveJob;
 
+#[cfg(any(target_os = "macos", target_abi = "macabi"))]
+#[path = "optional_model_verification.rs"]
+mod verification;
+
 struct Model {
     id: &'static str,
     name: &'static str,
@@ -376,12 +380,20 @@ impl OptionalModelJob {
             }
             Ok(())
         };
-        for asset in self.model.assets {
-            verify_asset_checked(&installed.join(asset.name), asset, io::sink(), &checkpoint)?;
-        }
+        #[cfg(any(target_os = "macos", target_abi = "macabi"))]
+        verification::verify_for_inference(installed, self.model, &checkpoint)?;
+        #[cfg(not(any(target_os = "macos", target_abi = "macabi")))]
+        verify_inference_assets(installed, self.model, &checkpoint)?;
         checkpoint()?;
         inference(installed, requested_yield)
     }
+}
+
+fn verify_inference_assets(directory: &Path, model: &Model, checkpoint: &impl Fn() -> Result<()>) -> Result<()> {
+    for asset in model.assets {
+        verify_asset_checked(&directory.join(asset.name), asset, io::sink(), checkpoint)?;
+    }
+    Ok(())
 }
 
 fn check_memory(model: &Model) -> Result<()> {
