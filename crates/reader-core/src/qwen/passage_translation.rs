@@ -33,13 +33,16 @@ struct TranslationChunk {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PassageTranslation {
     pub text: String,
+    pub source_text: String,
     pub cached: bool,
 }
 
 pub struct TranslatePassageJob {
     source: String,
+    source_text: String,
     target: String,
     regenerate: bool,
     chunks: Vec<HintWork<TranslationChunk>>,
@@ -108,6 +111,7 @@ impl Store {
             .collect::<Result<Vec<_>>>()?;
         Ok(TranslatePassageJob {
             source: language,
+            source_text: text,
             target: target.to_owned(),
             regenerate,
             chunks,
@@ -201,7 +205,7 @@ impl TranslatePassageJob {
             Ok(chunks
                 .into_iter()
                 .collect::<Option<Vec<_>>>()
-                .map(|chunks| combine(chunks, true)))
+                .map(|chunks| combine(chunks, &self.source_text, true)))
         };
         let Some(model) = self.chunks.iter().find_map(|item| match item {
             HintWork::Generate { model, .. } => Some(model),
@@ -266,7 +270,7 @@ impl TranslatePassageJob {
                     for (cache, index) in updates {
                         cache.save(&translated[index])?;
                     }
-                    Ok(combine(translated, false))
+                    Ok(combine(translated, &self.source_text, false))
                 },
             )
         })
@@ -307,13 +311,14 @@ fn parse(bytes: &[u8], source: &str, target: &str, source_text: &str) -> Result<
     Ok(TranslationChunk { text: text.into() })
 }
 
-fn combine(chunks: Vec<TranslationChunk>, cached: bool) -> PassageTranslation {
+fn combine(chunks: Vec<TranslationChunk>, source_text: &str, cached: bool) -> PassageTranslation {
     PassageTranslation {
         text: chunks
             .into_iter()
             .map(|chunk| chunk.text)
             .collect::<Vec<_>>()
             .join(" "),
+        source_text: source_text.to_owned(),
         cached,
     }
 }

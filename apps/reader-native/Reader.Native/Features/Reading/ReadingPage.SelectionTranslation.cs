@@ -94,6 +94,13 @@ public partial class ReadingPage
     {
         var text = original.Text ?? "";
         var formatted = new FormattedString();
+        void AddSpan(string value, Color? background = null)
+        {
+            var span = new Span { Text = value, FontFamily = original.FontFamily, FontSize = original.FontSize };
+            if (original.TextColor is { } foreground) span.TextColor = foreground;
+            if (background is not null) span.BackgroundColor = background;
+            formatted.Spans.Add(span);
+        }
         var start = 0;
         if (!string.IsNullOrWhiteSpace(gloss))
         {
@@ -106,12 +113,12 @@ public partial class ReadingPage
                 search = end;
                 if ((match > 0 && char.IsLetterOrDigit(text[match - 1])) ||
                     (end < text.Length && char.IsLetterOrDigit(text[end]))) continue;
-                if (match > start) formatted.Spans.Add(new Span { Text = text[start..match] });
-                formatted.Spans.Add(new Span { Text = text[match..end], BackgroundColor = Color.FromArgb("#FFE48B") });
+                if (match > start) AddSpan(text[start..match]);
+                AddSpan(text[match..end], Color.FromArgb("#FFE48B"));
                 start = end;
             }
         }
-        if (start > 0 && start < text.Length) formatted.Spans.Add(new Span { Text = text[start..] });
+        if (start > 0 && start < text.Length) AddSpan(text[start..]);
         highlighted.FormattedText = start > 0 ? formatted : null;
         original.IsVisible = start == 0;
         highlighted.IsVisible = start > 0;
