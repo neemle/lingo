@@ -3,6 +3,7 @@ using Windows.Graphics.Imaging;
 using Windows.Storage;
 using Windows.Storage.Streams;
 using WindowsClipboard = Windows.ApplicationModel.DataTransfer.Clipboard;
+using WindowsDataPackageView = Windows.ApplicationModel.DataTransfer.DataPackageView;
 
 namespace Reader.Native.Services;
 
@@ -67,7 +68,7 @@ internal static class DesktopFiles
         return handled;
     }
 
-    private static async Task<ShareInboxItem> StageBitmapAsync(DataPackageView data, string name)
+    private static async Task<ShareInboxItem> StageBitmapAsync(WindowsDataPackageView data, string name)
     {
         var reference = await data.GetBitmapAsync();
         using var source = await reference.OpenReadAsync();

@@ -10,12 +10,12 @@ internal sealed record WebArticle(string Title, string Text, Uri Address);
 internal static class WebArticles
 {
     private const int MaxBytes = 4 * 1024 * 1024;
-    private static readonly HttpClient Client = new(new HttpClientHandler
+    private static readonly Lazy<HttpClient> Client = new(() => new HttpClient(new SocketsHttpHandler
     {
         AutomaticDecompression = DecompressionMethods.All,
         MaxAutomaticRedirections = 5,
         UseCookies = false,
-    });
+    }));
 
     internal static Uri? Address(string? text) =>
         Uri.TryCreate(text?.Trim(), UriKind.Absolute, out var address) &&
@@ -26,7 +26,7 @@ internal static class WebArticles
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var cancel = deadline.Token;
-        using var response = await Client.GetAsync(address, HttpCompletionOption.ResponseHeadersRead, cancel);
+        using var response = await Client.Value.GetAsync(address, HttpCompletionOption.ResponseHeadersRead, cancel);
         response.EnsureSuccessStatusCode();
         var destination = Address(response.RequestMessage?.RequestUri?.AbsoluteUri) ??
             throw new InvalidDataException("Сторінка перенаправила на непідтримувану адресу.");
