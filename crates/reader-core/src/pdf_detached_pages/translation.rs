@@ -65,7 +65,7 @@ impl Store {
         let (projection, selected) = self.detached_page_projection(id, page, sentence_id, target)?;
         if cached_only {
             let routes = self.translation_cache_routes(&projection.document.language, target)?;
-            return cached_page_translation(self, &routes, &projection, selected, target);
+            return cached_page_translation(self, &routes, &projection, selected, target, false);
         }
         let position = projection.physical.start + selected;
         let translated =
@@ -74,7 +74,7 @@ impl Store {
             return Ok(Some(projection.localize(active)));
         }
         let routes = self.translation_cache_routes(&projection.document.language, target)?;
-        cached_page_translation(self, &routes, &projection, selected, target)
+        cached_page_translation(self, &routes, &projection, selected, target, false)
     }
 
     pub fn detached_pdf_passage(
@@ -113,7 +113,7 @@ impl Store {
             .map(|result| projection.localize(result));
         let active = match active {
             Some(active) => Some(active),
-            None => cached_page_translation(self, &routes, &projection, selected, target)?,
+            None => cached_page_translation(self, &routes, &projection, selected, target, false)?,
         };
         Ok(DetachedPdfPassage { active, rows })
     }
@@ -282,6 +282,7 @@ pub(super) fn cached_page_translation(
     projection: &PageProjection,
     selected: usize,
     target: &str,
+    for_search: bool,
 ) -> Result<Option<DetachedPdfTranslation>> {
     let document = &projection.document;
     let local_position = selected;
@@ -294,7 +295,7 @@ pub(super) fn cached_page_translation(
     {
         return Ok(None);
     }
-    let cached = routes.cached_active(store, document, selected, target)?;
+    let cached = routes.cached_active(store, document, selected, target, for_search)?;
     if let Some(active) = active_translation(document, selected, cached.paragraph) {
         return Ok(Some(projection.localize(active)));
     }

@@ -96,7 +96,7 @@ impl Store {
                         scanned_sentences += 1;
                         if let Some(text) = projection.reviewed(&sentence.id, target) {
                             (text.to_owned(), None, Some(true), None)
-                        } else if let Some(hit) = translation::cached_page_translation(self, routes, projection, position, target)? {
+                        } else if let Some(hit) = translation::cached_page_translation(self, routes, projection, position, target, true)? {
                             if hit.start_position != position { continue; }
                             (hit.text, hit.pivot_language, Some(false), hit.source_text)
                         } else {

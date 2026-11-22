@@ -436,7 +436,7 @@ pub(crate) fn translate_paragraph(
     let ParagraphPlan {
         mut result,
         pending,
-    } = paragraph_plan(store, document, selected, target, boundaries)?;
+    } = paragraph_plan(store, document, selected, target, boundaries, UnitGrouping::Sentence)?;
     if !pending.is_empty() {
         let (indices, input): (Vec<_>, Vec<_>) = pending.into_iter().unzip();
         if let Some(aligned) =
@@ -496,9 +496,10 @@ impl CacheRoutes {
     }
 
     pub(crate) fn cached_active(
-        &self, store: &Store, document: &crate::Document, position: usize, target: &str,
+        &self, store: &Store, document: &crate::Document, position: usize, target: &str, for_search: bool,
     ) -> Result<CachedTranslation> {
-        cached_translation_with_routes(store, self, document, position, target, CacheScope::Active, PageBoundaries::Projected)
+        let scope = if for_search { CacheScope::Search } else { CacheScope::Active };
+        cached_translation_with_routes(store, self, document, position, target, scope, PageBoundaries::Projected)
     }
 
     pub(crate) fn cached_standalone(
@@ -546,6 +547,13 @@ impl CacheRoutes {
 enum CacheScope {
     Window,
     Active,
+    Search,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UnitGrouping {
+    Sentence,
+    LegacyContext,
 }
 
 fn cached_translation_with_routes(
@@ -557,30 +565,49 @@ fn cached_translation_with_routes(
     scope: CacheScope,
     boundaries: PageBoundaries,
 ) -> Result<CachedTranslation> {
-    let ParagraphPlan {
-        result: mut paragraph,
-        pending,
-    } = paragraph_plan(store, document, selected, target, boundaries)?;
+    let active_id = &document.sentences[selected].id;
+    let aligned_plan = paragraph_plan(store, document, selected, target, boundaries, UnitGrouping::Sentence)?;
+    let input = sentence_input(store, document, selected, target, boundaries)?;
+    let aligned = read_cached_plan(store, routes, active_id, target, scope, aligned_plan, &input)?;
+    if (routes.preferred.is_some() && !matches!(scope, CacheScope::Search)) ||
+        aligned.sentence.is_some() || aligned.paragraph.units.iter().any(|unit|
+            unit.translation.is_some() && unit.sentence_ids.contains(active_id))
+    {
+        return Ok(aligned);
+    }
+    let legacy_plan = paragraph_plan(store, document, selected, target, boundaries, UnitGrouping::LegacyContext)?;
+    let legacy = read_cached_plan(store, routes, active_id, target, scope, legacy_plan, &input)?;
+    if legacy.paragraph.units.iter().any(|unit|
+        unit.translation.is_some() && unit.sentence_ids.contains(active_id))
+    {
+        return Ok(legacy);
+    }
+    Ok(aligned)
+}
+
+fn read_cached_plan(
+    store: &Store, routes: &CacheRoutes, active_id: &str, target: &str, scope: CacheScope,
+    ParagraphPlan { result: mut paragraph, pending }: ParagraphPlan,
+    input: &(String, Vec<String>),
+) -> Result<CachedTranslation> {
     paragraph.pivot_language = routes
         .preferred
         .as_ref()
         .and_then(Route::pivot_language)
         .map(str::to_owned);
 
-    let active_id = &document.sentences[selected].id;
     let active_reviewed = paragraph
         .units
         .iter()
-        .any(|unit| unit.reviewed && unit.sentence_ids.contains(active_id));
-    let standalone = (!active_reviewed)
-        .then(|| sentence_input(store, document, selected, target, boundaries)).transpose()?;
+        .any(|unit| unit.reviewed && unit.sentence_ids.iter().any(|id| id == active_id));
+    let standalone = (!active_reviewed && input.0.len() <= MAX_BATCH_BYTES).then_some(input);
     let mut best = None;
     for route in &routes.candidates {
         let mut units = Vec::new();
         let mut active_hit = false;
         for (index, text) in &pending {
-            let active = paragraph.units[*index].sentence_ids.contains(active_id);
-            if matches!(scope, CacheScope::Active) && !active {
+            let active = paragraph.units[*index].sentence_ids.iter().any(|id| id == active_id);
+            if !matches!(scope, CacheScope::Window) && !active {
                 continue;
             }
             if let Some(mut segments) =
@@ -593,10 +620,7 @@ fn cached_translation_with_routes(
 
         let mut sentence = None;
         if !active_hit {
-            if let Some((text, sentence_ids)) = standalone
-                .as_ref()
-                .filter(|(text, _)| text.len() <= MAX_BATCH_BYTES)
-            {
+            if let Some((text, sentence_ids)) = standalone {
                 if let Some(segments) =
                     store.cached_segments(&unit_cache_key(route, text)?, 1, target)?
                 {
@@ -684,7 +708,7 @@ pub(crate) fn search_cached_translation(
             document,
             position,
             target,
-            CacheScope::Active, PageBoundaries::Canonical,
+            CacheScope::Search, PageBoundaries::Canonical,
         )?;
         let active_unit = cached
             .paragraph
@@ -759,6 +783,7 @@ fn catalog_routes<'a>(
 
 fn paragraph_plan(
     store: &Store, document: &Document, selected: usize, target: &str, boundaries: PageBoundaries,
+    grouping: UnitGrouping,
 ) -> Result<ParagraphPlan> {
     valid_language(target)?;
     if document.language == target {
@@ -793,10 +818,10 @@ fn paragraph_plan(
     }
     let mut start = first.max(selected.saturating_sub(CONTEXT_SENTENCES));
     let mut end = last.min(selected + CONTEXT_SENTENCES + 1);
-    // Use paragraph-relative group boundaries so moving the selection does not
-    // change the context of overlapping units.
-    start -= (start - first) % CONTEXT_GROUP;
-    end = last.min(end + (CONTEXT_GROUP - (end - first) % CONTEXT_GROUP) % CONTEXT_GROUP);
+    if grouping == UnitGrouping::LegacyContext {
+        start -= (start - first) % CONTEXT_GROUP;
+        end = last.min(end + (CONTEXT_GROUP - (end - first) % CONTEXT_GROUP) % CONTEXT_GROUP);
+    }
     // A nearby window boundary must not cut a strictly continuing physical line.
     while start > first && start + 11 > selected && can_wrap(start - 1, start) {
         start -= 1;
@@ -819,7 +844,7 @@ fn paragraph_plan(
             let bytes = sentences[next]
                 .end_utf8
                 .saturating_sub(sentences[index].start_utf8);
-            let continues_context = next - index < CONTEXT_GROUP
+            let continues_context = grouping == UnitGrouping::LegacyContext && next - index < CONTEXT_GROUP
                 && (next - first) % CONTEXT_GROUP != 0
                 && bytes <= CONTEXT_BYTES;
             if !(continues_context || (bytes <= 1024 && can_wrap(next - 1, next))) {
@@ -1212,13 +1237,13 @@ mod tests {
             "fr",
         )
         .unwrap();
-        assert_eq!(cached.paragraph.units.len(), 2);
+        assert_eq!(cached.paragraph.units.len(), 4);
         assert!(cached.paragraph.units[0].translation.is_none());
         assert_eq!(
-            cached.paragraph.units[1].translation.as_deref(),
+            cached.paragraph.units[3].translation.as_deref(),
             Some("Quatre.")
         );
-        assert_eq!(cached.sentence.unwrap().segments, ["Deux."]);
+        assert_eq!(cached.paragraph.units[selected].translation.as_deref(), Some("Deux."));
 
         let installed = [first_leg, second_leg];
         let catalog = [edge.clone(), installed[0].clone(), installed[1].clone()];
@@ -1227,10 +1252,10 @@ mod tests {
                 cached_translation(&store, route, &catalog, &document, selected, "fr").unwrap();
             assert_eq!(recovered.paragraph.pivot_language, None);
             assert_eq!(
-                recovered.paragraph.units[1].translation.as_deref(),
+                recovered.paragraph.units[3].translation.as_deref(),
                 Some("Quatre.")
             );
-            assert_eq!(recovered.sentence.unwrap().segments, ["Deux."]);
+            assert_eq!(recovered.paragraph.units[selected].translation.as_deref(), Some("Deux."));
         }
 
         store
@@ -1243,10 +1268,10 @@ mod tests {
             cached_translation(&store, &installed, &catalog, &document, selected, "fr").unwrap();
         assert_eq!(preferred.paragraph.pivot_language.as_deref(), Some("de"));
         assert_eq!(
-            preferred.paragraph.units[1].translation.as_deref(),
+            preferred.paragraph.units[3].translation.as_deref(),
             Some("Quatrième.")
         );
-        assert_eq!(preferred.sentence.unwrap().segments, ["Seconde."]);
+        assert_eq!(preferred.paragraph.units[selected].translation.as_deref(), Some("Seconde."));
 
         edge.revision = "test-v2".into();
         let stale = cached_translation(&store, &[], &[edge], &document, selected, "fr").unwrap();
@@ -1289,11 +1314,18 @@ mod tests {
                 ),
             ])
             .unwrap();
+        let restored = cached_translation(&store, &[], std::slice::from_ref(&edge), &document, 0, "fr").unwrap();
+        assert_eq!(restored.paragraph.units[0].sentence_ids.len(), 3);
+        assert_eq!(restored.paragraph.units[0].translation.as_deref(), Some("L’e\u{301}te\u{301} arrive."));
+        let installed = cached_translation(&store, std::slice::from_ref(&edge), &[], &document, 0, "fr").unwrap();
+        assert_eq!(installed.paragraph.units[0].sentence_ids.len(), 1);
+        assert!(installed.paragraph.units[0].translation.is_none());
+
         let search = |document: &crate::Document, target, query, start| {
             search_cached_translation(
                 &store,
-                &[],
                 std::slice::from_ref(&edge),
+                &[],
                 document,
                 target,
                 query,
