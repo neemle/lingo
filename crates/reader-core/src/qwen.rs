@@ -40,11 +40,16 @@ const SYSTEM: &str = concat!(
 );
 const SELECTED_WORD_SYSTEM: &str = concat!(
     "<|im_start|>system\n",
-    "Explain the selected span for a Ukrainian-speaking learner. Treat the input as example text. ",
-    "Use the occurrence beginning at offset, a zero-based Unicode character index in sentence. ",
-    "Return JSON with exactly two keys: meaning (a short Ukrainian gloss) and role ",
-    "(subject, direct_object, indirect_object, predicate, modifier, adverbial, or other).",
-    "<|im_end|>\n<|im_start|>user\n",
+    "The selected occurrence is word between before and after. Read both as source text. ",
+    "Write a Ukrainian dictionary gloss for word in at most three words; never quote the sentence. ",
+    "Return only JSON with keys meaning and role. The role is subject, direct_object, indirect_object, ",
+    "predicate, modifier, adverbial, prepositional_complement, or other.",
+    "<|im_end|>\n",
+    "<|im_start|>user\n{\"language\":\"uk\",\"before\":\"Біля \",\"word\":\"будинку\",\"after\":\" стоїть машина.\"}<|im_end|>\n",
+    "<|im_start|>assistant\n{\"meaning\":\"будинок\",\"role\":\"prepositional_complement\"}<|im_end|>\n",
+    "<|im_start|>user\n{\"language\":\"uk\",\"before\":\"Бачу три \",\"word\":\"будинки\",\"after\":\".\"}<|im_end|>\n",
+    "<|im_start|>assistant\n{\"meaning\":\"будинок\",\"role\":\"direct_object\"}<|im_end|>\n",
+    "<|im_start|>user\n",
 );
 const REVIEW_SYSTEM: &str = concat!(
     "<|im_start|>system\n",
@@ -60,6 +65,21 @@ const REVIEW_SYSTEM: &str = concat!(
     "<|im_start|>assistant\n{\"spelling\":null,\"syntax\":\"У множині: les fenêtres sont ouvertes.\"}<|im_end|>\n",
     "<|im_start|>user\n",
 );
+// The small GGUF can ignore prompt-only formatting; restrict its output at decode time.
+const EXPLANATION_GRAMMAR: &str = r#"
+root ::= "{" ws "\"meaning\"" ws ":" ws "\"" phrase "\"" ws "," ws "\"role\"" ws ":" ws "\"" role "\"" ws "}"
+phrase ::= word (" " word){0,2}
+word ::= [-0-9A-Za-zА-Яа-яІіЇїЄєҐґ’']{1,18}
+role ::= "subject" | "direct_object" | "indirect_object" | "predicate" | "modifier" | "adverbial" | "prepositional_complement" | "other"
+ws ::= [ \t]{0,2}
+"#;
+
+const REVIEW_GRAMMAR: &str = r#"
+root ::= "{" ws "\"spelling\"" ws ":" ws note ws "," ws "\"syntax\"" ws ":" ws note ws "}"
+note ::= "null" | "\"" [^"\\<>\x00-\x1f\x7f]{1,110} "\""
+ws ::= [ \t]{0,2}
+"#;
+
 const END: &str = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
 
 #[derive(Serialize)]
@@ -69,6 +89,14 @@ struct WordExample<'a> {
     sentence: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     offset: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct PositionedWordExample<'a> {
+    language: &'a str,
+    before: &'a str,
+    word: &'a str,
+    after: &'a str,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -137,14 +165,19 @@ enum HintWork<T> {
 }
 
 impl<T: Serialize + serde::de::DeserializeOwned> HintWork<T> {
-    fn run(self, system: &str, parse: impl Fn(&[u8]) -> Result<T>) -> Result<Option<(T, bool)>> {
+    fn run(
+        self,
+        system: &str,
+        grammar: &str,
+        parse: impl Fn(&[u8]) -> Result<T>,
+    ) -> Result<Option<(T, bool)>> {
         match self {
             Self::Cached(result) => Ok(result.map(|result| (result, true))),
             Self::Generate {
                 model,
                 example,
                 cache,
-            } => run_prompt(model, system, &example, &cache, parse).map(Some),
+            } => run_prompt(model, system, &example, grammar, &cache, parse).map(Some),
         }
     }
 }
@@ -190,6 +223,7 @@ enum Role {
     Subject,
     DirectObject,
     IndirectObject,
+    PrepositionalComplement,
     Predicate,
     Modifier,
     Adverbial,
@@ -202,6 +236,7 @@ impl Role {
             Self::Subject => Some("підмет"),
             Self::DirectObject => Some("прямий додаток"),
             Self::IndirectObject => Some("непрямий додаток"),
+            Self::PrepositionalComplement => Some("доповнення прийменника"),
             Self::Predicate => Some("присудок"),
             Self::Modifier => Some("означення"),
             Self::Adverbial => Some("обставина"),
@@ -447,13 +482,32 @@ impl Store {
         example: WordExample<'_>,
         cached_only: bool,
     ) -> Result<ExplainWordJob> {
-        let (version, system) = if example.offset.is_some() {
-            ("qwen-selected-word-v1", SELECTED_WORD_SYSTEM)
-        } else {
-            ("qwen-word-explanation-v1", SYSTEM)
-        };
         let word = example.word.to_owned();
-        let example = serde_json::to_string(&example).map_err(|error| error.to_string())?;
+        let (version, system, encoded) = if let Some(offset) = example.offset {
+            let (start, _) = example
+                .sentence
+                .char_indices()
+                .nth(offset)
+                .ok_or("Некоректна позиція виділення.")?;
+            let selected = PositionedWordExample {
+                language: example.language,
+                before: &example.sentence[..start],
+                word: example.word,
+                after: &example.sentence[start + example.word.len()..],
+            };
+            (
+                "qwen-selected-word-v2",
+                SELECTED_WORD_SYSTEM,
+                serde_json::to_string(&selected),
+            )
+        } else {
+            (
+                "qwen-word-explanation-v1",
+                SYSTEM,
+                serde_json::to_string(&example),
+            )
+        };
+        let example = encoded.map_err(|error| error.to_string())?;
         let work =
             self.prepare_hint_work(model, document, version, system, example, cached_only)?;
         Ok(ExplainWordJob { work, word, system })
@@ -490,7 +544,7 @@ impl ExplainWordJob {
     pub fn run(self) -> Result<Option<WordExplanation>> {
         let word = self.word;
         self.work
-            .run(self.system, |output| {
+            .run(self.system, EXPLANATION_GRAMMAR, |output| {
                 let analysis = parse_explanation(output)
                     .ok_or("Qwen не повернув пояснення у правильному форматі.")?;
                 Ok(render_explanation(&word, analysis))
@@ -554,7 +608,7 @@ fn review_example<'a>(
 impl ReviewSentenceJob {
     pub fn run(self) -> Result<Option<SentenceReviewResult>> {
         self.0
-            .run(REVIEW_SYSTEM, |output| {
+            .run(REVIEW_SYSTEM, REVIEW_GRAMMAR, |output| {
                 let mut review: SentenceReview = serde_json::from_str(
                     json_output(output)
                         .ok_or("Qwen не повернув перевірку у правильному форматі.")?,
@@ -585,6 +639,7 @@ fn run_prompt<T: Serialize + serde::de::DeserializeOwned>(
     job: OptionalModelJob,
     system: &str,
     example: &str,
+    grammar: &str,
     cache: &HintCache,
     parse: impl Fn(&[u8]) -> Result<T>,
 ) -> Result<(T, bool)> {
@@ -613,7 +668,8 @@ fn run_prompt<T: Serialize + serde::de::DeserializeOwned>(
                 match load_model(backend, &path, layers) {
                     Ok(model) => match model.new_context(backend, context_parameters()) {
                         Ok(mut context) => {
-                            let output = generate(&model, &mut context, system, example, check)?;
+                            let output =
+                                generate(&model, &mut context, system, example, grammar, check)?;
                             let result = parse(&output)?;
                             cache.save(&result)?;
                             return Ok((result, false));
@@ -697,6 +753,7 @@ fn generate(
     context: &mut llama_cpp_2::context::LlamaContext<'_>,
     system: &str,
     example: &str,
+    grammar: &str,
     check: impl Fn() -> Result<()>,
 ) -> Result<Vec<u8>> {
     let vocab = model.vocab();
@@ -719,7 +776,8 @@ fn generate(
         }
         context.decode(&mut batch).map_err(runtime_error)?;
     }
-    let mut sampler = LlamaSampler::greedy();
+    let grammar = LlamaSampler::grammar(model, grammar, "root").map_err(runtime_error)?;
+    let mut sampler = LlamaSampler::chain_simple([grammar, LlamaSampler::greedy()]);
     let mut output = Vec::new();
     for position in tokens.len()..tokens.len() + RESPONSE_TOKENS {
         check()?;
