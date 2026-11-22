@@ -134,7 +134,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             value(store.prefetch_linguistics(&id, &sentence_id, &revision_id, step))
         }
         Command::PdfOcrNeededPages { id, center } => value(store.pdf_ocr_needed_pages(&id, center)),
-        Command::ClaimPdfOcrPage { id } => value(store.claim_pdf_ocr_page(&id)),
+        Command::ClaimPdfOcrPage { id, center } => value(store.claim_pdf_ocr_page_for_window(&id, center)),
         Command::RetryPdfOcrPage { id, page, token, canceled } => {
             if canceled {
                 value(store.cancel_pdf_ocr_page(&id, page, &token))

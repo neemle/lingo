@@ -290,6 +290,13 @@ impl Store {
 
     /// One worker per document can take the highest-priority available page.
     pub fn claim_pdf_ocr_page(&mut self, id: &str) -> Result<Option<PdfOcrRequest>> {
+        self.claim_pdf_ocr_page_for_window(id, None)
+    }
+
+    /// An asynchronous viewer may claim pages only while its physical window is active.
+    pub fn claim_pdf_ocr_page_for_window(
+        &mut self, id: &str, center: Option<u16>,
+    ) -> Result<Option<PdfOcrRequest>> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -299,12 +306,17 @@ impl Store {
             .query_row(
                 "SELECT page FROM pdf_ocr_requests
                  WHERE document_id=?1 AND available_at<=?2
+                   AND (?3 IS NULL OR (
+                     page BETWEEN ?3 - 1 AND ?3 + 1
+                     AND EXISTS (SELECT 1 FROM pdf_reading_positions
+                                 WHERE document_id=?1 AND page=?3)
+                   ))
                    AND NOT EXISTS (
                      SELECT 1 FROM pdf_ocr_requests
                      WHERE document_id=?1 AND token IS NOT NULL AND available_at>?2
                    )
                  ORDER BY priority LIMIT 1",
-                params![id, now],
+                params![id, now, center],
                 |row| row.get(0),
             )
             .optional()

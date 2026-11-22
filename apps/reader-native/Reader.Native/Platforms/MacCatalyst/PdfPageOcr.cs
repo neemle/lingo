@@ -16,10 +16,11 @@ internal static class PdfPageOcr
         {
             cancellation.ThrowIfCancellationRequested();
             if (updateFocus) await session.SetPdfReadingPageAsync(document.Id, page);
+            Exception? firstFailure = null;
             for (var attempt = 0; attempt < 3; attempt++)
             {
                 cancellation.ThrowIfCancellationRequested();
-                if (await session.ClaimPdfOcrPageAsync(document.Id) is not { } claim) return;
+                if (await session.ClaimPdfOcrPageAsync(document.Id, page) is not { } claim) break;
                 try
                 {
                     var textLayer = claim.ReadTextLayer
@@ -34,14 +35,18 @@ internal static class PdfPageOcr
                     cancellation.ThrowIfCancellationRequested();
                     await session.CachePdfOcrPageAsync(document.Id, claim, lines, textLayer);
                 }
-                catch
+                catch (Exception error)
                 {
                     await session.ReleasePdfOcrPageAsync(document.Id, claim, cancellation.IsCancellationRequested);
-                    throw;
+                    cancellation.ThrowIfCancellationRequested();
+                    firstFailure ??= new InvalidDataException($"Сторінка {claim.Page + 1} · {error.Message}", error);
+                    continue;
                 }
                 if (!cancellation.IsCancellationRequested)
                     await onCached();
             }
+            cancellation.ThrowIfCancellationRequested();
+            if (firstFailure is not null) throw firstFailure;
         }
         finally { Worker.Release(); }
     }

@@ -270,7 +270,7 @@ fn validate(command: &Command) -> Result<()> {
         | Command::DetachedPdfAnnotations { id, .. }
         | Command::AnalyzeDetachedPdf { id, .. }
         | Command::PdfOcrNeededPages { id, .. }
-        | Command::ClaimPdfOcrPage { id }
+        | Command::ClaimPdfOcrPage { id, .. }
         | Command::RetryPdfOcrPage { id, .. }
         | Command::CachePdfOcrPage { id, .. }
             if id.is_empty() || id.len() > 256 || id.contains('\0') =>

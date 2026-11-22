@@ -225,6 +225,7 @@ pub enum Command {
     },
     ClaimPdfOcrPage {
         id: String,
+        center: Option<u16>,
     },
     RetryPdfOcrPage {
         id: String,
