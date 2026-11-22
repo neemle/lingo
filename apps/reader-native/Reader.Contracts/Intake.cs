@@ -23,6 +23,7 @@ public sealed record DetachedPdfSentence(Sentence Sentence, int Position, int To
     public SpeechResume? SpeechResume { get; init; }
     public string? SpeechText { get; init; }
     public string? NarrationText { get; init; }
+    public bool Footnote { get; init; }
 }
 
 public sealed record DetachedPdfOcrPage(string Revision, OcrLine[] Lines);

@@ -578,7 +578,12 @@ public partial class ReadingPage
                         latest is null || latest.Position != sentence.Position) break;
                     detachedSentence = sentence = latest;
                 }
-                var completed = await PlayDetachedSentenceAsync(address, sentence,
+                if (sentence.Footnote && !ContinueSpeech.IsChecked)
+                {
+                    DetachedSentenceStatus.Text = SkippedFootnote;
+                    break;
+                }
+                var completed = sentence.Footnote || await PlayDetachedSentenceAsync(address, sentence,
                     resumePlayback ? sentence.SpeechResume : null, token);
                 resumePlayback = false;
                 if (!completed || !ContinueSpeech.IsChecked || !readingPageActive ||

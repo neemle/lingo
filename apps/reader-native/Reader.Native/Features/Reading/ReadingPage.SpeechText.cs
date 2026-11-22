@@ -11,8 +11,22 @@ public partial class ReadingPage
     private const int MaxSpeechTextBytes = 1000;
     private bool editingSpeechText;
 
+    private const string SkippedFootnote = "Виноски пропускаються під час озвучення.";
+
+    private static bool IsFootnote(Document document, Sentence sentence)
+    {
+        var offset = sentence.StartUtf16;
+        foreach (var character in sentence.Text)
+        {
+            if (char.IsLetterOrDigit(character)) break;
+            offset++;
+        }
+        return document.Blocks.Any(block => block.Footnote && offset >= block.StartUtf16 && offset < block.EndUtf16);
+    }
+
     private static string EffectiveSpeechText(Document document, Sentence sentence)
     {
+        if (IsFootnote(document, sentence)) return "";
         if (document.SpeechTextOverrides.TryGetValue(sentence.Id, out var saved))
             return saved;
         var text = sentence.Text;

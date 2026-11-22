@@ -222,7 +222,14 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
                     char.IsLowSurrogate(text[start]) || end < text.Length && char.IsLowSurrogate(text[end]))
                     continue;
 
-                if (block.Kind == "heading")
+                if (block.Footnote)
+                {
+                    var noteSize = Math.Max(12, size - 5);
+                    var footnote = UIFont.FromName("Georgia", noteSize) ?? UIFont.SystemFontOfSize(noteSize);
+                    if (footnote is not null)
+                        storage.AddAttribute(UIStringAttributeKey.Font, footnote, DisplayRange(start, end - start));
+                }
+                else if (block.Kind == "heading")
                 {
                     var headingSize = size + (block.HeadingLevel switch { 1 => 6, 2 => 4, _ => 2 });
                     var heading = UIFont.FromName("Georgia-Bold", headingSize) ?? UIFont.BoldSystemFontOfSize(headingSize);

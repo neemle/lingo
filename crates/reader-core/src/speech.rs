@@ -127,7 +127,12 @@ impl Store {
         let document = self.speech_document(document_id)?;
         let index = document.sentences.iter().position(|sentence| sentence.id == sentence_id)
             .ok_or("Речення для озвучення не знайдено")?;
-        let candidate = document.sentences.get(index + usize::from(next));
+        let candidate = if next {
+            document.sentences.iter().skip(index + 1).find(|sentence|
+                !crate::document_layout::sentence_in_footnote(&document.blocks, sentence))
+        } else {
+            document.sentences.get(index)
+        };
         if next && document.format == "pdf" {
             let sentence = &document.sentences[index];
             let page = self.pdf_reading_page(document_id)?
@@ -172,13 +177,18 @@ impl Store {
             "SELECT body FROM documents WHERE id=?1", [document_id], |row| row.get(0),
         ).optional().map_err(|error| error.to_string())?
             .ok_or("Документ для озвучення не знайдено")?;
-        serde_json::from_str(&body).map_err(|error| error.to_string())
+        let mut document = serde_json::from_str(&body).map_err(|error| error.to_string())?;
+        crate::document_layout::reflow_ocr_paragraphs(&mut document);
+        Ok(document)
     }
     pub fn speech_narration(&self, document_id: &str, sentence_id: &str) -> Result<Option<String>> {
         let document = self.speech_document(document_id)?;
         let Some(sentence) = document.sentences.iter().find(|sentence| sentence.id == sentence_id) else {
             return Ok(None);
         };
+        if crate::document_layout::sentence_in_footnote(&document.blocks, sentence) {
+            return Ok(Some(String::new()));
+        }
         word_break::canonical_narration(&self.connection, &document, sentence)
     }
 
@@ -198,8 +208,12 @@ impl Store {
     }
 
     fn canonical_speech(&self, document: &Document, sentence: &Sentence) -> Result<(String, SpeechSource)> {
-        let text = word_break::canonical_narration(&self.connection, document, sentence)?
-            .unwrap_or_else(|| document.speech_text(sentence).to_owned());
+        let text = if crate::document_layout::sentence_in_footnote(&document.blocks, sentence) {
+            String::new()
+        } else {
+            word_break::canonical_narration(&self.connection, document, sentence)?
+                .unwrap_or_else(|| document.speech_text(sentence).to_owned())
+        };
         Ok((sentence.id.clone(), SpeechSource { language: document.language.clone(), text }))
     }
 }

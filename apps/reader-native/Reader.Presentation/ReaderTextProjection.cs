@@ -47,10 +47,21 @@ public sealed class ReaderTextProjection
     private static string JoinPdfLines(string source, IReadOnlyList<DocumentBlock> blocks)
     {
         char[]? reflowed = null;
+        var previousEnd = -1;
         foreach (var block in blocks)
         {
             if (block.StartUtf16 < 0 || block.EndUtf16 > source.Length || block.EndUtf16 <= block.StartUtf16) continue;
-            foreach (var index in Enumerable.Range(block.StartUtf16, block.EndUtf16 - block.StartUtf16))
+            if (previousEnd >= 0 && previousEnd < block.StartUtf16)
+            {
+                var gap = source.AsSpan(previousEnd, block.StartUtf16 - previousEnd);
+                if (gap.IndexOfAny('\r', '\n') < 0 && gap.Trim().IsEmpty)
+                {
+                    reflowed ??= source.ToCharArray();
+                    reflowed[previousEnd] = '\n';
+                }
+            }
+            previousEnd = block.EndUtf16;
+            for (var index = block.StartUtf16; index < block.EndUtf16; index++)
             {
                 if (source[index] is not ('\r' or '\n')) continue;
                 reflowed ??= source.ToCharArray();

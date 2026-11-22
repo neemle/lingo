@@ -383,6 +383,7 @@ fn block(
         list,
         table_cell: paragraph.cell,
         page: None,
+        footnote: false,
     }
 }
 

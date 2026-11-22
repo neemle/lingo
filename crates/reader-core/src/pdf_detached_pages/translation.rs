@@ -202,7 +202,7 @@ impl Store {
         } else {
             (text, None)
         };
-        let layout = document_layout::from_transcript(text, page_starts);
+        let layout = document_layout::from_transcript(text, page_starts.or_else(|| Some(vec![Some(0)])));
         let document = Document {
             id: id.to_owned(),
             text: layout.text,

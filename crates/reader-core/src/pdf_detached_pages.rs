@@ -148,6 +148,7 @@ pub struct DetachedPdfSentence {
     pub language: String,
     pub revision_id: String,
     pub bookmarked: bool,
+    pub footnote: bool,
     pub note: Option<String>,
     pub reviewed_translations: std::collections::BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -182,7 +183,7 @@ impl Store {
     pub fn select_detached_pdf_sentence_at(
         &self, id: &str, page: u16, requested: Option<usize>, expected: Option<&str>, source_offset: Option<usize>,
     ) -> Result<Option<DetachedPdfSentence>> {
-        let Some(CachedSentences { language, saved, sentences, revision, .. }) = self.detached_pdf_sentences(id, page)? else {
+        let Some(CachedSentences { language, text, saved, sentences, revision }) = self.detached_pdf_sentences(id, page)? else {
             return Ok(None);
         };
         let total = sentences.len();
@@ -202,40 +203,53 @@ impl Store {
         if requested.is_some() || source_offset.is_some() {
             write_position(&self.connection, id, page, position)?;
         }
+        let layout = self.detached_speech_layout(id, page, text)?;
+        let footnote = crate::document_layout::sentence_in_footnote(&layout.blocks, &sentence);
         let (bookmarked, note) = annotations::read(&self.connection, id, page, sentence.start_utf16)?;
         let reviewed_translations = annotations::reviewed(&self.connection, id, page, sentence.start_utf16)?;
         Ok(Some(DetachedPdfSentence {
-            sentence, position, total, language, revision_id: revision, bookmarked, note,
-            reviewed_translations, speech_resume, speech_text, narration_text,
+            sentence, position, total, language, revision_id: revision, bookmarked, note, footnote,
+            reviewed_translations, speech_resume: speech_resume.filter(|_| !footnote), speech_text, narration_text,
         }))
     }
     pub(crate) fn detached_pdf_speech_source(
         &self, id: &str, page: u16, sentence_id: &str, next: bool,
     ) -> Result<Option<(String, crate::speech::SpeechSource)>> {
-        let CachedSentences { language, saved, sentences, .. } = self.detached_pdf_sentences(id, page)?
+        let CachedSentences { language, text, saved, sentences, .. } = self.detached_pdf_sentences(id, page)?
             .ok_or("Текст сторінки PDF недоступний.")?;
         let position = saved.min(sentences.len() - 1);
         if sentences[position].id != sentence_id {
             return Err("Позиція читання сторінки PDF змінилася.".into());
         }
         let start = position + usize::from(next);
-        self.speech_on_detached_page(id, page, language, &sentences, start, next)
+        let layout = self.detached_speech_layout(id, page, text)?;
+        self.speech_on_detached_page(id, page, language, &sentences, &layout.blocks, start, next)
     }
 
     pub(crate) fn first_detached_pdf_speech_source(
         &self, id: &str, page: u16,
     ) -> Result<Option<(String, crate::speech::SpeechSource)>> {
-        let Some(CachedSentences { language, sentences, .. }) = self.detached_pdf_sentences(id, page)? else {
+        let Some(CachedSentences { language, text, sentences, .. }) = self.detached_pdf_sentences(id, page)? else {
             return Ok(None);
         };
-        self.speech_on_detached_page(id, page, language, &sentences, 0, true)
+        let layout = self.detached_speech_layout(id, page, text)?;
+        self.speech_on_detached_page(id, page, language, &sentences, &layout.blocks, 0, true)
+    }
+
+    fn detached_speech_layout(&self, id: &str, page: u16, text: String) -> Result<crate::Document> {
+        let lines = self.detached_pdf_ocr(id, page)?.map(|ocr| ocr.lines);
+        Ok(crate::document_layout::detached_pdf_document(text, lines))
     }
 
     fn speech_on_detached_page(
         &self, id: &str, page: u16, language: String, sentences: &[Sentence],
-        start: usize, skip_consumed: bool,
+        blocks: &[crate::document_layout::DocumentBlock], start: usize, skip_consumed: bool,
     ) -> Result<Option<(String, crate::speech::SpeechSource)>> {
         for (position, sentence) in sentences.iter().enumerate().skip(start) {
+            if crate::document_layout::sentence_in_footnote(blocks, sentence) {
+                if !skip_consumed { break; }
+                continue;
+            }
             let (speech, narration) = narration_text(&self.connection, id, page, sentences, position)?;
             let text = speech.or(narration).unwrap_or_else(|| sentence.text.clone());
             if !text.is_empty() {

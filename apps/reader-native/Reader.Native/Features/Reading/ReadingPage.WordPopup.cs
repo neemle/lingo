@@ -113,7 +113,7 @@ public partial class ReadingPage
     {
         if (DetachedWordCard.IsVisible)
         {
-            if (detachedSentence is { } current)
+            if (detachedSentence is { Footnote: false } current)
                 await SpeakWordDetailAsync(current.SpeechText ?? current.NarrationText ?? current.Sentence.Text, current.Language);
         }
         else if (selection is { } selected && AppState.Session.Document is { } document)

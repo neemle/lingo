@@ -816,6 +816,12 @@ public partial class ReadingPage : ContentPage
         var session = AppState.Session;
         if (PdfPageNotice.IsVisible || session.Busy || session.Document is not { } initial || session.Sentence is not { } sentence) return;
         StopWordDetail();
+        if (!ContinueSpeech.IsChecked && IsFootnote(initial, sentence))
+        {
+            StopSpeech();
+            SpeechStatus.Text = SkippedFootnote;
+            return;
+        }
         var source = SpeechSourceFor(initial, sentence);
         CheckpointSpeechPosition();
         var request = ++speechRequest;
