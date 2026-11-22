@@ -111,6 +111,18 @@ pub enum Command {
         id: String,
         center: u16,
     },
+    DetachedPdfSentence {
+        id: String,
+        page: u16,
+        position: Option<usize>,
+    },
+    TranslateDetachedPdfSentence {
+        id: String,
+        page: u16,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        target: String,
+    },
     SentenceTokens {
         id: String,
         #[serde(rename = "sentenceId")]

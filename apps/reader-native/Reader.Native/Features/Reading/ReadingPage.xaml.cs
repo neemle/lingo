@@ -309,7 +309,7 @@ public partial class ReadingPage : ContentPage
                 || document is not null && HasUntranslatedUnits(document, window));
         TranslateSentence.IsEnabled = active && !session.Busy && !translating && readiness?.Ready == true && text is null;
         OpenTranslationPackages.IsVisible = active && readiness is { Missing.Length: > 0 };
-        TargetLanguage.IsEnabled = active && !session.Busy;
+        TargetLanguage.IsEnabled = (active || DetachedPdfReader.IsVisible) && !session.Busy;
         UpdateSourceLocation(document, session.Sentence);
         UpdateParagraphPreview(document, window, unit);
         TrackTranslationScroll(key);
@@ -375,6 +375,7 @@ public partial class ReadingPage : ContentPage
         if (AppState.Session.Document is { } document && TargetCode is { } target)
             SaveReaderPreference(ReaderPreferenceChange.TranslationTarget(document.Language, target));
         UpdateTranslation();
+        if (DetachedTranslation is not null) ResetDetachedTranslation();
     }
 
     private async void EditTranslationClicked(object? sender, EventArgs args)

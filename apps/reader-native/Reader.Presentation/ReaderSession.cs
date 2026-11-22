@@ -197,6 +197,12 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<PdfReadWindow> PdfReadWindowAsync(string id, int center) =>
         Task.Run(() => client.PdfReadWindow(id, center));
 
+    public Task<DetachedPdfSentence?> DetachedPdfSentenceAsync(string id, int page, int? position) =>
+        Task.Run(() => client.DetachedPdfSentence(id, page, position));
+
+    public Task<MachineTranslation?> TranslateDetachedPdfSentenceAsync(string id, int page, string sentenceId, string target) =>
+        Task.Run(() => client.TranslateDetachedPdfSentence(id, page, sentenceId, target));
+
     public Task<PdfOcrRequest?> ClaimPdfOcrPageAsync(string id) => Task.Run(() => client.ClaimPdfOcrPage(id));
 
     public Task CachePdfOcrPageAsync(string id, PdfOcrRequest claim, OcrLine[] lines, string? textLayer = null) =>

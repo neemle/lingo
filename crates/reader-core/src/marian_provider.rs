@@ -442,6 +442,13 @@ impl StoreWorker {
             .translate_installed_sentence(document_id, sentence_id, target)
     }
 
+    pub fn translate_detached_pdf_sentence(
+        self, id: &str, page: u16, sentence_id: &str, target: &str,
+    ) -> Result<Option<AlignedTranslation>> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?
+            .translate_detached_pdf_sentence(id, page, sentence_id, target)
+    }
+
     pub fn translate_paragraph(
         self,
         document_id: &str,
@@ -630,6 +637,25 @@ impl Store {
             document_id,
             sentence_id,
             target,
+        )
+    }
+
+    pub fn translate_detached_pdf_sentence(
+        &mut self, id: &str, page: u16, sentence_id: &str, target: &str,
+    ) -> Result<Option<AlignedTranslation>> {
+        let current = self.detached_pdf_sentence(id, page, None)?
+            .filter(|current| current.sentence.id == sentence_id)
+            .ok_or("Позиція читання сторінки PDF змінилася.")?;
+        let directory = self.model_directory.clone();
+        self.translate_aligned(
+            &mut MarianProvider::interactive(&directory),
+            TranslationRequest {
+                source: &current.language,
+                target,
+                segments: &[current.sentence.text],
+                context: None,
+                settings: TranslationSettings::default(),
+            },
         )
     }
 

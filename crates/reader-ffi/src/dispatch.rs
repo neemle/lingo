@@ -98,6 +98,10 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             }
         }
         Command::PdfReadWindow { id, center } => value(store.pdf_read_window(&id, center)),
+        Command::DetachedPdfSentence { id, page, position } =>
+            value(store.detached_pdf_sentence(&id, page, position)),
+        Command::TranslateDetachedPdfSentence { id, page, sentence_id, target } =>
+            sentence_translation(store.translate_detached_pdf_sentence(&id, page, &sentence_id, &target)),
         Command::SentenceTokens { id, sentence_id, start, limit } => value(store.sentence_tokens(
             &id, &sentence_id, start,
             limit.unwrap_or(reader_core::document_tokens::DEFAULT_TOKEN_PAGE_SIZE),

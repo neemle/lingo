@@ -201,6 +201,11 @@ fn validate(command: &Command) -> Result<()> {
         {
             Err(Error::new("invalid_argument", "Invalid PDF OCR request token"))
         }
+        Command::TranslateDetachedPdfSentence { id, sentence_id, target, .. }
+            if !valid_token_address(id, sentence_id) || target.len() > 8 =>
+        {
+            Err(Error::new("invalid_argument", "Invalid PDF sentence translation address"))
+        }
         Command::DeleteDocument { id }
         | Command::ReadingCursor { id }
         | Command::PendingTranslationWindow { id }
@@ -210,6 +215,7 @@ fn validate(command: &Command) -> Result<()> {
         | Command::SetPdfReadingPage { id, .. }
         | Command::OpenPdfReadingPage { id, .. }
         | Command::PdfReadWindow { id, .. }
+        | Command::DetachedPdfSentence { id, .. }
         | Command::PdfOcrNeededPages { id, .. }
         | Command::ClaimPdfOcrPage { id }
         | Command::RetryPdfOcrPage { id, .. }

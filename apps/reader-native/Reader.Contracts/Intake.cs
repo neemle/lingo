@@ -12,3 +12,5 @@ public sealed record PdfOcrRequest(int Page, string Token, long ExpiresAt, strin
 public sealed record PdfReadPage(int Page, string State, string Text, OcrSpan? Span, bool RefreshPending = false);
 
 public sealed record PdfReadWindow(int Center, int PageCount, PdfReadPage[] Pages, string Context, OcrSpan? ContextSpan);
+
+public sealed record DetachedPdfSentence(Sentence Sentence, int Position, int Total, string Language);

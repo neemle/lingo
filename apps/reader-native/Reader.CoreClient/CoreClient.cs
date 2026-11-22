@@ -129,6 +129,15 @@ public sealed class CoreClient : IDisposable
     public PdfReadWindow PdfReadWindow(string id, int center) =>
         Call<PdfReadWindow>(new { version = 1, operation = "pdf_read_window", id, center });
 
+    public DetachedPdfSentence? DetachedPdfSentence(string id, int page, int? position) =>
+        Call<DetachedPdfSentence?>(new { version = 1, operation = "detached_pdf_sentence", id, page, position });
+
+    public MachineTranslation? TranslateDetachedPdfSentence(string id, int page, string sentenceId, string target) =>
+        CallIndependent<MachineTranslation?>(new
+        {
+            version = 1, operation = "translate_detached_pdf_sentence", id, page, sentenceId, target,
+        });
+
     public PdfOcrRequest? ClaimPdfOcrPage(string id) =>
         Call<PdfOcrRequest?>(new { version = 1, operation = "claim_pdf_ocr_page", id });
 

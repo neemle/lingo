@@ -174,6 +174,7 @@ public partial class ReadingPage
         if (page == window.Center || page < 0 || page >= window.PageCount) return;
 
         movingPdfPage = true;
+        StopDetachedPdfReader();
         StopAnalysisPrefetch();
         CancelReaderPdfOcr();
         StopSpeech();
@@ -192,7 +193,11 @@ public partial class ReadingPage
             movingPdfPage = false;
             if (readingPageActive && session.Document?.Id == document.Id)
             {
-                if (session.Error.Length > 0) StartReaderPdfOcr(session, document);
+                if (session.Error.Length > 0)
+                {
+                    StartReaderPdfOcr(session, document);
+                    UpdatePdfPageDisplay();
+                }
                 UpdatePdfPageButtons();
             }
         }
@@ -219,6 +224,8 @@ public partial class ReadingPage
         else if (pdfOcrError is not null && message is null)
             PdfPageStatus.Text += " · помилка OCR сусідньої сторінки";
         ShowPdfPageNotice(message, page is { State: "detached" } ? page.Text : null);
+        if (page is { State: "detached" } && pdfSnapshot is { } document)
+            ShowDetachedPdfPage(document, page);
         UpdatePdfPageButtons();
     }
 
@@ -231,7 +238,8 @@ public partial class ReadingPage
         if (detachedText is not null)
             DetachedPdfText.ReadingFontSize = SourceText.ReadingFontSize;
         DetachedPdfText.Text = detachedText ?? "";
-        DetachedPdfText.IsVisible = detachedText is not null;
+        DetachedPdfReader.IsVisible = detachedText is not null;
+        if (detachedText is null) StopDetachedPdfReader();
         if (show && stateChanged)
         {
             StopSpeech();

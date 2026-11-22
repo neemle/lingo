@@ -146,6 +146,14 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 return encode_job(worker.discard_intake(id));
             }
         }
+        Command::TranslateDetachedPdfSentence { id, page, sentence_id, target } => {
+            let worker = registry::lock()?.store(handle)?.prepare_translation_worker();
+            if let Some(worker) = worker {
+                return dispatch::sentence_translation(
+                    worker.translate_detached_pdf_sentence(id, *page, sentence_id, target),
+                );
+            }
+        }
         Command::TranslateParagraph {
             id,
             sentence_id,
