@@ -173,6 +173,10 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::InstallTranslationPackage { path } => {
             value(store.install_translation_package(std::path::Path::new(&path)))
         }
+        Command::VerifyTranslationPackage { .. } => Err(Error::new(
+            "internal_error",
+            "Translation verification must run outside the store lock",
+        )),
         Command::RemoveTranslationPackage { source, target } => {
             value(store.remove_translation_package(&source, &target))
         }

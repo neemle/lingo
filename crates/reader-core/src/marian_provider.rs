@@ -96,6 +96,27 @@ struct MarianProvider<'a> {
     background: bool,
 }
 
+/// An installed translation package integrity check independent of the store connection.
+pub struct TranslationPackageVerification {
+    directory: PathBuf,
+    package: &'static Package,
+}
+
+impl TranslationPackageVerification {
+    pub fn run(self) -> Result<()> {
+        if !self.directory.is_dir() {
+            return Err("Пакет перекладу не встановлено.".into());
+        }
+        let provider = MarianProvider::interactive(&self.directory);
+        let _lock = provider.lock(self.package, false)?;
+        let package_path = provider.read_path(self.package);
+        if !package_directory(&package_path)? {
+            return Err("Пакет перекладу не встановлено.".into());
+        }
+        verify_files(&package_path, self.package, &ASSETS, &|| Ok(()))
+    }
+}
+
 /// Owned settings for reading a document and updating its translation cache off the main store.
 pub struct TranslationWorker {
     database: PathBuf,
@@ -231,6 +252,21 @@ impl Store {
                     .collect(),
             })
             .collect()
+    }
+
+    pub fn prepare_translation_package_verification(
+        &self,
+        source: &str,
+        target: &str,
+    ) -> Result<TranslationPackageVerification> {
+        let package = catalog::PACKAGES
+            .iter()
+            .find(|package| package.source == source && package.target == target)
+            .ok_or("Для цієї мовної пари немає пакета.")?;
+        Ok(TranslationPackageVerification {
+            directory: self.model_directory.clone(),
+            package,
+        })
     }
 
     pub fn remove_translation_package(&self, source: &str, target: &str) -> Result<bool> {
@@ -785,10 +821,20 @@ fn verify_files(
     assets: &[&str],
     checkpoint: &impl Fn() -> Result<()>,
 ) -> Result<()> {
-    for (asset, expected) in assets.iter().zip(package.hashes) {
-        let file = File::open(directory.join(asset)).map_err(model_error)?;
-        let (_, actual) = copy_and_hash_checked(file, io::sink(), asset_limit(asset), checkpoint)?;
-        if actual != expected {
+    for ((asset, expected_size), expected_hash) in
+        assets.iter().zip(package.sizes).zip(package.hashes)
+    {
+        let path = directory.join(asset);
+        let read_error =
+            |error| format!("Не вдалося прочитати файл мовного пакета {asset}: {error}");
+        let metadata = fs::symlink_metadata(&path).map_err(read_error)?;
+        if !metadata.is_file() || metadata.len() != expected_size {
+            return Err(format!("Файл мовного пакета пошкоджений: {asset}"));
+        }
+        let file = File::open(path).map_err(read_error)?;
+        let (size, actual) = copy_and_hash_checked(file, io::sink(), expected_size, checkpoint)
+            .map_err(|error| format!("{asset}: {error}"))?;
+        if size != expected_size || actual != expected_hash {
             return Err(format!("Файл мовного пакета пошкоджений: {asset}"));
         }
     }

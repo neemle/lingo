@@ -186,6 +186,10 @@ pub enum Command {
     InstallTranslationPackage {
         path: String,
     },
+    VerifyTranslationPackage {
+        source: String,
+        target: String,
+    },
     RemoveTranslationPackage {
         source: String,
         target: String,

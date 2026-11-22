@@ -115,6 +115,13 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
+        Command::VerifyTranslationPackage { source, target } => {
+            let job = registry::lock()?
+                .store(handle)?
+                .prepare_translation_package_verification(source, target)
+                .map_err(gateway::domain)?;
+            return encode_job(job.run());
+        }
         Command::InstallOptionalModel { id, staging_root } => {
             let job = registry::lock()?
                 .store(handle)?
