@@ -31,6 +31,8 @@ use crate::{
 
 #[path = "marian_decoder.rs"]
 mod decoder;
+#[path = "marian_validation.rs"]
+mod probe_evidence;
 #[path = "marian_rerank.rs"]
 mod rerank;
 #[path = "marian_time.rs"]
@@ -82,6 +84,7 @@ pub struct TranslationPackageStatus {
     pub has_local_files: bool,
     pub revision: &'static str,
     pub assets: Vec<TranslationAsset>,
+    pub validation: Option<TranslationPackageValidationResult>,
 }
 
 #[derive(serde::Serialize)]
@@ -139,9 +142,16 @@ pub struct TranslationPackageValidationResult {
 impl TranslationPackageValidation {
     pub fn run(self) -> Result<TranslationPackageValidationResult> {
         let mut provider = MarianProvider::interactive(&self.directory);
-        if !provider.files_present(self.package) {
+        if !self.directory.is_dir() {
             return Err("Пакет перекладу не встановлено або він неповний.".into());
         }
+        let (package_path, before) = {
+            let _lock = provider.lock(self.package, false)?;
+            let package_path = provider.read_path(self.package);
+            let before = probe_evidence::fingerprint(&package_path, self.package)
+                .ok_or("Пакет перекладу не встановлено або він неповний.")?;
+            (package_path, before)
+        };
         let segments = [self.input.to_owned()];
         let output = provider
             .translate(
@@ -156,14 +166,25 @@ impl TranslationPackageValidation {
             return Err("У пробному перекладі немає очікуваного слова цільовою мовою.".into());
         }
 
-        Ok(TranslationPackageValidationResult {
+        let validation = TranslationPackageValidationResult {
             source: self.package.source,
             target: self.package.target,
             repository: self.package.repository,
             revision: self.package.revision,
             input: self.input,
             output,
-        })
+        };
+
+        // The translation acquires its own shared lock. Only attach this
+        // result to the package generation observed before that inference.
+        let _lock = provider.lock(self.package, true)?;
+        let current = provider.read_path(self.package);
+        let fingerprint = probe_evidence::fingerprint(&current, self.package);
+        if current != package_path || fingerprint.as_ref() != Some(&before) {
+            return Err("Пакет перекладу змінився під час перевірки.".into());
+        }
+        probe_evidence::write(&current, &validation, before)?;
+        Ok(validation)
     }
 }
 
@@ -428,6 +449,7 @@ impl Store {
                     || provider.removed_path(package).symlink_metadata().is_ok()
                     || provider.previous_path(package).symlink_metadata().is_ok(),
                 revision: package.revision,
+                validation: provider.validation_result(package),
                 assets: ASSETS
                     .into_iter()
                     .zip(package.sizes)
@@ -637,6 +659,14 @@ impl<'a> MarianProvider<'a> {
             fs::metadata(path.join(asset))
                 .is_ok_and(|metadata| metadata.is_file() && metadata.len() == expected)
         })
+    }
+
+    fn validation_result(&self, model: &Package) -> Option<TranslationPackageValidationResult> {
+        if !self.read_path(model).is_dir() {
+            return None;
+        }
+        let _lock = self.lock(model, false).ok()?;
+        probe_evidence::read(&self.read_path(model), model)
     }
 
     fn path(&self, model: &Package) -> PathBuf {
