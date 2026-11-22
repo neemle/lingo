@@ -107,6 +107,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::PdfReadWindow { id, center } => value(store.pdf_read_window(&id, center)),
         Command::DetachedPdfSentence { id, page, position, sentence_id } =>
             value(store.select_detached_pdf_sentence(&id, page, position, sentence_id.as_deref())),
+        Command::UnreadPdfTextPages { id } => value(store.unread_pdf_text_pages(&id)),
         Command::FindDetachedPdfText { id, query, start, limit, target } =>
             value(store.find_detached_pdf_text(&id, &query, start, limit, target.as_deref())),
         Command::SetDetachedPdfSpeechResume { id, page, sentence_id, resume } =>

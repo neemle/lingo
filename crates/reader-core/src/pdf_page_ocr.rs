@@ -214,6 +214,17 @@ fn remove_request(db: &Connection, id: &str, page: u16) -> Result<()> {
 }
 
 impl Store {
+    pub fn unread_pdf_text_pages(&self, id: &str) -> Result<Vec<u16>> {
+        let mut query = self.connection.prepare(
+            "SELECT j.value FROM documents d, json_each(d.body,'$.pdfPendingTextPages') j
+             WHERE d.id=?1 AND NOT EXISTS (
+                 SELECT 1 FROM pdf_detached_pages p WHERE p.document_id=d.id AND p.page=j.value
+             ) ORDER BY j.value",
+        ).map_err(database_error)?;
+        let rows = query.query_map([id], |row| row.get(0)).map_err(database_error)?;
+        rows.collect::<rusqlite::Result<_>>().map_err(database_error)
+    }
+
     /// Provide enough text for the active page and both immediate neighbors.
     pub fn pdf_read_window(&self, id: &str, center: u16) -> Result<PdfReadWindow> {
         let (body, file_backed): (String, bool) = self

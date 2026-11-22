@@ -155,6 +155,8 @@ public sealed class CoreClient : IDisposable
 
     public PdfReadWindow PdfReadWindow(string id, int center) =>
         Call<PdfReadWindow>(new { version = 1, operation = "pdf_read_window", id, center });
+    public int[] UnreadPdfTextPages(string id) =>
+        Call<int[]>(new { version = 1, operation = "unread_pdf_text_pages", id });
 
     public DetachedPdfSentence? DetachedPdfSentence(string id, int page, int? position, string? sentenceId = null) =>
         Call<DetachedPdfSentence?>(new { version = 1, operation = "detached_pdf_sentence", id, page, position, sentenceId });

@@ -133,6 +133,9 @@ pub enum Command {
         id: String,
         center: u16,
     },
+    UnreadPdfTextPages {
+        id: String,
+    },
     DetachedPdfSentence {
         id: String,
         page: u16,

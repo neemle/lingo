@@ -9,7 +9,7 @@ public partial class ReadingPage
     private bool findingInDocument;
     private sealed record DocumentFindSelection(int Position, bool Translation,
         int? PhysicalPage = null, string? SentenceId = null, DetachedPdfTranslation? CachedMachine = null);
-    private sealed record DocumentFindCursor(int Position, int? PhysicalPage = null);
+    private sealed record DocumentFindCursor(int Position, int? PhysicalPage = null, bool UnreadLayer = false);
     private sealed record DocumentFindHit(string Text, DocumentFindSelection Selection);
     private sealed record DocumentFindPage(DocumentFindHit[] Matches, DocumentFindCursor? Next);
 
@@ -28,6 +28,18 @@ public partial class ReadingPage
                 return;
 
 #if MACCATALYST
+            if (match.PhysicalPage is int unreadPage && match.SentenceId is null && !match.Translation)
+            {
+                await pdfWindowRead;
+                if (!readingPageActive || session.Document?.Id != document.Id) return;
+                if (readingLayout == ReaderLayout.Translation)
+                {
+                    readingLayout = ReaderLayout.Automatic;
+                    ArrangeReadingColumns();
+                }
+                await OpenPdfPageAsync(unreadPage);
+                return;
+            }
             if (match.PhysicalPage is int page && match.SentenceId is { } sentenceId)
             {
                 await pdfWindowRead;
@@ -185,14 +197,13 @@ public partial class ReadingPage
                 nextStart = page.Next;
                 status.Text = page.Matches.Length > 0 ? $"Збіги · сторінка {earlierPages.Count + 1}"
                     : inTranslation ? "Збігів у збереженому перекладі немає." : "Збігів не знайдено.";
-                if (!inTranslation && document.PdfPendingTextPages.Length > 0)
-                    status.Text += " Пошук охоплює сторінки з доступним текстом.";
                 foreach (var match in page.Matches)
                 {
                     var selection = match.Selection;
                     var text = selection.Translation ? DocumentFind.MatchingExcerpt(match.Text, query) : match.Text;
-                    var label = BookmarkLabel(selection.Position, text);
-                    if (selection.PhysicalPage is int physicalPage) label = $"PDF {physicalPage + 1} · {label}";
+                    var label = selection.PhysicalPage is int physicalPage
+                        ? $"PDF {physicalPage + 1} · {(selection.SentenceId is null ? text : BookmarkLabel(selection.Position, text))}"
+                        : BookmarkLabel(selection.Position, text);
                     var result = new Button { Text = label, Style = outline, HorizontalOptions = LayoutOptions.Fill };
                     result.Clicked += (_, _) => closed.TrySetResult(selection);
                     results.Children.Add(result);
@@ -216,6 +227,9 @@ public partial class ReadingPage
         async Task<DocumentFindPage> FindOriginalAsync(DocumentFindCursor start, CancellationToken token)
         {
             var matches = new List<DocumentFindHit>(DocumentFind.PageSize);
+#if MACCATALYST
+            if (start.UnreadLayer) return await AppendUnreadAsync(matches, start.PhysicalPage ?? 0, token);
+#endif
             if (start.PhysicalPage is null)
             {
                 var found = await Task.Run(() => DocumentFind.FindPage(document.Sentences, query, start.Position, token), token);
@@ -224,10 +238,30 @@ public partial class ReadingPage
                 if (found.NextStart is int nextPosition)
                     return new(matches.ToArray(), new DocumentFindCursor(nextPosition));
             }
-            return await AppendDetachedAsync(matches, start, null, token);
+            var cached = await AppendDetachedAsync(matches, start, null, token);
+#if MACCATALYST
+            if (cached.Next is null && document.Format == "pdf")
+                return await AppendUnreadAsync(matches, 0, token);
+#endif
+            return cached;
         }
 
 #if MACCATALYST
+        async Task<DocumentFindPage> AppendUnreadAsync(List<DocumentFindHit> matches, int start, CancellationToken token)
+        {
+            var pages = await session.UnreadPdfTextPagesAsync(document.Id, token);
+            var pending = pages.Where(page => page >= start).ToArray();
+            if (pending.Length == 0 || await session.OriginalFileAsync(document.Id) is not { } original)
+                return new(matches.ToArray(), null);
+
+            var space = DocumentFind.PageSize - matches.Count;
+            var found = await PdfScan.FindUnreadTextAsync(original.Path, pending, query, space + 1, token);
+            matches.AddRange(found.Take(space).Select(hit => new DocumentFindHit(hit.Text,
+                new DocumentFindSelection(0, Translation: false, PhysicalPage: hit.Page))));
+            var next = found.Length > space ? new DocumentFindCursor(0, found[space].Page, UnreadLayer: true) : null;
+            return new(matches.ToArray(), next);
+        }
+
         async Task<DocumentFindPage> AppendDetachedAsync(
             List<DocumentFindHit> matches, DocumentFindCursor start, string? language, CancellationToken token)
         {

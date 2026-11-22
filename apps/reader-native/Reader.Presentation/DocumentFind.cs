@@ -6,6 +6,12 @@ public static class DocumentFind
 {
     public const int PageSize = 30;
 
+    public static bool Contains(string text, string query)
+    {
+        var needle = Normalize(query.Trim());
+        return needle.Length > 0 && Normalize(text).Contains(needle, StringComparison.OrdinalIgnoreCase);
+    }
+
     public static (int[] Positions, int? NextStart) FindPage(Sentence[] sentences, string query,
         int start, CancellationToken cancellationToken)
     {

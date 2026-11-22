@@ -2,6 +2,7 @@ using CoreGraphics;
 using Foundation;
 using PdfKit;
 using Reader.Contracts;
+using Reader.Presentation;
 using System.Text;
 using Client = Reader.CoreClient.CoreClient;
 
@@ -67,6 +68,28 @@ internal static class PdfScan
         Array.Fill(pages, "", pageLimit, count - pageLimit);
         return (pages, pageLimit);
     }
+
+    internal static Task<(int Page, string Text)[]> FindUnreadTextAsync(string path, int[] pages,
+        string query, int limit, CancellationToken cancellation) =>
+        Task.Run(() =>
+        {
+            using var pool = new NSAutoreleasePool();
+            using var document = Open(path);
+            var matches = new List<(int Page, string Text)>(limit);
+            foreach (var index in pages)
+            {
+                cancellation.ThrowIfCancellationRequested();
+                using var pagePool = new NSAutoreleasePool();
+                using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
+                var text = page.Text?.Trim() ?? "";
+                if (!DocumentFind.Contains(text, query)) continue;
+                var excerpt = new System.Globalization.StringInfo(DocumentFind.MatchingExcerpt(text, query));
+                matches.Add((index, excerpt.LengthInTextElements > 240
+                    ? excerpt.SubstringByTextElements(0, 240) + "…" : excerpt.String));
+                if (matches.Count == limit) break;
+            }
+            return matches.ToArray();
+        }, cancellation);
 
     internal static Task<string> ReadPageTextAsync(string path, int index, int expectedPages, CancellationToken cancellation) =>
         Task.Run(() =>
