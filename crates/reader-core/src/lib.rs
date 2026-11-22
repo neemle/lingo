@@ -112,6 +112,8 @@ pub struct Document {
     pub(crate) pdf_structured_sentences: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) pdf_abbreviation_boundaries: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) pdf_quote_boundaries: bool,
     pub created_at: i64,
     pub source_hash: String,
     pub format: String,
@@ -828,7 +830,7 @@ impl Store {
             .and_then(|extension| extension.to_str())
             .unwrap_or("txt")
             .to_lowercase();
-        let sentences = if format == "pdf" { segment_pdf_with_titles(&text, &id) } else { segment(&text, &id) };
+        let sentences = if format == "pdf" { pdf_sentences::Layout::ClosingQuotes.segment(&text, &id) } else { segment(&text, &id) };
         let mut document = Document {
             sentences,
             id,
@@ -858,6 +860,7 @@ impl Store {
             pdf_soft_lines: format == "pdf",
             pdf_structured_sentences: format == "pdf",
             pdf_abbreviation_boundaries: format == "pdf",
+            pdf_quote_boundaries: format == "pdf",
             created_at: now(),
             source_hash: hash,
             source_url: source_url.map(str::to_owned),

@@ -1019,13 +1019,14 @@ fn inference_span(document: &crate::Document, first: usize, last: usize) -> Opti
             span.split_whitespace().collect::<Vec<_>>().join(" ")
         });
     }
-    if first.id == last.id && !span.contains('\n') {
+    let normalized = if first.id == last.id && !span.contains('\n') {
         let cleaned = crate::document_layout::mask_pdf_note_references(document, span, first.start_utf8);
-        return Some(cleaned.map_or_else(|| first.text.clone(), |text|
-            normalize_ocr_input(document, &text, first.start_utf16)));
-    }
-
-    Some(normalize_pdf_translation_input(document, span, first.start_utf8, first.start_utf16))
+        cleaned.map_or_else(|| first.text.clone(), |text| normalize_ocr_input(document, &text, first.start_utf16))
+    } else {
+        normalize_pdf_translation_input(document, span, first.start_utf8, first.start_utf16)
+    };
+    let prose = normalized.trim_start_matches(['»', '”', '›', '」', '』']).trim_start();
+    Some(prose.to_owned())
 }
 
 pub(crate) fn normalize_pdf_translation_input(

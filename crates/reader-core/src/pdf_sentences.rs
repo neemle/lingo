@@ -16,11 +16,13 @@ pub(crate) enum Layout {
     SoftLines = 1,
     Structured = 2,
     Titles = 3,
+    ClosingQuotes = 4,
 }
 
 impl Layout {
     pub(crate) fn from_storage(value: u8) -> Self {
         match value {
+            4 => Self::ClosingQuotes,
             3 => Self::Titles,
             2 => Self::Structured,
             1 => Self::SoftLines,
@@ -30,6 +32,7 @@ impl Layout {
 
     pub(crate) fn segment(self, text: &str, id: &str) -> Vec<Sentence> {
         match self {
+            Self::ClosingQuotes => attach_closing_quotes(text, id, crate::segment_pdf_with_titles(text, id)),
             Self::Titles => crate::segment_pdf_with_titles(text, id),
             Self::Structured => crate::segment_pdf_structured(text, id),
             Self::SoftLines => crate::segment_pdf(text, id),
@@ -39,7 +42,9 @@ impl Layout {
 }
 
 pub(crate) fn segment_document(document: &Document, text: &str) -> Vec<Sentence> {
-    if document.format == "pdf" && document.pdf_abbreviation_boundaries {
+    if document.format == "pdf" && document.pdf_quote_boundaries {
+        Layout::ClosingQuotes.segment(text, &document.id)
+    } else if document.format == "pdf" && document.pdf_abbreviation_boundaries {
         crate::segment_pdf_with_titles(text, &document.id)
     } else if document.format == "pdf" && document.pdf_structured_sentences {
         crate::segment_pdf_structured(text, &document.id)
@@ -56,11 +61,12 @@ pub(crate) fn position_at(sentences: &[Sentence], offset: usize) -> usize {
 
 /// The legacy sentence remains intact if changing it would alter a saved translation or annotation.
 pub(crate) fn upgrade_document(document: &mut Document) -> bool {
-    if document.format != "pdf" || document.pdf_abbreviation_boundaries {
+    if document.format != "pdf" || document.pdf_quote_boundaries {
         return false;
     }
-    let candidates = [Layout::Titles, Layout::Structured, Layout::SoftLines];
-    let previous = if document.pdf_structured_sentences { Layout::Structured }
+    let candidates = [Layout::ClosingQuotes, Layout::Titles, Layout::Structured, Layout::SoftLines];
+    let previous = if document.pdf_abbreviation_boundaries { Layout::Titles }
+        else if document.pdf_structured_sentences { Layout::Structured }
         else if document.pdf_soft_lines { Layout::SoftLines } else { Layout::Literal };
     let Some((layout, sentences)) = candidates.into_iter()
         .take_while(|layout| *layout as u8 > previous as u8)
@@ -69,7 +75,11 @@ pub(crate) fn upgrade_document(document: &mut Document) -> bool {
     else { return false; };
 
     if let Some(previous) = document.sentences.get(document.position) {
-        let offset = previous.start_utf16 + document.reading_token_utf16.unwrap_or(0);
+        let cursor = document.reading_token_utf16.unwrap_or_else(|| {
+            let speech = previous.text.trim_start_matches(['»', '”', '›', '」', '』']).trim_start();
+            previous.text[..previous.text.len() - speech.len()].encode_utf16().count()
+        });
+        let offset = previous.start_utf16 + cursor;
         document.position = position_at(&sentences, offset);
         document.reading_token_utf16 = document.reading_token_utf16.and_then(|_| {
             let new = sentences.get(document.position)?;
@@ -79,7 +89,8 @@ pub(crate) fn upgrade_document(document: &mut Document) -> bool {
     document.sentences = sentences;
     document.pdf_soft_lines = true;
     document.pdf_structured_sentences = layout != Layout::SoftLines;
-    document.pdf_abbreviation_boundaries = layout == Layout::Titles;
+    document.pdf_abbreviation_boundaries = matches!(layout, Layout::Titles | Layout::ClosingQuotes);
+    document.pdf_quote_boundaries = layout == Layout::ClosingQuotes;
     true
 }
 
@@ -126,7 +137,7 @@ pub(crate) fn upgrade_documents(connection: &mut Connection) -> Result<()> {
     if connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
         .map_err(storage_error)?
-        >= 4
+        >= 5
     {
         return Ok(());
     }
@@ -137,7 +148,7 @@ pub(crate) fn upgrade_documents(connection: &mut Connection) -> Result<()> {
     if tx
         .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
         .map_err(storage_error)?
-        < 4
+        < 5
     {
         let ids = {
             let mut query = tx
@@ -169,10 +180,39 @@ pub(crate) fn upgrade_documents(connection: &mut Connection) -> Result<()> {
             }
         }
         crate::pdf_detached_pages::upgrade_sentence_layouts(&tx)?;
-        tx.pragma_update(None, "user_version", 4)
+        tx.pragma_update(None, "user_version", 5)
             .map_err(storage_error)?;
     }
     tx.commit().map_err(storage_error)
+}
+
+fn attach_closing_quotes(text: &str, id: &str, sentences: Vec<Sentence>) -> Vec<Sentence> {
+    let mut joined: Vec<Sentence> = Vec::with_capacity(sentences.len());
+    for mut next in sentences {
+        let remainder = next.text.trim_start_matches(['»', '”', '›', '」', '』']);
+        let quote_bytes = next.text.len() - remainder.len();
+        if quote_bytes > 0 {
+            if let Some(previous) = joined.last_mut().filter(|previous| {
+                let gap = &text[previous.end_utf8..next.start_utf8];
+                previous.text.ends_with(['.', '!', '?', '…']) &&
+                    gap.chars().all(char::is_whitespace) && gap.bytes().filter(|&byte| byte == b'\n').count() <= 1
+            }) {
+                let end = next.start_utf8 + quote_bytes;
+                previous.end_utf16 += text[previous.end_utf8..end].encode_utf16().count();
+                previous.end_utf8 = end;
+                previous.text = text[previous.start_utf8..end].to_owned();
+                let remainder = remainder.trim_start();
+                if remainder.is_empty() { continue; }
+                let lifted = next.text.len() - remainder.len();
+                next.start_utf16 += next.text[..lifted].encode_utf16().count();
+                next.start_utf8 += lifted;
+                next.text = remainder.to_owned();
+                next.id = format!("{id}:{}", next.start_utf8);
+            }
+        }
+        joined.push(next);
+    }
+    joined
 }
 
 pub(crate) fn mask_title_periods(boundaries: &mut [u8]) {
@@ -201,6 +241,19 @@ fn storage_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closing_quote_moves_to_the_previous_pdf_sentence_with_its_original_span() {
+        let text = "– Faites votre métier... capitaine Dantès. »\nLe jeune homme donne ses ordres aux marins.";
+        let sentences = Layout::ClosingQuotes.segment(text, "pdf");
+        assert_eq!(sentences.last().unwrap().text, "Le jeune homme donne ses ordres aux marins.");
+        assert!(sentences[..sentences.len()-1].last().unwrap().text.ends_with("Dantès. »"));
+        for sentence in sentences {
+            assert_eq!(&text[sentence.start_utf8..sentence.end_utf8], sentence.text);
+            assert_eq!(sentence.start_utf16, text[..sentence.start_utf8].encode_utf16().count());
+            assert_eq!(sentence.end_utf16, text[..sentence.end_utf8].encode_utf16().count());
+        }
+    }
 
     #[test]
     fn french_title_is_not_the_end_of_a_pdf_sentence() {

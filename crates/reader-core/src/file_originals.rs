@@ -11,7 +11,7 @@ use tempfile::NamedTempFile;
 use uuid::Uuid;
 
 use crate::{
-    document_layout, document_revisions, now, ocr, pdf_layers, segment_pdf_with_titles, valid_language, Document,
+    document_layout, document_revisions, now, ocr, pdf_layers, valid_language, Document,
     Result, Store,
 };
 
@@ -442,7 +442,7 @@ impl Store {
             .unwrap_or(&name);
         let text = extracted.text;
         let mut document = Document {
-            sentences: segment_pdf_with_titles(&text, &id),
+            sentences: crate::pdf_sentences::Layout::ClosingQuotes.segment(&text, &id),
             id,
             title: title.into(),
             language,
@@ -465,6 +465,7 @@ impl Store {
             pdf_soft_lines: true,
             pdf_structured_sentences: true,
             pdf_abbreviation_boundaries: true,
+            pdf_quote_boundaries: true,
             created_at: now(),
             source_hash: hash,
             format: "pdf".into(),

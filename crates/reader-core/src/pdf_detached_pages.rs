@@ -23,7 +23,7 @@ pub(crate) fn initialize(db: &mut Connection) -> Result<()> {
             ocr_language TEXT,
             text TEXT NOT NULL,
             lines TEXT,
-            soft_lines INTEGER NOT NULL DEFAULT 3,
+            soft_lines INTEGER NOT NULL DEFAULT 4,
             PRIMARY KEY(document_id, page)
         );
         CREATE TABLE IF NOT EXISTS pdf_detached_positions (
@@ -94,7 +94,7 @@ pub(crate) fn upgrade_sentence_layouts(db: &Connection) -> Result<()> {
     let pages = {
         let mut statement = db.prepare(
             "SELECT p.document_id,p.page FROM pdf_detached_pages p
-             WHERE p.soft_lines<3 AND NOT EXISTS(
+             WHERE p.soft_lines<4 AND NOT EXISTS(
                  SELECT 1 FROM pdf_detached_speech_resume s WHERE s.document_id=p.document_id AND s.page=p.page
              )",
         ).map_err(database_error)?;
@@ -111,14 +111,14 @@ pub(crate) fn upgrade_sentence_layouts(db: &Connection) -> Result<()> {
         ).map_err(database_error)?;
         let prior = Layout::from_storage(layout);
         let before = prior.segment(&text, "");
-        let after = Layout::Titles.segment(&text, "");
+        let after = Layout::ClosingQuotes.segment(&text, "");
         if !anchors_unchanged(&annotations::list(db, &id, page)?, &before, &after) {
             continue;
         }
         if let Some(position) = saved {
             write_position(db, &id, page, remap_position(position as usize, &before, &after))?;
         }
-        db.execute("UPDATE pdf_detached_pages SET soft_lines=3 WHERE document_id=?1 AND page=?2",
+        db.execute("UPDATE pdf_detached_pages SET soft_lines=4 WHERE document_id=?1 AND page=?2",
             params![id, page]).map_err(database_error)?;
     }
     Ok(())
@@ -341,7 +341,7 @@ pub(crate) fn read(db: &Connection, id: &str, page: u16) -> Result<Option<(Strin
 }
 
 pub(crate) fn write_text_layer(db: &Connection, id: &str, page: u16, text: &str) -> Result<()> {
-    write(db, id, page, text, None, None, Layout::Titles)
+    write(db, id, page, text, None, None, Layout::ClosingQuotes)
 }
 
 pub(crate) fn write_ocr(
@@ -357,7 +357,7 @@ pub(crate) fn write_ocr(
     }
     let text = ocr::recognized_lines(lines, page_count)?;
     let payload = serde_json::to_string(lines).map_err(database_error)?;
-    write(db, id, page, &text, Some(language), Some(&payload), Layout::Titles)
+    write(db, id, page, &text, Some(language), Some(&payload), Layout::ClosingQuotes)
 }
 
 fn write(
@@ -388,6 +388,8 @@ pub(crate) struct ArchivedPage {
     structured_sentences: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     abbreviation_boundaries: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    quote_boundaries: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<annotations::ArchivedAnnotation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -396,7 +398,9 @@ pub(crate) struct ArchivedPage {
 
 impl ArchivedPage {
     fn layout(&self) -> Layout {
-        if self.abbreviation_boundaries {
+        if self.quote_boundaries {
+            Layout::ClosingQuotes
+        } else if self.abbreviation_boundaries {
             Layout::Titles
         } else if self.structured_sentences {
             Layout::Structured
@@ -407,8 +411,9 @@ impl ArchivedPage {
 
     fn set_layout(&mut self, layout: Layout) {
         self.soft_lines = layout != Layout::Literal;
-        self.structured_sentences = matches!(layout, Layout::Structured | Layout::Titles);
-        self.abbreviation_boundaries = layout == Layout::Titles;
+        self.structured_sentences = matches!(layout, Layout::Structured | Layout::Titles | Layout::ClosingQuotes);
+        self.abbreviation_boundaries = matches!(layout, Layout::Titles | Layout::ClosingQuotes);
+        self.quote_boundaries = layout == Layout::ClosingQuotes;
     }
 
     pub(crate) fn validate(&self, document: &crate::Document, page_count: u16) -> Result<()> {
@@ -535,8 +540,9 @@ pub(crate) fn visit_cached_pages(
             annotations,
             position: position.filter(|&position| has_sentence(&text, position, layout)),
             soft_lines: layout != Layout::Literal,
-            structured_sentences: matches!(layout, Layout::Structured | Layout::Titles),
-            abbreviation_boundaries: layout == Layout::Titles,
+            structured_sentences: matches!(layout, Layout::Structured | Layout::Titles | Layout::ClosingQuotes),
+            abbreviation_boundaries: matches!(layout, Layout::Titles | Layout::ClosingQuotes),
+            quote_boundaries: layout == Layout::ClosingQuotes,
             text,
             language: row.get(2).map_err(database_error)?,
             lines: encoded.as_deref().map(serde_json::from_str).transpose().map_err(database_error)?,
@@ -567,12 +573,12 @@ pub(crate) fn adopt_cached_page(db: &Connection, document: &crate::Document, mut
             page.set_layout(local_mode);
         }
     } else {
-        if page.layout() != Layout::Titles && page.speech_resume.is_none() {
+        if page.layout() != Layout::ClosingQuotes && page.speech_resume.is_none() {
             let previous = page.layout().segment(&page.text, "");
-            let current = Layout::Titles.segment(&page.text, "");
+            let current = Layout::ClosingQuotes.segment(&page.text, "");
             if anchors_unchanged(&page.annotations, &previous, &current) {
                 page.position = page.position.map(|position| remap_position(position, &previous, &current));
-                page.set_layout(Layout::Titles);
+                page.set_layout(Layout::ClosingQuotes);
             }
         }
         let payload = page.lines.as_ref().map(serde_json::to_string).transpose().map_err(database_error)?;
