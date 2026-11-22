@@ -30,6 +30,7 @@ mod onnx_runtime;
 pub mod optional_models;
 pub mod pdf_layers;
 mod pdf_page_ocr;
+mod pdf_reading_position;
 pub use pdf_page_ocr::{PdfReadPage, PdfReadPageState, PdfReadWindow};
 pub mod practice;
 pub mod qwen;
@@ -329,6 +330,8 @@ pub struct Backup<Originals = Vec<Original>> {
     pub reading_sessions: Vec<reading_history::ReadingSession>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub document_revisions: Vec<document_revisions::DocumentRevision>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pdf_reading_positions: BTreeMap<String, u16>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -432,6 +435,7 @@ impl Store {
         document_revisions::initialize(&mut connection)?;
         file_originals::initialize(&connection)?;
         pdf_page_ocr::initialize(&connection)?;
+        pdf_reading_position::initialize(&connection)?;
         let file_original_directory = file_originals::directory(path);
         file_originals::cleanup_orphans(&mut connection, &file_original_directory);
         Ok(Self {

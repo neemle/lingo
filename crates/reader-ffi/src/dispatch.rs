@@ -78,6 +78,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
                     .collect::<Vec<_>>()
             }),
         ),
+        Command::PdfReadingPage { id } => value(store.pdf_reading_page(&id)),
+        Command::SetPdfReadingPage { id, page } => value(store.set_pdf_reading_page(&id, page)),
         Command::PdfReadWindow { id, center } => value(store.pdf_read_window(&id, center)),
         Command::PdfOcrNeededPages { id, center } => value(store.pdf_ocr_needed_pages(&id, center)),
         Command::CachePdfOcrPage { id, page, lines } => {

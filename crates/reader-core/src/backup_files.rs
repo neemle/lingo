@@ -1,6 +1,6 @@
 use crate::{
     backup_limits::{LimitedReader, LimitedWriter},
-    dictionary_transfer, document_layout, document_revisions, now, ocr, pdf_layers, practice,
+    dictionary_transfer, document_layout, document_revisions, now, ocr, pdf_layers, pdf_reading_position, practice,
     reading_history, segment, valid_language, validate_sentence_note, validate_speech_text,
     validate_translation, Backup, BackupResource, Document, Original, Result, Snapshot,
     SpeechResume, Store,
@@ -188,6 +188,7 @@ pub(crate) fn restore_library_data<O>(db: &Connection, backup: Backup<O>) -> Res
         &backup.snapshot.documents,
     )?;
     reading_history::restore(db, backup.reading_sessions, &backup.snapshot.documents)?;
+    pdf_reading_position::restore(db, backup.pdf_reading_positions, &backup.snapshot.documents)?;
     if let Some(progress) = backup.practice {
         practice::restore_if_fresh(db, progress, &review_cards)?;
     }
@@ -230,6 +231,7 @@ pub(crate) fn assemble<O>(
         resources: store.backup_resources(),
         reading_sessions: reading_history::export(tx)?,
         document_revisions: document_revisions::export(tx)?,
+        pdf_reading_positions: pdf_reading_position::export(tx)?,
     })
 }
 
@@ -401,6 +403,7 @@ pub(crate) fn prepare_documents(
     backup: &Backup,
 ) -> Result<impl Iterator<Item = Result<PreparedDocument<'_>>>> {
     let documents = &backup.snapshot.documents;
+    pdf_reading_position::validate(&backup.pdf_reading_positions, documents)?;
     let originals = checked_originals(backup.version, documents, &backup.originals)?;
     let mut revisions = revision_groups(backup, originals.keys().copied())?;
     Ok(documents.iter().map(move |document| {

@@ -141,6 +141,8 @@ fn validate(command: &Command) -> Result<()> {
             Err(Error::new("invalid_argument", "Too many OCR lines for one PDF page"))
         }
         Command::DeleteDocument { id }
+        | Command::PdfReadingPage { id }
+        | Command::SetPdfReadingPage { id, .. }
         | Command::PdfReadWindow { id, .. }
         | Command::PdfOcrNeededPages { id, .. }
         | Command::CachePdfOcrPage { id, .. }
