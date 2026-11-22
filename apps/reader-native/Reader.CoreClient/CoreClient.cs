@@ -37,6 +37,8 @@ public sealed class CoreClient : IDisposable
     public Backup Export() => Call<Backup>(new { version = 1, operation = "export" });
     public void ExportBackupFile(string path) =>
         Call<JsonElement>(new { version = 1, operation = "export_backup_file", path });
+    public BackupPreview InspectBackupFile(string path) =>
+        CallIndependent<BackupPreview>(new { version = 1, operation = "inspect_backup_file", path });
     public BackupResource[] RestoreBackupFile(string path) =>
         Call<BackupResource[]>(new { version = 1, operation = "restore_backup_file", path });
     public Original Original(string id) => Call<Original>(new { version = 1, operation = "original", id });

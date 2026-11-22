@@ -285,6 +285,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
 
     public Task<Backup> ExportAsync() => Task.Run(client.Export);
     public Task ExportBackupFileAsync(string path) => Task.Run(() => client.ExportBackupFile(path));
+    public Task<BackupPreview> InspectBackupFileAsync(string path) => Task.Run(() => client.InspectBackupFile(path));
     public async Task<BackupResource[]?> RestoreBackupFileAsync(string path)
     {
         BackupResource[]? resources = null;

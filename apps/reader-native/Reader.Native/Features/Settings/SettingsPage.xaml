@@ -100,7 +100,7 @@
      <FlexLayout Wrap="Wrap" JustifyContent="Start">
       <Button Text="Експортувати резервну копію" Clicked="ExportClicked" Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
       <Button Text="Поширити копію" Clicked="ExportClicked" CommandParameter="share" Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
-      <Button Text="Відновити з архіву" Clicked="RestoreClicked" Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
+      <Button x:Name="RestoreBackup" Text="Відновити з архіву" Clicked="RestoreClicked" Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
       <Button Text="Зберегти оригінал" Clicked="OriginalClicked" Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
       <Button Text="Поширити оригінал" Clicked="OriginalClicked" CommandParameter="share" Style="{StaticResource OutlineButton}" Margin="0,0,0,8" />
      </FlexLayout>

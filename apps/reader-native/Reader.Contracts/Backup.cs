@@ -15,3 +15,6 @@ public sealed record Backup(
 }
 
 public sealed record BackupResource(string Kind, string Id, string Revision);
+
+public sealed record BackupPreview(int Documents, int Vocabulary, int Reviews, int ReadingSessions,
+    int Resources, bool HasPractice);
