@@ -20,6 +20,7 @@ public partial class ReadingPage : ContentPage
     private TranslationReadiness? readiness;
     private string? readinessError;
     private int readinessRequest;
+    private const string TargetPreferencePrefix = "reader.translation.target.";
     private string? TargetCode
     {
         get
@@ -181,9 +182,10 @@ public partial class ReadingPage : ContentPage
             {
                 availableTargets = DocumentLanguages.All.Where(language => language.Code != source).ToArray();
                 TargetLanguage.ItemsSource = availableTargets.Select(language => language.Name).ToArray();
-                var previousIndex = Array.FindIndex(availableTargets, language => language.Code == previous);
+                var preferred = source is null ? previous : Preferences.Get(TargetPreferencePrefix + source, previous ?? "");
+                var preferredIndex = Array.FindIndex(availableTargets, language => language.Code == preferred);
                 var defaultIndex = Array.FindIndex(availableTargets, language => language.Code == (source == "uk" ? "fr" : "uk"));
-                TargetLanguage.SelectedIndex = previousIndex >= 0 ? previousIndex : defaultIndex;
+                TargetLanguage.SelectedIndex = preferredIndex >= 0 ? preferredIndex : defaultIndex;
             }
             finally { updatingTargets = false; }
         }
@@ -282,7 +284,10 @@ public partial class ReadingPage : ContentPage
 
     private void TargetChanged(object? sender, EventArgs args)
     {
-        if (TranslationNotice is not null && !updatingTargets) UpdateTranslation();
+        if (TranslationNotice is null || updatingTargets) return;
+        if (AppState.Session.Document is { } document && TargetCode is { } target)
+            Preferences.Set(TargetPreferencePrefix + document.Language, target);
+        UpdateTranslation();
     }
 
     private async void EditTranslationClicked(object? sender, EventArgs args)
