@@ -187,7 +187,7 @@ public partial class VocabularyPage : ContentPage
         var ready = !transferring && !loadingCollection;
         CollectionPicker.IsEnabled = !transferring && choices.Length > 1;
         ImportDictionary.IsEnabled = !transferring;
-        ExportDictionary.IsEnabled = ShareDictionary.IsEnabled = ready && entries.Length > 0;
+        ExportDictionary.IsEnabled = ShareDictionary.IsEnabled = ExportDictionaryCsv.IsEnabled = ready && entries.Length > 0;
         ExportDictionary.Text = ActiveCollection.DocumentId is null ? "Зберегти словник" : "Зберегти добірку";
         ShareDictionary.Text = ActiveCollection.DocumentId is null ? "Поширити словник" : "Поширити добірку";
         SemanticSearch.IsEnabled = ready && !searching && entries.Length > 0 &&
@@ -352,6 +352,7 @@ public partial class VocabularyPage : ContentPage
         if (transferring || loadingCollection) return;
         var documentId = ActiveCollection.DocumentId;
         var share = sender is Button { CommandParameter: "share" };
+        var csv = sender is Button { CommandParameter: "csv" };
         transferring = true;
         UpdateControls();
         ArchiveStatus.IsVisible = false;
@@ -363,9 +364,9 @@ public partial class VocabularyPage : ContentPage
                 ShowArchiveStatus("Немає карток для експорту.");
                 return;
             }
-            var fileName = documentId is null ? "chytai-dictionary.json" : "chytai-collection.json";
+            var fileName = (documentId is null ? "chytai-dictionary" : "chytai-collection") + (csv ? ".csv" : ".json");
             if (share) archive = archive with { Practice = null };
-            var bytes = await Task.Run(() => NativeFiles.Encode(archive));
+            var bytes = await Task.Run(() => csv ? DictionaryCsv.Encode(archive.Entries) : NativeFiles.Encode(archive));
             if (await NativeFiles.ExportBytesAsync(this, fileName, bytes,
                 share: share) is { } status)
                 ShowArchiveStatus(status);
@@ -387,10 +388,11 @@ public partial class VocabularyPage : ContentPage
         ShowTextMatches();
         try
         {
-            var file = await FilePicker.Default.PickAsync(new PickOptions { PickerTitle = "Архів словника Читай JSON" });
+            var file = await FilePicker.Default.PickAsync(new PickOptions { PickerTitle = "Словник Читай JSON або CSV" });
             if (file is null) return;
-            var bytes = await NativeFiles.ReadBoundedAsync(file, MaxArchiveBytes);
-            var archive = await Task.Run(() => NativeFiles.Decode<DictionaryArchive>(bytes));
+            var csv = string.Equals(Path.GetExtension(file.FileName), ".csv", StringComparison.OrdinalIgnoreCase);
+            var bytes = await NativeFiles.ReadBoundedAsync(file, csv ? DictionaryCsv.MaxBytes : MaxArchiveBytes);
+            var archive = await Task.Run(() => csv ? DictionaryCsv.Decode(bytes) : NativeFiles.Decode<DictionaryArchive>(bytes));
             if (archive is not { Version: 1, Entries: not null, Reviews: not null, Sources: not null })
                 throw new InvalidDataException("Виберіть архів словника Читай.");
             if (archive.Entries.Length == 0)
@@ -398,7 +400,9 @@ public partial class VocabularyPage : ContentPage
                 ShowArchiveStatus("Архів не містить карток.");
                 return;
             }
-            var details = $"Карток в архіві: {archive.Entries.Length}. Повторення буде об'єднано з вашою історією.";
+            var details = csv
+                ? $"Карток у CSV — {archive.Entries.Length}. Імпортуються слова, переклади й мови."
+                : $"Карток в архіві: {archive.Entries.Length}. Повторення буде об'єднано з вашою історією.";
             if (archive.Practice?.Question is not null)
                 details += "\nНезавершене запитання відновиться, якщо у вас ще немає збереженої практики.";
             if (!await DisplayAlertAsync("Імпорт словника", details, "Імпортувати", "Скасувати"))
