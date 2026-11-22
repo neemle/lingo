@@ -145,6 +145,14 @@ pub enum Command {
         #[serde(rename = "stagingRoot")]
         staging_root: String,
     },
+    ExportOptionalModelArchive {
+        id: String,
+        path: String,
+    },
+    InstallOptionalModelArchive {
+        id: String,
+        path: String,
+    },
     RollbackOptionalModel {
         id: String,
     },

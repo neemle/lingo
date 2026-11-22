@@ -33,6 +33,19 @@ fn validate(command: &Command) -> Result<()> {
                 "Backup file path must be nonempty and bounded",
             ))
         }
+        Command::ExportOptionalModelArchive { id, path }
+        | Command::InstallOptionalModelArchive { id, path }
+            if id.is_empty()
+                || id.len() > 64
+                || path.is_empty()
+                || path.len() > 4096
+                || path.contains('\0') =>
+        {
+            Err(Error::new(
+                "invalid_argument",
+                "Optional model archive fields must be nonempty and bounded",
+            ))
+        }
         Command::Import { bytes, name, .. }
         | Command::DetectDocumentLanguage { bytes, name }
         | Command::ImportImage { bytes, name, .. }

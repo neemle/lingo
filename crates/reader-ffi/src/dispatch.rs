@@ -144,7 +144,9 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::CheckOptionalModelSpace { id, staging_root } => {
             value(store.check_optional_model_space(&id, std::path::Path::new(&staging_root)))
         }
-        Command::InstallOptionalModel { .. } => Err(Error::new(
+        Command::InstallOptionalModel { .. }
+        | Command::ExportOptionalModelArchive { .. }
+        | Command::InstallOptionalModelArchive { .. } => Err(Error::new(
             "internal_error",
             "Optional model installation requires unlocked dispatch",
         )),

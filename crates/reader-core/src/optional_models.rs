@@ -15,6 +15,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "optional_model_archive.rs"]
+mod archive;
+pub use archive::OptionalModelArchiveJob;
+
 struct Model {
     id: &'static str,
     name: &'static str,
@@ -372,26 +376,30 @@ pub struct OptionalModelInstallJob {
 impl OptionalModelInstallJob {
     pub fn run(self) -> Result<()> {
         install_optional_model_files(&self.root, self.model, &self.staging_root, |directory| {
-            let permit = RESOURCES.optional()?;
-            check_memory(self.model)?;
-            let deadline = Instant::now() + Duration::from_secs(20);
-            let interrupted = || permit.should_yield() || Instant::now() >= deadline;
-            if interrupted() {
-                return Err("Контрольний запуск відкладено. Повторіть встановлення.".into());
-            }
-            match self.model.id {
-                "qwen-0.8b" | "qwen-2b" => crate::qwen::smoke(directory, &interrupted)?,
-                "multilingual-e5-small" => crate::e5::smoke(directory, &interrupted)?,
-                "piper-uk" => crate::tts::smoke(directory, &interrupted)?,
-                "supertonic-3" => crate::supertonic::smoke(directory, &interrupted)?,
-                _ => return Err("Контрольний запуск цієї моделі не підтримується.".into()),
-            }
-            if interrupted() {
-                return Err("Контрольний запуск відкладено. Повторіть встановлення.".into());
-            }
-            Ok(())
+            probe_optional_model(self.model, directory)
         })
     }
+}
+
+fn probe_optional_model(model: &Model, directory: &Path) -> Result<()> {
+    let permit = RESOURCES.optional()?;
+    check_memory(model)?;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let interrupted = || permit.should_yield() || Instant::now() >= deadline;
+    if interrupted() {
+        return Err("Контрольний запуск відкладено. Повторіть встановлення.".into());
+    }
+    match model.id {
+        "qwen-0.8b" | "qwen-2b" => crate::qwen::smoke(directory, &interrupted)?,
+        "multilingual-e5-small" => crate::e5::smoke(directory, &interrupted)?,
+        "piper-uk" => crate::tts::smoke(directory, &interrupted)?,
+        "supertonic-3" => crate::supertonic::smoke(directory, &interrupted)?,
+        _ => return Err("Контрольний запуск цієї моделі не підтримується.".into()),
+    }
+    if interrupted() {
+        return Err("Контрольний запуск відкладено. Повторіть встановлення.".into());
+    }
+    Ok(())
 }
 
 impl Store {
@@ -552,6 +560,27 @@ fn install_optional_model_files(
     if !package_directory(&source)? {
         return Err("Завантажені файли моделі відсутні.".into());
     }
+    install_optional_model_candidate(
+        root,
+        model,
+        |destination| {
+            for asset in model.assets {
+                let mut output = File::create(destination.join(asset.name)).map_err(model_error)?;
+                verify_asset(&source.join(asset.name), asset, &mut output)?;
+                output.sync_all().map_err(model_error)?;
+            }
+            Ok(())
+        },
+        probe,
+    )
+}
+
+fn install_optional_model_candidate(
+    root: &Path,
+    model: &Model,
+    stage: impl FnOnce(&Path) -> Result<()>,
+    probe: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
     fs::create_dir_all(root).map_err(model_error)?;
     let paths = ModelPaths::new(root, model.id);
     let _gate = lock_package(&paths.lock, true)?;
@@ -560,13 +589,9 @@ fn install_optional_model_files(
         model.assets.iter().map(|asset| asset.bytes).sum::<u64>() + PACKAGE_OVERHEAD,
     )])?;
     let staged = tempfile::tempdir_in(root).map_err(model_error)?;
-    for asset in model.assets {
-        let mut output = File::create(staged.path().join(asset.name)).map_err(model_error)?;
-        verify_asset(&source.join(asset.name), asset, &mut output)?;
-        output.sync_all().map_err(model_error)?;
-    }
+    stage(staged.path())?;
     probe(staged.path()).map_err(|error| {
-            format!("Модель не активовано: контрольний запуск не завершено. Завантажені файли збережено для повторної спроби. {error}")
+            format!("Модель не активовано: контрольний запуск не завершено. Вихідні файли збережено для повторної спроби. {error}")
         })?;
     activate_verified_package(
         staged.path(),

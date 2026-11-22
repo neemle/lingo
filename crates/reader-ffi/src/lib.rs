@@ -157,6 +157,21 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
+        Command::ExportOptionalModelArchive { id, path }
+        | Command::InstallOptionalModelArchive { id, path } => {
+            let job = registry::lock()?
+                .store(handle)?
+                .prepare_optional_model_archive(id)
+                .map_err(gateway::domain)?;
+            let path = std::path::Path::new(path);
+            return encode_job(
+                if matches!(command, Command::ExportOptionalModelArchive { .. }) {
+                    job.export(path)
+                } else {
+                    job.install(path)
+                },
+            );
+        }
         Command::InstallKnowledgePackage { language, path } => {
             let job = registry::lock()?
                 .store(handle)?
