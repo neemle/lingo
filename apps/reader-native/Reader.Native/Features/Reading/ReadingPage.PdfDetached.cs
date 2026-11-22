@@ -16,6 +16,7 @@ public partial class ReadingPage
     private bool changingDetachedAnnotation;
     private bool savingDetachedWord;
     private bool translatingDetachedSentence;
+    private string? detachedMachineTranslation;
     private bool speakingDetachedSentence;
     private bool detachedPaused;
     private int detachedAudioRun;
@@ -72,6 +73,7 @@ public partial class ReadingPage
             if (request == detachedSentenceRequest && ReferenceEquals(detachedAddress, address))
             {
                 loadingDetachedSentence = false;
+                ShowDetachedReviewedTranslation();
                 UpdateDetachedControls();
             }
         }
@@ -227,7 +229,7 @@ public partial class ReadingPage
             if (!ReferenceEquals(detachedAddress, address)) return;
             if (marks.Length == 0)
             {
-                await DisplayAlertAsync("Позначки на сторінці", "Закладок і нотаток ще немає.", "Гаразд");
+                await DisplayAlertAsync("Позначки на сторінці", "Закладок, нотаток і власних перекладів ще немає.", "Гаразд");
                 return;
             }
             var choices = marks.ToDictionary(item => BookmarkLabel(item.Position, item.Note ?? item.Text));
@@ -236,6 +238,50 @@ public partial class ReadingPage
                 await LoadDetachedSentenceAsync(address, mark.Position);
         }
         catch (Exception error) { await DisplayAlertAsync("Позначки", error.Message, "Гаразд"); }
+    }
+
+    private string? ReviewedDetachedTranslation() =>
+        TargetCode is { } target ? detachedSentence?.ReviewedTranslations.GetValueOrDefault(target) : null;
+
+    private string? CurrentDetachedTranslation() => ReviewedDetachedTranslation() ?? detachedMachineTranslation;
+
+    private async void DetachedEditTranslationClicked(object? sender, EventArgs args)
+    {
+        if (!DetachedEditTranslation.IsEnabled || detachedAddress is not { } address ||
+            detachedSentence is not { } current || TargetCode is not { } target) return;
+        changingDetachedAnnotation = true;
+        UpdateDetachedControls();
+        try
+        {
+            var own = ReviewedDetachedTranslation();
+            var message = own is null ? current.Sentence.Text
+                : current.Sentence.Text + Environment.NewLine + Environment.NewLine
+                    + "Щоб видалити переклад, збережіть порожнє поле.";
+            var text = await DisplayPromptAsync("Переклад речення", message, accept: "Зберегти",
+                cancel: "Скасувати", initialValue: CurrentDetachedTranslation() ?? "", maxLength: 4000);
+            if (text is null || !ReferenceEquals(detachedAddress, address) ||
+                detachedSentence?.Sentence.Id != current.Sentence.Id || TargetCode != target) return;
+            var updated = await AppState.Session.UpdateDetachedPdfAnnotationAsync(
+                address.Document, address.Page, current.Sentence.Id, new { kind = "translation", target, text });
+            if (ReferenceEquals(detachedAddress, address) && detachedSentence?.Sentence.Id == current.Sentence.Id)
+            {
+                detachedSentence = updated;
+                ResetDetachedTranslation();
+            }
+        }
+        catch (Exception error) { await DisplayAlertAsync("Переклад", error.Message, "Гаразд"); }
+        finally
+        {
+            changingDetachedAnnotation = false;
+            UpdateDetachedControls();
+        }
+    }
+
+    private async void DetachedShareTranslationClicked(object? sender, EventArgs args)
+    {
+        if (sharingReaderText || detachedSentence is not { } current || TargetCode is not { } target
+            || CurrentDetachedTranslation() is not { } translated) return;
+        await ShareTranslationPairAsync(new TranslationPair(current.Sentence.Text, current.Language, translated, target));
     }
 
     private async void DetachedTranslateClicked(object? sender, EventArgs args)
@@ -251,6 +297,7 @@ public partial class ReadingPage
             var translated = await AppState.Session.TranslateDetachedPdfSentenceAsync(
                 address.Document, address.Page, current.Sentence.Id, target);
             if (run != detachedTranslationRun) return;
+            detachedMachineTranslation = translated?.Text;
             var text = translated?.Text ?? "Для цього напрямку потрібен пакет офлайн-перекладу.";
             if (translated?.PivotLanguage is { } pivot)
                 text = $"{DocumentLanguages.PivotRoute(current.Language, pivot, target)}\n{text}";
@@ -274,8 +321,15 @@ public partial class ReadingPage
     {
         detachedTranslationRun++;
         translatingDetachedSentence = false;
-        ShowDetachedTranslation("");
+        detachedMachineTranslation = null;
+        ShowDetachedReviewedTranslation();
         UpdateDetachedControls();
+    }
+
+    private void ShowDetachedReviewedTranslation()
+    {
+        var reviewed = loadingDetachedSentence ? null : ReviewedDetachedTranslation();
+        ShowDetachedTranslation(reviewed is null ? "" : $"Ваш переклад{Environment.NewLine}{reviewed}");
     }
 
     private void ShowDetachedTranslation(string value)
@@ -377,7 +431,11 @@ public partial class ReadingPage
         DetachedSaveWord.IsVisible = DetachedAnalyzeSelection.IsVisible;
         DetachedSaveWord.IsEnabled = DetachedSaveWord.IsVisible && !savingDetachedWord
             && !AppState.Session.Busy && TargetCode is not null;
-        DetachedTranslate.IsEnabled = available && !translatingDetachedSentence && TargetCode is not null;
+        DetachedTranslate.IsEnabled = available && !translatingDetachedSentence && TargetCode is not null
+            && ReviewedDetachedTranslation() is null;
+        DetachedEditTranslation.IsEnabled = available && !changingDetachedAnnotation && TargetCode is not null;
+        DetachedEditTranslation.Text = ReviewedDetachedTranslation() is null ? "Свій переклад…" : "Редагувати переклад…";
+        DetachedShareTranslation.IsVisible = available && !translatingDetachedSentence && CurrentDetachedTranslation() is not null;
         var playing = speakingDetachedSentence && !detachedPaused;
         DetachedSpeak.Text = playing ? "Ⅱ" : "▶";
         SemanticProperties.SetDescription(DetachedSpeak, playing ? "Призупинити озвучення" : "Озвучити речення сторінки");

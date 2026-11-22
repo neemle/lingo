@@ -2,12 +2,14 @@ use super::{database_error, DetachedPdfSentence};
 use crate::{Result, Store};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum DetachedPdfAnnotationChange {
     Bookmark { saved: bool },
     Note { text: String },
+    Translation { target: String, text: String },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -16,6 +18,8 @@ pub(crate) struct ArchivedAnnotation {
     pub start_utf16: usize,
     pub bookmarked: bool,
     pub note: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub translations: BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -25,6 +29,7 @@ pub struct DetachedPdfAnnotationItem {
     text: String,
     bookmarked: bool,
     note: Option<String>,
+    translations: BTreeMap<String, String>,
 }
 
 pub(super) fn initialize(db: &Connection) -> Result<()> {
@@ -37,6 +42,15 @@ pub(super) fn initialize(db: &Connection) -> Result<()> {
             note TEXT,
             PRIMARY KEY(document_id,page,start_utf16),
             FOREIGN KEY(document_id,page) REFERENCES pdf_detached_pages(document_id,page) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS pdf_detached_translations (
+            document_id TEXT NOT NULL,
+            page INTEGER NOT NULL,
+            start_utf16 INTEGER NOT NULL CHECK(start_utf16 >= 0),
+            target TEXT NOT NULL,
+            text TEXT NOT NULL,
+            PRIMARY KEY(document_id,page,start_utf16,target),
+            FOREIGN KEY(document_id,page) REFERENCES pdf_detached_pages(document_id,page) ON DELETE CASCADE
         );",
     )
     .map_err(database_error)
@@ -44,10 +58,30 @@ pub(super) fn initialize(db: &Connection) -> Result<()> {
 
 pub(crate) fn has_annotations(db: &Connection, id: &str, page: u16) -> Result<bool> {
     db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM pdf_detached_annotations WHERE document_id=?1 AND page=?2)",
+        "SELECT EXISTS(SELECT 1 FROM pdf_detached_annotations WHERE document_id=?1 AND page=?2
+                       UNION ALL SELECT 1 FROM pdf_detached_translations WHERE document_id=?1 AND page=?2)",
         params![id, page],
         |row| row.get(0),
     ).map_err(database_error)
+}
+
+pub(crate) fn has_reviewed_target(db: &Connection, id: &str, language: &str) -> Result<bool> {
+    db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pdf_detached_translations WHERE document_id=?1 AND target=?2)",
+        params![id, language],
+        |row| row.get(0),
+    ).map_err(database_error)
+}
+
+pub(super) fn reviewed(
+    db: &Connection, id: &str, page: u16, start: usize,
+) -> Result<BTreeMap<String, String>> {
+    let mut statement = db.prepare(
+        "SELECT target,text FROM pdf_detached_translations WHERE document_id=?1 AND page=?2 AND start_utf16=?3",
+    ).map_err(database_error)?;
+    let rows = statement.query_map(params![id, page, start], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(database_error)?;
+    rows.collect::<rusqlite::Result<_>>().map_err(database_error)
 }
 
 pub(super) fn read(
@@ -69,28 +103,57 @@ pub(crate) fn validate_note(note: &str) -> Result<()> {
 }
 
 pub(super) fn list(db: &Connection, id: &str, page: u16) -> Result<Vec<ArchivedAnnotation>> {
+    let mut marks = BTreeMap::new();
     let mut statement = db.prepare(
         "SELECT start_utf16,bookmarked,note FROM pdf_detached_annotations
-         WHERE document_id=?1 AND page=?2 ORDER BY start_utf16",
+         WHERE document_id=?1 AND page=?2",
     ).map_err(database_error)?;
     let rows = statement.query_map(params![id, page], |row| Ok(ArchivedAnnotation {
         start_utf16: row.get(0)?,
         bookmarked: row.get(1)?,
         note: row.get(2)?,
+        translations: BTreeMap::new(),
     })).map_err(database_error)?;
-    rows.collect::<rusqlite::Result<_>>().map_err(database_error)
+    for row in rows {
+        let row = row.map_err(database_error)?;
+        marks.insert(row.start_utf16, row);
+    }
+
+    let mut statement = db.prepare(
+        "SELECT start_utf16,target,text FROM pdf_detached_translations WHERE document_id=?1 AND page=?2",
+    ).map_err(database_error)?;
+    let rows = statement.query_map(params![id, page], |row|
+        Ok((row.get::<_, usize>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+    ).map_err(database_error)?;
+    for row in rows {
+        let (start_utf16, target, text) = row.map_err(database_error)?;
+        let item = marks.entry(start_utf16).or_insert_with(|| ArchivedAnnotation {
+            start_utf16, bookmarked: false, note: None, translations: BTreeMap::new(),
+        });
+        item.translations.insert(target, text);
+    }
+    Ok(marks.into_values().collect())
 }
 
 pub(super) fn merge(db: &Connection, id: &str, page: u16, annotations: &[ArchivedAnnotation]) -> Result<()> {
     for item in annotations {
-        db.execute(
-            "INSERT INTO pdf_detached_annotations (document_id,page,start_utf16,bookmarked,note)
-             VALUES (?1,?2,?3,?4,?5)
-             ON CONFLICT(document_id,page,start_utf16) DO UPDATE SET
-                bookmarked=max(bookmarked,excluded.bookmarked),
-                note=coalesce(note,excluded.note)",
-            params![id, page, item.start_utf16, item.bookmarked, item.note],
-        ).map_err(database_error)?;
+        if item.bookmarked || item.note.is_some() {
+            db.execute(
+                "INSERT INTO pdf_detached_annotations (document_id,page,start_utf16,bookmarked,note)
+                 VALUES (?1,?2,?3,?4,?5)
+                 ON CONFLICT(document_id,page,start_utf16) DO UPDATE SET
+                    bookmarked=max(bookmarked,excluded.bookmarked),
+                    note=coalesce(note,excluded.note)",
+                params![id, page, item.start_utf16, item.bookmarked, item.note],
+            ).map_err(database_error)?;
+        }
+        for (target, text) in &item.translations {
+            db.execute(
+                "INSERT OR IGNORE INTO pdf_detached_translations (document_id,page,start_utf16,target,text)
+                 VALUES (?1,?2,?3,?4,?5)",
+                params![id, page, item.start_utf16, target, text],
+            ).map_err(database_error)?;
+        }
     }
     Ok(())
 }
@@ -103,6 +166,7 @@ impl Store {
         let mut current = self.detached_pdf_sentence(id, page, None)?
             .filter(|current| current.sentence.id == sentence_id)
             .ok_or("Речення сторінки PDF змінилося.")?;
+        let start = current.sentence.start_utf16;
         match change {
             DetachedPdfAnnotationChange::Bookmark { saved } => current.bookmarked = saved,
             DetachedPdfAnnotationChange::Note { text } => {
@@ -110,8 +174,33 @@ impl Store {
                 validate_note(text)?;
                 current.note = (!text.is_empty()).then(|| text.to_owned());
             }
+            DetachedPdfAnnotationChange::Translation { target, text } => {
+                crate::valid_language(&target)?;
+                if target == current.language {
+                    return Err("Виберіть іншу мову перекладу.".into());
+                }
+                let text = text.trim();
+                if text.is_empty() {
+                    tx.execute(
+                        "DELETE FROM pdf_detached_translations
+                         WHERE document_id=?1 AND page=?2 AND start_utf16=?3 AND target=?4",
+                        params![id, page, start, target],
+                    ).map_err(database_error)?;
+                    current.reviewed_translations.remove(&target);
+                } else {
+                    crate::validate_translation(text)?;
+                    tx.execute(
+                        "INSERT INTO pdf_detached_translations (document_id,page,start_utf16,target,text)
+                         VALUES (?1,?2,?3,?4,?5)
+                         ON CONFLICT(document_id,page,start_utf16,target) DO UPDATE SET text=excluded.text",
+                        params![id, page, start, target, text],
+                    ).map_err(database_error)?;
+                    current.reviewed_translations.insert(target, text.to_owned());
+                }
+                tx.commit().map_err(database_error)?;
+                return Ok(current);
+            }
         }
-        let start = current.sentence.start_utf16;
         if !current.bookmarked && current.note.is_none() {
             tx.execute(
                 "DELETE FROM pdf_detached_annotations WHERE document_id=?1 AND page=?2 AND start_utf16=?3",
@@ -141,6 +230,7 @@ impl Store {
                 text: cached.sentences[position].text.clone(),
                 bookmarked: item.bookmarked,
                 note: item.note,
+                translations: item.translations,
             })
         }).collect())
     }

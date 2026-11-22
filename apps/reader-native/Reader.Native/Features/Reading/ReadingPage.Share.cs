@@ -48,11 +48,16 @@ public partial class ReadingPage
     private async void ShareTranslationPairClicked(object? sender, EventArgs args)
     {
         if (sharingReaderText || !TranslationVisible || DisplayedTranslationPair() is not { } pair) return;
+        await ShareTranslationPairAsync(pair);
+    }
+
+    private Task ShareTranslationPairAsync(TranslationPair pair)
+    {
         var sourceLabel = DocumentLanguages.Name(pair.SourceLanguage);
         var targetLabel = DocumentLanguages.Name(pair.TargetLanguage);
         var text = $"{sourceLabel}{Environment.NewLine}{pair.Source}{Environment.NewLine}{Environment.NewLine}" +
                    $"{targetLabel}{Environment.NewLine}{pair.Target}";
-        await ShareReaderTextAsync("Оригінал і переклад", text);
+        return ShareReaderTextAsync("Оригінал і переклад", text);
     }
 
     private async Task ShareReaderTextAsync(string title, string text)

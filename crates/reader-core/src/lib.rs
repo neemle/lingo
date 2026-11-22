@@ -946,7 +946,9 @@ impl Store {
             if document.language == language {
                 return Ok(false);
             }
-            if document.reviewed_translations.contains_key(language) {
+            if document.reviewed_translations.contains_key(language)
+                || pdf_detached_pages::has_reviewed_target(tx, id, language)?
+            {
                 return Err("Для нової мови джерела вже збережено переклади. Збережіть їх окремо і видаліть із документа перед зміною мови.".into());
             }
             document.language = language.to_owned();

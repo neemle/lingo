@@ -8,7 +8,7 @@ mod annotations;
 mod find;
 pub use find::{DetachedPdfFindCursor, DetachedPdfFindPage};
 pub use annotations::{DetachedPdfAnnotationChange, DetachedPdfAnnotationItem};
-pub(crate) use annotations::has_annotations;
+pub(crate) use annotations::{has_annotations, has_reviewed_target};
 
 pub(crate) fn initialize(db: &Connection) -> Result<()> {
     db.execute_batch(
@@ -41,6 +41,7 @@ pub struct DetachedPdfSentence {
     pub language: String,
     pub bookmarked: bool,
     pub note: Option<String>,
+    pub reviewed_translations: std::collections::BTreeMap<String, String>,
 }
 
 pub(crate) struct CachedSentences {
@@ -78,7 +79,8 @@ impl Store {
             ).map_err(database_error)?;
         }
         let (bookmarked, note) = annotations::read(&self.connection, id, page, sentence.start_utf16)?;
-        Ok(Some(DetachedPdfSentence { sentence, position, total, language, bookmarked, note }))
+        let reviewed_translations = annotations::reviewed(&self.connection, id, page, sentence.start_utf16)?;
+        Ok(Some(DetachedPdfSentence { sentence, position, total, language, bookmarked, note, reviewed_translations }))
     }
     pub(crate) fn detached_pdf_speech_source(
         &self, id: &str, page: u16, sentence_id: &str, next: bool,
@@ -194,7 +196,7 @@ impl ArchivedPage {
                 return Err("Некоректний порядок приміток до сторінки PDF.".into());
             }
             for item in &self.annotations {
-                if (!item.bookmarked && item.note.is_none())
+                if (!item.bookmarked && item.note.is_none() && item.translations.is_empty())
                     || sentences.binary_search_by_key(&item.start_utf16, |sentence| sentence.start_utf16).is_err()
                 {
                     return Err("Примітка до сторінки PDF не має речення.".into());
@@ -203,6 +205,13 @@ impl ArchivedPage {
                     annotations::validate_note(note)?;
                     if note.trim().is_empty() {
                         return Err("Порожня нотатка до сторінки PDF.".into());
+                    }
+                }
+                for (target, text) in &item.translations {
+                    crate::valid_language(target)?;
+                    crate::validate_translation(text)?;
+                    if target == &document.language || text.trim().is_empty() {
+                        return Err("Некоректний переклад речення PDF у резервній копії.".into());
                     }
                 }
             }
