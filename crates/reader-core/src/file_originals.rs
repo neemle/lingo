@@ -285,6 +285,17 @@ pub(crate) fn ensure_root(path: &Path) -> Result<()> {
     }
 }
 
+pub(crate) fn try_worker_lock(root: &Path, name: &str) -> Result<Option<File>> {
+    ensure_root(root)?;
+    let file = File::options().read(true).write(true).create(true).truncate(false)
+        .open(root.join(name)).map_err(storage_error)?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(fs::TryLockError::WouldBlock) => Ok(None),
+        Err(fs::TryLockError::Error(error)) => Err(storage_error(error)),
+    }
+}
+
 fn staging_gate(root: &Path) -> io::Result<File> {
     File::options()
         .read(true)

@@ -443,6 +443,7 @@ pub struct Store {
     optional_model_directory: std::path::PathBuf,
     knowledge_directory: std::path::PathBuf,
     file_original_directory: std::path::PathBuf,
+    active_pdf_ocr: Option<pdf_page_ocr::ActiveClaim>,
 }
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
@@ -481,6 +482,7 @@ impl Store {
             optional_model_directory: path.with_file_name("optional-models"),
             knowledge_directory: path.with_file_name("languages"),
             file_original_directory,
+            active_pdf_ocr: None,
         })
     }
     pub fn snapshot(&self) -> Result<Snapshot> {

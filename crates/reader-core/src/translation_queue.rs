@@ -1,7 +1,6 @@
 use crate::{translation::ParagraphTranslation, valid_language, Document, Result, Store};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
-use std::fs::{File, TryLockError};
 
 const RETRY_SECONDS: i64 = 15;
 
@@ -102,7 +101,9 @@ impl Store {
     pub(crate) fn run_translation_window(
         &mut self, id: &str, expected: Option<&TranslationWindowAddress>,
     ) -> Result<Option<ParagraphTranslation>> {
-        let Some(_process_lock) = self.try_lock_translation_worker()? else {
+        let Some(_process_lock) = crate::file_originals::try_worker_lock(
+            &self.file_original_directory, ".translation-window.lock",
+        )? else {
             return Ok(None);
         };
         // With the worker lock held, a leftover lease cannot belong to a live worker.
@@ -181,17 +182,6 @@ impl Store {
         }
     }
 
-    fn try_lock_translation_worker(&self) -> Result<Option<File>> {
-        crate::file_originals::ensure_root(&self.file_original_directory)?;
-        let file = File::options().read(true).write(true).create(true).truncate(false)
-            .open(self.file_original_directory.join(".translation-window.lock"))
-            .map_err(database_error)?;
-        match file.try_lock() {
-            Ok(()) => Ok(Some(file)),
-            Err(TryLockError::WouldBlock) => Ok(None),
-            Err(TryLockError::Error(error)) => Err(database_error(error)),
-        }
-    }
 }
 
 fn database_error(error: impl std::fmt::Display) -> String {

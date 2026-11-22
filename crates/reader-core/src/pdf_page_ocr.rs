@@ -6,9 +6,8 @@ use crate::{
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, fs::File};
 
-const OCR_LEASE_SECONDS: i64 = 120;
 const OCR_RETRY_DELAY_SECONDS: i64 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -49,9 +48,17 @@ pub struct PdfReadWindow {
 pub struct PdfOcrRequest {
     pub page: u16,
     pub token: String,
+    /// Zero indicates a claim tied to the live library handle.
     pub expires_at: i64,
     pub language: String,
     pub read_text_layer: bool,
+}
+
+pub(crate) struct ActiveClaim {
+    document: String,
+    page: u16,
+    token: String,
+    _worker_lock: File,
 }
 
 pub(crate) fn initialize(db: &Connection) -> Result<()> {
@@ -308,6 +315,14 @@ impl Store {
     pub fn claim_pdf_ocr_page_for_window(
         &mut self, id: &str, center: Option<u16>,
     ) -> Result<Option<PdfOcrRequest>> {
+        if self.active_pdf_ocr.is_some() {
+            return Ok(None);
+        }
+        let Some(worker_lock) = file_originals::try_worker_lock(
+            &self.file_original_directory, ".pdf-ocr-window.lock",
+        )? else {
+            return Ok(None);
+        };
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -316,16 +331,12 @@ impl Store {
         let page = tx
             .query_row(
                 "SELECT page FROM pdf_ocr_requests
-                 WHERE document_id=?1 AND available_at<=?2
+                 WHERE document_id=?1 AND (token IS NOT NULL OR available_at<=?2)
                    AND (?3 IS NULL OR (
                      page BETWEEN ?3 - 1 AND ?3 + 1
                      AND EXISTS (SELECT 1 FROM pdf_reading_positions
                                  WHERE document_id=?1 AND page=?3)
                    ))
-                   AND NOT EXISTS (
-                     SELECT 1 FROM pdf_ocr_requests
-                     WHERE document_id=?1 AND token IS NOT NULL AND available_at>?2
-                   )
                  ORDER BY priority LIMIT 1",
                 params![id, now, center],
                 |row| row.get(0),
@@ -347,36 +358,48 @@ impl Store {
             language,
             read_text_layer,
             token: uuid::Uuid::new_v4().to_string(),
-            expires_at: now + OCR_LEASE_SECONDS,
+            expires_at: 0,
         };
         tx.execute(
-            "UPDATE pdf_ocr_requests SET token=?3, available_at=?4 WHERE document_id=?1 AND page=?2",
-            params![id, page, request.token, request.expires_at],
+            "UPDATE pdf_ocr_requests SET token=?3, available_at=0 WHERE document_id=?1 AND page=?2",
+            params![id, page, request.token],
         )
         .map_err(database_error)?;
         tx.commit().map_err(database_error)?;
+        self.active_pdf_ocr = Some(ActiveClaim {
+            document: id.to_owned(), page, token: request.token.clone(), _worker_lock: worker_lock,
+        });
         Ok(Some(request))
     }
 
+    fn owns_pdf_ocr_claim(&self, id: &str, page: u16, token: &str) -> bool {
+        self.active_pdf_ocr.as_ref().is_some_and(|claim|
+            claim.document == id && claim.page == page && claim.token == token)
+    }
+
     /// Release a failed page for retry while allowing available neighbors to proceed.
-    pub fn retry_pdf_ocr_page(&self, id: &str, page: u16, token: &str) -> Result<bool> {
+    pub fn retry_pdf_ocr_page(&mut self, id: &str, page: u16, token: &str) -> Result<bool> {
         self.release_pdf_ocr_page(id, page, token, OCR_RETRY_DELAY_SECONDS)
     }
 
-    pub fn cancel_pdf_ocr_page(&self, id: &str, page: u16, token: &str) -> Result<bool> {
+    pub fn cancel_pdf_ocr_page(&mut self, id: &str, page: u16, token: &str) -> Result<bool> {
         self.release_pdf_ocr_page(id, page, token, 0)
     }
 
-    fn release_pdf_ocr_page(&self, id: &str, page: u16, token: &str, retry_delay: i64) -> Result<bool> {
-        let now = crate::now();
-        self.connection
+    fn release_pdf_ocr_page(&mut self, id: &str, page: u16, token: &str, retry_delay: i64) -> Result<bool> {
+        if !self.owns_pdf_ocr_claim(id, page, token) {
+            return Ok(false);
+        }
+        let result = self.connection
             .execute(
-                "UPDATE pdf_ocr_requests SET token=NULL, available_at=?5
-                 WHERE document_id=?1 AND page=?2 AND token=?3 AND available_at>?4",
-                params![id, page, token, now, now + retry_delay],
+                "UPDATE pdf_ocr_requests SET token=NULL, available_at=?4
+                 WHERE document_id=?1 AND page=?2 AND token=?3",
+                params![id, page, token, crate::now() + retry_delay],
             )
             .map(|count| count != 0)
-            .map_err(database_error)
+            .map_err(database_error);
+        self.active_pdf_ocr = None;
+        result
     }
 
     /// Store a page once, including an empty result. Existing corrections survive retries.
@@ -403,6 +426,9 @@ impl Store {
         &mut self, id: &str, page: u16, lines: Vec<ocr::OcrLine>, token: Option<&str>,
         text_layer: Option<String>,
     ) -> Result<Document> {
+        if token.is_some_and(|token| !self.owns_pdf_ocr_claim(id, page, token)) {
+            return Err("Запит OCR для цієї сторінки вже неактивний".into());
+        }
         if let Some(text) = &text_layer {
             if token.is_none() || !lines.is_empty() || text.trim().is_empty()
                 || text.contains('\0') || text.len() > crate::MAX_IMPORT
@@ -423,8 +449,8 @@ impl Store {
                 let current: bool = tx
                     .query_row(
                         "SELECT EXISTS(SELECT 1 FROM pdf_ocr_requests
-                         WHERE document_id=?1 AND page=?2 AND token=?3 AND available_at>?4)",
-                        params![id, page, token, crate::now()],
+                         WHERE document_id=?1 AND page=?2 AND token=?3)",
+                        params![id, page, token],
                         |row| row.get(0),
                     )
                     .map_err(database_error)?;
@@ -523,6 +549,9 @@ impl Store {
             updated = Some(document.clone());
             Ok(true)
         })?;
+        if token.is_some() {
+            self.active_pdf_ocr = None;
+        }
         updated.ok_or_else(|| "Не вдалося оновити сторінку PDF".to_owned())
     }
 }

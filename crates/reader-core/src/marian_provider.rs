@@ -405,6 +405,7 @@ impl StoreWorker {
             optional_model_directory: self.optional_model_directory,
             knowledge_directory: self.knowledge_directory,
             file_original_directory: crate::file_originals::directory(&self.database),
+            active_pdf_ocr: None,
         })
     }
 
