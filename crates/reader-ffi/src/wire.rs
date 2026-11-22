@@ -440,6 +440,10 @@ pub enum Command {
         path: String,
     },
     DictionarySources,
+    DictionarySourceLocations {
+        #[serde(rename = "cardId")]
+        card_id: String,
+    },
     DictionaryCollection {
         #[serde(rename = "documentId")]
         document_id: Option<String>,

@@ -493,6 +493,23 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<LexicalPackage> InstallLexicalPackageAsync(string language, string path) =>
         Task.Run(() => client.InstallLexicalPackage(language, path));
     public Task<DictionarySource[]> DictionarySourcesAsync() => Task.Run(client.DictionarySources);
+    public Task<DictionarySourceLocation[]> DictionarySourceLocationsAsync(string cardId) =>
+        Task.Run(() => client.DictionarySourceLocations(cardId));
+
+    public Task OpenDictionarySourceAsync(DictionarySourceLocation source) => RunAsync(() =>
+    {
+        if (source.Page is int page)
+        {
+            if (client.DetachedPdfSentence(source.DocumentId, page, source.Position, source.SentenceId) is null)
+                throw new InvalidDataException("Речення на сторінці PDF більше недоступне.");
+            client.SetPdfReadingPage(source.DocumentId, page);
+        }
+        else
+        {
+            client.SetReadingCursor(source.DocumentId, source.SentenceId, source.RevisionId);
+        }
+        return (client.Snapshot(), source.DocumentId);
+    });
     public Task<Vocabulary[]> DictionaryCollectionAsync(string? documentId = null) =>
         Task.Run(() => client.DictionaryCollection(documentId));
     public Task<DictionaryArchive> ExportDictionaryAsync(string? documentId = null) =>

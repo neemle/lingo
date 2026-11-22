@@ -414,6 +414,8 @@ public sealed class CoreClient : IDisposable
         CallIndependent<LexicalPackage>(new { version = 1, operation = "install_lexical_package", language, path });
     public DictionarySource[] DictionarySources() =>
         Call<DictionarySource[]>(new { version = 1, operation = "dictionary_sources" });
+    public DictionarySourceLocation[] DictionarySourceLocations(string cardId) =>
+        Call<DictionarySourceLocation[]>(new { version = 1, operation = "dictionary_source_locations", cardId });
     public Vocabulary[] DictionaryCollection(string? documentId = null) =>
         Call<Vocabulary[]>(new { version = 1, operation = "dictionary_collection", documentId });
     public DictionaryArchive ExportDictionary(string? documentId = null) =>

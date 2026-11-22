@@ -132,6 +132,9 @@
          <Button Text="Історія" FontSize="11" HorizontalOptions="End" Style="{StaticResource OutlineButton}"
           Clicked="ReviewHistoryClicked" CommandParameter="{Binding .}"
           SemanticProperties.Description="{Binding Word, StringFormat='Історія повторень картки {0}'}" />
+         <Button Text="Джерело" FontSize="11" HorizontalOptions="End" Style="{StaticResource OutlineButton}"
+          Clicked="OpenSourceClicked" CommandParameter="{Binding .}"
+          SemanticProperties.Description="{Binding Word, StringFormat='Відкрити речення для {0}'}" />
          <Button Text="Поширити" FontSize="11" HorizontalOptions="End" Style="{StaticResource OutlineButton}"
           Clicked="ShareCardClicked" CommandParameter="{Binding .}"
           SemanticProperties.Description="{Binding Word, StringFormat='Поширити картку {0}'}" />

@@ -24,6 +24,7 @@ public partial class VocabularyPage : ContentPage
 
     private bool sharingCard;
     private bool editingCard;
+    private bool openingSource;
 
     private CollectionChoice ActiveCollection =>
         CollectionPicker.SelectedIndex >= 0 && CollectionPicker.SelectedIndex < choices.Length
@@ -192,6 +193,38 @@ public partial class VocabularyPage : ContentPage
         ShareDictionary.Text = ActiveCollection.DocumentId is null ? "Поширити словник" : "Поширити добірку";
         SemanticSearch.IsEnabled = ready && !searching && entries.Length > 0 &&
             !string.IsNullOrWhiteSpace(VocabularyQuery.Text);
+    }
+
+    private async void OpenSourceClicked(object? sender, EventArgs args)
+    {
+        if (openingSource || transferring || AppState.Session.Busy ||
+            sender is not Button { CommandParameter: VocabularyCard card }) return;
+        openingSource = true;
+        var activeAppearance = appearance;
+        try
+        {
+            var sources = await AppState.Session.DictionarySourceLocationsAsync(card.Id);
+            if (activeAppearance != appearance) return;
+            if (sources.Length == 0)
+            {
+                await DisplayAlertAsync("Джерело", "Збережене речення недоступне в цій бібліотеці.", "Гаразд");
+                return;
+            }
+            var chosen = sources[0];
+            if (sources.Length > 1)
+            {
+                var labels = sources.Select((source, index) =>
+                    $"{index + 1}. {source.Title} · {(source.Page is int page ? $"стор. {page + 1}, " : "")}речення {source.Position + 1}")
+                    .ToArray();
+                var label = await DisplayActionSheetAsync("Джерела картки", "Скасувати", null, labels);
+                var index = Array.IndexOf(labels, label);
+                if (index < 0 || activeAppearance != appearance) return;
+                chosen = sources[index];
+            }
+            await AppState.OpenAsync(chosen.DocumentId, chosen);
+        }
+        catch (Exception error) { await DisplayAlertAsync("Джерело", error.Message, "Гаразд"); }
+        finally { openingSource = false; }
     }
 
     private async void PracticeClicked(object? sender, EventArgs args)

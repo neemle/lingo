@@ -1,3 +1,4 @@
+using Reader.Contracts;
 using Reader.Presentation;
 
 namespace Reader.Native.Services;
@@ -23,10 +24,16 @@ public static class AppState
         (Shell.Current as AppShell)?.RefreshRecent();
     }
 
-    public static async Task OpenAsync(string id)
+    public static async Task OpenAsync(string id, DictionarySourceLocation? source = null)
     {
         if (Session.Busy) return;
-        await Session.SelectAsync(id);
+        if (source is null)
+            await Session.SelectAsync(id);
+        else
+        {
+            await Session.OpenDictionarySourceAsync(source);
+            if (Session.Error.Length > 0) throw new InvalidOperationException(Session.Error);
+        }
         if (Session.Error.Length > 0 || Session.Document?.Id != id) return;
         Preferences.Set("lastDocument", id);
         var recent = Preferences.Get("recentDocuments", "").Split(';').Prepend(id)

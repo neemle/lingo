@@ -66,6 +66,74 @@ pub struct DictionarySelection {
     pub(crate) start_utf16: usize,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DictionarySourceLocation {
+    document_id: String,
+    title: String,
+    sentence: String,
+    sentence_id: String,
+    revision_id: String,
+    page: Option<u16>,
+    position: usize,
+}
+
+impl Store {
+    pub fn dictionary_source_locations(&self, card_id: &str) -> Result<Vec<DictionarySourceLocation>> {
+        let mut query = self.connection.prepare(
+            "SELECT d.id, json_extract(d.body,'$.title'), a.sentence, a.anchor
+             FROM dictionary_context_anchors a
+             JOIN dictionary_sources s ON s.document_id=a.document_id
+             JOIN documents d ON d.id=coalesce(
+                 (SELECT id FROM documents WHERE source_hash=s.source_hash), s.document_id)
+             WHERE a.card_id=?1
+             ORDER BY d.id, a.sentence, a.anchor",
+        ).map_err(error)?;
+        let rows = query.query_map([card_id], |row| Ok((
+            row.get::<_, String>(0)?, row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?, row.get::<_, String>(3)?,
+        ))).map_err(error)?;
+        let mut locations = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut canonical = None;
+        for row in rows {
+            let (document, title, text, anchor) = row.map_err(error)?;
+            let anchor: DictionarySentenceAnchor = serde_json::from_str(&anchor).map_err(error)?;
+            let resolved = if let Some(page) = anchor.page {
+                let Some(cached) = self.detached_pdf_sentences(&document, page)? else { continue; };
+                location_in_revision(&anchor, &text, &cached.revision, &cached.sentences)
+            } else {
+                if !canonical.as_ref().is_some_and(|loaded: &Document| loaded.id == document) {
+                    canonical = Some(self.token_document(&document)?);
+                }
+                let loaded = canonical.as_ref().expect("document loaded");
+                let Some(revision) = loaded.current_revision_id.as_deref() else { continue; };
+                location_in_revision(&anchor, &text, revision, &loaded.sentences)
+            };
+            if let Some((position, sentence_id, revision_id)) = resolved {
+                if seen.insert((document.clone(), anchor.page, position)) {
+                    locations.push(DictionarySourceLocation {
+                        document_id: document, title, sentence: text, sentence_id, revision_id,
+                        page: anchor.page, position,
+                    });
+                }
+            }
+        }
+        Ok(locations)
+    }
+}
+
+fn location_in_revision(
+    anchor: &DictionarySentenceAnchor, text: &str, revision: &str, sentences: &[crate::Sentence],
+) -> Option<(usize, String, String)> {
+    let position = sentences.binary_search_by_key(&anchor.sentence_start_utf16, |item| item.start_utf16).ok()?;
+    let sentence = &sentences[position];
+    if sentence.text != text {
+        return None;
+    }
+    Some((position, sentence.id.clone(), revision.to_owned()))
+}
+
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DictionaryImport {
