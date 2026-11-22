@@ -8,7 +8,7 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage
 {
     private sealed record VoiceChoice(string Id, string Label, string? Engine = null, uint Speaker = 0, string? Revision = null);
-    private sealed record SpeechSource(string Document, string Sentence, string Language, string Text);
+    private sealed record SpeechSource(string Document, string Sentence, string Language, string SourceText, string SpeechText);
     private sealed record ClipKey(SpeechSource Source, string Engine, uint Speaker, float Rate);
     private sealed record PendingClip(ClipKey Key, Task<SpeechAudio> Audio);
 
@@ -117,7 +117,7 @@ public partial class ReadingPage
             ? model.PositionMs : null;
 
     private static SpeechSource SpeechSourceFor(Document document, Sentence sentence) =>
-        new(document.Id, sentence.Id, document.Language, sentence.Text);
+        new(document.Id, sentence.Id, document.Language, sentence.Text, EffectiveSpeechText(document, sentence));
 
     private bool IsSpeechSourceCurrent(ReaderSession session, SpeechSource source) =>
         session.Document is { } document && session.Sentence is { } sentence &&

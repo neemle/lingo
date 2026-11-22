@@ -20,6 +20,7 @@ public sealed record Document(
     public SpeechResume? SpeechResume { get; init; }
     public string[] Bookmarks { get; init; } = [];
     public Dictionary<string, string> Notes { get; init; } = [];
+    public Dictionary<string, string> SpeechTextOverrides { get; init; } = [];
     public Dictionary<string, Dictionary<string, string>> ReviewedTranslations { get; init; } = [];
 }
 

@@ -92,6 +92,8 @@ public sealed class CoreClient : IDisposable
         Call<JsonElement>(new { version = 1, operation = "set_bookmark", id, sentenceId, saved });
     public void SetSentenceNote(string id, string sentenceId, string note) =>
         Call<JsonElement>(new { version = 1, operation = "set_sentence_note", id, sentenceId, note });
+    public void SetSpeechText(string id, string sentenceId, string text) =>
+        Call<JsonElement>(new { version = 1, operation = "set_speech_text", id, sentenceId, text });
     public void SetReviewedTranslation(string id, string sentenceId, string target, string text) =>
         Call<JsonElement>(new { version = 1, operation = "set_reviewed_translation", id, sentenceId, target, text });
     public WordExplanation ExplainWord(string model, string document, string sentence, string word) =>

@@ -548,12 +548,15 @@ public partial class ReadingPage : ContentPage
         try
         {
             var resume = session.GetSpeechResume(document.Id);
-            if (resume is null || !SpeechProgress.Matches(sentence, resume)) return;
+            var speechText = EffectiveSpeechText(document, sentence);
+            if (resume is null || !SpeechProgress.Matches(sentence, resume, speechText)) return;
             var voice = SelectedVoice();
-            var position = voice?.Engine is null ? SpeechProgress.ResumeOffset(sentence, resume)
+            var position = voice?.Engine is null
+                ? speechText == sentence.Text ? SpeechProgress.ResumeOffset(sentence, resume) : null
                 : ModelResumePosition(resume, voice, document.Language, SpeechRatePercent);
             if (!position.HasValue) return;
             speechResume = resume;
+            ResumeSpeech.Text = resume.Model is null ? "Продовжити зі збереженого слова" : "Продовжити зі збереженої позиції";
             ResumeSpeech.IsVisible = true;
         }
         catch (Exception error) { SpeechStatus.Text = $"Не вдалося прочитати позицію озвучення. {error.Message}"; }
@@ -570,8 +573,9 @@ public partial class ReadingPage : ContentPage
         if (pendingSpeechResume is not { } pending) return;
         var session = AppState.Session;
         if (session.Busy) return;
-        if (session.Document?.Id != pending.DocumentId || session.Sentence is not { } sentence ||
-            !SpeechProgress.Matches(sentence, pending.Resume))
+        if (session.Document is not { } document || document.Id != pending.DocumentId ||
+            session.Sentence is not { } sentence ||
+            !SpeechProgress.Matches(sentence, pending.Resume, EffectiveSpeechText(document, sentence)))
         {
             pendingSpeechResume = null;
             return;
@@ -631,16 +635,19 @@ public partial class ReadingPage : ContentPage
         speech.PreferredVoice = modelVoice ? null : voice?.Id;
         speech.Rate = ratePercent / 100f;
         var receivedCue = false;
+        var systemUsesSpeechOverride = false;
         string? status = LocalSpeech.CompletedStatus;
 
         while (request == speechRequest && session.Document is { } doc && doc.Id == documentId &&
             session.Sentence is { } sentence)
         {
-            var startAt = modelVoice ? 0 : SpeechProgress.ResumeOffset(sentence, resume) ?? 0;
-            var startAtMs = modelVoice && resume is not null && SpeechProgress.Matches(sentence, resume)
+            var speechText = EffectiveSpeechText(doc, sentence);
+            var hasSpeechOverride = speechText != sentence.Text;
+            var startAt = modelVoice || hasSpeechOverride ? 0 : SpeechProgress.ResumeOffset(sentence, resume) ?? 0;
+            var startAtMs = modelVoice && resume is not null && SpeechProgress.Matches(sentence, resume, speechText)
                 ? ModelResumePosition(resume, voice, doc.Language, ratePercent) ?? 0 : 0;
             resume = null;
-            var textHash = SpeechProgress.TextHash(sentence);
+            var textHash = SpeechProgress.TextHash(sentence, speechText);
             lastSpeechSave = 0;
             SourceText.SpokenWord = null;
             speechPaused = false;
@@ -668,8 +675,11 @@ public partial class ReadingPage : ContentPage
             if (!modelVoice)
             {
                 var fallbackReason = status != LocalSpeech.CompletedStatus ? status : null;
-                status = await PlaySystemSentenceAsync(session, doc, sentence, startAt, textHash, request,
-                    () => receivedCue = true);
+                systemUsesSpeechOverride = hasSpeechOverride;
+                status = hasSpeechOverride
+                    ? await speech.SpeakAsync(speechText, doc.Language)
+                    : await PlaySystemSentenceAsync(session, doc, sentence, startAt, textHash, request,
+                        () => receivedCue = true);
                 if (fallbackReason is not null && status is not null && status != LocalSpeech.CompletedStatus)
                     status = $"{fallbackReason} {status}";
             }
@@ -709,8 +719,14 @@ public partial class ReadingPage : ContentPage
         SourceText.SpokenWord = null;
         PauseSpeech.IsEnabled = false;
         if (status is not null)
-            SpeechStatus.Text = status == LocalSpeech.CompletedStatus && !modelVoice && !receivedCue
-                ? $"{status} Межі слів від голосу не отримано." : status;
+        {
+            SpeechStatus.Text = status;
+            if (status == LocalSpeech.CompletedStatus && !modelVoice)
+            {
+                if (systemUsesSpeechOverride) SpeechStatus.Text += " Застосовано текст вимови.";
+                else if (!receivedCue) SpeechStatus.Text += " Межі слів від голосу не отримано.";
+            }
+        }
         RefreshSpeechResume();
     }
 

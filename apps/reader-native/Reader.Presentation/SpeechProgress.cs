@@ -7,8 +7,8 @@ namespace Reader.Presentation;
 
 public static class SpeechProgress
 {
-    public static string TextHash(Sentence sentence) =>
-        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(sentence.Text)));
+    public static string TextHash(Sentence sentence, string? speechText = null) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(speechText ?? sentence.Text)));
 
     public static int? ResumeOffset(Sentence sentence, SpeechResume? resume)
     {
@@ -18,6 +18,6 @@ public static class SpeechProgress
             ? resume.OffsetUtf16 : null;
     }
 
-    public static bool Matches(Sentence sentence, SpeechResume resume) =>
-        resume.SentenceId == sentence.Id && resume.TextHash == TextHash(sentence);
+    public static bool Matches(Sentence sentence, SpeechResume resume, string? speechText = null) =>
+        resume.SentenceId == sentence.Id && resume.TextHash == TextHash(sentence, speechText);
 }

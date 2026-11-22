@@ -158,6 +158,12 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         return Read();
     });
 
+    public Task SetSpeechTextAsync(string documentId, string sentenceId, string text) => RunAsync(() =>
+    {
+        client.SetSpeechText(documentId, sentenceId, text);
+        return Read();
+    });
+
     public Task<WordExplanation> ExplainWordAsync(string model, string document, string sentence, string word) =>
         Task.Run(() => client.ExplainWord(model, document, sentence, word));
 
