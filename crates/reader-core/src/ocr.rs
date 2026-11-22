@@ -366,6 +366,32 @@ pub(crate) fn update_transcript_with_page_starts(
     text: String,
     starts: Option<&[Option<usize>]>,
 ) -> Result<()> {
+    update_transcript_with_edits(document, text, starts, &[])
+}
+
+pub(crate) struct TranscriptEdit {
+    pub start_utf16: usize,
+    pub old_len: usize,
+    pub new_len: usize,
+}
+
+fn map_transcript_offset(offset: usize, edits: &[TranscriptEdit]) -> Option<usize> {
+    let mut mapped = offset;
+    for edit in edits.iter().take_while(|edit| edit.start_utf16 < offset) {
+        if offset < edit.start_utf16 + edit.old_len {
+            return None;
+        }
+        mapped = mapped - edit.old_len + edit.new_len;
+    }
+    Some(mapped)
+}
+
+pub(crate) fn update_transcript_with_edits(
+    document: &mut crate::Document,
+    text: String,
+    starts: Option<&[Option<usize>]>,
+    edits: &[TranscriptEdit],
+) -> Result<()> {
     use std::collections::HashMap;
 
     let sentences = crate::pdf_sentences::segment_document(document, &text);
@@ -399,6 +425,12 @@ pub(crate) fn update_transcript_with_page_starts(
         *old_counts.entry(sentence.text.as_str()).or_insert(0usize) += 1;
     }
     let matching_index = |old: &crate::Sentence| {
+        if !edits.is_empty() {
+            let start = map_transcript_offset(old.start_utf16, edits)?;
+            let end = map_transcript_offset(old.end_utf16, edits)?;
+            let index = sentences.binary_search_by_key(&start, |sentence| sentence.start_utf16).ok()?;
+            return (sentences[index].end_utf16 == end).then_some(index);
+        }
         // Inserting an earlier page can reuse an old offset on a different page.
         if starts.is_some() && !old_pages.is_empty() {
             return page_match(old);
@@ -460,10 +492,8 @@ pub(crate) fn update_transcript_with_page_starts(
         resume.sentence_id = map_id(&resume.sentence_id).ok()?;
         Some(resume)
     });
-    let matched_position = document
-        .sentences
-        .get(document.position)
-        .and_then(matching_index);
+    let previous_sentence = document.sentences.get(document.position);
+    let matched_position = previous_sentence.and_then(matching_index);
     let position = matched_position
         .unwrap_or(document.position.min(sentences.len().saturating_sub(1)));
 
@@ -471,7 +501,7 @@ pub(crate) fn update_transcript_with_page_starts(
     document.notes = notes;
     document.speech_text_overrides = speech_text_overrides;
     document.reviewed_translations = translations;
-    if matched_position.is_none() {
+    if matched_position.is_none_or(|index| previous_sentence.is_some_and(|old| old.text != sentences[index].text)) {
         document.reading_token_utf16 = None;
     }
     document.position = position;

@@ -483,9 +483,29 @@ impl Store {
             let lines = document.ocr_lines.get_or_insert_with(Vec::new);
             let start = lines.partition_point(|line| line.page < page);
             let end = lines.partition_point(|line| line.page <= page);
-            changed = reconcile_ocr_with_layer(reference, &mut lines[start..end]);
+            let page_lines = &mut lines[start..end];
+            let was_raw: Vec<_> = page_lines.iter().map(|line| line.correction.is_none()).collect();
+            changed = reconcile_ocr_with_layer(reference, page_lines);
             if changed {
-                reflow_pdf_document(tx, document, pages)?;
+                let mut edits = Vec::new();
+                for (line, _) in page_lines.iter().zip(was_raw)
+                    .filter(|(line, was_raw)| *was_raw && line.correction.is_some())
+                {
+                    use crate::document_tokens::word_parts;
+                    let span = line.source_span.ok_or("Розпізнаний рядок не має позиції в тексті.")?;
+                    for ((_, offset, raw), (_, _, corrected)) in
+                        word_parts(line.text.trim()).zip(word_parts(line.reading_text()))
+                    {
+                        if raw != corrected {
+                            edits.push(ocr::TranscriptEdit {
+                                start_utf16: span.start_utf16 + offset,
+                                old_len: raw.encode_utf16().count(),
+                                new_len: corrected.encode_utf16().count(),
+                            });
+                        }
+                    }
+                }
+                reflow_pdf_document_with_edits(tx, document, pages, &edits)?;
             }
             Ok(changed)
         })?;
@@ -920,15 +940,22 @@ pub(crate) fn merge_cached_pages(
 }
 
 fn reflow_pdf_document(db: &Connection, document: &mut Document, pages: Vec<String>) -> Result<()> {
+    reflow_pdf_document_with_edits(db, document, pages, &[])
+}
+
+fn reflow_pdf_document_with_edits(
+    db: &Connection, document: &mut Document, pages: Vec<String>, edits: &[ocr::TranscriptEdit],
+) -> Result<()> {
     let lines = document.ocr_lines.as_deref().unwrap_or_default();
     let (text, starts) = pdf_layers::merge_page_text(pages, lines)?;
     let parsed = document_layout::from_transcript(text, Some(starts));
     let changed = parsed.text != document.text;
     document.speech_resume = Store::read_speech_resume(db, &document.id)?;
-    ocr::update_transcript_with_page_starts(
+    ocr::update_transcript_with_edits(
         document,
         parsed.text,
         parsed.pdf_page_starts.as_deref(),
+        edits,
     )?;
     document.pdf_page_starts = parsed.pdf_page_starts;
     document.blocks = parsed.blocks;
