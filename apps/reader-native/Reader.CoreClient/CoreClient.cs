@@ -127,11 +127,11 @@ public sealed class CoreClient : IDisposable
     public OcrSuggestion[]? SuggestOcr(string language, string text) =>
         Call<OcrSuggestion[]?>(new { version = 1, operation = "suggest_ocr", language, text });
     public string InstallTranslationPackage(string path) =>
-        Call<string>(new { version = 1, operation = "install_translation_package", path });
+        CallIndependent<string>(new { version = 1, operation = "install_translation_package", path });
     public void VerifyTranslationPackage(string source, string target) =>
         CallIndependent<JsonElement>(new { version = 1, operation = "verify_translation_package", source, target });
     public bool RemoveTranslationPackage(string source, string target) =>
-        Call<bool>(new { version = 1, operation = "remove_translation_package", source, target });
+        CallIndependent<bool>(new { version = 1, operation = "remove_translation_package", source, target });
     public void CheckTranslationDownloadSpace(string source, string target, string stagingRoot, string archiveDirectory) =>
         Call<JsonElement>(new { version = 1, operation = "check_translation_download_space", source, target, stagingRoot, archiveDirectory });
     public void CheckTranslationArchiveSpace(string directory, long bytes) =>
