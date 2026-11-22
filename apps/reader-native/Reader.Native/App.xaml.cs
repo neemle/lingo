@@ -11,8 +11,15 @@ public partial class App : Application
             Title = "Читай — локальна бібліотека", Width = 1160, Height = 820,
             MinimumWidth = 760, MinimumHeight = 600,
         };
+        void Activate(object? sender, EventArgs args)
+        {
+            window.Activated -= Activate;
+            window.Dispatcher.Dispatch(shell.RestoreAfterActivation);
+        }
+        window.Activated += Activate;
         window.Destroying += (_, _) =>
         {
+            window.Activated -= Activate;
             shell.StopListening();
             Services.AppState.Close();
         };

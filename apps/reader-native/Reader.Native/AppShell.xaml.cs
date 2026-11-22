@@ -14,41 +14,46 @@ public partial class AppShell : Shell
     private bool restored;
     private bool openingFiles;
     private bool listening;
+    private bool stopped;
 
     public AppShell()
 	{
 		InitializeComponent();
 	}
 
-    protected override async void OnAppearing()
+    internal async void RestoreAfterActivation()
     {
-        base.OnAppearing();
-        if (restored) return;
+        if (restored || stopped) return;
         restored = true;
         try
         {
             trackedSession = AppState.Session;
             var id = Preferences.Get("lastDocument", "");
             if (id.Length > 0) await trackedSession.SelectAsync(id);
-            if (!DesktopImport.HasPending) await GoToAsync(previousRoute);
+            if (!stopped && !DesktopImport.HasPending && previousRoute != "//library")
+                await GoToAsync(previousRoute);
         }
         catch (Exception error)
         {
             Console.Error.WriteLine(error);
-            await DisplayAlertAsync("Локальний читач", error.Message, "Гаразд");
+            if (!stopped) await DisplayAlertAsync("Локальний читач", error.Message, "Гаразд");
         }
         finally
         {
-            listening = true;
-            if (trackedSession is not null) trackedSession.PropertyChanged += SessionChanged;
-            RefreshRecent();
-            DesktopImport.Available += ScheduleFileImports;
-            ScheduleFileImports();
+            if (!stopped)
+            {
+                listening = true;
+                if (trackedSession is not null) trackedSession.PropertyChanged += SessionChanged;
+                RefreshRecent();
+                DesktopImport.Available += ScheduleFileImports;
+                ScheduleFileImports();
+            }
         }
     }
 
     internal void StopListening()
     {
+        stopped = true;
         listening = false;
         DesktopImport.Available -= ScheduleFileImports;
         if (trackedSession is not null) trackedSession.PropertyChanged -= SessionChanged;
