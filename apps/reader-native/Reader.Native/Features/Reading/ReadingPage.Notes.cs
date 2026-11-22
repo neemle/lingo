@@ -39,9 +39,20 @@ public partial class ReadingPage
         finally { showingNotes = false; }
     }
 
-    private async Task ShowNoteEditorAsync(Document document, Sentence sentence)
+    private Task ShowNoteEditorAsync(Document document, Sentence sentence)
     {
         document.Notes.TryGetValue(sentence.Id, out var existing);
+        return ShowNoteEditorAsync(sentence, existing, async text =>
+        {
+            var session = AppState.Session;
+            await session.WaitUntilIdleAsync();
+            await session.SetSentenceNoteAsync(document.Id, sentence.Id, text);
+            if (session.Error.Length > 0) throw new InvalidOperationException(session.Error);
+        });
+    }
+
+    private async Task ShowNoteEditorAsync(Sentence sentence, string? existing, Func<string, Task> saveNote)
+    {
         var resources = Application.Current!.Resources;
         var editor = new Editor { Text = existing, Placeholder = "Напишіть нотатку", MinimumHeightRequest = 180, MaxLength = 4000 };
         var status = new Label { TextColor = (Color)resources["Accent"] };
@@ -84,12 +95,9 @@ public partial class ReadingPage
             actions.IsEnabled = false;
             try
             {
-                var session = AppState.Session;
-                await session.WaitUntilIdleAsync();
-                await session.SetSentenceNoteAsync(document.Id, sentence.Id, text);
-                if (session.Error.Length == 0 && Navigation.ModalStack.LastOrDefault() == page)
+                await saveNote(text);
+                if (Navigation.ModalStack.LastOrDefault() == page)
                     await Navigation.PopModalAsync();
-                else status.Text = session.Error;
             }
             catch (Exception error) { status.Text = error.Message; }
             finally { actions.IsEnabled = true; }

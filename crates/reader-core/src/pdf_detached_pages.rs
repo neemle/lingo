@@ -4,6 +4,10 @@ use unicode_segmentation::UnicodeSegmentation;
 use sha2::{Digest, Sha256};
 use rusqlite::{params, Connection, OptionalExtension};
 
+mod annotations;
+pub use annotations::{DetachedPdfAnnotationChange, DetachedPdfAnnotationItem};
+pub(crate) use annotations::has_annotations;
+
 pub(crate) fn initialize(db: &Connection) -> Result<()> {
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS pdf_detached_pages (
@@ -22,7 +26,8 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
             FOREIGN KEY(document_id,page) REFERENCES pdf_detached_pages(document_id,page) ON DELETE CASCADE
         );",
     )
-    .map_err(database_error)
+    .map_err(database_error)?;
+    annotations::initialize(db)
 }
 
 #[derive(Serialize)]
@@ -32,6 +37,8 @@ pub struct DetachedPdfSentence {
     pub position: usize,
     pub total: usize,
     pub language: String,
+    pub bookmarked: bool,
+    pub note: Option<String>,
 }
 
 pub(crate) struct CachedSentences {
@@ -59,7 +66,8 @@ impl Store {
             ).map_err(database_error)?;
         }
         let sentence = sentences.into_iter().nth(position).ok_or("Речення PDF не знайдено.")?;
-        Ok(Some(DetachedPdfSentence { sentence, position, total, language }))
+        let (bookmarked, note) = annotations::read(&self.connection, id, page, sentence.start_utf16)?;
+        Ok(Some(DetachedPdfSentence { sentence, position, total, language, bookmarked, note }))
     }
     pub(crate) fn detached_pdf_speech_source(
         &self, id: &str, page: u16, sentence_id: &str, next: bool,
@@ -154,6 +162,8 @@ pub(crate) struct ArchivedPage {
     pub language: Option<String>,
     pub lines: Option<Vec<ocr::OcrLine>>,
     pub position: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<annotations::ArchivedAnnotation>,
 }
 
 impl ArchivedPage {
@@ -167,6 +177,25 @@ impl ArchivedPage {
             return Err("Некоректна окрема сторінка PDF у резервній копії.".into());
         }
 
+        if !self.annotations.is_empty() {
+            let sentences = crate::segment(&self.text, "");
+            if self.annotations.windows(2).any(|pair| pair[0].start_utf16 >= pair[1].start_utf16) {
+                return Err("Некоректний порядок приміток до сторінки PDF.".into());
+            }
+            for item in &self.annotations {
+                if (!item.bookmarked && item.note.is_none())
+                    || sentences.binary_search_by_key(&item.start_utf16, |sentence| sentence.start_utf16).is_err()
+                {
+                    return Err("Примітка до сторінки PDF не має речення.".into());
+                }
+                if let Some(note) = &item.note {
+                    annotations::validate_note(note)?;
+                    if note.trim().is_empty() {
+                        return Err("Порожня нотатка до сторінки PDF.".into());
+                    }
+                }
+            }
+        }
         match (&self.language, &self.lines) {
             (None, None) => Ok(()),
             (Some(language), Some(lines))
@@ -210,8 +239,10 @@ pub(crate) fn visit_cached_pages(
         let encoded: Option<String> = row.get(3).map_err(database_error)?;
         let text: String = row.get(1).map_err(database_error)?;
         let position: Option<usize> = row.get(4).map_err(database_error)?;
+        let page = row.get(0).map_err(database_error)?;
         visit(ArchivedPage {
-            page: row.get(0).map_err(database_error)?,
+            page,
+            annotations: annotations::list(db, id, page)?,
             position: position.filter(|&position| has_sentence(&text, position)),
             text,
             language: row.get(2).map_err(database_error)?,
@@ -244,6 +275,7 @@ pub(crate) fn adopt_cached_page(db: &Connection, document: &crate::Document, pag
             params![document.id, page.page],
         ).map_err(database_error)?;
     }
+    annotations::merge(db, &document.id, page.page, &page.annotations)?;
     if let Some(position) = page.position {
         db.execute(
             "INSERT OR IGNORE INTO pdf_detached_positions (document_id,page,sentence) VALUES (?1,?2,?3)",

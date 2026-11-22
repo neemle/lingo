@@ -100,6 +100,9 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::PdfReadWindow { id, center } => value(store.pdf_read_window(&id, center)),
         Command::DetachedPdfSentence { id, page, position } =>
             value(store.detached_pdf_sentence(&id, page, position)),
+        Command::DetachedPdfAnnotations { id, page } => value(store.detached_pdf_annotations(&id, page)),
+        Command::UpdateDetachedPdfAnnotation { id, page, sentence_id, change } =>
+            value(store.update_detached_pdf_annotation(&id, page, &sentence_id, change)),
         Command::TranslateDetachedPdfSentence { id, page, sentence_id, target } =>
             sentence_translation(store.translate_detached_pdf_sentence(&id, page, &sentence_id, &target)),
         Command::SentenceTokens { id, sentence_id, start, limit } => value(store.sentence_tokens(

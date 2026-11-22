@@ -200,6 +200,12 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<DetachedPdfSentence?> DetachedPdfSentenceAsync(string id, int page, int? position) =>
         Task.Run(() => client.DetachedPdfSentence(id, page, position));
 
+    public Task<DetachedPdfAnnotationItem[]> DetachedPdfAnnotationsAsync(string id, int page) =>
+        Task.Run(() => client.DetachedPdfAnnotations(id, page));
+
+    public Task<DetachedPdfSentence> UpdateDetachedPdfAnnotationAsync(string id, int page, string sentenceId, object change) =>
+        Task.Run(() => client.UpdateDetachedPdfAnnotation(id, page, sentenceId, change));
+
     public Task<MachineTranslation?> TranslateDetachedPdfSentenceAsync(string id, int page, string sentenceId, string target) =>
         Task.Run(() => client.TranslateDetachedPdfSentence(id, page, sentenceId, target));
 

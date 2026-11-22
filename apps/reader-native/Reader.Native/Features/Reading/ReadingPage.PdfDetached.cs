@@ -12,6 +12,7 @@ public partial class ReadingPage
     private DetachedPdfSentence? detachedSentence;
     private TextSelection? detachedSelection;
     private bool loadingDetachedSentence;
+    private bool changingDetachedAnnotation;
     private bool translatingDetachedSentence;
     private bool speakingDetachedSentence;
     private bool detachedPaused;
@@ -105,6 +106,66 @@ public partial class ReadingPage
         var session = AppState.Session;
         await ShowAnalysisPageAsync("Аналіз виділення", selected.Text,
             _ => session.AnalyzeDetachedPdfSelectionAsync(address.Document, address.Page, selected));
+    }
+
+    private async void DetachedBookmarkClicked(object? sender, EventArgs args)
+    {
+        if (!DetachedBookmark.IsEnabled || detachedAddress is not { } address ||
+            detachedSentence is not { } current) return;
+        changingDetachedAnnotation = true;
+        UpdateDetachedControls();
+        try
+        {
+            var updated = await AppState.Session.UpdateDetachedPdfAnnotationAsync(
+                address.Document, address.Page, current.Sentence.Id, new { kind = "bookmark", saved = !current.Bookmarked });
+            if (ReferenceEquals(detachedAddress, address) && detachedSentence?.Sentence.Id == current.Sentence.Id)
+                detachedSentence = updated;
+        }
+        catch (Exception error) { await DisplayAlertAsync("Закладка", error.Message, "Гаразд"); }
+        finally
+        {
+            changingDetachedAnnotation = false;
+            UpdateDetachedControls();
+        }
+    }
+
+    private async void DetachedNoteClicked(object? sender, EventArgs args)
+    {
+        if (!DetachedNote.IsEnabled || detachedAddress is not { } address || detachedSentence is not { } current) return;
+        try
+        {
+            await ShowNoteEditorAsync(current.Sentence, current.Note, async text =>
+            {
+                var updated = await AppState.Session.UpdateDetachedPdfAnnotationAsync(
+                    address.Document, address.Page, current.Sentence.Id, new { kind = "note", text });
+                if (ReferenceEquals(detachedAddress, address) && detachedSentence?.Sentence.Id == current.Sentence.Id)
+                {
+                    detachedSentence = updated;
+                    UpdateDetachedControls();
+                }
+            });
+        }
+        catch (Exception error) { await DisplayAlertAsync("Нотатка", error.Message, "Гаразд"); }
+    }
+
+    private async void DetachedAnnotationsClicked(object? sender, EventArgs args)
+    {
+        if (!DetachedAnnotations.IsEnabled || detachedAddress is not { } address) return;
+        try
+        {
+            var marks = await AppState.Session.DetachedPdfAnnotationsAsync(address.Document, address.Page);
+            if (!ReferenceEquals(detachedAddress, address)) return;
+            if (marks.Length == 0)
+            {
+                await DisplayAlertAsync("Позначки на сторінці", "Закладок і нотаток ще немає.", "Гаразд");
+                return;
+            }
+            var choices = marks.ToDictionary(item => BookmarkLabel(item.Position, item.Note ?? item.Text));
+            var selected = await DisplayActionSheetAsync("Позначки на сторінці", "Скасувати", null, choices.Keys.ToArray());
+            if (selected is not null && choices.TryGetValue(selected, out var mark) && ReferenceEquals(detachedAddress, address))
+                await LoadDetachedSentenceAsync(address, mark.Position);
+        }
+        catch (Exception error) { await DisplayAlertAsync("Позначки", error.Message, "Гаразд"); }
     }
 
     private async void DetachedTranslateClicked(object? sender, EventArgs args)
@@ -237,6 +298,10 @@ public partial class ReadingPage
         DetachedNext.IsEnabled = available && detachedSentence is { } current && current.Position + 1 < current.Total;
         DetachedSpeak.IsEnabled = available;
         DetachedAnalyze.IsEnabled = available;
+        DetachedBookmark.IsEnabled = DetachedNote.IsEnabled = DetachedAnnotations.IsEnabled =
+            available && !changingDetachedAnnotation;
+        DetachedBookmark.Text = detachedSentence?.Bookmarked == true ? "Зняти закладку" : "Закладка";
+        DetachedNote.Text = detachedSentence?.Note is null ? "Нотатка…" : "Редагувати нотатку…";
         DetachedAnalyzeSelection.IsVisible = DetachedAnalyzeSelection.IsEnabled =
             !loadingDetachedSentence && detachedSelection is not null;
         DetachedTranslate.IsEnabled = available && !translatingDetachedSentence && TargetCode is not null;

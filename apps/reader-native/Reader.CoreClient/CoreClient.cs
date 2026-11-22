@@ -132,6 +132,15 @@ public sealed class CoreClient : IDisposable
     public DetachedPdfSentence? DetachedPdfSentence(string id, int page, int? position) =>
         Call<DetachedPdfSentence?>(new { version = 1, operation = "detached_pdf_sentence", id, page, position });
 
+    public DetachedPdfAnnotationItem[] DetachedPdfAnnotations(string id, int page) =>
+        Call<DetachedPdfAnnotationItem[]>(new { version = 1, operation = "detached_pdf_annotations", id, page });
+
+    public DetachedPdfSentence UpdateDetachedPdfAnnotation(string id, int page, string sentenceId, object change) =>
+        Call<DetachedPdfSentence>(new
+        {
+            version = 1, operation = "update_detached_pdf_annotation", id, page, sentenceId, change,
+        });
+
     public MachineTranslation? TranslateDetachedPdfSentence(string id, int page, string sentenceId, string target) =>
         CallIndependent<MachineTranslation?>(new
         {

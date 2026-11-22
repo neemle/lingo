@@ -13,4 +13,7 @@ public sealed record PdfReadPage(int Page, string State, string Text, OcrSpan? S
 
 public sealed record PdfReadWindow(int Center, int PageCount, PdfReadPage[] Pages, string Context, OcrSpan? ContextSpan);
 
-public sealed record DetachedPdfSentence(Sentence Sentence, int Position, int Total, string Language);
+public sealed record DetachedPdfSentence(Sentence Sentence, int Position, int Total, string Language,
+    bool Bookmarked = false, string? Note = null);
+
+public sealed record DetachedPdfAnnotationItem(int Position, string Text, bool Bookmarked, string? Note);
