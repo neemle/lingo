@@ -473,6 +473,11 @@ pub enum Command {
         sentence_id: String,
         target: String,
     },
+    SaveDetachedPdfWord {
+        id: String,
+        page: u16,
+        input: reader_core::knowledge::DetachedVocabularyInput,
+    },
     SaveWord {
         entry: Vocabulary,
     },

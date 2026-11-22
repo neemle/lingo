@@ -19,7 +19,7 @@ mod scoped_analysis;
 mod syntax;
 mod syntax_parse;
 
-pub use scoped_analysis::{AnalysisScope, DetachedPageAnalysis, LinguisticAnalysis};
+pub use scoped_analysis::{AnalysisScope, DetachedPageAnalysis, DetachedVocabularyInput, LinguisticAnalysis};
 
 pub use lexicon::{LexicalPackage, LexicalPackageInstall, WordMeaning};
 

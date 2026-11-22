@@ -195,6 +195,8 @@
         Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedAnalyzeSelection" Text="Аналіз виділення" IsVisible="False"
         Clicked="DetachedAnalyzeSelectionClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
+       <Button x:Name="DetachedSaveWord" Text="До словника" IsVisible="False" Clicked="DetachedSaveWordClicked"
+        Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedBookmark" Text="Закладка" Clicked="DetachedBookmarkClicked"
         Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedNote" Text="Нотатка…" Clicked="DetachedNoteClicked"

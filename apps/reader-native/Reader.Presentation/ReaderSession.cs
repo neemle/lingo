@@ -468,6 +468,13 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         return Read();
     });
 
+    public Task SaveDetachedPdfWordAsync(string id, int page, TextSelection selection, string translation,
+        string target, LemmaSnapshot? analysis, ExpressionSnapshot? expression) => RunAsync(() =>
+    {
+        client.SaveDetachedPdfWord(id, page, selection.StartUtf16, selection.Text, translation, target, analysis, expression);
+        return Read();
+    });
+
     public Task SaveWordAsync(TextSelection selection, string translation, LemmaSnapshot? analysis = null,
         ExpressionSnapshot? expression = null, SenseSnapshot? sense = null) => RunAsync(() =>
     {

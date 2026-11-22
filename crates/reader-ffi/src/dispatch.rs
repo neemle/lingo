@@ -307,6 +307,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             sentence_id,
             target,
         } => cached_translation(store.cached_installed_translation(&id, &sentence_id, &target)),
+        Command::SaveDetachedPdfWord { id, page, input } =>
+            value(store.save_detached_pdf_word(&id, page, input)),
         Command::SaveWord { entry } => value(store.save_word(entry)),
         Command::DeleteVocabularyCard { id } => value(store.delete_vocabulary_card(&id)),
         Command::SetVocabularyVariants {

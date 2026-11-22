@@ -232,6 +232,7 @@ fn validate(command: &Command) -> Result<()> {
         | Command::PdfReadWindow { id, .. }
         | Command::DetachedPdfSentence { id, .. }
         | Command::FindDetachedPdfText { id, .. }
+        | Command::SaveDetachedPdfWord { id, .. }
         | Command::DetachedPdfAnnotations { id, .. }
         | Command::AnalyzeDetachedPdf { id, .. }
         | Command::PdfOcrNeededPages { id, .. }

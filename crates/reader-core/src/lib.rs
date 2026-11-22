@@ -1173,7 +1173,11 @@ impl Store {
         })
     }
 
-    pub fn save_word(&mut self, mut entry: Vocabulary) -> Result<Vocabulary> {
+    pub fn save_word(&mut self, entry: Vocabulary) -> Result<Vocabulary> {
+        self.save_word_for_document(entry, false)
+    }
+
+    fn save_word_for_document(&mut self, mut entry: Vocabulary, link_document: bool) -> Result<Vocabulary> {
         valid_language(&entry.language)?;
         valid_language(&entry.target_language)?;
         entry.word = entry.word.trim().to_owned();
@@ -1241,7 +1245,7 @@ impl Store {
                 ],
             )
             .map_err(|e| e.to_string())?;
-            if card.sense.is_some() && card.document_id != entry.document_id {
+            if (link_document || card.sense.is_some()) && card.document_id != entry.document_id {
                 dictionary_transfer::link_card_document(&tx, &card.id, &entry.document_id)?;
             }
             tx.commit().map_err(|e| e.to_string())?;
@@ -1283,6 +1287,9 @@ impl Store {
                     ],
                 )
                 .map_err(|error| error.to_string())?;
+                if link_document && card.document_id != entry.document_id {
+                    dictionary_transfer::link_card_document(&tx, &card.id, &entry.document_id)?;
+                }
                 tx.commit().map_err(|error| error.to_string())?;
                 return Ok(card);
             }

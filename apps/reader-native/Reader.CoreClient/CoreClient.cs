@@ -364,6 +364,14 @@ public sealed class CoreClient : IDisposable
 
     public MachineTranslation? TranslateSentence(string id, string sentenceId, string target) =>
         CallIndependent<MachineTranslation?>(new { version = 1, operation = "translate_sentence", id, sentenceId, target });
+    public Vocabulary SaveDetachedPdfWord(string id, int page, int startUtf16, string selectedText,
+        string translation, string target, LemmaSnapshot? analysis, ExpressionSnapshot? expression) =>
+        Call<Vocabulary>(new
+        {
+            version = 1, operation = "save_detached_pdf_word", id, page,
+            input = new { startUtf16, selectedText, translation, target, analysis, expression },
+        });
+
     public Vocabulary SaveWord(Vocabulary entry) =>
         Call<Vocabulary>(new { version = 1, operation = "save_word", entry });
     public Vocabulary SetVocabularyVariants(string id, string[] acceptedTranslations, string? translation = null) =>

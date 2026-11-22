@@ -47,6 +47,17 @@ pub enum DetachedPageAnalysis {
     Selection { start_utf16: usize, text: String },
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DetachedVocabularyInput {
+    start_utf16: usize,
+    selected_text: String,
+    translation: String,
+    target: String,
+    analysis: Option<Box<crate::LemmaSnapshot>>,
+    expression: Option<Box<crate::ExpressionSnapshot>>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LinguisticAnalysis {
@@ -148,6 +159,29 @@ impl Store {
             (document_id, &cached.language), sentence, &cached.revision, &scope,
             versioned_index(&index)?, lexical,
         )
+    }
+
+    pub fn save_detached_pdf_word(
+        &mut self, document_id: &str, page: u16, input: DetachedVocabularyInput,
+    ) -> Result<crate::Vocabulary> {
+        let cached = self.detached_pdf_sentences(document_id, page)?
+            .ok_or("Текст сторінки PDF недоступний.")?;
+        let (sentence, _) = detached_selection(&cached.sentences, input.start_utf16, &input.selected_text)?;
+        self.save_word_for_document(crate::Vocabulary {
+            id: String::new(),
+            word: input.selected_text,
+            translation: input.translation,
+            language: cached.language,
+            target_language: input.target,
+            context: sentence.text.clone(),
+            document_id: document_id.to_owned(),
+            forward: Default::default(),
+            reverse: Default::default(),
+            analysis: input.analysis,
+            expression: input.expression,
+            sense: None,
+            accepted_translations: Vec::new(),
+        }, true)
     }
 
     /// Warm one sentence in the current reading window. A changed cursor or

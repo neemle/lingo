@@ -14,6 +14,7 @@ public partial class ReadingPage
     private bool loadingDetachedSentence;
     private int detachedSentenceRequest;
     private bool changingDetachedAnnotation;
+    private bool savingDetachedWord;
     private bool translatingDetachedSentence;
     private bool speakingDetachedSentence;
     private bool detachedPaused;
@@ -108,6 +109,73 @@ public partial class ReadingPage
         var session = AppState.Session;
         await ShowAnalysisPageAsync("Аналіз виділення", selected.Text,
             _ => session.AnalyzeDetachedPdfSelectionAsync(address.Document, address.Page, selected));
+    }
+
+    private async void DetachedSaveWordClicked(object? sender, EventArgs args)
+    {
+        if (!DetachedSaveWord.IsEnabled || detachedAddress is not { } address ||
+            detachedSelection is not { } selected || TargetCode is not { } target) return;
+
+        var session = AppState.Session;
+        savingDetachedWord = true;
+        UpdateDetachedControls();
+        try
+        {
+            var translation = await DisplayPromptAsync("Додати до словника",
+                $"«{selected.Text}» · {DocumentLanguages.Name(target)}", accept: "Далі", cancel: "Скасувати",
+                placeholder: "Переклад", maxLength: 2000);
+            if (string.IsNullOrWhiteSpace(translation) || detachedAddress != address || TargetCode != target) return;
+
+            var reading = new VocabularyReadingOption("Як у тексті");
+            LinguisticAnalysis? details = null;
+            try { details = await session.AnalyzeDetachedPdfSelectionAsync(address.Document, address.Page, selected); }
+            catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
+            if (detachedAddress != address || TargetCode != target) return;
+            var options = DetachedVocabularyReadings(details, selected, reading);
+            if (options.Length > 1)
+            {
+                var labels = options.Select((option, index) => $"{index + 1}. {option.Label}").ToArray();
+                var choice = await DisplayActionSheetAsync("Як зберегти картку", "Скасувати", null, labels);
+                var index = Array.IndexOf(labels, choice);
+                if (index < 0 || detachedAddress != address || TargetCode != target) return;
+                reading = options[index];
+            }
+
+            await session.WaitUntilIdleAsync();
+            if (session.Document?.Id != address.Document || detachedAddress != address) return;
+            await session.SaveDetachedPdfWordAsync(address.Document, address.Page, selected, translation,
+                target, reading.Lemma, reading.Expression);
+            if (session.Error.Length > 0)
+            {
+                await DisplayAlertAsync("Словник", session.Error, "Гаразд");
+                return;
+            }
+            if (detachedAddress == address) DetachedSentenceStatus.Text = "Картку збережено в словнику.";
+        }
+        catch (Exception error) { await DisplayAlertAsync("Словник", error.Message, "Гаразд"); }
+        finally
+        {
+            savingDetachedWord = false;
+            UpdateDetachedControls();
+        }
+    }
+
+    private static VocabularyReadingOption[] DetachedVocabularyReadings(
+        LinguisticAnalysis? details, TextSelection selected, VocabularyReadingOption surface)
+    {
+        if (details is not { Package: { } package }) return [surface];
+        var version = $"{package.Version} · {package.Revision}";
+        if (details.Words is [var word])
+        {
+            return [surface, .. word.Morphology.DistinctBy(analysis => (analysis.Lemma, analysis.PartOfSpeech))
+                .Select(analysis => new VocabularyReadingOption($"Лема · {analysis.Lemma} · {analysis.PartOfSpeech}",
+                    Lemma: new LemmaSnapshot(analysis.Lemma, selected.Text, analysis.PartOfSpeech, analysis.Features,
+                        package.Name, version)))];
+        }
+        return [surface, .. details.Expressions.DistinctBy(expression => (expression.Canonical, expression.Kind))
+            .Select(expression => new VocabularyReadingOption($"Сталий вираз · {expression.Text}",
+                Expression: new ExpressionSnapshot(expression.Canonical, expression.Text, expression.Kind,
+                    expression.Observations, package.Name, version)))];
     }
 
     private async void DetachedBookmarkClicked(object? sender, EventArgs args)
@@ -306,6 +374,9 @@ public partial class ReadingPage
         DetachedNote.Text = detachedSentence?.Note is null ? "Нотатка…" : "Редагувати нотатку…";
         DetachedAnalyzeSelection.IsVisible = DetachedAnalyzeSelection.IsEnabled =
             !loadingDetachedSentence && detachedSelection is not null;
+        DetachedSaveWord.IsVisible = DetachedAnalyzeSelection.IsVisible;
+        DetachedSaveWord.IsEnabled = DetachedSaveWord.IsVisible && !savingDetachedWord
+            && !AppState.Session.Busy && TargetCode is not null;
         DetachedTranslate.IsEnabled = available && !translatingDetachedSentence && TargetCode is not null;
         var playing = speakingDetachedSentence && !detachedPaused;
         DetachedSpeak.Text = playing ? "Ⅱ" : "▶";
