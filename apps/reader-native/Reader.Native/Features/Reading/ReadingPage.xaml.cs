@@ -32,6 +32,7 @@ public partial class ReadingPage : ContentPage
     }
     private readonly LocalSpeech speech = new();
     private TextSelection? selection;
+    private LemmaSnapshot[] vocabularyReadings = [];
     private string? documentId;
     private int speechRequest;
     private bool speechPaused;
@@ -211,6 +212,8 @@ public partial class ReadingPage : ContentPage
         if (session.Document is not { } doc) return;
         if (selection != selected) Translation.Text = "";
         selection = selected;
+        vocabularyReadings = [];
+        VocabularyReading.IsVisible = false;
         SelectedWord.Text = selected.Text;
         KnowledgeAnalysis.Text = "Пошук у мовному пакеті…";
         WordCard.IsVisible = true;
@@ -234,6 +237,17 @@ public partial class ReadingPage : ContentPage
             KnowledgeAnalysis.Text = lookup.Analyses.Length == 0
                 ? $"Словоформи немає в корпусі {source}."
                 : $"{string.Join(Environment.NewLine, readings)}{Environment.NewLine}Частота в корпусі · {source}";
+            vocabularyReadings = lookup.Analyses.DistinctBy(analysis => (analysis.Lemma, analysis.PartOfSpeech))
+                .Select(analysis => new LemmaSnapshot(analysis.Lemma, selected.Text, analysis.PartOfSpeech,
+                    analysis.Features, lookup.Package.Name, $"{lookup.Package.Version} · {lookup.Package.Revision}"))
+                .ToArray();
+            if (vocabularyReadings.Length > 0)
+            {
+                VocabularyReading.ItemsSource = new[] { $"Виділена форма · {selected.Text}" }
+                    .Concat(vocabularyReadings.Select(analysis => $"Лема · {analysis.Lemma} · {analysis.PartOfSpeech}")).ToArray();
+                VocabularyReading.SelectedIndex = vocabularyReadings.Length == 1 ? 1 : 0;
+                VocabularyReading.IsVisible = true;
+            }
         }
         catch (Exception error)
         {
@@ -244,9 +258,16 @@ public partial class ReadingPage : ContentPage
 
     private async void SaveWordClicked(object? sender, EventArgs args)
     {
-        if (selection is null) return;
-        await AppState.Session.SaveWordAsync(selection, Translation.Text ?? "");
-        if (AppState.Session.Error.Length == 0) { WordCard.IsVisible = false; Translation.Text = ""; }
+        if (selection is not { } selected) return;
+        var index = VocabularyReading.SelectedIndex - 1;
+        var analysis = VocabularyReading.IsVisible && index >= 0 && index < vocabularyReadings.Length
+            ? vocabularyReadings[index] : null;
+        await AppState.Session.SaveWordAsync(selected, Translation.Text ?? "", analysis);
+        if (selection == selected && AppState.Session.Error.Length == 0)
+        {
+            WordCard.IsVisible = false;
+            Translation.Text = "";
+        }
     }
 
     private async void BookmarkClicked(object? sender, EventArgs args) =>

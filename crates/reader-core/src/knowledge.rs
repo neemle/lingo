@@ -208,7 +208,7 @@ impl Store {
     }
 }
 
-fn word_key(word: &str) -> String {
+pub(crate) fn word_key(word: &str) -> String {
     word.trim()
         .to_lowercase()
         .replace(['\u{2019}', '\u{02bc}'], "'")

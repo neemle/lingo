@@ -124,6 +124,9 @@ corpus against its pinned SHA-256 and builds a local read-only index. Select a w
 observed lemmas, parts of speech, grammatical features and relative frequency. If there are multiple
 readings, the card shows the most frequent variant for each before showing additional variants.
 The card names the corpus and marks missing forms. Analysis leaves the original and reading text intact.
+In **Форма для словникової картки**, choose the reading you intend to save. Equivalent inflections
+of the same lemma, part of speech and reviewed translation share one card and its review history.
+The card retains the recorded form, source sentence and the grammatical data available when saved.
 
 The initial indexes use the training annotations from Universal Dependencies 2.18 and omit corpus passages.
 They can be reinstalled independently of documents and backup data.

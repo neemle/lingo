@@ -138,11 +138,13 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public Task<MachineTranslation?> TranslateSentenceAsync(string id, string sentenceId, string target) =>
         Task.Run(() => client.TranslateSentence(id, sentenceId, target));
 
-    public Task SaveWordAsync(TextSelection selection, string translation) => RunAsync(() =>
+    public Task SaveWordAsync(TextSelection selection, string translation, LemmaSnapshot? analysis = null) => RunAsync(() =>
     {
         if (Document is not { } doc) return Read();
+        var context = doc.Sentences.FirstOrDefault(sentence => selection.StartUtf16 >= sentence.StartUtf16
+            && selection.StartUtf16 < sentence.EndUtf16)?.Text ?? "";
         client.SaveWord(new Vocabulary("", selection.Text, translation, doc.Language, "uk",
-            Sentence?.Text ?? "", doc.Id, new ReviewState(), new ReviewState()));
+            context, doc.Id, new ReviewState(), new ReviewState()) { Analysis = analysis });
         return Read();
     });
 

@@ -9,4 +9,10 @@ public sealed record Vocabulary(
     string Context,
     string DocumentId,
     ReviewState Forward,
-    ReviewState Reverse);
+    ReviewState Reverse)
+{
+    public LemmaSnapshot? Analysis { get; init; }
+}
+
+public sealed record LemmaSnapshot(string Lemma, string Surface, string PartOfSpeech, string Features,
+    string Source, string SourceVersion, string? Context = null, string? DocumentId = null);

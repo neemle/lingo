@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -96,6 +96,71 @@ pub struct Vocabulary {
     pub document_id: String,
     pub forward: ReviewState,
     pub reverse: ReviewState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis: Option<Box<LemmaSnapshot>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LemmaSnapshot {
+    pub lemma: String,
+    pub surface: String,
+    pub part_of_speech: String,
+    pub features: String,
+    pub source: String,
+    pub source_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_id: Option<String>,
+}
+
+impl Vocabulary {
+    fn surface_key(&self, word: &str) -> String {
+        format!(
+            "{}|{}|{}|{}",
+            self.language,
+            self.target_language,
+            word.to_lowercase(),
+            self.translation.to_lowercase()
+        )
+    }
+
+    fn word_key(&self) -> String {
+        match &self.analysis {
+            None => self.surface_key(&self.word),
+            Some(analysis) => format!(
+                "lemma:{}",
+                serde_json::json!([
+                    self.language,
+                    self.target_language,
+                    knowledge::word_key(&analysis.lemma),
+                    analysis.part_of_speech,
+                    knowledge::word_key(&self.translation),
+                ])
+            ),
+        }
+    }
+
+    fn validate_analysis(&self) -> Result<()> {
+        if let Some(analysis) = &self.analysis {
+            for (value, limit) in [
+                (&analysis.lemma, 500),
+                (&analysis.surface, 500),
+                (&analysis.part_of_speech, 20),
+                (&analysis.source, 120),
+                (&analysis.source_version, 80),
+            ] {
+                if value.trim().is_empty() || value.len() > limit {
+                    return Err("Некоректний граматичний запис словникової картки".into());
+                }
+            }
+            if self.word != analysis.lemma || analysis.features.len() > 1024 {
+                return Err("Некоректні граматичні ознаки словникової картки".into());
+            }
+        }
+        Ok(())
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -548,7 +613,6 @@ impl Store {
     }
 
     fn read_speech_resume(connection: &Connection, id: &str) -> Result<Option<SpeechResume>> {
-        use rusqlite::OptionalExtension;
         let body: Option<String> = connection
             .query_row(
                 "SELECT body FROM speech_resume WHERE document_id=?1",
@@ -688,38 +752,85 @@ impl Store {
         {
             return Err("Вкажіть слово й переклад (до 500 / 2000 символів)".into());
         }
-        // Distinct translations remain distinct senses; exact repetitions preserve learning states.
-        let key = format!(
-            "{}|{}|{}|{}",
-            entry.language,
-            entry.target_language,
-            entry.word.to_lowercase(),
-            entry.translation.to_lowercase()
-        );
-        if let Ok(body) = self.connection.query_row(
-            "SELECT body FROM vocabulary WHERE word_key=?",
-            [&key],
-            |r| r.get::<_, String>(0),
-        ) {
+        if let Some(analysis) = &mut entry.analysis {
+            analysis.lemma = analysis.lemma.trim().to_owned();
+            analysis.surface = entry.word;
+            analysis.context = None;
+            analysis.document_id = None;
+            entry.word = analysis.lemma.clone();
+        }
+        entry.validate_analysis()?;
+
+        let key = entry.word_key();
+        let tx = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT body FROM vocabulary WHERE word_key=?",
+                [&key],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        if let Some(body) = existing {
             return serde_json::from_str(&body).map_err(|e| e.to_string());
+        }
+        if entry.analysis.is_some() {
+            let legacy_key = entry.surface_key(&entry.word);
+            let legacy: Option<String> = tx
+                .query_row(
+                    "SELECT body FROM vocabulary WHERE word_key=?1",
+                    [&legacy_key],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|error| error.to_string())?;
+            if let Some(body) = legacy {
+                let mut card: Vocabulary =
+                    serde_json::from_str(&body).map_err(|error| error.to_string())?;
+                card.word = entry.word;
+                card.analysis = entry.analysis.map(|mut analysis| {
+                    if entry.context != card.context || entry.document_id != card.document_id {
+                        analysis.context = Some(entry.context);
+                        analysis.document_id = Some(entry.document_id);
+                    }
+                    analysis
+                });
+                tx.execute(
+                    "UPDATE vocabulary SET word_key=?1, body=?2 WHERE id=?3",
+                    params![
+                        key,
+                        serde_json::to_string(&card).map_err(|error| error.to_string())?,
+                        card.id
+                    ],
+                )
+                .map_err(|error| error.to_string())?;
+                tx.commit().map_err(|error| error.to_string())?;
+                return Ok(card);
+            }
         }
         entry.id = Uuid::new_v4().to_string();
         entry.forward = ReviewState::default();
         entry.reverse = ReviewState::default();
-        self.connection
-            .execute(
-                "INSERT INTO vocabulary VALUES (?1,?2,?3)",
-                params![entry.id, key, serde_json::to_string(&entry).unwrap()],
-            )
-            .map_err(|e| e.to_string())?;
+        tx.execute(
+            "INSERT INTO vocabulary VALUES (?1,?2,?3)",
+            params![entry.id, key, serde_json::to_string(&entry).unwrap()],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
         Ok(entry)
     }
     pub fn review(&mut self, id: &str, direction: &str, grade: u8) -> Result<()> {
         if !["forward", "reverse"].contains(&direction) || grade > 3 {
             return Err("Некоректна відповідь".into());
         }
-        let body: String = self
+        let tx = self
             .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let body: String = tx
             .query_row("SELECT body FROM vocabulary WHERE id=?", [id], |r| r.get(0))
             .map_err(|e| e.to_string())?;
         let mut entry: Vocabulary = serde_json::from_str(&body).map_err(|e| e.to_string())?;
@@ -754,7 +865,6 @@ impl Store {
                 state.interval_days as i64 * 86400
             };
         state.reviews += 1;
-        let tx = self.connection.transaction().map_err(|e| e.to_string())?;
         tx.execute(
             "UPDATE vocabulary SET body=? WHERE id=?",
             params![serde_json::to_string(&entry).unwrap(), id],
@@ -885,6 +995,7 @@ impl Store {
             if v.word.trim().is_empty() || v.translation.trim().is_empty() {
                 return Err("Некоректна словникова картка".into());
             }
+            v.validate_analysis()?;
         }
         let tx = self.connection.transaction().map_err(|e| e.to_string())?;
         for (d, o) in validated {
@@ -907,25 +1018,27 @@ impl Store {
                 .map_err(|e| e.to_string())?;
             }
         }
+        let mut review_cards = BTreeMap::new();
         for v in backup.snapshot.vocabulary {
-            let key = format!(
-                "{}|{}|{}|{}",
-                v.language,
-                v.target_language,
-                v.word.to_lowercase(),
-                v.translation.to_lowercase()
-            );
+            let key = v.word_key();
             tx.execute(
                 "INSERT OR IGNORE INTO vocabulary VALUES (?1,?2,?3)",
                 params![v.id, key, serde_json::to_string(&v).unwrap()],
             )
             .map_err(|e| e.to_string())?;
+            let local_id: String = tx.query_row(
+                "SELECT id FROM vocabulary WHERE id=?1 OR word_key=?2 ORDER BY id=?1 DESC LIMIT 1",
+                params![v.id, key], |row| row.get(0),
+            ).map_err(|error| error.to_string())?;
+            review_cards.insert(v.id, local_id);
         }
         for r in backup.reviews {
             if !["forward", "reverse"].contains(&r.direction.as_str()) || r.grade > 3 {
                 return Err("Некоректна історія повторень".into());
             }
-            tx.execute("INSERT INTO review_events(entry_id,direction,grade,reviewed_at) SELECT ?1,?2,?3,?4 WHERE NOT EXISTS (SELECT 1 FROM review_events WHERE entry_id=?1 AND direction=?2 AND grade=?3 AND reviewed_at=?4)",params![r.entry_id,r.direction,r.grade,r.reviewed_at]).map_err(|e|e.to_string())?;
+            if let Some(card_id) = review_cards.get(&r.entry_id) {
+                tx.execute("INSERT INTO review_events(entry_id,direction,grade,reviewed_at) SELECT ?1,?2,?3,?4 WHERE NOT EXISTS (SELECT 1 FROM review_events WHERE entry_id=?1 AND direction=?2 AND grade=?3 AND reviewed_at=?4)",params![card_id,r.direction,r.grade,r.reviewed_at]).map_err(|e|e.to_string())?;
+            }
         }
         tx.commit().map_err(|e| e.to_string())
     }
@@ -1031,6 +1144,7 @@ mod tests {
                 document_id: doc.id.clone(),
                 forward: ReviewState::default(),
                 reverse: ReviewState::default(),
+                analysis: None,
             })
             .unwrap();
         db.review(&entry.id, "forward", 2).unwrap();
@@ -1053,6 +1167,83 @@ mod tests {
         assert_eq!(restored.export().unwrap().reviews.len(), 1);
         restored.restore(db.export().unwrap()).unwrap();
         assert_eq!(restored.export().unwrap().reviews.len(), 1);
+    }
+    #[test]
+    fn selected_lemma_preserves_learning_across_forms_and_backup() {
+        let mut db = Store::open(Path::new(":memory:")).unwrap();
+        let make_card =
+            |word: &str, translation: &str, pos: Option<&str>, context: &str| Vocabulary {
+                id: String::new(),
+                word: word.into(),
+                translation: translation.into(),
+                language: "en".into(),
+                target_language: "uk".into(),
+                context: context.into(),
+                document_id: "story".into(),
+                forward: ReviewState::default(),
+                reverse: ReviewState::default(),
+                analysis: pos.map(|pos| {
+                    Box::new(LemmaSnapshot {
+                        lemma: "read".into(),
+                        surface: word.into(),
+                        part_of_speech: pos.into(),
+                        features: "Tense=Pres".into(),
+                        source: "UD English EWT".into(),
+                        source_version: "2.18".into(),
+                        context: None,
+                        document_id: None,
+                    })
+                }),
+            };
+        let legacy = db
+            .save_word(make_card("read", "читати", None, "I read every day."))
+            .unwrap();
+        db.review(&legacy.id, "forward", 2).unwrap();
+        let first = db
+            .save_word(make_card("reads", "читати", Some("VERB"), "She reads."))
+            .unwrap();
+        let second = db
+            .save_word(make_card(
+                "reading",
+                "читати",
+                Some("VERB"),
+                "He is reading.",
+            ))
+            .unwrap();
+        assert_eq!(first.id, legacy.id);
+        assert_eq!(second.id, first.id);
+        assert_eq!(second.word, "read");
+        assert_eq!(second.forward.reviews, 1);
+        assert_eq!(second.reverse.reviews, 0);
+        let snapshot = second.analysis.unwrap();
+        assert_eq!(snapshot.surface, "reads");
+        assert_eq!(second.context, legacy.context);
+        assert_eq!(snapshot.context.as_deref(), Some("She reads."));
+        assert_ne!(
+            db.save_word(make_card("reads", "читати", Some("NOUN"), ""))
+                .unwrap()
+                .id,
+            first.id
+        );
+        assert_ne!(
+            db.save_word(make_card("read", "прочитати", Some("VERB"), ""))
+                .unwrap()
+                .id,
+            first.id
+        );
+
+        let mut restored = Store::open(Path::new(":memory:")).unwrap();
+        let archive = serde_json::to_vec(&db.export().unwrap()).unwrap();
+        restored
+            .restore(serde_json::from_slice(&archive).unwrap())
+            .unwrap();
+        let again = restored
+            .save_word(make_card("reading", "читати", Some("VERB"), ""))
+            .unwrap();
+        assert_eq!(again.id, first.id);
+        assert_eq!(again.forward.reviews, 1);
+        assert_eq!(restored.snapshot().unwrap().vocabulary.len(), 3);
+        assert_eq!(restored.export().unwrap().reviews[0].entry_id, first.id);
     }
     #[test]
     fn speech_checkpoint_restarts_and_survives_backup() {

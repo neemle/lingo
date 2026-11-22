@@ -20,6 +20,22 @@
       <Label Text="{Binding Word}" FontSize="22" FontAttributes="Bold" />
       <Label Text="{Binding Translation}" FontSize="18" TextColor="#63725C" />
       <Label Text="{Binding Context}" FontSize="14" LineBreakMode="WordWrap" />
+      <VerticalStackLayout Spacing="4">
+       <VerticalStackLayout.Triggers>
+        <DataTrigger TargetType="VerticalStackLayout" Binding="{Binding Analysis}" Value="{x:Null}">
+         <Setter Property="IsVisible" Value="False" />
+        </DataTrigger>
+       </VerticalStackLayout.Triggers>
+       <Label Text="{Binding Analysis.Surface, StringFormat='У тексті: {0}'}" FontSize="13" />
+       <Label Text="{Binding Analysis.Context}" FontSize="14" LineBreakMode="WordWrap">
+        <Label.Triggers>
+         <DataTrigger TargetType="Label" Binding="{Binding Analysis.Context}" Value="{x:Null}">
+          <Setter Property="IsVisible" Value="False" />
+         </DataTrigger>
+        </Label.Triggers>
+       </Label>
+       <Label Text="{Binding Analysis.Source, StringFormat='Граматичний розбір: {0}'}" FontSize="12" />
+      </VerticalStackLayout>
       <Label Text="{Binding Forward.Reviews, StringFormat='Прямий напрям: {0} повторень'}" FontSize="12" />
       <Label Text="{Binding Reverse.Reviews, StringFormat='Зворотний напрям: {0} повторень'}" FontSize="12" />
      </VerticalStackLayout>
