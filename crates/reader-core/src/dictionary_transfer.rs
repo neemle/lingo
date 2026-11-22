@@ -63,12 +63,20 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
     .map_err(error)
 }
 
-impl Store {
-    pub fn dictionary_collection(&self, document_id: Option<&str>) -> Result<Vec<Vocabulary>> {
-        let mut statement = self
-            .connection
-            .prepare(
-                "WITH selected_hash(hash) AS (
+pub(crate) fn collection_cards(
+    db: &Connection,
+    document_id: Option<&str>,
+    card_id: Option<&str>,
+) -> Result<Vec<Vocabulary>> {
+    // A single-card lookup can use the vocabulary primary key before checking membership.
+    let card_match = if card_id.is_some() {
+        "v.id = ?2"
+    } else {
+        "?2 IS NULL"
+    };
+    let mut statement = db
+        .prepare(&format!(
+            "WITH selected_hash(hash) AS (
                  SELECT source_hash FROM documents WHERE id = ?1
                  UNION
                  SELECT source_hash FROM dictionary_sources WHERE document_id = ?1
@@ -78,20 +86,57 @@ impl Store {
                  UNION SELECT document_id FROM dictionary_sources WHERE source_hash IN selected_hash
              )
              SELECT v.body FROM vocabulary v
-             WHERE ?1 IS NULL
+             WHERE {card_match}
+               AND (?1 IS NULL
                 OR json_extract(v.body, '$.documentId') IN source_ids
                 OR json_extract(v.body, '$.analysis.documentId') IN source_ids
                 OR json_extract(v.body, '$.expression.documentId') IN source_ids
                 OR EXISTS (SELECT 1 FROM dictionary_card_sources c
-                           WHERE c.card_id = v.id AND c.document_id IN source_ids)
+                           WHERE c.card_id = v.id AND c.document_id IN source_ids))
              ORDER BY v.rowid DESC",
-            )
-            .map_err(error)?;
-        let rows = statement
-            .query_map([document_id], |r| r.get::<_, String>(0))
-            .map_err(error)?;
-        rows.map(|row| serde_json::from_str(&row.map_err(error)?).map_err(error))
-            .collect()
+        ))
+        .map_err(error)?;
+    let rows = statement
+        .query_map(params![document_id, card_id], |r| r.get::<_, String>(0))
+        .map_err(error)?;
+    rows.map(|row| serde_json::from_str(&row.map_err(error)?).map_err(error))
+        .collect()
+}
+
+pub(crate) fn resolve_collection(
+    db: &Connection,
+    document_id: &str,
+    source_hash: Option<&str>,
+) -> Result<(String, Option<String>)> {
+    let metadata = source_metadata(db, document_id)?;
+    let local_hash = metadata.as_ref().and_then(|(_, hash)| hash.as_deref());
+    let Some(hash) = source_hash.or(local_hash) else {
+        // Legacy collections can come from card context alone, without source metadata.
+        if metadata.is_none() && collection_cards(db, Some(document_id), None)?.is_empty() {
+            return Err("Джерело добірки для практики не знайдено.".into());
+        }
+        return Ok((document_id.to_owned(), None));
+    };
+    let resolved = db
+        .query_row(
+            "SELECT id FROM (
+               SELECT id, 0 AS priority FROM documents WHERE source_hash=?1
+               UNION ALL
+               SELECT document_id, CASE WHEN document_id=?2 THEN 1 ELSE 2 END
+               FROM dictionary_sources WHERE source_hash=?1
+             ) ORDER BY priority, id LIMIT 1",
+            params![hash, document_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(error)?
+        .ok_or("Джерело добірки для практики не знайдено.")?;
+    Ok((resolved, Some(hash.to_owned())))
+}
+
+impl Store {
+    pub fn dictionary_collection(&self, document_id: Option<&str>) -> Result<Vec<Vocabulary>> {
+        collection_cards(&self.connection, document_id, None)
     }
 
     pub fn dictionary_sources(&self) -> Result<Vec<DictionarySource>> {

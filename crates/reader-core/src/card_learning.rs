@@ -169,7 +169,7 @@ pub(crate) fn answer_key(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::practice::{PracticeProgress, SavedQuestion};
+    use crate::practice::{PracticeCollection, PracticeProgress, SavedQuestion};
     use crate::ReviewState;
 
     #[test]
@@ -235,6 +235,10 @@ mod tests {
                 revision: 0,
                 direction: "forward".into(),
                 mode: 2,
+                collection: Some(PracticeCollection {
+                    document_id: second.id.clone(),
+                    source_hash: None,
+                }),
                 question: Some(SavedQuestion {
                     card_id: lawyer.id.clone(),
                     prompt: lawyer.word.clone(),

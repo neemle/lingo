@@ -1,4 +1,4 @@
-use crate::{card_learning::answer_key, Result, Store, Vocabulary};
+use crate::{card_learning::answer_key, dictionary_transfer, Result, Store};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -10,6 +10,15 @@ pub struct PracticeProgress {
     pub direction: String,
     pub mode: u8,
     pub question: Option<SavedQuestion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection: Option<PracticeCollection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PracticeCollection {
+    pub document_id: String,
+    pub source_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +39,7 @@ impl Default for PracticeProgress {
             direction: "forward".into(),
             mode: 0,
             question: None,
+            collection: None,
         }
     }
 }
@@ -38,6 +48,11 @@ impl PracticeProgress {
     fn validate(&self) -> Result<()> {
         if !["forward", "reverse"].contains(&self.direction.as_str()) || self.mode > 2 {
             return Err("Некоректні налаштування практики.".into());
+        }
+        if self.collection.as_ref().is_some_and(|collection| {
+            collection.document_id.trim().is_empty() || collection.document_id.len() > 256
+        }) {
+            return Err("Некоректна добірка для практики.".into());
         }
         if let Some(question) = &self.question {
             if question.card_id.is_empty()
@@ -83,19 +98,31 @@ pub(crate) fn read(connection: &Connection) -> Result<Option<PracticeProgress>> 
 }
 
 fn align_question(connection: &Connection, progress: &mut PracticeProgress) -> Result<()> {
+    if let Some(collection) = &mut progress.collection {
+        let (id, hash) = dictionary_transfer::resolve_collection(
+            connection,
+            &collection.document_id,
+            collection.source_hash.as_deref(),
+        )?;
+        collection.document_id = id;
+        collection.source_hash = hash;
+    }
+
     let Some(question) = &mut progress.question else {
         return Ok(());
     };
-    let body: String = connection
-        .query_row(
-            "SELECT body FROM vocabulary WHERE id=?1",
-            [&question.card_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?
-        .ok_or("Словникову картку не знайдено.")?;
-    let card: Vocabulary = serde_json::from_str(&body).map_err(|error| error.to_string())?;
+    let document_id = progress
+        .collection
+        .as_ref()
+        .map(|collection| collection.document_id.as_str());
+    let card =
+        dictionary_transfer::collection_cards(connection, document_id, Some(&question.card_id))?
+            .pop()
+            .ok_or(if document_id.is_some() {
+                "Словникова картка не входить до вибраної добірки."
+            } else {
+                "Словникову картку не знайдено."
+            })?;
     let reverse = progress.direction == "reverse";
     question.answers = card.practice_answers(reverse);
     question.prompt = if reverse { card.translation } else { card.word };
@@ -194,7 +221,7 @@ pub(crate) fn restore_if_fresh(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ReviewState;
+    use crate::{ReviewState, Vocabulary};
 
     #[test]
     fn restart_keeps_choice_order_and_consumes_grade_once() {
@@ -224,6 +251,7 @@ mod tests {
                 revision: 0,
                 direction: "reverse".into(),
                 mode: 2,
+                collection: None,
                 question: Some(SavedQuestion {
                     card_id: card.id,
                     prompt: card.translation,
