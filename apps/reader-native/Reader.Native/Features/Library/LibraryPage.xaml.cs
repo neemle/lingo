@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Globalization;
 using System.Text;
 using Reader.Contracts;
 using Reader.Native.Services;
@@ -15,6 +16,7 @@ public partial class LibraryPage : ContentPage
     private Task loading = Task.CompletedTask;
     private ReaderSession? observedSession;
     private Snapshot? displayedSnapshot;
+    private string displayedFilter = "";
     private bool openingCard;
 
     public LibraryPage()
@@ -45,11 +47,34 @@ public partial class LibraryPage : ContentPage
 
     private void ShowBooks(Snapshot snapshot)
     {
-        if (ReferenceEquals(displayedSnapshot, snapshot)) return;
+        var filter = LibraryFilter.Text?.Trim() ?? "";
+        if (ReferenceEquals(displayedSnapshot, snapshot) && displayedFilter == filter) return;
+
         displayedSnapshot = snapshot;
-        Books.ItemsSource = snapshot.Documents.Select((document, index) => new LibraryCard(document, index))
-            .Append(new LibraryCard(null, 0)).ToArray();
+        displayedFilter = filter;
+        var cards = snapshot.Documents.Select((document, index) => (document, index))
+            .Where(item => filter.Length == 0 || MatchesLibraryFilter(item.document, filter))
+            .Select(item => new LibraryCard(item.document, item.index));
+        var visible = (filter.Length == 0 ? cards.Append(new LibraryCard(null, 0)) : cards).ToArray();
+        Books.ItemsSource = visible;
+        NoMatchingBooks.IsVisible = filter.Length != 0 && visible.Length == 0;
     }
+
+    private static bool MatchesLibraryFilter(Document document, string filter)
+    {
+        var comparison = CultureInfo.InvariantCulture.CompareInfo;
+        return string.Equals(document.Language, filter, StringComparison.OrdinalIgnoreCase) ||
+            comparison.IndexOf(document.Title, filter, CompareOptions.IgnoreCase) >= 0 ||
+            comparison.IndexOf(DocumentLanguages.Name(document.Language), filter, CompareOptions.IgnoreCase) >= 0;
+    }
+
+    private void LibraryFilterChanged(object? sender, TextChangedEventArgs args)
+    {
+        ClearLibraryFilter.IsVisible = !string.IsNullOrEmpty(args.NewTextValue);
+        if (displayedSnapshot is { } snapshot) ShowBooks(snapshot);
+    }
+
+    private void ClearLibraryFilterClicked(object? sender, EventArgs args) => LibraryFilter.Text = "";
 
     private void BooksResized(object? sender, EventArgs args)
     {

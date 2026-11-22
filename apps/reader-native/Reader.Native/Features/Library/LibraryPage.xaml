@@ -50,6 +50,13 @@
    <Label x:Name="ImportStatus" TextColor="{StaticResource Sage}" />
    <Label x:Name="PdfStatus" TextColor="{StaticResource Sage}" IsVisible="False" />
    <Label x:Name="StartupError" TextColor="{StaticResource Accent}" />
+   <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" Margin="0,6,0,0">
+    <Entry x:Name="LibraryFilter" Placeholder="Назва або мова документа" MaxLength="160"
+     TextChanged="LibraryFilterChanged" SemanticProperties.Description="Пошук у бібліотеці за назвою або мовою" />
+    <Button x:Name="ClearLibraryFilter" Grid.Column="1" Text="Очистити" Style="{StaticResource OutlineButton}"
+     IsVisible="False" Clicked="ClearLibraryFilterClicked" SemanticProperties.Description="Очистити пошук у бібліотеці" />
+   </Grid>
+   <Label x:Name="NoMatchingBooks" Text="За цим запитом документів немає." TextColor="{StaticResource Muted}" IsVisible="False" />
   </VerticalStackLayout>
   <CollectionView Grid.Row="2" x:Name="Books" SelectionMode="Single" SelectionChanged="DocumentSelected"
    IsEnabled="{Binding CanInteract}" SizeChanged="BooksResized">
