@@ -6,6 +6,7 @@ public sealed record DocumentBlock(string Kind, int StartUtf8, int EndUtf8,
     int StartUtf16, int EndUtf16, int? Page, int? HeadingLevel)
 {
     public bool Footnote { get; init; }
+    public OcrSpan[] FootnoteReferences { get; init; } = [];
     public DocxList? List { get; init; }
     public DocxTableCell? TableCell { get; init; }
 }

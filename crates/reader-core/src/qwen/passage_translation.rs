@@ -2,7 +2,7 @@ use super::{
     generate_in_mode, json_output, prompt_checkpoint, with_prompt_context, GenerationMode,
     HintCacheMode, HintWork, HINT_GENERATION_MODEL,
 };
-use crate::{translation::normalize_ocr_input, Document, Result, Store};
+use crate::{translation::normalize_pdf_translation_input, Document, Result, Store};
 use serde::{Deserialize, Serialize};
 use std::{
     ops::Range,
@@ -82,6 +82,9 @@ impl Store {
             let document = crate::document_layout::detached_pdf_document(
                 cached.text, self.detached_pdf_ocr(id, page)?.map(|cached| cached.lines),
             );
+            if crate::document_layout::sentence_in_footnote(&document.blocks, sentence) {
+                return Err("Виноски пропускаються під час перекладу.".into());
+            }
             let range = document.paragraph_for_sentence(sentence);
             (cached.language, normalize_passage(&document, range))
         } else {
@@ -93,6 +96,9 @@ impl Store {
                 .ok_or("Речення документа змінилося.")?;
             let sentence = sentence.clone();
             crate::document_layout::reflow_ocr_paragraphs(&mut document);
+            if crate::document_layout::sentence_in_footnote(&document.blocks, &sentence) {
+                return Err("Виноски пропускаються під час перекладу.".into());
+            }
             let range = document.paragraph_for_sentence(&sentence);
             let text = normalize_passage(&document, range);
             (document.language, text)
@@ -130,9 +136,10 @@ impl Store {
 
 fn normalize_passage(document: &Document, range: Range<usize>) -> String {
     let normalize = |span: Range<usize>| {
-        normalize_ocr_input(
+        normalize_pdf_translation_input(
             document,
             &document.text[span.clone()],
+            span.start,
             document.text[..span.start].encode_utf16().count(),
         )
     };

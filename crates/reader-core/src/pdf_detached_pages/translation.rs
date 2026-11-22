@@ -202,17 +202,19 @@ impl Store {
         } else {
             (text, None)
         };
-        let layout = document_layout::from_transcript(text, page_starts.or_else(|| Some(vec![Some(0)])));
+        let layout = if let Some(starts) = page_starts {
+            let extracted = document_layout::from_transcript(text, Some(starts));
+            Document { text: extracted.text, blocks: extracted.blocks, pdf_page_starts: extracted.pdf_page_starts, ..Document::default() }
+        } else {
+            document_layout::detached_pdf_document(text, self.detached_pdf_ocr(id, page)?.map(|ocr| ocr.lines))
+        };
         let document = Document {
             id: id.to_owned(),
-            text: layout.text,
-            blocks: layout.blocks,
-            pdf_page_starts: layout.pdf_page_starts,
             sentences,
             language,
             format: "pdf".into(),
             reviewed_translations,
-            ..Document::default()
+            ..layout
         };
         Ok(PageProjection { document, physical })
     }
@@ -288,6 +290,9 @@ pub(super) fn cached_page_translation(
     let local_position = selected;
     let selected = projection.physical.start + selected;
     let original = &document.sentences[selected];
+    if document_layout::sentence_in_footnote(&document.blocks, original) {
+        return Ok(None);
+    }
     if document
         .reviewed_translations
         .get(target)
@@ -315,8 +320,11 @@ pub(super) fn cached_page_translation(
             .map(|value| projection.localize(value)));
         }
     }
+    let standalone = crate::translation::normalize_pdf_translation_input(
+        document, &original.text, original.start_utf8, original.start_utf16,
+    );
     Ok(routes
-        .cached_standalone(store, &original.text, target)?
+        .cached_standalone(store, &standalone, target)?
         .map(|(text, pivot_language)| DetachedPdfTranslation {
             text,
             pivot_language,

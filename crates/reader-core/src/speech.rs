@@ -240,59 +240,11 @@ impl Store {
 
 /// Blanks confirmed references in the reading input while preserving UTF-16 offsets.
 pub(crate) fn without_pdf_note_markers(document: &Document, sentence: &Sentence, text: &str) -> Option<String> {
-    if document.format != "pdf" || !text.chars().any(char::is_numeric) {
-        return None;
-    }
-    let block = document.blocks.partition_point(|block| block.start_utf8 <= sentence.start_utf8);
-    let page = document.blocks.get(block.checked_sub(1)?)?.page?;
-    let mut numbers = document.blocks.iter().filter(|block| block.footnote && block.page == Some(page))
-        .filter_map(|block| {
-            let note = document.text.get(block.start_utf8..block.end_utf8)?;
-            note.split_whitespace().next()?.parse::<u32>().ok()
-        }).peekable();
-    numbers.peek()?;
-    let numbers: Vec<_> = numbers.collect();
-
-    let mut clean = String::with_capacity(text.len());
-    let mut previous_letter_count = 0;
-    let mut lower_word = true;
-    let mut chars = text.chars().peekable();
-    let mut changed = false;
-    while let Some(ch) = chars.next() {
-        if let Some((digit, superscript)) = note_digit(ch) {
-            let mut run = String::from(ch);
-            let mut number = digit;
-            while let Some(next) = chars.peek().and_then(|&ch| note_digit(ch).filter(|&(_, sup)| sup == superscript)) {
-                run.push(chars.next().expect("peeked digit"));
-                number = number.saturating_mul(10).saturating_add(next.0);
-            }
-            let follows_word = previous_letter_count > 0 &&
-                (superscript || previous_letter_count >= 3 && lower_word);
-            if follows_word && chars.peek().is_none_or(|ch| !ch.is_alphanumeric()) && numbers.contains(&number) {
-                clean.extend(std::iter::repeat_n(' ', run.encode_utf16().count()));
-                changed = true;
-            } else {
-                clean.push_str(&run);
-            }
-        } else {
-            clean.push(ch);
-        }
-        if ch.is_alphabetic() {
-            previous_letter_count += 1;
-            lower_word &= ch.is_lowercase();
-        } else {
-            previous_letter_count = 0;
-            lower_word = true;
-        }
-    }
-    changed.then_some(clean)
-}
-
-fn note_digit(ch: char) -> Option<(u32, bool)> {
-    if let Some(digit) = ch.to_digit(10) {
-        return Some((digit, false));
-    }
-    "⁰¹²³⁴⁵⁶⁷⁸⁹".chars().position(|digit| digit == ch).map(|index| (index as u32, true))
+    let start = text.find(&sentence.text)?;
+    let cleaned = crate::document_layout::mask_pdf_note_references(document, &sentence.text, sentence.start_utf8)?;
+    let mut out = text.to_owned();
+    out.replace_range(start..start + sentence.text.len(), &cleaned);
+    Some(out)
 }
 
 #[cfg(test)]

@@ -415,7 +415,7 @@ public partial class ReadingPage
     private async Task RestoreDetachedTranslationAsync()
     {
         if (!readingPageActive || loadingDetachedSentence || translatingDetachedSentence ||
-            detachedAddress is not { } address || detachedSentence is not { } current || TargetCode is not { } target ||
+            detachedAddress is not { } address || detachedSentence is not { Footnote: false } current || TargetCode is not { } target ||
             detachedCacheLookupRun == detachedTranslationRun) return;
         var run = detachedTranslationRun;
         detachedCacheLookupRun = run;
@@ -463,7 +463,7 @@ public partial class ReadingPage
 
     private void ShowDetachedReviewedTranslation()
     {
-        var reviewed = loadingDetachedSentence ? null : ReviewedDetachedTranslation();
+        var reviewed = loadingDetachedSentence || detachedSentence?.Footnote == true ? null : ReviewedDetachedTranslation();
         ShowDetachedTranslation(reviewed is null ? "" : $"Ваш переклад{Environment.NewLine}{reviewed}");
     }
 
@@ -807,13 +807,14 @@ public partial class ReadingPage
             && !AppState.Session.Busy && TargetCode is not null;
         var routeSelected = detachedSentence is { } loaded && TargetCode is { } target
             && readinessPair == (loaded.Language, target);
-        DetachedTranslate.IsEnabled = available && !translatingDetachedSentence && routeSelected
+        DetachedTranslate.IsEnabled = available && detachedSentence?.Footnote == false && !translatingDetachedSentence && routeSelected
             && readiness?.Ready == true;
         DetachedReadiness.IsVisible = available && routeSelected && !translatingDetachedSentence
             && CurrentDetachedTranslation() is null;
-        if (DetachedReadiness.IsVisible) DetachedReadiness.Text = ReadinessMessage();
+        if (DetachedReadiness.IsVisible)
+            DetachedReadiness.Text = detachedSentence?.Footnote == true ? "Виноски залишаються в оригіналі." : ReadinessMessage();
         DetachedOpenTranslationPackages.IsVisible = DetachedReadiness.IsVisible && readiness is { Missing.Length: > 0 };
-        DetachedEditTranslation.IsEnabled = available && !changingDetachedAnnotation && TargetCode is not null;
+        DetachedEditTranslation.IsEnabled = available && detachedSentence?.Footnote == false && !changingDetachedAnnotation && TargetCode is not null;
         DetachedEditTranslation.Text = ReviewedDetachedTranslation() is null ? "Свій переклад…" : "Редагувати переклад…";
         UpdateModelTranslation();
         DetachedShareTranslation.IsVisible = available && !translatingDetachedSentence && CurrentDetachedTranslation() is not null;

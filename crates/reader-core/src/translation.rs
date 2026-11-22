@@ -600,7 +600,7 @@ fn read_cached_plan(
         .units
         .iter()
         .any(|unit| unit.reviewed && unit.sentence_ids.iter().any(|id| id == active_id));
-    let standalone = (!active_reviewed && input.0.len() <= MAX_BATCH_BYTES).then_some(input);
+    let standalone = (!active_reviewed && !input.0.is_empty() && input.0.len() <= MAX_BATCH_BYTES).then_some(input);
     let mut best = None;
     for route in &routes.candidates {
         let mut units = Vec::new();
@@ -794,6 +794,13 @@ fn paragraph_plan(
     const CONTEXT_GROUP: usize = 3;
     const CONTEXT_BYTES: usize = 768;
     let sentences = &document.sentences;
+    let footnote = |index| crate::document_layout::sentence_in_footnote(&document.blocks, &sentences[index]);
+    if footnote(selected) {
+        return Ok(ParagraphPlan {
+            result: ParagraphTranslation { units: Vec::new(), pivot_language: None, more_before: false, more_after: false },
+            pending: Vec::new(),
+        });
+    }
     let paragraph = document.paragraph_for_sentence(&sentences[selected]);
     let mut first = sentences
         .partition_point(|sentence| sentence.end_utf8 <= paragraph.start)
@@ -805,6 +812,7 @@ fn paragraph_plan(
     let reviewed = |index: usize| reviews.and_then(|entries| entries.get(&sentences[index].id));
     let can_wrap = |left: usize, right: usize| {
         (document.format == "pdf" || document.ocr_lines.is_some())
+            && !footnote(left) && !footnote(right)
             && reviewed(left).is_none()
             && reviewed(right).is_none()
             && soft_wrap(document, left, right)
@@ -835,8 +843,13 @@ fn paragraph_plan(
     let mut active_unit = 0;
     let mut index = start;
     while index < end {
+        if footnote(index) {
+            index += 1;
+            continue;
+        }
         let mut next = index + 1;
         while next < end
+            && !footnote(next)
             && next - index < 12
             && reviewed(index).is_none()
             && reviewed(next).is_none()
@@ -914,6 +927,9 @@ fn sentence_span_input(
     const MAX_JOINED_BYTES: usize = 1024;
     const MAX_FRAGMENTS: usize = 12;
     let active = &document.sentences[selected];
+    if crate::document_layout::sentence_in_footnote(&document.blocks, active) {
+        return (String::new(), selected..=selected);
+    }
     if document.format != "pdf" && document.ocr_lines.is_none() {
         return (active.text.clone(), selected..=selected);
     }
@@ -957,7 +973,7 @@ pub(crate) fn sentence_input(
 fn with_adjacent_pdf_text(
     store: &Store, document: &Document, first: usize, last: usize, target: &str, input: String,
 ) -> Result<String> {
-    if document.pdf_page_starts.is_none() || input.len() > 1024 {
+    if document.pdf_page_starts.is_none() || input.is_empty() || input.len() > 1024 {
         return Ok(input);
     }
     let reviews = document.reviewed_translations.get(target);
@@ -995,10 +1011,19 @@ fn inference_span(document: &crate::Document, first: usize, last: usize) -> Opti
         });
     }
     if first.id == last.id && !span.contains('\n') {
-        return Some(first.text.clone());
+        let cleaned = crate::document_layout::mask_pdf_note_references(document, span, first.start_utf8);
+        return Some(cleaned.map_or_else(|| first.text.clone(), |text|
+            normalize_ocr_input(document, &text, first.start_utf16)));
     }
 
-    Some(normalize_ocr_input(document, span, first.start_utf16))
+    Some(normalize_pdf_translation_input(document, span, first.start_utf8, first.start_utf16))
+}
+
+pub(crate) fn normalize_pdf_translation_input(
+    document: &Document, text: &str, start_utf8: usize, start_utf16: usize,
+) -> String {
+    let input = crate::document_layout::mask_pdf_note_references(document, text, start_utf8);
+    normalize_ocr_input(document, input.as_deref().unwrap_or(text), start_utf16)
 }
 
 pub(crate) fn normalize_ocr_input(
@@ -1088,6 +1113,11 @@ fn page_word_break(document: &crate::Document, left: usize, right: usize) -> boo
 }
 
 fn soft_wrap(document: &crate::Document, left: usize, right: usize) -> bool {
+    if [left, right].into_iter().any(|index|
+        crate::document_layout::sentence_in_footnote(&document.blocks, &document.sentences[index]))
+    {
+        return false;
+    }
     if page_word_break(document, left, right) {
         return true;
     }

@@ -915,6 +915,7 @@ impl Store {
         text: String,
         sentence_ids: Vec<String>,
     ) -> Result<Option<AlignedTranslation>> {
+        if text.trim().is_empty() { return Ok(None); }
         let directory = self.model_directory.clone();
         let translated = self.translate_aligned(
             &mut MarianProvider::interactive(&directory),

@@ -20,10 +20,11 @@ public partial class ReadingPage
         var session = AppState.Session;
         if (TargetCode is not { } target || session.Document is not { } document) return null;
         if (DetachedPdfReader.IsVisible)
-            return detachedAddress is { } address && detachedSentence is { RevisionId: { } revision } current
+            return detachedAddress is { } address && detachedSentence is { Footnote: false, RevisionId: { } revision } current
                 ? new ModelPassage(document.Id, address.Page, current.Sentence.Id, revision, address.Language, target)
                 : null;
-        return !PdfPageNotice.IsVisible && session.Sentence is { } sentence && document.CurrentRevisionId is { } canonical
+        return !PdfPageNotice.IsVisible && session.Sentence is { } sentence && !IsFootnote(document, sentence) &&
+            document.CurrentRevisionId is { } canonical
             ? new ModelPassage(document.Id, null, sentence.Id, canonical, document.Language, target)
             : null;
     }

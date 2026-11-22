@@ -61,6 +61,19 @@ public sealed class ReaderTextProjection
                 }
             }
             previousEnd = block.EndUtf16;
+            foreach (var marker in block.FootnoteReferences)
+            {
+                if (marker.StartUtf16 < block.StartUtf16 || marker.EndUtf16 > block.EndUtf16 ||
+                    marker.StartUtf16 >= marker.EndUtf16) continue;
+                const string superscript = "⁰¹²³⁴⁵⁶⁷⁸⁹";
+                for (var offset = marker.StartUtf16; offset < marker.EndUtf16; offset++)
+                {
+                    var digit = source[offset];
+                    if (digit is < '0' or > '9') continue;
+                    reflowed ??= source.ToCharArray();
+                    reflowed[offset] = superscript[digit - '0'];
+                }
+            }
             for (var index = block.StartUtf16; index < block.EndUtf16; index++)
             {
                 if (source[index] is not ('\r' or '\n')) continue;

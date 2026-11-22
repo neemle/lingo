@@ -293,7 +293,9 @@ public partial class ReadingPage : ContentPage
             ? $"Ваш переклад · {DocumentLanguages.Name(cardTarget)}" : "Виберіть мову перекладу";
         Translation.Placeholder = wordTranslationLabel;
         SemanticProperties.SetDescription(Translation, wordTranslationLabel);
-        var active = session.Sentence is not null && TargetCode is not null;
+        var footnote = session.Document is { } sourceDocument && session.Sentence is { } sourceSentence &&
+            IsFootnote(sourceDocument, sourceSentence);
+        var active = session.Sentence is not null && TargetCode is not null && !footnote;
         var text = TargetCode is { } target ? session.ReviewedTranslation(target) : null;
         var key = ActiveTranslationKey();
         if (source is not null && TargetCode is { } routeTarget && readinessPair != (source, routeTarget))
@@ -313,12 +315,13 @@ public partial class ReadingPage : ContentPage
         if (alignment is { } result && !IsPreferredRoute(result.Window))
             machineLabel = $"Збережено раніше · {machineLabel}. {currentStatus ?? ReadinessMessage()}";
 
-        TranslationNotice.Text = !active ? "Відкрийте документ для читання."
+        TranslationNotice.Text = footnote ? "Виноски залишаються в оригіналі."
+            : !active ? "Відкрийте документ для читання."
             : translating && currentStatus is not null ? currentStatus
             : text is not null ? "Ваш переклад активного речення"
             : machine is not null ? machineLabel
             : currentStatus ?? ReadinessMessage();
-        var newTranslation = text ?? machine?.Text ?? "";
+        var newTranslation = footnote ? "" : text ?? machine?.Text ?? "";
         var hasNewActiveTranslation = newTranslation.Length > 0 && SegmentTranslation.Text != newTranslation;
         SegmentTranslation.Text = newTranslation;
         ActiveTranslationCard.IsVisible = SegmentTranslation.Text.Length > 0;

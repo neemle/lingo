@@ -33,6 +33,8 @@ pub struct DocumentBlock {
     pub heading_level: Option<u8>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub footnote: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footnote_references: Vec<crate::ocr::OcrSpan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub list: Option<DocxList>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -490,7 +492,7 @@ fn trimmed_range(text: &str, range: Range<usize>) -> Option<Range<usize>> {
 fn materialize_blocks(text: &str, ranges: Vec<BlockRange>) -> Vec<DocumentBlock> {
     let mut previous = 0;
     let mut utf16 = 0;
-    ranges
+    let mut blocks: Vec<_> = ranges
         .into_iter()
         .filter_map(|range| {
             let offset = trimmed_range(text, range.offset)?;
@@ -509,13 +511,89 @@ fn materialize_blocks(text: &str, ranges: Vec<BlockRange>) -> Vec<DocumentBlock>
                 end_utf16: utf16,
                 page: range.page,
                 heading_level: range.heading,
+                footnote_references: Vec::new(),
                 footnote: range.footnote ||
                     range.page.is_some() && text[offset.clone()].lines().next().is_some_and(footnote_start),
                 list: range.list,
                 table_cell: range.table_cell,
             })
         })
-        .collect()
+        .collect();
+    for page in blocks.chunk_by_mut(|left, right| left.page == right.page) {
+        if page[0].page.is_none() { continue; }
+        let numbers: Vec<_> = page.iter().filter(|block| block.footnote).filter_map(|block|
+            text[block.start_utf8..block.end_utf8].split_whitespace().next()?.parse::<u32>().ok()
+        ).collect();
+        if numbers.is_empty() { continue; }
+        for block in page.iter_mut().filter(|block| !block.footnote) {
+            let span = &text[block.start_utf8..block.end_utf8];
+            block.footnote_references = pdf_note_references(span, &numbers)
+                .into_iter().map(|range| crate::ocr::OcrSpan {
+                    start_utf8: block.start_utf8 + range.start,
+                    end_utf8: block.start_utf8 + range.end,
+                    start_utf16: block.start_utf16 + span[..range.start].encode_utf16().count(),
+                    end_utf16: block.start_utf16 + span[..range.end].encode_utf16().count(),
+                }).collect();
+        }
+    }
+    blocks
+}
+
+fn pdf_note_references(text: &str, numbers: &[u32]) -> Vec<Range<usize>> {
+    let mut result = Vec::new();
+    let mut letters = 0;
+    let mut lower = true;
+    let mut chars = text.char_indices().peekable();
+    while let Some((start, ch)) = chars.next() {
+        if let Some((mut number, superscript)) = note_digit(ch) {
+            while let Some(digit) = chars.peek().and_then(|&(_, ch)| note_digit(ch).filter(|&(_, sup)| sup == superscript)) {
+                chars.next();
+                number = number.saturating_mul(10).saturating_add(digit.0);
+            }
+            let end = chars.peek().map_or(text.len(), |&(index, _)| index);
+            if letters > 0 && (superscript || letters >= 3 && lower) &&
+                chars.peek().is_none_or(|&(_, ch)| !ch.is_alphanumeric()) && numbers.contains(&number)
+            {
+                result.push(start..end);
+            }
+        }
+        if ch.is_alphabetic() {
+            letters += 1;
+            lower &= ch.is_lowercase();
+        } else {
+            letters = 0;
+            lower = true;
+        }
+    }
+    result
+}
+
+pub(crate) fn mask_pdf_note_references(document: &Document, text: &str, start: usize) -> Option<String> {
+    if document.format != "pdf" { return None; }
+    let end = start + text.len();
+    let first = document.blocks.partition_point(|block| block.end_utf8 <= start);
+    let refs = document.blocks[first..].iter().take_while(|block| block.start_utf8 < end)
+        .flat_map(|block| &block.footnote_references)
+        .filter(|reference| reference.start_utf8 >= start && reference.end_utf8 <= end);
+    let mut clean = String::new();
+    let mut copied = 0;
+    for reference in refs {
+        let range = reference.start_utf8 - start..reference.end_utf8 - start;
+        let marker = text.get(range.clone())?;
+        clean.push_str(&text[copied..range.start]);
+        clean.extend(std::iter::repeat_n(' ', marker.encode_utf16().count()));
+        copied = range.end;
+    }
+    if copied == 0 { return None; }
+    clean.push_str(&text[copied..]);
+    Some(clean)
+}
+
+fn note_digit(ch: char) -> Option<(u32, bool)> {
+    if let Some(digit) = ch.to_digit(10) {
+        return Some((digit, false));
+    }
+    "⁰¹²³⁴⁵⁶⁷⁸⁹".chars().position(|digit| digit == ch).map(|index| (index as u32, true))
 }
 
 type PdfBuffer = RefCell<String>;
