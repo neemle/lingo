@@ -244,7 +244,7 @@ public partial class ReadingPage : ContentPage
     private void ChangeReadingSize(int change)
     {
         var size = Math.Clamp(SourceText.ReadingFontSize + change, 18, 30);
-        SourceText.ReadingFontSize = size;
+        SourceText.ReadingFontSize = DetachedPdfText.ReadingFontSize = size;
         SegmentTranslation.FontSize = size - 2;
         UpdateTranslation();
     }
@@ -618,10 +618,12 @@ public partial class ReadingPage : ContentPage
 
     private async void PreviousClicked(object? sender, EventArgs args)
     {
+        if (PdfPageNotice.IsVisible) return;
         StopSpeech(); await AppState.Session.MoveAsync(-1);
     }
     private async void NextClicked(object? sender, EventArgs args)
     {
+        if (PdfPageNotice.IsVisible) return;
         StopSpeech(); await AppState.Session.MoveAsync(1);
     }
     private async void SentenceChanged(object? sender, EventArgs args)

@@ -85,7 +85,7 @@
    </Grid>
   </Grid>
 
-  <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
+  <Grid Grid.Row="1" x:Name="SentenceToolbar" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
    <Picker x:Name="SentencePicker" Title="Перейти до речення"
     ItemsSource="{Binding Document.Sentences}" ItemDisplayBinding="{Binding Text, x:DataType=models:Sentence}"
     SelectedIndex="{Binding Document.Position, Mode=OneWay}" SelectedIndexChanged="SentenceChanged" />
@@ -171,10 +171,12 @@
       </FlexLayout>
      </Grid>
     </Grid>
-    <VerticalStackLayout Grid.Row="2" x:Name="PdfPageNotice" IsVisible="False" Spacing="10"
-     Padding="18" HorizontalOptions="Center" VerticalOptions="Center">
-     <Label x:Name="PdfPageMessage" Style="{StaticResource ReaderMeta}" HorizontalTextAlignment="Center" />
-    </VerticalStackLayout>
+    <Grid Grid.Row="2" x:Name="PdfPageNotice" IsVisible="False">
+     <Label x:Name="PdfPageMessage" Margin="18" Style="{StaticResource ReaderMeta}"
+      HorizontalTextAlignment="Center" VerticalOptions="Center" />
+     <controls:NativeReaderView x:Name="DetachedPdfText" IsVisible="False" BackgroundColor="{StaticResource Panel}"
+      SemanticProperties.Description="Текст поточної сторінки PDF" />
+    </Grid>
     <Grid Grid.Row="3" x:Name="SourceHint" BackgroundColor="#FAFBF6" Padding="15,7">
      <Label Text="Виділіть слово в оригіналі, щоб переглянути значення чи додати його до словника."
       Style="{StaticResource ReaderMeta}" />

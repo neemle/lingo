@@ -208,25 +208,30 @@ public partial class ReadingPage
             : "Текст сторінки ще не отримано.");
         var message = waiting ? pendingMessage : page?.State switch
         {
-            "textLayer" or "recognized" => null,
+            "textLayer" or "recognized" or "detached" => null,
             "empty" => "На цій сторінці не знайдено тексту.",
             _ => "Для цієї сторінки немає тексту. Відкрийте оригінал.",
         };
         PdfPageStatus.Text = $"Сторінка {window.Center + 1} із {window.PageCount}";
-        if (page is { State: "recognized", RefreshPending: true })
+        if (page is { State: "recognized" or "detached", RefreshPending: true })
             PdfPageStatus.Text += pdfOcrError is not null ? " · помилка оновлення OCR"
                 : readerPdfOcr is not null ? " · оновлюємо OCR" : " · OCR потребує оновлення";
         else if (pdfOcrError is not null && message is null)
             PdfPageStatus.Text += " · помилка OCR сусідньої сторінки";
-        ShowPdfPageNotice(message);
+        ShowPdfPageNotice(message, page is { State: "detached" } ? page.Text : null);
         UpdatePdfPageButtons();
     }
 
-    private void ShowPdfPageNotice(string? message)
+    private void ShowPdfPageNotice(string? message, string? detachedText = null)
     {
-        var show = message is not null;
+        var show = message is not null || detachedText is not null;
         var stateChanged = PdfPageNotice.IsVisible != show;
         PdfPageMessage.Text = message;
+        PdfPageMessage.IsVisible = message is not null;
+        if (detachedText is not null)
+            DetachedPdfText.ReadingFontSize = SourceText.ReadingFontSize;
+        DetachedPdfText.Text = detachedText ?? "";
+        DetachedPdfText.IsVisible = detachedText is not null;
         if (show && stateChanged)
         {
             StopSpeech();
@@ -236,7 +241,7 @@ public partial class ReadingPage
             WordCard.IsVisible = false;
         }
         PdfPageNotice.IsVisible = show;
-        ReadingColumns.IsVisible = ReaderControls.IsVisible = !show;
+        ReadingColumns.IsVisible = ReaderControls.IsVisible = SentenceToolbar.IsVisible = !show;
         SourceHint.IsVisible = !show && SourcePane.IsVisible;
         if (stateChanged) SyncAnalysisPrefetch();
     }

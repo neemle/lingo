@@ -36,6 +36,7 @@ mod onnx_runtime;
 pub mod optional_models;
 pub mod pdf_layers;
 mod pdf_page_ocr;
+mod pdf_detached_pages;
 mod pdf_reading_position;
 pub use pdf_page_ocr::{PdfReadPage, PdfReadPageState, PdfReadWindow};
 pub mod practice;
@@ -454,6 +455,7 @@ impl Store {
         file_originals::initialize(&connection)?;
         intake::initialize(&connection)?;
         pdf_page_ocr::initialize(&connection)?;
+        pdf_detached_pages::initialize(&connection)?;
         pdf_reading_position::initialize(&connection)?;
         reader_preferences::initialize(&connection)?;
         translation_queue::initialize(&connection)?;

@@ -82,7 +82,7 @@ public partial class ReadingPage
     private async void OpenSentenceAnalysisClicked(object? sender, EventArgs args)
     {
         var session = AppState.Session;
-        if (session.Busy || session.Document is not { CurrentRevisionId: { } revision } document
+        if (PdfPageNotice.IsVisible || session.Busy || session.Document is not { CurrentRevisionId: { } revision } document
             || session.Sentence is not { } sentence) return;
         await ShowAnalysisPageAsync("Аналіз речення", sentence.Text,
             start => session.AnalyzeSentenceAsync(document.Id, sentence.Id, revision, start));

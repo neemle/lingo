@@ -1,7 +1,8 @@
 //! On-demand OCR for PDFs whose original file was already imported.
 
 use crate::{
-    document_layout, document_revisions, file_originals, ocr, pdf_layers, Document, Result, Store,
+    document_layout, document_revisions, file_originals, ocr, pdf_detached_pages, pdf_layers,
+    Document, Result, Store,
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
@@ -18,6 +19,7 @@ pub enum PdfReadPageState {
     Empty,
     NeedsOcr,
     NeedsTextLayer,
+    Detached,
     Unavailable,
 }
 
@@ -84,17 +86,19 @@ fn needed_pages(
         db, &document.id, center.saturating_sub(1), center.saturating_add(1),
     )?;
     let window = [Some(center), center.checked_sub(1), center.checked_add(1)];
-    Ok(window
-        .into_iter()
-        .flatten()
-        .filter(|&page| {
-            pages
-                .get(usize::from(page))
-                .is_some_and(|text| text.trim().is_empty())
-                && (should_refresh(document, page)
-                    || (completed.binary_search(&page).is_err() && !has_ocr_lines(document, page)))
-        })
-        .collect())
+    let mut needed = Vec::with_capacity(3);
+    for page in window.into_iter().flatten() {
+        if !pages.get(usize::from(page)).is_some_and(|text| text.trim().is_empty()) {
+            continue;
+        }
+        let pending = match pdf_detached_pages::source_language(db, &document.id, page)? {
+            Some(language) => language.as_deref().is_some_and(|value| value != document.language.as_str()),
+            None => should_refresh(document, page)
+                || (completed.binary_search(&page).is_err() && !has_ocr_lines(document, page)),
+        };
+        if pending { needed.push(page); }
+    }
+    Ok(needed)
 }
 
 fn should_refresh(document: &Document, page: u16) -> bool {
@@ -236,12 +240,24 @@ impl Store {
         )?;
         let first = index.saturating_sub(1);
         let last = (index + 1).min(starts.len() - 1);
-        let pages = (first..=last)
-            .map(|page| reading_page(&document, starts, &completed, page, file_backed))
-            .collect::<Result<Vec<_>>>()?;
+        let mut pages = Vec::with_capacity(last + 1 - first);
+        for page in first..=last {
+            let mut result = reading_page(&document, starts, &completed, page, file_backed)?;
+            if file_backed && result.span.is_none() {
+                if let Some((text, language)) = pdf_detached_pages::read(&self.connection, id, result.page)? {
+                    result.text = text;
+                    result.state = PdfReadPageState::Detached;
+                    result.refresh_pending = language.is_some_and(|language| language != document.language.as_str());
+                }
+            }
+            pages.push(result);
+        }
 
         let context_span = reading_context(&pages, index - first);
-        let context = context_span.map_or_else(String::new, |span| {
+        let context = context_span.map_or_else(|| {
+            let current = &pages[index - first];
+            if current.state == PdfReadPageState::Detached { current.text.clone() } else { String::new() }
+        }, |span| {
             crate::translation::normalize_ocr_input(
                 &document,
                 &document.text[span.start_utf8..span.end_utf8],
@@ -398,10 +414,33 @@ impl Store {
                 .ok_or("Сторінку PDF не знайдено")?
                 .trim()
                 .is_empty();
+            let remaining = crate::MAX_IMPORT.saturating_sub(document.text.len());
+            if let Some(previous_language) = pdf_detached_pages::source_language(tx, id, page)? {
+                if token.is_some() && previous_language.as_deref()
+                    .is_some_and(|previous| previous != document.language.as_str())
+                {
+                    if let Some(text) = text_layer {
+                        pdf_detached_pages::write_text_layer(tx, id, page, text.trim())?;
+                    } else {
+                        let page_count = u16::try_from(pages.len()).map_err(database_error)?;
+                        pdf_detached_pages::write_ocr(tx, id, page, &document.language, &lines, page_count)?;
+                    }
+                }
+                remove_request(tx, id, page)?;
+                updated = Some(document.clone());
+                return Ok(false);
+            }
             if let Some(text) = text_layer {
-                if !needs_text || !document.pdf_pending_text_pages.remove(&page) {
+                if !needs_text || !document.pdf_pending_text_pages.contains(&page) {
                     return Err("Сторінка PDF не очікує витягання тексту.".into());
                 }
+                if text.trim().len() + 2 > remaining {
+                    pdf_detached_pages::write_text_layer(tx, id, page, text.trim())?;
+                    remove_request(tx, id, page)?;
+                    updated = Some(document.clone());
+                    return Ok(false);
+                }
+                document.pdf_pending_text_pages.remove(&page);
                 pages[usize::from(page)] = text;
                 let page_text = serde_json::to_string(&pages).map_err(database_error)?;
                 tx.execute(
@@ -427,6 +466,16 @@ impl Store {
                 return Ok(false);
             }
 
+            if !lines.is_empty() && !has_ocr_lines(document, page) {
+                let bytes = 1 + lines.iter().map(|line| line.reading_text().len() + 1).sum::<usize>();
+                if bytes > remaining {
+                    let page_count = u16::try_from(pages.len()).map_err(database_error)?;
+                    pdf_detached_pages::write_ocr(tx, id, page, &document.language, &lines, page_count)?;
+                    remove_request(tx, id, page)?;
+                    updated = Some(document.clone());
+                    return Ok(false);
+                }
+            }
             mark_completed(tx, id, page)?;
             let cleared_refresh = document.pdf_ocr_refresh_pages.remove(&page);
             let resolved_text_layer = document.pdf_pending_text_pages.remove(&page);
@@ -532,6 +581,9 @@ pub(crate) fn merge_cached_pages(
             continue;
         }
 
+        if pdf_detached_pages::source_language(db, &local.id, page)?.is_some() {
+            continue;
+        }
         if !incoming_text.is_empty() {
             let bytes = incoming_text.trim().len() + 2;
             if bytes > available {
@@ -554,6 +606,7 @@ pub(crate) fn merge_cached_pages(
         let page = lines[0].page;
         if !pages.get(usize::from(page)).is_some_and(|text| text.trim().is_empty())
             || has_ocr_lines(&local, page)
+            || pdf_detached_pages::source_language(db, &local.id, page)?.is_some()
         {
             continue;
         }
@@ -577,6 +630,7 @@ pub(crate) fn merge_cached_pages(
     let local_completed = completed_pages(db, &local.id)?;
     for &page in cache.completed {
         if unadopted_results.contains(&page)
+            || pdf_detached_pages::source_language(db, &local.id, page)?.is_some()
             || !pages.get(usize::from(page)).is_some_and(|text| text.trim().is_empty())
         {
             continue;
