@@ -13,6 +13,7 @@ use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
 pub(crate) mod cache;
+mod uk_numbers;
 
 const MODEL: &str = "piper-uk";
 const SAMPLE_RATE: u32 = 22_050;
@@ -82,7 +83,8 @@ impl SpeechJob {
     }
 
     fn render(self, priority: InferencePriority) -> Result<RenderedSpeech> {
-        let spoken = ukrainian_stress(&self.text);
+        let normalized = uk_numbers::expand(&self.text);
+        let spoken = ukrainian_stress(&normalized);
         let cache = cache::SpeechCacheKey::new(
             MODEL,
             self.model.revision(),
