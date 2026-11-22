@@ -585,7 +585,6 @@ public partial class ReadingPage : ContentPage
                     recognizeWindow = (page, token, onCached) =>
                         PdfPageOcr.RecognizeWindowAsync(session, document, originalFile.Path, page, token, onCached);
                 }
-                if (selection is null) savedPage = await session.PdfReadingPageAsync(document.Id);
             }
             else
 #endif
@@ -597,6 +596,10 @@ public partial class ReadingPage : ContentPage
                 total = isPdf ? await PdfScan.PageCountAsync(bytes) : 1;
                 preview = page => isPdf ? PdfScan.PreviewAsync(bytes, page) : PhotoOcr.PreviewAsync(bytes);
             }
+#if MACCATALYST
+            if (isPdf && selection is null && document.PdfPageStarts is not null)
+                savedPage = await session.PdfReadingPageAsync(document.Id);
+#endif
             if (session.Document is not { } current || current.Id != document.Id || !readingPageActive) return;
             var initial = Math.Clamp(savedPage ?? session.OriginalPageIndex(), 0, total - 1);
             await Navigation.PushAsync(new OriginalPage(name, total, initial, isPdf, preview,

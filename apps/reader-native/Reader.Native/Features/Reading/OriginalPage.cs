@@ -11,6 +11,7 @@ internal sealed class OriginalPage : ContentPage
     private readonly Label status = new() { VerticalOptions = LayoutOptions.Center };
     private readonly Button previous = new() { Text = "←" };
     private readonly Button next = new() { Text = "→" };
+    private readonly Button jump = new() { Text = "До сторінки…" };
     private readonly Button toggle = new();
     private readonly Button readPage = new() { Text = "Читати сторінку" };
     private readonly Button wordCard = new() { Text = "Картка слова" };
@@ -31,6 +32,7 @@ internal sealed class OriginalPage : ContentPage
     private int[] currentLineIndices = [];
     private bool editing;
     private bool leavingOriginal;
+    private bool choosingPage;
     private readonly int pageCount;
     private int pageIndex;
     private bool loading;
@@ -54,13 +56,15 @@ internal sealed class OriginalPage : ContentPage
         this.pageCount = pageCount;
         focus = selection is not null ? (selection.StartUtf16, selection.StartUtf16 + selection.LengthUtf16)
             : SentenceRange();
-        pageIndex = recognizeWindow is not null && selection is null ? initialPage
+        pageIndex = selection is null ? initialPage
             : lines.FirstOrDefault(line => Overlaps(line.SourceSpan, focus))?.Page ?? initialPage;
         Title = isPdf ? "Вихідний PDF" : "Вихідна фотографія";
         SemanticProperties.SetDescription(image, filename);
         SemanticProperties.SetDescription(previous, "Попередня сторінка");
         SemanticProperties.SetDescription(next, "Наступна сторінка");
-        previous.IsVisible = next.IsVisible = pageCount > 1;
+        SemanticProperties.SetDescription(jump, "Перейти за номером сторінки PDF");
+        previous.IsVisible = next.IsVisible = jump.IsVisible = pageCount > 1;
+        jump.Clicked += async (_, _) => await JumpPageAsync();
         previous.Clicked += async (_, _) => await LoadAsync(pageIndex - 1);
         next.Clicked += async (_, _) => await LoadAsync(pageIndex + 1);
         overlay.IsVisible = lines.Any(line => Overlaps(line.SourceSpan, focus));
@@ -76,11 +80,12 @@ internal sealed class OriginalPage : ContentPage
         wordCard.Clicked += async (_, _) => await OpenWordAsync();
         readPage.IsVisible = isPdf;
         readPage.Clicked += async (_, _) => await ReadPageAsync();
-        var controls = new HorizontalStackLayout
+        var controls = new FlexLayout { Wrap = Microsoft.Maui.Layouts.FlexWrap.Wrap };
+        foreach (var control in new View[] { previous, next, jump, readPage, toggle, wordCard, status })
         {
-            Spacing = 8,
-            Children = { previous, next, readPage, toggle, wordCard, status },
-        };
+            control.Margin = new Thickness(0, 0, 8, 5);
+            controls.Children.Add(control);
+        }
         SemanticProperties.SetDescription(linePicker, "Рядок для виправлення");
         SemanticProperties.SetDescription(reset, "Відновити початковий результат OCR для рядка");
         linePicker.SelectedIndexChanged += (_, _) => UpdateEditButtons();
@@ -139,12 +144,29 @@ internal sealed class OriginalPage : ContentPage
         base.OnDisappearing();
     }
 
+    private async Task JumpPageAsync()
+    {
+        if (!jump.IsEnabled || Navigation.NavigationStack.LastOrDefault() != this) return;
+        choosingPage = true;
+        UpdateEditButtons();
+        try
+        {
+            var destination = await PdfPagePrompt.ChooseAsync(this, pageIndex, pageCount);
+            if (destination is int page && page != pageIndex && Navigation.NavigationStack.LastOrDefault() == this)
+                await LoadAsync(page);
+        }
+        finally
+        {
+            choosingPage = false;
+            UpdateEditButtons();
+        }
+    }
+
     private async Task LoadAsync(int index)
     {
         if (loading || editing || leavingOriginal || index < 0 || index >= pageCount) return;
         pageOcr?.Cancel();
         loading = true;
-        previous.IsEnabled = next.IsEnabled = false;
         status.Text = "Завантаження сторінки…";
         UpdateEditButtons();
         try
@@ -168,8 +190,6 @@ internal sealed class OriginalPage : ContentPage
         finally
         {
             loading = false;
-            previous.IsEnabled = pageIndex > 0;
-            next.IsEnabled = pageIndex + 1 < pageCount;
             UpdateEditButtons();
         }
     }
@@ -310,7 +330,6 @@ internal sealed class OriginalPage : ContentPage
     private async Task ReadPageAsync()
     {
         if (!readPage.IsEnabled || session.Busy || session.Document is not { } document || document.Id != documentId ||
-            DocumentPages.SentencePosition(document, pageIndex) is not int position ||
             Navigation.NavigationStack.LastOrDefault() != this)
             return;
 
@@ -319,10 +338,19 @@ internal sealed class OriginalPage : ContentPage
         try
         {
             var opened = true;
-            if (document.CurrentRevisionId is { } revision)
-                opened = await session.OpenPdfReadingPageAsync(documentId, revision, pageIndex);
-            else
-                await session.SelectSentenceAsync(position);
+            if (HasPhysicalPageAddress(document))
+            {
+                pageOcr?.Cancel();
+                await session.OpenPdfReadingPageAsync(documentId, revisionId: null, page: pageIndex);
+            }
+            else if (DocumentPages.SentencePosition(document, pageIndex) is int position)
+            {
+                if (document.CurrentRevisionId is { } revision)
+                    opened = await session.OpenPdfReadingPageAsync(documentId, revision, pageIndex);
+                else
+                    await session.SelectSentenceAsync(position);
+            }
+            else return;
             if (session.Error.Length > 0)
             {
                 status.Text = session.Error;
@@ -338,6 +366,15 @@ internal sealed class OriginalPage : ContentPage
             leavingOriginal = false;
             UpdateEditButtons();
         }
+    }
+
+    private bool HasPhysicalPageAddress(Document document)
+    {
+#if MACCATALYST
+        return document.Format == "pdf" && document.PdfPageStarts is { } starts && pageIndex < starts.Length;
+#else
+        return false;
+#endif
     }
 
     private void UpdateOverlay()
@@ -372,12 +409,15 @@ internal sealed class OriginalPage : ContentPage
     private void UpdateEditButtons()
     {
         var index = LineIndex();
-        var canInteract = !loading && !editing && !leavingOriginal;
+        var canInteract = !loading && !editing && !leavingOriginal && !choosingPage;
+        previous.IsEnabled = canInteract && pageIndex > 0;
+        next.IsEnabled = canInteract && pageIndex + 1 < pageCount;
+        jump.IsEnabled = canInteract && pageCount > 1;
         linePicker.IsEnabled = canInteract && currentLineIndices.Length > 0;
         wordCard.IsEnabled = canInteract && activeWord is not null;
         readPage.IsEnabled = readPage.IsVisible && canInteract && image.Source is not null &&
             session.Document is { } document && document.Id == documentId &&
-            DocumentPages.SentencePosition(document, pageIndex).HasValue;
+            (HasPhysicalPageAddress(document) || DocumentPages.SentencePosition(document, pageIndex).HasValue);
         edit.IsEnabled = canInteract && index >= 0;
         suggest.IsEnabled = edit.IsEnabled;
         reset.IsEnabled = edit.IsEnabled && lines[index].Correction is not null;
@@ -392,7 +432,6 @@ internal sealed class OriginalPage : ContentPage
             document.Id != documentId) return;
         var line = lines[index];
         editing = true;
-        previous.IsEnabled = next.IsEnabled = false;
         UpdateEditButtons();
         try
         {
@@ -437,8 +476,6 @@ internal sealed class OriginalPage : ContentPage
         finally
         {
             editing = false;
-            previous.IsEnabled = pageIndex > 0;
-            next.IsEnabled = pageIndex + 1 < pageCount;
             UpdateEditButtons();
         }
     }

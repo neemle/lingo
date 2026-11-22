@@ -14,9 +14,33 @@ public partial class ReadingPage
     private Task MovePdfPageAsync(int direction)
     {
 #if MACCATALYST
-        return OpenAdjacentPdfPageAsync(direction);
+        return pdfWindow is { } window ? OpenPdfPageAsync(window.Center + direction) : Task.CompletedTask;
 #else
         return Task.CompletedTask;
+#endif
+    }
+
+    private async void JumpPdfPageClicked(object? sender, EventArgs args)
+    {
+#if MACCATALYST
+        if (pdfPagePromptOpen || !JumpPdfPage.IsEnabled || pdfWindow is not { } window
+            || pdfSnapshot is not { } document) return;
+
+        pdfPagePromptOpen = true;
+        UpdatePdfPageButtons();
+        try
+        {
+            var destination = await PdfPagePrompt.ChooseAsync(this, window.Center, window.PageCount);
+            if (destination is int page && readingPageActive && document.Id == pdfSnapshot?.Id)
+                await OpenPdfPageAsync(page);
+        }
+        finally
+        {
+            pdfPagePromptOpen = false;
+            UpdatePdfPageButtons();
+        }
+#else
+        await Task.CompletedTask;
 #endif
     }
 
@@ -73,6 +97,7 @@ public partial class ReadingPage
     private DateTimeOffset pdfOcrRetryAt;
     private bool movingPdfPage;
     private bool pdfWindowLoading;
+    private bool pdfPagePromptOpen;
 
     private async Task ReadPdfWindowAsync(ReaderSession session, Document document, bool entering)
     {
@@ -141,13 +166,12 @@ public partial class ReadingPage
     private bool IsCurrentPdfSnapshot(ReaderSession session, Document document) =>
         readingPageActive && ReferenceEquals(pdfSnapshot, document) && ReferenceEquals(session.Document, document);
 
-    private async Task OpenAdjacentPdfPageAsync(int direction)
+    private async Task OpenPdfPageAsync(int page)
     {
         var session = AppState.Session;
         if (movingPdfPage || pdfWindowLoading || session.Busy || pdfWindow is not { } window ||
             session.Document is not { } document || document.Id != pdfSnapshot?.Id) return;
-        var next = window.Center + direction;
-        if (next < 0 || next >= window.PageCount) return;
+        if (page == window.Center || page < 0 || page >= window.PageCount) return;
 
         movingPdfPage = true;
         StopAnalysisPrefetch();
@@ -160,7 +184,7 @@ public partial class ReadingPage
         UpdatePdfPageButtons();
         try
         {
-            await session.OpenPdfReadingPageAsync(document.Id, revisionId: null, page: next);
+            await session.OpenPdfReadingPageAsync(document.Id, revisionId: null, page: page);
             if (session.Error.Length == 0) await pdfWindowRead;
         }
         finally
@@ -214,7 +238,9 @@ public partial class ReadingPage
 
     private void UpdatePdfPageButtons()
     {
-        var enabled = !movingPdfPage && !pdfWindowLoading && !AppState.Session.Busy;
+        var enabled = !movingPdfPage && !pdfWindowLoading && !pdfPagePromptOpen && !AppState.Session.Busy;
+        JumpPdfPage.IsVisible = pdfWindow is { PageCount: > 1 };
+        JumpPdfPage.IsEnabled = enabled && JumpPdfPage.IsVisible;
         PreviousPdfPage.IsEnabled = enabled && pdfWindow is { Center: > 0 };
         NextPdfPage.IsEnabled = enabled && pdfWindow is { } window && window.Center + 1 < window.PageCount;
         RetryPdfOcr.IsVisible = enabled && readerPdfOcr is null

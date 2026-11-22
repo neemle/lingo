@@ -72,13 +72,15 @@
     IsVisible="{Binding CanViewOriginal}" Clicked="ViewOriginalClicked"
     SemanticProperties.Description="Переглянути оригінал документа" />
    <Grid Grid.Row="1" Grid.ColumnSpan="2" x:Name="PdfPageControls" IsVisible="False" Margin="0,8,0,0"
-    ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+    ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
     <Button x:Name="PreviousPdfPage" Text="‹" Style="{StaticResource PlayerButton}" Clicked="PreviousPdfPageClicked"
      IsEnabled="False" SemanticProperties.Description="Попередня сторінка PDF" />
     <Label Grid.Column="1" x:Name="PdfPageStatus" Style="{StaticResource ReaderMeta}" HorizontalTextAlignment="Center" />
     <Button Grid.Column="2" x:Name="NextPdfPage" Text="›" Style="{StaticResource PlayerButton}" Clicked="NextPdfPageClicked"
      IsEnabled="False" SemanticProperties.Description="Наступна сторінка PDF" />
-    <Button Grid.Column="3" x:Name="RetryPdfOcr" Text="Повторити OCR" Style="{StaticResource PlayerButton}"
+    <Button Grid.Column="3" x:Name="JumpPdfPage" Text="До сторінки…" Style="{StaticResource PlayerButton}"
+     Clicked="JumpPdfPageClicked" IsEnabled="False" IsVisible="False" SemanticProperties.Description="Перейти за номером сторінки PDF" />
+    <Button Grid.Column="4" x:Name="RetryPdfOcr" Text="Повторити OCR" Style="{StaticResource PlayerButton}"
      Clicked="RetryPdfOcrClicked" IsVisible="False" />
    </Grid>
   </Grid>
