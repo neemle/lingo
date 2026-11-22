@@ -364,7 +364,7 @@ fn scanned_pdf_pages_survive_restore_and_invalid_page_geometry_is_rejected() {
     let source = b"%PDF-1.7\n%%EOF\n";
     let recognized = json!([
         {"page":0,"text":"First scanned page.","x":0.12,"y":0.2,"width":0.5,"height":0.1,"confidence":0.9},
-        {"page":2,"text":"Last scanned page.","x":0.12,"y":0.4,"width":0.6,"height":0.1,"confidence":0.9},
+        {"page":40,"text":"Last scanned page.","x":0.12,"y":0.4,"width":0.6,"height":0.1,"confidence":0.9},
     ]);
     let import = |lines, pages| {
         call(
@@ -375,20 +375,20 @@ fn scanned_pdf_pages_survive_restore_and_invalid_page_geometry_is_rejected() {
             }),
         )
     };
-    assert_error(&import(recognized.clone(), 2), "core_error");
-    assert_error(&import(recognized.clone(), 41), "core_error");
+    assert_error(&import(recognized.clone(), 40), "core_error");
+    assert_error(&import(recognized.clone(), 0), "core_error");
     let reversed = json!([recognized[1], recognized[0]]);
-    assert_error(&import(reversed, 3), "core_error");
+    assert_error(&import(reversed, 41), "core_error");
 
-    let imported = import(recognized, 3);
+    let imported = import(recognized, 41);
     assert_eq!(imported["ok"], true, "{imported}");
     let document = &imported["data"];
-    assert_eq!(document["ocrPdfPages"], 3);
+    assert_eq!(document["ocrPdfPages"], 41);
     assert_eq!(
         document["text"],
         "First scanned page.\n\nLast scanned page."
     );
-    assert_eq!(document["ocrLines"][1]["page"], 2);
+    assert_eq!(document["ocrLines"][1]["page"], 40);
     let backup = call(store.handle, json!({"version":1,"operation":"export"}));
     let target = StoreFixture::new();
     let restored = call(
