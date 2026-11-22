@@ -16,11 +16,11 @@ pub(super) const SCHEMA: &str = "CREATE TABLE syntax_links (
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyntaxEvidence {
-    relation: String,
-    selected_is_head: bool,
+    pub(super) relation: String,
+    pub(super) selected_is_head: bool,
     other_word: String,
-    other_start_utf16: usize,
-    observations: u32,
+    pub(super) other_start_utf16: usize,
+    pub(super) observations: u32,
 }
 
 struct Token {

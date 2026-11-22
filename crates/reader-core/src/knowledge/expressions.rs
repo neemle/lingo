@@ -11,7 +11,7 @@ const MAX_PARTICLE_GAP: usize = 6;
 pub struct ExpressionMatch {
     text: String,
     pub(super) canonical: String,
-    kind: String,
+    pub(super) kind: String,
     observations: u32,
     pub(super) part_starts_utf16: Vec<usize>,
     #[serde(skip_serializing_if = "Vec::is_empty")]

@@ -91,6 +91,9 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::LookupSentenceToken { id, sentence_id, revision_id, start_utf16 } => {
             value(store.lookup_sentence_token(&id, &sentence_id, &revision_id, start_utf16))
         }
+        Command::AnalyzeLinguistics { id, sentence_id, revision_id, scope } => {
+            value(store.analyze_linguistics(&id, &sentence_id, &revision_id, scope))
+        }
         Command::PdfOcrNeededPages { id, center } => value(store.pdf_ocr_needed_pages(&id, center)),
         Command::ClaimPdfOcrPage { id } => value(store.claim_pdf_ocr_page(&id)),
         Command::RetryPdfOcrPage { id, page, token } => {

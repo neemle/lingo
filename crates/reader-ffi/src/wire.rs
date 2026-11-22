@@ -90,6 +90,14 @@ pub enum Command {
         #[serde(rename = "startUtf16")]
         start_utf16: usize,
     },
+    AnalyzeLinguistics {
+        id: String,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        #[serde(rename = "revisionId")]
+        revision_id: String,
+        scope: reader_core::knowledge::AnalysisScope,
+    },
     PdfOcrNeededPages {
         id: String,
         center: u16,

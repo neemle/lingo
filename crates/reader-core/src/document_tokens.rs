@@ -197,7 +197,7 @@ impl Store {
         Ok(lookup)
     }
 
-    fn token_document(&self, id: &str) -> Result<Document> {
+    pub(crate) fn token_document(&self, id: &str) -> Result<Document> {
         let body: String = self
             .connection
             .query_row("SELECT body FROM documents WHERE id=?1", [id], |row| row.get(0))
@@ -206,14 +206,14 @@ impl Store {
     }
 }
 
-fn revision_id(document: &Document) -> Result<&str> {
+pub(crate) fn revision_id(document: &Document) -> Result<&str> {
     document
         .current_revision_id
         .as_deref()
         .ok_or_else(|| "Ревізію документа не знайдено".into())
 }
 
-fn find_sentence<'a>(document: &'a Document, id: &str) -> Result<&'a Sentence> {
+pub(crate) fn find_sentence<'a>(document: &'a Document, id: &str) -> Result<&'a Sentence> {
     document
         .sentences
         .iter()
@@ -221,7 +221,7 @@ fn find_sentence<'a>(document: &'a Document, id: &str) -> Result<&'a Sentence> {
         .ok_or_else(|| "Речення не знайдено".into())
 }
 
-fn token_id(revision: &str, sentence: &str, start_utf16: usize) -> String {
+pub(crate) fn token_id(revision: &str, sentence: &str, start_utf16: usize) -> String {
     format!("{revision}:{sentence}:{start_utf16}")
 }
 
@@ -252,7 +252,7 @@ fn word_at(text: &str, start_utf16: usize) -> Option<&str> {
         .find_map(|(_, offset, word)| (offset == start_utf16).then_some(word))
 }
 
-fn word_parts(text: &str) -> impl Iterator<Item = (usize, usize, &str)> {
+pub(crate) fn word_parts(text: &str) -> impl Iterator<Item = (usize, usize, &str)> {
     text.split_word_bound_indices()
         .scan(0, |utf16, (byte, part)| {
             let start = *utf16;

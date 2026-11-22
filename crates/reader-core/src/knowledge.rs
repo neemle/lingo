@@ -14,7 +14,10 @@ mod expressions;
 mod grammar_cues;
 mod lexicon;
 mod ocr_suggestions;
+mod scoped_analysis;
 mod syntax;
+
+pub use scoped_analysis::{AnalysisScope, LinguisticAnalysis};
 
 pub use lexicon::{LexicalPackage, LexicalPackageInstall, WordMeaning};
 
@@ -254,8 +257,19 @@ impl Store {
         word: &str,
         context: Option<&WordContext>,
     ) -> Result<Option<WordLookup>> {
+        let index = self.open_knowledge_index(language)?;
+        self.lookup_word_with_index(language, word, context, versioned_index(&index)?)
+    }
+
+    fn lookup_word_with_index(
+        &self,
+        language: &str,
+        word: &str,
+        context: Option<&WordContext>,
+        index: Option<(&Pack, &Connection, u32)>,
+    ) -> Result<Option<WordLookup>> {
         let key = word_key(word);
-        let Some((pack, db)) = self.open_knowledge_index(language)? else {
+        let Some((pack, db, index_version)) = index else {
             let Some(pack) = PACKS.iter().find(|pack| pack.language == language) else {
                 return Ok(None);
             };
@@ -282,9 +296,6 @@ impl Store {
                 meanings,
             }));
         };
-        let index_version: u32 = db
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .map_err(|error| error.to_string())?;
         let neighbors = context.and_then(|context| context.neighbors(&key));
         let (previous, next) = neighbors.unwrap_or_default();
         let (left, right) = if index_version >= 2 {
@@ -336,11 +347,11 @@ impl Store {
         let cue = grammar_cues::GrammarCue::infer(language, previous.as_deref(), &analyses);
         grammar_cues::order_readings(&mut analyses, cue);
         let expressions = match context {
-            Some(context) if index_version >= 3 => expressions::lookup(&db, context, &key)?,
+            Some(context) if index_version >= 3 => expressions::lookup(db, context, &key)?,
             _ => Vec::new(),
         };
         let syntax_evidence = match context {
-            Some(context) if index_version >= 4 => syntax::lookup(&db, context, &key)?,
+            Some(context) if index_version >= 4 => syntax::lookup(db, context, &key)?,
             _ => Vec::new(),
         };
         let (lexical_package, meanings) = lexicon::lookup(
@@ -354,7 +365,7 @@ impl Store {
         )?;
         let spelling_suggestions =
             if analyses.is_empty() && meanings.is_empty() && neighbors.is_some() {
-                ocr_suggestions::suggest_spelling(&db, language, word, &key, left, right)?
+                ocr_suggestions::suggest_spelling(db, language, word, &key, left, right)?
             } else {
                 Vec::new()
             };
@@ -369,6 +380,16 @@ impl Store {
             meanings,
         }))
     }
+}
+
+fn versioned_index(
+    index: &Option<(&'static Pack, Connection)>,
+) -> Result<Option<(&'static Pack, &Connection, u32)>> {
+    index.as_ref().map(|(pack, db)| {
+        let version = db.query_row("PRAGMA user_version", [], |row| row.get(0))
+            .map_err(|error| error.to_string())?;
+        Ok((*pack, db, version))
+    }).transpose()
 }
 
 fn neighbor_hash(key: &str) -> i64 {
