@@ -346,13 +346,13 @@ pub(crate) fn cached_translation(
     )
 }
 
-struct CacheRoutes {
+pub(crate) struct CacheRoutes {
     preferred: Option<Route>,
     candidates: Vec<Route>,
 }
 
 impl CacheRoutes {
-    fn resolve(
+    pub(crate) fn resolve(
         installed: &[ModelEdge],
         catalog: &[ModelEdge],
         source: &str,
@@ -369,6 +369,20 @@ impl CacheRoutes {
             preferred,
             candidates,
         })
+    }
+
+    pub(crate) fn cached_standalone(
+        &self, store: &Store, text: &str, target: &str,
+    ) -> Result<Option<(String, Option<String>)>> {
+        if text.len() > MAX_BATCH_BYTES {
+            return Ok(None);
+        }
+        for route in &self.candidates {
+            if let Some(mut segments) = store.cached_segments(&unit_cache_key(route, text)?, 1, target)? {
+                return Ok(Some((segments.remove(0), route.pivot_language().map(str::to_owned))));
+            }
+        }
+        Ok(None)
     }
 }
 

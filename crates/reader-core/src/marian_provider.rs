@@ -450,10 +450,10 @@ impl StoreWorker {
     }
 
     pub fn find_detached_pdf_text(
-        self, id: &str, query: &str, start: crate::DetachedPdfFindCursor, limit: usize,
+        self, id: &str, query: &str, start: crate::DetachedPdfFindCursor, limit: usize, target: Option<&str>,
     ) -> Result<crate::DetachedPdfFindPage> {
         self.open(OpenFlags::SQLITE_OPEN_READ_ONLY)?
-            .find_detached_pdf_text(id, query, start, limit)
+            .find_detached_pdf_text(id, query, start, limit, target)
     }
 
     pub fn translate_detached_pdf_sentence(
@@ -736,6 +736,14 @@ impl Store {
         let installed = MarianProvider::interactive(&self.model_directory).installed_models()?;
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
         search_cached_translation(self, &installed, &catalog, &document, target, query, start)
+    }
+
+    pub(crate) fn detached_translation_routes(
+        &self, source: &str, target: &str,
+    ) -> Result<crate::translation::CacheRoutes> {
+        let installed = MarianProvider::interactive(&self.model_directory).installed_models()?;
+        let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
+        crate::translation::CacheRoutes::resolve(&installed, &catalog, source, target)
     }
 
     fn translation_selection(

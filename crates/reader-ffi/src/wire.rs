@@ -121,6 +121,7 @@ pub enum Command {
     FindDetachedPdfText {
         id: String,
         query: String,
+        target: Option<String>,
         start: reader_core::DetachedPdfFindCursor,
         limit: usize,
     },

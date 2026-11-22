@@ -1,10 +1,11 @@
 use super::database_error;
 use crate::{Result, Store};
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
 const MAX_SCAN_PAGES: usize = 16;
+const MAX_TRANSLATION_SCAN_SENTENCES: usize = 128;
 const MAX_RESULTS: usize = 30;
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -21,6 +22,10 @@ pub struct DetachedPdfFindHit {
     position: usize,
     sentence_id: String,
     text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pivot_language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reviewed: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -32,7 +37,7 @@ pub struct DetachedPdfFindPage {
 
 impl Store {
     pub fn find_detached_pdf_text(
-        &self, id: &str, query: &str, start: DetachedPdfFindCursor, limit: usize,
+        &self, id: &str, query: &str, start: DetachedPdfFindCursor, limit: usize, target: Option<&str>,
     ) -> Result<DetachedPdfFindPage> {
         if query.len() > 1024 || !(1..=MAX_RESULTS).contains(&limit) {
             return Err("Некоректні параметри пошуку у PDF.".into());
@@ -41,11 +46,25 @@ impl Store {
         let mut result = DetachedPdfFindPage { matches: Vec::with_capacity(limit), next: None };
         let needle = search_text(query.trim());
         if needle.is_empty() { return Ok(result); }
+        let routes = if let Some(target) = target {
+            crate::valid_language(target)?;
+            let source: Option<String> = self.connection.query_row(
+                "SELECT json_extract(body, '$.language') FROM documents WHERE id=?1
+                 AND EXISTS (SELECT 1 FROM pdf_detached_pages WHERE document_id=?1 AND page>=?2)",
+                params![id, start.page], |row| row.get(0),
+            ).optional().map_err(database_error)?;
+            let Some(source) = source else { return Ok(result); };
+            if source == target { return Ok(result); }
+            Some((target, self.detached_translation_routes(&source, target)?))
+        } else {
+            None
+        };
         let mut statement = self.connection.prepare(
             "SELECT page,text FROM pdf_detached_pages WHERE document_id=?1 AND page>=?2 ORDER BY page LIMIT ?3",
         ).map_err(database_error)?;
         let mut pages = statement.query(params![id, start.page, MAX_SCAN_PAGES + 1]).map_err(database_error)?;
         let mut scanned = 0;
+        let mut scanned_sentences = 0;
         while let Some(row) = pages.next().map_err(database_error)? {
             let page: u16 = row.get(0).map_err(database_error)?;
             let first_position = if page == start.page { start.position } else { 0 };
@@ -57,20 +76,42 @@ impl Store {
 
             let text: String = row.get(1).map_err(database_error)?;
             let prefix = super::sentence_prefix(id, page, &super::page_revision(&text));
+            let mut reviewed_for_page = match &routes {
+                Some((target, _)) => super::annotations::reviewed_for_page(&self.connection, id, page, target)?,
+                None => Default::default(),
+            };
             for (position, sentence) in crate::segment(&text, &prefix).into_iter().enumerate().skip(first_position) {
-                let normalized = search_text(&sentence.text);
+                let (text, pivot_language, reviewed) = if let Some((target, routes)) = &routes {
+                    if scanned_sentences == MAX_TRANSLATION_SCAN_SENTENCES {
+                        result.next = Some(DetachedPdfFindCursor { page, position });
+                        return Ok(result);
+                    }
+                    scanned_sentences += 1;
+                    if let Some(text) = reviewed_for_page.remove(&sentence.start_utf16) {
+                        (text, None, Some(true))
+                    } else if let Some((text, pivot)) = routes.cached_standalone(self, &sentence.text, target)? {
+                        (text, pivot, Some(false))
+                    } else {
+                        continue;
+                    }
+                } else {
+                    (sentence.text, None, None)
+                };
+                let normalized = search_text(&text);
                 let Some(offset) = normalized.find(&needle) else { continue; };
                 if result.matches.len() == limit {
                     result.next = Some(DetachedPdfFindCursor { page, position });
                     return Ok(result);
                 }
-                let text = if sentence.text.chars().take(513).count() <= 512 {
-                    sentence.text
+                let text = if reviewed.is_some() || text.chars().take(513).count() <= 512 {
+                    text
                 } else {
                     let excerpt: String = normalized[offset..].chars().take(512).collect();
                     if offset == 0 { excerpt } else { format!("…{excerpt}") }
                 };
-                result.matches.push(DetachedPdfFindHit { page, position, sentence_id: sentence.id, text });
+                result.matches.push(DetachedPdfFindHit {
+                    page, position, sentence_id: sentence.id, text, pivot_language, reviewed,
+                });
             }
         }
         Ok(result)

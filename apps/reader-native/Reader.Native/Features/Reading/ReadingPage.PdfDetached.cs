@@ -297,11 +297,10 @@ public partial class ReadingPage
             var translated = await AppState.Session.TranslateDetachedPdfSentenceAsync(
                 address.Document, address.Page, current.Sentence.Id, target);
             if (run != detachedTranslationRun) return;
-            detachedMachineTranslation = translated?.Text;
-            var text = translated?.Text ?? "Для цього напрямку потрібен пакет офлайн-перекладу.";
-            if (translated?.PivotLanguage is { } pivot)
-                text = $"{DocumentLanguages.PivotRoute(current.Language, pivot, target)}\n{text}";
-            ShowDetachedTranslation(text);
+            if (translated is null)
+                ShowDetachedTranslation("Для цього напрямку потрібен пакет офлайн-перекладу.");
+            else
+                ShowDetachedMachineTranslation(translated, current.Language, target);
         }
         catch (Exception error)
         {
@@ -330,6 +329,15 @@ public partial class ReadingPage
     {
         var reviewed = loadingDetachedSentence ? null : ReviewedDetachedTranslation();
         ShowDetachedTranslation(reviewed is null ? "" : $"Ваш переклад{Environment.NewLine}{reviewed}");
+    }
+
+    private void ShowDetachedMachineTranslation(MachineTranslation translation, string source, string target)
+    {
+        detachedMachineTranslation = translation.Text;
+        var text = translation.PivotLanguage is { } pivot
+            ? $"{DocumentLanguages.PivotRoute(source, pivot, target)}{Environment.NewLine}{translation.Text}"
+            : translation.Text;
+        ShowDetachedTranslation(text);
     }
 
     private void ShowDetachedTranslation(string value)

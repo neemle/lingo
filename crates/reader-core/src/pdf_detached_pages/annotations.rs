@@ -84,6 +84,17 @@ pub(super) fn reviewed(
     rows.collect::<rusqlite::Result<_>>().map_err(database_error)
 }
 
+pub(super) fn reviewed_for_page(
+    db: &Connection, id: &str, page: u16, target: &str,
+) -> Result<BTreeMap<usize, String>> {
+    let mut statement = db.prepare_cached(
+        "SELECT start_utf16,text FROM pdf_detached_translations WHERE document_id=?1 AND page=?2 AND target=?3",
+    ).map_err(database_error)?;
+    let rows = statement.query_map(params![id, page, target], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(database_error)?;
+    rows.collect::<rusqlite::Result<_>>().map_err(database_error)
+}
+
 pub(super) fn read(
     db: &Connection, id: &str, page: u16, start: usize,
 ) -> Result<(bool, Option<String>)> {

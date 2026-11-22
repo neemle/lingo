@@ -201,8 +201,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         Task.Run(() => client.DetachedPdfSentence(id, page, position, sentenceId));
 
     public Task<DetachedPdfFindPage> FindDetachedPdfTextAsync(
-        string id, string query, DetachedPdfFindCursor start, int limit, CancellationToken cancellation) =>
-        Task.Run(() => client.FindDetachedPdfText(id, query, start, limit), cancellation);
+        string id, string query, DetachedPdfFindCursor start, int limit, CancellationToken cancellation, string? target = null) =>
+        Task.Run(() => client.FindDetachedPdfText(id, query, start, limit, target), cancellation);
 
     public Task<DetachedPdfAnnotationItem[]> DetachedPdfAnnotationsAsync(string id, int page) =>
         Task.Run(() => client.DetachedPdfAnnotations(id, page));
