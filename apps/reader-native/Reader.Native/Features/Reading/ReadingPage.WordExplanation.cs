@@ -47,22 +47,16 @@ public partial class ReadingPage
         ExplainWord.IsEnabled = DetachedExplainWord.IsEnabled = false;
         try
         {
-            var models = (await AppState.Session.OptionalModelsAsync())
-                .Where(model => model.Id is "qwen-0.8b" or "qwen-2b")
-                .OrderByDescending(model => model.CanGenerateLanguageHints).ToArray();
+            var selected = (await AppState.Session.OptionalModelsAsync())
+                .FirstOrDefault(model => model.CanGenerateLanguageHints);
             if (!isCurrent()) return;
-            foreach (var model in models)
+            if (selected is not null && await explain(selected.Id, true) is { } saved)
             {
-                var saved = await explain(model.Id, true);
-                if (!isCurrent()) return;
-                if (saved is not null)
-                {
-                    ShowExplanation(result, model.Name, saved);
-                    return;
-                }
+                if (isCurrent()) ShowExplanation(result, selected.Name, saved);
+                return;
             }
-            var selected = models.FirstOrDefault(model => model.CanGenerateLanguageHints && model.FilesPresent);
-            if (selected is null)
+            if (!isCurrent()) return;
+            if (selected is not { FilesPresent: true })
             {
                 if (await DisplayAlertAsync("Локальне пояснення",
                     "Для нових пояснень встановіть Qwen 2B у налаштуваннях.",

@@ -271,8 +271,8 @@ impl Store {
         revision: Option<&str>,
         cached_only: bool,
     ) -> Result<ReviewSentenceJob> {
-        if !matches!(model, "qwen-0.8b" | "qwen-2b") {
-            return Err("Виберіть одну з моделей Qwen.".into());
+        if model != HINT_GENERATION_MODEL {
+            return Err("Для локальних підказок використовуйте Qwen 2B.".into());
         }
         let (language, sentences) = if let Some(page) = page {
             let current = self
@@ -365,12 +365,6 @@ impl Store {
         let cached = annotation_cache::read_model_hint(&self.connection, document, &key)?;
         if cached_only || cached.is_some() {
             return Ok(HintWork::Cached(cached));
-        }
-        if model != HINT_GENERATION_MODEL {
-            return Err(
-                "Для нових підказок використовуйте Qwen 2B. Збережені підказки 0.8B доступні."
-                    .into(),
-            );
         }
         let database = self
             .connection
@@ -619,8 +613,8 @@ fn genitive_preposition(sentence: &str, start: usize, selection: &str) -> Option
 }
 
 fn validate_word_request(model: &str, word: &str) -> Result<()> {
-    if !matches!(model, "qwen-0.8b" | "qwen-2b") {
-        return Err("Виберіть одну з моделей Qwen.".into());
+    if model != HINT_GENERATION_MODEL {
+        return Err("Для локальних підказок використовуйте Qwen 2B.".into());
     }
     if word.trim().is_empty() || word.chars().count() > 80 || word.chars().any(char::is_control) {
         return Err("Виділіть слово або короткий вираз.".into());

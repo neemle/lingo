@@ -40,10 +40,12 @@ struct Asset {
     sha256: &'static str,
 }
 
+const RETIRED_MODEL: &str = "qwen-0.8b";
+
 // Pins are part of the application; downloaded files cannot update this catalogue.
 const MODELS: &[Model] = &[
     Model {
-        id: "qwen-0.8b",
+        id: RETIRED_MODEL,
         name: "Qwen3.5-0.8B",
         license: "Apache-2.0",
         repo: "ggml-org/Qwen3.5-0.8B-GGUF",
@@ -240,6 +242,9 @@ impl ModelPaths {
 }
 
 fn model(id: &str) -> Result<&'static Model> {
+    if id == RETIRED_MODEL {
+        return Err("Підтримку Qwen 0.8B припинено. Для підказок доступна Qwen 2B.".into());
+    }
     MODELS
         .iter()
         .find(|model| model.id == id)
@@ -456,7 +461,7 @@ fn probe_optional_model(model: &Model, directory: &Path) -> Result<()> {
         return Err("Контрольний запуск відкладено. Повторіть встановлення.".into());
     }
     match model.id {
-        "qwen-0.8b" | "qwen-2b" => crate::qwen::smoke(directory, &interrupted)?,
+        crate::qwen::HINT_GENERATION_MODEL => crate::qwen::smoke(directory, &interrupted)?,
         "multilingual-e5-small" => crate::e5::smoke(directory, &interrupted)?,
         "piper-uk" => crate::tts::smoke(directory, &interrupted)?,
         "supertonic-3" => crate::supertonic::smoke(directory, &interrupted)?,
@@ -601,11 +606,11 @@ impl Store {
     }
 
     pub fn remove_optional_model(&self, id: &str) -> Result<bool> {
-        let model = model(id)?;
+        let id = if id == RETIRED_MODEL { RETIRED_MODEL } else { model(id)?.id };
         if !package_directory(&self.optional_model_directory)? {
             return Ok(false);
         }
-        let paths = ModelPaths::new(&self.optional_model_directory, model.id);
+        let paths = ModelPaths::new(&self.optional_model_directory, id);
         let _gate = lock_package(&paths.lock, true)?;
         let mut removed = remove_package_directory(&paths.previous)?;
         removed |= remove_package_directory(&paths.removed)?;
