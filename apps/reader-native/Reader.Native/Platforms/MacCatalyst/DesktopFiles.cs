@@ -1,3 +1,4 @@
+using System.Text;
 using Foundation;
 using ImageIO;
 using UIKit;
@@ -101,38 +102,43 @@ internal static class DesktopFiles
     {
         if (args.PlatformArgs?.DropSession is not { } session) return false;
         var staged = new List<ShareInboxItem>();
-        var handled = false;
+        (string Name, Exception Error)? failure = null;
         foreach (var item in session.Items)
         {
-            var provider = item.ItemProvider;
-            var suggested = Path.GetFileName(provider.SuggestedName ?? "Документ");
-            var declaredType = provider.RegisteredTypeIdentifiers.FirstOrDefault(type => DocumentTypes.ContainsKey(type)
-                && (type != "public.plain-text" || DesktopFile.Supports(suggested)));
+            var suggested = "Документ";
             try
             {
+                var provider = item.ItemProvider;
+                suggested = Path.GetFileName(provider.SuggestedName ?? suggested);
+                var declaredType = provider.RegisteredTypeIdentifiers.FirstOrDefault(type => DocumentTypes.ContainsKey(type)
+                    && (type != "public.plain-text" || DesktopFile.Supports(suggested)));
                 if (declaredType is not null)
                 {
                     var filename = DesktopFile.Supports(suggested) ? suggested : suggested + DocumentTypes[declaredType];
                     staged.Add(await StageProviderAsync(provider, declaredType, filename));
-                    handled = true;
                 }
-                else if (provider.HasItemConformingTo("public.file-url") && await StageFileItemAsync(provider) is { } original)
+                else if (provider.HasItemConformingTo("public.file-url"))
                 {
-                    staged.Add(original);
-                    handled = true;
+                    if (await StageFileItemAsync(provider) is { } original)
+                        staged.Add(original);
+                }
+                else
+                {
+                    var address = await GetDropAddressAsync(provider);
+                    var text = address is null ? await GetDropTextAsync(provider) : null;
+                    if (await DesktopImport.StageDropTextAsync(address, text) is { } payload)
+                        staged.Add(payload);
                 }
             }
             catch (Exception error)
             {
-                handled = true;
-                DesktopImport.ReportFailure(suggested, error);
+                failure ??= (suggested, error);
             }
         }
+        // Import prompts can change the current page. Open them after all providers have been staged.
+        if (failure is { } failed) DesktopImport.ReportFailure(failed.Name, failed.Error);
         foreach (var item in staged) DesktopImport.Publish(item);
-        if (handled) return true;
-        var address = await GetDropAddressAsync(args);
-        var text = address is null ? await GetDropTextAsync(args) : null;
-        return await DesktopImport.EnqueueDropTextAsync(address, text);
+        return staged.Count > 0 || failure is not null;
     }
 
     private static Task<ShareInboxItem?> StageFileItemAsync(NSItemProvider provider)
@@ -147,42 +153,30 @@ internal static class DesktopFiles
         return completion.Task;
     }
 
-    private static async Task<Uri?> GetDropAddressAsync(DropEventArgs args)
+    private static Task<Uri?> GetDropAddressAsync(NSItemProvider provider)
     {
-        if (args.PlatformArgs?.DropSession is not { } session) return null;
-        foreach (var item in session.Items)
-        {
-            var provider = item.ItemProvider;
-            if (provider.HasItemConformingTo("public.file-url") || !provider.HasItemConformingTo("public.url")) continue;
-            var completion = new TaskCompletionSource<Uri?>(TaskCreationOptions.RunContinuationsAsynchronously);
-            provider.LoadItem("public.url", null, (value, error) =>
-                completion.TrySetResult(error is null && value is NSUrl url ? WebArticles.Address(url.AbsoluteString) : null));
-            if (await completion.Task is { } address) return address;
-        }
-        return null;
+        if (!provider.HasItemConformingTo("public.url")) return Task.FromResult<Uri?>(null);
+
+        var completion = new TaskCompletionSource<Uri?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        provider.LoadItem("public.url", null, (value, error) =>
+            completion.TrySetResult(error is null && value is NSUrl url ? WebArticles.Address(url.AbsoluteString) : null));
+        return completion.Task;
     }
 
-    private static async Task<string?> GetDropTextAsync(DropEventArgs args)
+    private static Task<string?> GetDropTextAsync(NSItemProvider provider)
     {
-        if (args.PlatformArgs?.DropSession is not { } session) return null;
-        foreach (var item in session.Items)
+        var type = provider.HasItemConformingTo("public.utf8-plain-text") ? "public.utf8-plain-text" : "public.plain-text";
+        if (!provider.HasItemConformingTo(type)) return Task.FromResult<string?>(null);
+
+        var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        provider.LoadItem(type, null, (value, error) => completion.TrySetResult(error is null ? value switch
         {
-            var provider = item.ItemProvider;
-            if (provider.HasItemConformingTo("public.file-url") ||
-                provider.SuggestedName is { } name && DesktopFile.Supports(name)) continue;
-            var type = provider.HasItemConformingTo("public.utf8-plain-text") ? "public.utf8-plain-text" : "public.plain-text";
-            if (!provider.HasItemConformingTo(type)) continue;
-            var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
-            provider.LoadItem(type, null, (value, error) => completion.TrySetResult(error is null ? value switch
-            {
-                NSString nativeText => nativeText.ToString(),
-                NSData data when data.Length <= Reader.CoreClient.CoreClient.MaxImportBytes =>
-                    System.Text.Encoding.UTF8.GetString(data.ToArray()),
-                _ => null,
-            } : null));
-            if (await completion.Task is { Length: > 0 } text) return text;
-        }
-        return null;
+            NSString nativeText => nativeText.ToString(),
+            NSData data when data.Length <= Reader.CoreClient.CoreClient.MaxImportBytes =>
+                Encoding.UTF8.GetString(data.ToArray()),
+            _ => null,
+        } : null));
+        return completion.Task;
     }
 
     private static async Task<ShareInboxItem> StageProviderAsync(NSItemProvider provider, string type, string name)

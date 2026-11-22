@@ -41,21 +41,21 @@ internal static class DesktopImport
 
     internal static async Task<bool> EnqueueDropTextAsync(Uri? address, string? text)
     {
-        if ((address ?? WebArticles.Address(text)) is { } webAddress)
-        {
-            await EnqueueTextAsync("url", "Вебпосилання", webAddress.AbsoluteUri).ConfigureAwait(false);
-            return true;
-        }
-        if (string.IsNullOrWhiteSpace(text)) return false;
-        await EnqueueTextAsync("text", "Перетягнутий текст", text).ConfigureAwait(false);
+        if (await StageDropTextAsync(address, text).ConfigureAwait(false) is not { } item) return false;
+        Publish(item);
         return true;
     }
 
-    private static async Task EnqueueTextAsync(string kind, string name, string value)
+    internal static async Task<ShareInboxItem?> StageDropTextAsync(Uri? address, string? text)
     {
+        var webAddress = address ?? WebArticles.Address(text);
+        var value = webAddress?.AbsoluteUri ?? text;
+        if (string.IsNullOrWhiteSpace(value)) return null;
         if (Encoding.UTF8.GetByteCount(value) > CoreClient.CoreClient.MaxImportBytes)
             throw new InvalidDataException("Текст перевищує 20 МБ.");
         using var source = new MemoryStream(Encoding.UTF8.GetBytes(value));
-        Publish(await ShareInbox.StageAsync(kind, name, source).ConfigureAwait(false));
+        return webAddress is null
+            ? await ShareInbox.StageAsync("text", "Перетягнутий текст", source).ConfigureAwait(false)
+            : await ShareInbox.StageAsync("url", "Вебпосилання", source).ConfigureAwait(false);
     }
 }
