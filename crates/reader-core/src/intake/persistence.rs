@@ -15,6 +15,12 @@ pub struct PreparedIntake {
 }
 
 pub fn prepare(root: &Path, input: IntakeInput) -> Result<PreparedIntake> {
+    prepare_for_request(root, input, None)
+}
+
+pub fn prepare_for_request(
+    root: &Path, input: IntakeInput, request_id: Option<&str>,
+) -> Result<PreparedIntake> {
     let material = validate_input(input)?;
     let (payload, file, bytes) = match material.asset {
         ValidatedAsset::Link => (None, None, material.name.len() as u64),
@@ -28,11 +34,8 @@ pub fn prepare(root: &Path, input: IntakeInput) -> Result<PreparedIntake> {
         }
         ValidatedAsset::PdfFile(path) => {
             let (source, expected) = file_originals::open_pdf_source(&path)?;
-            let (file, size) = stage_pdf(root, source)?;
-            if size != expected {
-                return Err("Розмір PDF змінився під час прийому.".into());
-            }
-            (None, Some(file), size)
+            let file = stage_pdf_file(root, &path, request_id, source, expected)?;
+            (None, Some(file), expected)
         }
     };
     Ok(PreparedIntake {
@@ -45,6 +48,36 @@ pub fn prepare(root: &Path, input: IntakeInput) -> Result<PreparedIntake> {
         payload,
         file,
     })
+}
+
+fn stage_pdf_file(
+    root: &Path, path: &Path, request_id: Option<&str>, source: fs::File, expected: u64,
+) -> Result<NamedTempFile> {
+    // The picker and Finder adapters copy sources into this private inbox first.
+    // Only reuse that per-request asset; an ordinary path may remain writable by its owner.
+    #[cfg(target_vendor = "apple")]
+    if let Some(request) = request_id.and_then(|id| Uuid::parse_str(id).ok()) {
+        if let Some(parent) = root.parent() {
+            let inbox = parent.join("share-inbox");
+            let entry = inbox.join(request.simple().to_string());
+            if path == entry.join("payload")
+                && file_originals::verify_root(&inbox).is_ok()
+                && file_originals::verify_root(&entry).is_ok()
+            {
+                if let Some(file) = file_originals::stage_inbox_original(root, path, &source)? {
+                    return Ok(file);
+                }
+            }
+        }
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    let _ = (path, request_id);
+
+    let (file, size) = stage_pdf(root, source)?;
+    if size != expected {
+        return Err("Розмір PDF змінився під час прийому.".into());
+    }
+    Ok(file)
 }
 
 fn stage_pdf(root: &Path, source: impl Read) -> Result<(NamedTempFile, u64)> {

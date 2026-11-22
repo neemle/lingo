@@ -6,7 +6,7 @@ mod application;
 mod document_importer;
 mod persistence;
 
-pub use persistence::{prepare, PreparedIntake};
+pub use persistence::{prepare, prepare_for_request, PreparedIntake};
 pub(crate) use persistence::initialize;
 
 #[derive(Deserialize)]

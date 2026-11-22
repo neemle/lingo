@@ -288,6 +288,40 @@ pub(crate) fn stage_original(root: &Path) -> Result<NamedTempFile> {
     Ok(staged)
 }
 
+#[cfg(target_vendor = "apple")]
+pub(crate) fn stage_inbox_original(root: &Path, path: &Path, source: &File) -> Result<Option<NamedTempFile>> {
+    use std::os::unix::fs::MetadataExt;
+
+    ensure_root(root)?;
+    let gate = staging_gate(root).map_err(storage_error)?;
+    gate.lock().map_err(storage_error)?;
+    let expected = source.metadata().map_err(storage_error)?;
+    let staged = tempfile::Builder::new().prefix(".pending-").make_in(root, |link| {
+        fs::hard_link(path, link)?;
+        let open = || {
+            let metadata = link.symlink_metadata()?;
+            if !metadata.is_file() || (metadata.dev(), metadata.ino(), metadata.len())
+                != (expected.dev(), expected.ino(), expected.len())
+            {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "PDF source changed"));
+            }
+            let staged = File::open(link)?;
+            staged.lock()?;
+            Ok(staged)
+        };
+        open().inspect_err(|_| {
+            let _ = fs::remove_file(link);
+        })
+    });
+    match staged {
+        Ok(staged) => Ok(Some(staged)),
+        Err(error) if matches!(error.kind(),
+            io::ErrorKind::CrossesDevices | io::ErrorKind::Unsupported | io::ErrorKind::PermissionDenied
+        ) => Ok(None),
+        Err(error) => Err(storage_error(error)),
+    }
+}
+
 pub(crate) fn verify_root(path: &Path) -> Result<()> {
     match path.symlink_metadata() {
         Ok(metadata) if metadata.is_dir() => Ok(()),
