@@ -7,7 +7,6 @@ use unicode_normalization::char::is_combining_mark;
 use unicode_segmentation::UnicodeSegmentation;
 
 const LATIN: &str = "abcdefghijklmnopqrstuvwxyz'";
-const FRENCH: &str = "àâäæçéèêëîïôöœùûüÿ";
 const UKRAINIAN: &str = "абвгґдеєжзиіїйклмнопрстуфхцчшщьюя'";
 const CONFUSIONS: &[(&str, &str)] = &[
     ("0", "o"),
@@ -174,11 +173,22 @@ impl Store {
 }
 
 fn alphabet(language: &str) -> String {
-    match language {
-        "uk" => UKRAINIAN.to_owned(),
-        "fr" => format!("{LATIN}{FRENCH}"),
-        _ => LATIN.to_owned(),
-    }
+    let variant = language.split('-').next().unwrap_or(language);
+    let diacritics = match variant {
+        "uk" => return UKRAINIAN.to_owned(),
+        "fr" => "àâäæçéèêëîïôöœùûüÿ",
+        "de" => "äöüß",
+        "es" => "áéíñóúü",
+        "it" => "àèéìíîòóùú",
+        "pt" => "àáâãçéêíóôõúü",
+        "pl" => "ąćęłńóśźż",
+        "nl" => "áàäéèëíïóöúü",
+        "cs" => "áčďéěíňóřšťúůýž",
+        "ro" => "ăâîșț",
+        "sv" => "åäöé",
+        _ => "",
+    };
+    format!("{LATIN}{diacritics}")
 }
 
 fn candidate_edits(key: &str, alphabet: &str) -> BTreeMap<String, u8> {
