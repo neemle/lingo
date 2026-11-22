@@ -67,10 +67,16 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
 }
 
 impl Store {
-    pub fn insert_intake(&mut self, prepared: PreparedIntake) -> Result<IntakeItem> {
-        let id = Uuid::new_v4();
+    pub fn insert_intake(&mut self, prepared: PreparedIntake, request_id: Option<&str>) -> Result<IntakeItem> {
+        let id = request_id.map(Uuid::parse_str).transpose().map_err(intake_error)?
+            .unwrap_or_else(Uuid::new_v4);
         let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(intake_error)?;
+        if request_id.is_some() {
+            if let Some(existing) = intake_item(&tx, &id.to_string())? {
+                return Ok(existing);
+            }
+        }
         let serialized = serde_json::to_string(&prepared.metadata).map_err(intake_error)?;
         tx.execute(
             "INSERT INTO intake (id,metadata,payload) VALUES (?1,?2,?3)",
@@ -110,12 +116,12 @@ impl Store {
     }
 
     pub fn intake_item(&self, id: &str) -> Result<IntakeItem> {
-        let (metadata, document): (String, Option<String>) = self.connection.query_row(
-            "SELECT metadata,document_id FROM intake WHERE id=?1", [id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        ).optional().map_err(intake_error)?.ok_or("Вхідний матеріал не знайдено.")?;
-        let metadata = serde_json::from_str(&metadata).map_err(intake_error)?;
-        Ok(IntakeItem::new(id.to_owned(), metadata, document))
+        intake_item(&self.connection, id)?.ok_or_else(|| "Вхідний матеріал не знайдено.".into())
+    }
+
+    pub fn intake_item_for_request(&self, id: &str) -> Result<Option<IntakeItem>> {
+        let id = Uuid::parse_str(id).map_err(intake_error)?.to_string();
+        intake_item(&self.connection, &id)
     }
 
     pub fn discard_intake(&self, id: &str) -> Result<bool> {
@@ -156,6 +162,17 @@ impl Store {
         }
         path.canonicalize().map_err(intake_error)
     }
+}
+
+fn intake_item(db: &Connection, id: &str) -> Result<Option<IntakeItem>> {
+    let row: Option<(String, Option<String>)> = db.query_row(
+        "SELECT metadata,document_id FROM intake WHERE id=?1", [id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional().map_err(intake_error)?;
+    row.map(|(metadata, document)| {
+        let metadata = serde_json::from_str(&metadata).map_err(intake_error)?;
+        Ok(IntakeItem::new(id.to_owned(), metadata, document))
+    }).transpose()
 }
 
 impl IntakeRepository for Store {

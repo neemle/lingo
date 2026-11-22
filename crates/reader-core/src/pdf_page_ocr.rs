@@ -254,12 +254,20 @@ impl Store {
 
     /// Release a failed page for retry while allowing available neighbors to proceed.
     pub fn retry_pdf_ocr_page(&self, id: &str, page: u16, token: &str) -> Result<bool> {
+        self.release_pdf_ocr_page(id, page, token, OCR_RETRY_DELAY_SECONDS)
+    }
+
+    pub fn cancel_pdf_ocr_page(&self, id: &str, page: u16, token: &str) -> Result<bool> {
+        self.release_pdf_ocr_page(id, page, token, 0)
+    }
+
+    fn release_pdf_ocr_page(&self, id: &str, page: u16, token: &str, retry_delay: i64) -> Result<bool> {
         let now = crate::now();
         self.connection
             .execute(
                 "UPDATE pdf_ocr_requests SET token=NULL, available_at=?5
                  WHERE document_id=?1 AND page=?2 AND token=?3 AND available_at>?4",
-                params![id, page, token, now, now + OCR_RETRY_DELAY_SECONDS],
+                params![id, page, token, now, now + retry_delay],
             )
             .map(|count| count != 0)
             .map_err(database_error)

@@ -53,10 +53,20 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         unsafe { std::slice::from_raw_parts(input, len as usize) }
     };
     let command = validation::decode(bytes)?;
-    if let Command::StageIntake { input } = command {
-        let root = registry::lock()?.store(handle)?.pdf_original_root().to_owned();
+    if let Command::StageIntake { input, request_id } = command {
+        let root = {
+            let state = registry::lock()?;
+            let store = state.store(handle)?;
+            if let Some(id) = &request_id {
+                if let Some(item) = store.intake_item_for_request(id).map_err(gateway::domain)? {
+                    drop(state);
+                    return encode_job(Ok(item));
+                }
+            }
+            store.pdf_original_root().to_owned()
+        };
         let prepared = reader_core::intake::prepare(&root, input).map_err(gateway::domain)?;
-        let item = registry::lock()?.insert_intake(handle, prepared)?;
+        let item = registry::lock()?.insert_intake(handle, prepared, request_id.as_deref())?;
         return encode_job(Ok(item));
     }
     let command = match command {

@@ -102,9 +102,8 @@ public partial class LibraryPage
         if (!ShareInbox.Contains(item)) return null;
         string? id;
 #if MACCATALYST
-        if (item.Kind == "file" && item.Bytes > Reader.CoreClient.CoreClient.MaxImportBytes
-            && Path.GetExtension(item.Name).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
-            id = await ImportLargePdfAsync(item, chooseLanguage);
+        if (item.Kind == "file" && Path.GetExtension(item.Name).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+            id = await ImportPdfForReadingAsync(item, chooseLanguage);
         else
 #endif
         {
@@ -122,5 +121,12 @@ public partial class LibraryPage
         return id;
     }
 
-    private Task RemoveShareItemAsync(ShareInboxItem item) => Task.Run(() => ShareInbox.Remove(item));
+    private async Task RemoveShareItemAsync(ShareInboxItem item)
+    {
+#if MACCATALYST
+        if (item.Kind == "file" && Path.GetExtension(item.Name).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+            await AppState.Session.DiscardIntakeAsync(item.Id);
+#endif
+        await Task.Run(() => ShareInbox.Remove(item));
+    }
 }

@@ -16,6 +16,10 @@ internal sealed class OriginalPage : ContentPage
     private readonly Button wordCard = new() { Text = "Картка слова" };
     private readonly Func<int, Task<PhotoPreview>> loadPage;
     private readonly Func<TextSelection, Task> showWord;
+    private readonly Func<int, CancellationToken, Func<Task>, Task>? recognizeWindow;
+    private readonly Grid editor;
+    private CancellationTokenSource? pageOcr;
+    private bool visible;
     private OcrLine[] lines;
     private readonly ReaderSession session;
     private readonly string documentId;
@@ -38,17 +42,20 @@ internal sealed class OriginalPage : ContentPage
 
     internal OriginalPage(string filename, int pageCount, int initialPage, bool isPdf,
         Func<int, Task<PhotoPreview>> loadPage, string documentId, ReaderSession session, OcrLine[] lines,
-        TextSelection? selection, Func<TextSelection, Task> showWord)
+        TextSelection? selection, Func<TextSelection, Task> showWord,
+        Func<int, CancellationToken, Func<Task>, Task>? recognizeWindow = null)
     {
         this.loadPage = loadPage;
         this.showWord = showWord;
+        this.recognizeWindow = recognizeWindow;
         this.lines = lines;
         this.documentId = documentId;
         this.session = session;
         this.pageCount = pageCount;
         focus = selection is not null ? (selection.StartUtf16, selection.StartUtf16 + selection.LengthUtf16)
             : SentenceRange();
-        pageIndex = lines.FirstOrDefault(line => Overlaps(line.SourceSpan, focus))?.Page ?? initialPage;
+        pageIndex = recognizeWindow is not null && selection is null ? initialPage
+            : lines.FirstOrDefault(line => Overlaps(line.SourceSpan, focus))?.Page ?? initialPage;
         Title = isPdf ? "Вихідний PDF" : "Вихідна фотографія";
         SemanticProperties.SetDescription(image, filename);
         SemanticProperties.SetDescription(previous, "Попередня сторінка");
@@ -81,7 +88,7 @@ internal sealed class OriginalPage : ContentPage
         suggest.Clicked += async (_, _) => await CorrectAsync(LineAction.Suggest);
         reset.Clicked += async (_, _) => await CorrectAsync(LineAction.Reset);
         var editButtons = new HorizontalStackLayout { Spacing = 8, Children = { suggest, edit, reset } };
-        var editor = new Grid { ColumnSpacing = 8, ColumnDefinitions = new ColumnDefinitionCollection
+        editor = new Grid { ColumnSpacing = 8, ColumnDefinitions = new ColumnDefinitionCollection
         {
             new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Auto),
         }};
@@ -120,12 +127,22 @@ internal sealed class OriginalPage : ContentPage
     protected override async void OnAppearing()
     {
         base.OnAppearing();
+        visible = true;
         if (image.Source is null) await LoadAsync(pageIndex);
+        else QueuePageOcr(pageIndex);
+    }
+
+    protected override void OnDisappearing()
+    {
+        visible = false;
+        pageOcr?.Cancel();
+        base.OnDisappearing();
     }
 
     private async Task LoadAsync(int index)
     {
         if (loading || editing || leavingOriginal || index < 0 || index >= pageCount) return;
+        pageOcr?.Cancel();
         loading = true;
         previous.IsEnabled = next.IsEnabled = false;
         status.Text = "Завантаження сторінки…";
@@ -145,6 +162,7 @@ internal sealed class OriginalPage : ContentPage
             UpdateOverlay();
             RebuildLineChoices();
             status.Text = pageCount == 1 ? "" : $"{pageIndex + 1} / {pageCount}";
+            QueuePageOcr(index);
         }
         catch (Exception error) { status.Text = error.Message; }
         finally
@@ -153,6 +171,48 @@ internal sealed class OriginalPage : ContentPage
             previous.IsEnabled = pageIndex > 0;
             next.IsEnabled = pageIndex + 1 < pageCount;
             UpdateEditButtons();
+        }
+    }
+
+    private void QueuePageOcr(int index)
+    {
+        if (!visible || recognizeWindow is null) return;
+        pageOcr?.Cancel();
+        var run = new CancellationTokenSource();
+        pageOcr = run;
+        _ = RecognizeWindowAsync(index, run);
+    }
+
+    private async Task RecognizeWindowAsync(int index, CancellationTokenSource run)
+    {
+        try
+        {
+            await recognizeWindow!(index, run.Token, async () =>
+            {
+                if (!visible || run.IsCancellationRequested || session.Busy) return;
+                await session.RefreshAsync();
+                if (!visible || run.IsCancellationRequested || pageIndex != index ||
+                    session.Document is not { } current || current.Id != documentId)
+                    return;
+                lines = current.OcrLines ?? [];
+                activeWord = null;
+                focus = SentenceRange();
+                toggle.IsVisible = editor.IsVisible = editStatus.IsVisible = lines.Length > 0;
+                wordCard.IsVisible = lines.Any(line => line.Words is { Length: > 0 });
+                UpdateOverlay();
+                RebuildLineChoices();
+                UpdateEditButtons();
+            });
+        }
+        catch (OperationCanceledException) when (run.IsCancellationRequested) {}
+        catch (Exception error)
+        {
+            if (visible && !run.IsCancellationRequested) status.Text = error.Message;
+        }
+        finally
+        {
+            if (pageOcr == run) pageOcr = null;
+            run.Dispose();
         }
     }
 

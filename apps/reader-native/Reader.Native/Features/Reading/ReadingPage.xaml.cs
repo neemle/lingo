@@ -84,11 +84,17 @@ public partial class ReadingPage : ContentPage
         speechPreferencesReady = true;
         RefreshSpeechResume();
         RefreshVoices(force: true);
+#if MACCATALYST
+        QueueReaderPdfOcr();
+#endif
     }
 
     protected override void OnDisappearing()
     {
         readingPageActive = false;
+#if MACCATALYST
+        StopReaderPdfOcr();
+#endif
         CancelScheduledTranslation();
         EndReadingHistory(keepVisit: showingMeanings);
         StopSpeech();
@@ -499,6 +505,8 @@ public partial class ReadingPage : ContentPage
             string name;
             int total;
             Func<int, Task<PhotoPreview>> preview;
+            Func<int, CancellationToken, Func<Task>, Task>? recognizeWindow = null;
+            int? savedPage = null;
 #if MACCATALYST
             var originalFile = isPdf ? await session.OriginalFileAsync(document.Id) : null;
             if (originalFile is not null)
@@ -507,6 +515,12 @@ public partial class ReadingPage : ContentPage
                 name = originalFile.Name;
                 total = await PdfScan.PageCountAsync(originalFile.Path);
                 preview = page => PdfScan.PreviewAsync(originalFile.Path, page);
+                if (document.OcrPdfPages is not null)
+                {
+                    recognizeWindow = (page, token, onCached) =>
+                        PdfPageOcr.RecognizeWindowAsync(session, document, originalFile.Path, page, token, onCached);
+                    if (selection is null) savedPage = await session.PdfReadingPageAsync(document.Id);
+                }
             }
             else
 #endif
@@ -519,7 +533,7 @@ public partial class ReadingPage : ContentPage
                 preview = page => isPdf ? PdfScan.PreviewAsync(bytes, page) : PhotoOcr.PreviewAsync(bytes);
             }
             if (session.Document is not { } current || current.Id != document.Id || !readingPageActive) return;
-            var initial = Math.Clamp(session.OriginalPageIndex(), 0, total - 1);
+            var initial = Math.Clamp(savedPage ?? session.OriginalPageIndex(), 0, total - 1);
             await Navigation.PushAsync(new OriginalPage(name, total, initial, isPdf, preview,
                 document.Id, session, current.OcrLines ?? [], selection, selected =>
                 {
@@ -529,7 +543,7 @@ public partial class ReadingPage : ContentPage
                         !active.Text.AsSpan(selected.StartUtf16, selected.LengthUtf16).SequenceEqual(selected.Text))
                         return Task.CompletedTask;
                     return ShowWordAsync(selected);
-                }));
+                }, recognizeWindow));
         }
         catch (Exception error) { await DisplayAlertAsync("Оригінал", error.Message, "Гаразд"); }
     }
@@ -537,16 +551,25 @@ public partial class ReadingPage : ContentPage
     private async void PreviousClicked(object? sender, EventArgs args)
     {
         StopSpeech(); await AppState.Session.MoveAsync(-1);
+#if MACCATALYST
+        QueueReaderPdfOcr();
+#endif
     }
     private async void NextClicked(object? sender, EventArgs args)
     {
         StopSpeech(); await AppState.Session.MoveAsync(1);
+#if MACCATALYST
+        QueueReaderPdfOcr();
+#endif
     }
     private async void SentenceChanged(object? sender, EventArgs args)
     {
         if (SentencePicker.SelectedIndex < 0 || AppState.Session.Busy ||
             SentencePicker.SelectedIndex == AppState.Session.Document?.Position) return;
         StopSpeech(); await AppState.Session.SelectSentenceAsync(SentencePicker.SelectedIndex);
+#if MACCATALYST
+        QueueReaderPdfOcr();
+#endif
     }
 
     private void SpeechPreferencesChanged(object? sender, EventArgs args)

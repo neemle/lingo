@@ -100,6 +100,31 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
             return (client.Snapshot(), id);
         });
 
+    public Task<IntakeItem> StagePdfIntakeAsync(Guid requestId, string name, string path) =>
+        Task.Run(() => client.StagePdfIntake(requestId, name, path));
+
+    public Task<IntakeFile> IntakeFileAsync(string id) => Task.Run(() => client.IntakeFile(id));
+
+    public Task CompletePdfIntakeAsync(string id, string language, string[] pageTexts) => RunAsync(() =>
+    {
+        var result = client.CompletePdfIntake(id, language, pageTexts);
+        return (client.Snapshot(), result.DocumentId ?? throw new InvalidDataException("Імпорт PDF не підтверджено."));
+    });
+
+    public Task DiscardIntakeAsync(Guid id) => Task.Run(() => client.DiscardIntake(id));
+
+    public Task<int?> PdfReadingPageAsync(string id) => Task.Run(() => client.PdfReadingPage(id));
+
+    public Task SetPdfReadingPageAsync(string id, int page) => Task.Run(() => client.SetPdfReadingPage(id, page));
+
+    public Task<PdfOcrRequest?> ClaimPdfOcrPageAsync(string id) => Task.Run(() => client.ClaimPdfOcrPage(id));
+
+    public Task CachePdfOcrPageAsync(string id, PdfOcrRequest claim, OcrLine[] lines) =>
+        Task.Run(() => client.CachePdfOcrPage(id, claim, lines));
+
+    public Task ReleasePdfOcrPageAsync(string id, PdfOcrRequest claim, bool canceled) =>
+        Task.Run(() => client.ReleasePdfOcrPage(id, claim, canceled));
+
     public Task ImportScannedPdfAsync(string name, byte[] bytes, string language, OcrLine[] lines, int pages) =>
         RunAsync(() =>
         {

@@ -20,6 +20,8 @@ pub enum Command {
     Snapshot,
     StageIntake {
         input: reader_core::intake::IntakeInput,
+        #[serde(rename = "requestId")]
+        request_id: Option<String>,
     },
     ListIntake {
         #[serde(default)]
@@ -129,6 +131,8 @@ pub enum Command {
         id: String,
         page: u16,
         token: String,
+        #[serde(default)]
+        canceled: bool,
     },
     CachePdfOcrPage {
         id: String,

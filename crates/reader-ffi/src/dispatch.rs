@@ -102,8 +102,12 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         }
         Command::PdfOcrNeededPages { id, center } => value(store.pdf_ocr_needed_pages(&id, center)),
         Command::ClaimPdfOcrPage { id } => value(store.claim_pdf_ocr_page(&id)),
-        Command::RetryPdfOcrPage { id, page, token } => {
-            value(store.retry_pdf_ocr_page(&id, page, &token))
+        Command::RetryPdfOcrPage { id, page, token, canceled } => {
+            if canceled {
+                value(store.cancel_pdf_ocr_page(&id, page, &token))
+            } else {
+                value(store.retry_pdf_ocr_page(&id, page, &token))
+            }
         }
         Command::CachePdfOcrPage { id, page, lines, token } => {
             value(store.complete_pdf_ocr_page(&id, page, lines, token.as_deref()))

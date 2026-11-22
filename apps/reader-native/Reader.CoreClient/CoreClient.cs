@@ -46,6 +46,47 @@ public sealed class CoreClient : IDisposable
     public OriginalFile? OriginalFile(string id) =>
         Call<OriginalFile?>(new { version = 1, operation = "original_file", id });
 
+    public IntakeItem StagePdfIntake(Guid requestId, string name, string path) =>
+        CallIndependent<IntakeItem>(new
+        {
+            version = 1, operation = "stage_intake", requestId,
+            input = new { kind = "pdfFile", name, path },
+        });
+
+    public IntakeFile IntakeFile(string id) =>
+        Call<IntakeFile>(new { version = 1, operation = "intake_payload", id });
+
+    public IntakeItem CompletePdfIntake(string id, string language, string[] pageTexts) =>
+        CallIndependent<IntakeItem>(new
+        {
+            version = 1, operation = "complete_intake", id,
+            result = new { kind = "pdf", language, pageTexts },
+        });
+
+    public bool DiscardIntake(Guid id) =>
+        CallIndependent<bool>(new { version = 1, operation = "discard_intake", id });
+
+    public int? PdfReadingPage(string id) =>
+        Call<int?>(new { version = 1, operation = "pdf_reading_page", id });
+
+    public void SetPdfReadingPage(string id, int page) =>
+        Call<JsonElement>(new { version = 1, operation = "set_pdf_reading_page", id, page });
+
+    public PdfOcrRequest? ClaimPdfOcrPage(string id) =>
+        Call<PdfOcrRequest?>(new { version = 1, operation = "claim_pdf_ocr_page", id });
+
+    public void CachePdfOcrPage(string id, PdfOcrRequest claim, OcrLine[] lines) =>
+        Call<JsonElement>(new
+        {
+            version = 1, operation = "cache_pdf_ocr_page", id, page = claim.Page, token = claim.Token, lines,
+        });
+
+    public void ReleasePdfOcrPage(string id, PdfOcrRequest claim, bool canceled) =>
+        Call<bool>(new
+        {
+            version = 1, operation = "retry_pdf_ocr_page", id, page = claim.Page, token = claim.Token, canceled,
+        });
+
     public Document ImportPdfFile(string name, string path, string language, string[] pageTexts, OcrLine[] lines) =>
         CallIndependent<Document>(new { version = 1, operation = "import_pdf_file", name, path, language, pageTexts, lines });
     public Document Import(string name, ReadOnlySpan<byte> bytes, string language, string? sourceUrl = null)

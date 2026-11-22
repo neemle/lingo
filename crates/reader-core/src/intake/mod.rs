@@ -87,7 +87,7 @@ pub enum IntakePayload {
 impl Store {
     pub fn stage_intake(&mut self, input: IntakeInput) -> Result<IntakeItem> {
         let prepared = prepare(&self.file_original_directory, input)?;
-        self.insert_intake(prepared)
+        self.insert_intake(prepared, None)
     }
 
     pub fn complete_intake(&mut self, id: &str, result: IntakeImport) -> Result<IntakeItem> {

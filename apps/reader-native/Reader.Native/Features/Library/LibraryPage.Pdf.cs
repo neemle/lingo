@@ -75,13 +75,16 @@ public partial class LibraryPage
     }
 
 #if MACCATALYST
-    private async Task<string?> ImportLargePdfAsync(ShareInboxItem item, bool chooseLanguage)
+    private async Task<string?> ImportPdfForReadingAsync(ShareInboxItem item, bool chooseLanguage)
     {
         var session = AppState.Session;
         await session.WaitUntilIdleAsync();
-        var source = ShareInbox.PayloadPath(item);
+        ImportStatus.Text = "Зберігаємо оригінал PDF…";
+        var intake = await session.StagePdfIntakeAsync(item.Id, item.Name, ShareInbox.PayloadPath(item));
+        if (intake.DocumentId is { } completed) return completed;
+        var source = await session.IntakeFileAsync(intake.Id);
         ImportStatus.Text = "Читаємо текстовий шар PDF…";
-        var pageTexts = await PdfScan.ExtractTextAsync(source);
+        var pageTexts = await PdfScan.ExtractTextAsync(source.Path);
         var language = await ResolveImportLanguageAsync(item, chooseLanguage, () =>
         {
             if (item.ScanPdf) return Task.FromResult<string?>(null);
@@ -91,20 +94,9 @@ public partial class LibraryPage
         });
         if (language is null) return null;
 
-        var missing = Enumerable.Range(0, pageTexts.Length)
-            .Where(page => string.IsNullOrWhiteSpace(pageTexts[page])).ToArray();
-        if (missing.Length > 0)
-        {
-            ImportStatus.Text = "Готуємо локальну копію для розпізнавання…";
-            var checkpoint = await Task.Run(() => PdfOcrCheckpoint.Create(item.Name, source, language, pageTexts.Length, missing));
-            await RemoveShareItemAsync(item);
-            ImportStatus.Text = "";
-            return await RunPdfOcrAsync(checkpoint, pageTexts: pageTexts);
-        }
-
         await session.WaitUntilIdleAsync();
-        ImportStatus.Text = "Зберігаємо оригінал PDF…";
-        await session.ImportPdfFileAsync(item.Name, source, language, pageTexts, []);
+        ImportStatus.Text = "Зберігаємо документ…";
+        await session.CompletePdfIntakeAsync(intake.Id, language, pageTexts);
         if (session.Error.Length != 0) throw new InvalidDataException(session.Error);
         return session.Document?.Id;
     }
