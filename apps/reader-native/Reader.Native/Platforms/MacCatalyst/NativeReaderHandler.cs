@@ -33,6 +33,8 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
     protected override UITextView CreatePlatformView() => new()
     {
         Editable = false, Selectable = true, ScrollEnabled = true,
+        SpellCheckingType = UITextSpellCheckingType.No,
+        AutocorrectionType = UITextAutocorrectionType.No,
         BackgroundColor = UIColor.FromRGB(253, 253, 249),
         TextContainerInset = new UIEdgeInsets(14, 16, 16, 16),
         AccessibilityLabel = "Текст документа. Виділіть слово або торкніться його.",
