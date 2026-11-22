@@ -145,6 +145,18 @@ pub enum Command {
         id: String,
         position: usize,
     },
+    ReadingCursor {
+        id: String,
+    },
+    SetReadingCursor {
+        id: String,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        #[serde(rename = "revisionId")]
+        revision_id: String,
+        #[serde(rename = "startUtf16")]
+        start_utf16: Option<usize>,
+    },
     SpeechResume {
         id: String,
     },

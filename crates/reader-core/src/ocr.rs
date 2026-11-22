@@ -449,16 +449,20 @@ pub(crate) fn update_transcript_with_page_starts(
         resume.sentence_id = map_id(&resume.sentence_id).ok()?;
         Some(resume)
     });
-    let position = document
+    let matched_position = document
         .sentences
         .get(document.position)
-        .and_then(matching_index)
+        .and_then(matching_index);
+    let position = matched_position
         .unwrap_or(document.position.min(sentences.len().saturating_sub(1)));
 
     document.bookmarks = bookmarks;
     document.notes = notes;
     document.speech_text_overrides = speech_text_overrides;
     document.reviewed_translations = translations;
+    if matched_position.is_none() {
+        document.reading_token_utf16 = None;
+    }
     document.position = position;
     document.text = text;
     document.sentences = sentences;

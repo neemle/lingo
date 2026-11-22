@@ -42,7 +42,62 @@ pub struct TokenOcrAnchor {
     pub line_confidence: Option<f64>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadingCursor {
+    pub revision_id: String,
+    pub sentence_id: String,
+    pub position: usize,
+    pub token_id: Option<String>,
+    pub sentence_start_utf16: Option<usize>,
+}
+
 impl Store {
+    pub fn reading_cursor(&self, id: &str) -> Result<Option<ReadingCursor>> {
+        let document = self.token_document(id)?;
+        let Some(sentence) = document.sentences.get(document.position) else {
+            return Ok(None);
+        };
+        let revision = revision_id(&document)?;
+        Ok(Some(reading_cursor(
+            revision,
+            sentence,
+            document.position,
+            validated_cursor_offset(&document),
+        )))
+    }
+
+    pub fn set_reading_cursor(
+        &mut self,
+        id: &str,
+        sentence_id: &str,
+        expected_revision: &str,
+        start_utf16: Option<usize>,
+    ) -> Result<ReadingCursor> {
+        let mut cursor = None;
+        self.edit_document(id, |document, _| {
+            let revision = revision_id(document)?;
+            if revision != expected_revision {
+                return Err("Текст документа змінився. Оновіть позицію читання.".into());
+            }
+            let position = document
+                .sentences
+                .iter()
+                .position(|sentence| sentence.id == sentence_id)
+                .ok_or("Речення не знайдено")?;
+            let sentence = &document.sentences[position];
+            if start_utf16.is_some_and(|offset| word_at(&sentence.text, offset).is_none()) {
+                return Err("Токен речення не знайдено".into());
+            }
+            cursor = Some(reading_cursor(revision, sentence, position, start_utf16));
+            let changed = document.position != position || document.reading_token_utf16 != start_utf16;
+            document.position = position;
+            document.reading_token_utf16 = start_utf16;
+            Ok(changed)
+        })?;
+        cursor.ok_or_else(|| "Не вдалося оновити позицію читання".into())
+    }
+
     pub fn sentence_tokens(
         &self,
         id: &str,
@@ -132,9 +187,7 @@ impl Store {
             return Err("Текст документа змінився. Оновіть токени речення.".into());
         }
         let sentence = find_sentence(&document, sentence_id)?;
-        let word = word_parts(&sentence.text)
-            .take_while(|(_, offset, _)| *offset <= start_utf16)
-            .find_map(|(_, offset, word)| (offset == start_utf16).then_some(word))
+        let word = word_at(&sentence.text, start_utf16)
             .ok_or("Токен речення не знайдено")?;
         let context = knowledge::WordContext::new(sentence.text.clone(), start_utf16);
         let mut lookup = self.lookup_word(&document.language, word, Some(&context))?;
@@ -170,6 +223,33 @@ fn find_sentence<'a>(document: &'a Document, id: &str) -> Result<&'a Sentence> {
 
 fn token_id(revision: &str, sentence: &str, start_utf16: usize) -> String {
     format!("{revision}:{sentence}:{start_utf16}")
+}
+
+fn reading_cursor(
+    revision: &str,
+    sentence: &Sentence,
+    position: usize,
+    offset: Option<usize>,
+) -> ReadingCursor {
+    ReadingCursor {
+        revision_id: revision.to_owned(),
+        sentence_id: sentence.id.clone(),
+        position,
+        token_id: offset.map(|offset| token_id(revision, &sentence.id, offset)),
+        sentence_start_utf16: offset,
+    }
+}
+
+pub(crate) fn validated_cursor_offset(document: &Document) -> Option<usize> {
+    let offset = document.reading_token_utf16?;
+    let sentence = document.sentences.get(document.position)?;
+    word_at(&sentence.text, offset).map(|_| offset)
+}
+
+fn word_at(text: &str, start_utf16: usize) -> Option<&str> {
+    word_parts(text)
+        .take_while(|(_, offset, _)| *offset <= start_utf16)
+        .find_map(|(_, offset, word)| (offset == start_utf16).then_some(word))
 }
 
 fn word_parts(text: &str) -> impl Iterator<Item = (usize, usize, &str)> {

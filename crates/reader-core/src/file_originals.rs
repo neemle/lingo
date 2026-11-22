@@ -244,6 +244,7 @@ impl Store {
             current_revision_id: None,
             blocks: extracted.blocks,
             position: 0,
+            reading_token_utf16: None,
             speech_resume: None,
             bookmarks: Vec::new(),
             notes: Default::default(),

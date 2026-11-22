@@ -71,6 +71,8 @@ pub struct Document {
     pub sentences: Vec<Sentence>,
     pub position: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reading_token_utf16: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speech_resume: Option<SpeechResume>,
     #[serde(default)]
     pub bookmarks: Vec<String>,
@@ -733,6 +735,7 @@ impl Store {
             current_revision_id: None,
             blocks,
             position: 0,
+            reading_token_utf16: None,
             speech_resume: None,
             bookmarks: Vec::new(),
             notes: BTreeMap::new(),
@@ -937,6 +940,9 @@ impl Store {
                 return Err("Некоректна позиція".into());
             }
             let changed = document.position != position;
+            if changed {
+                document.reading_token_utf16 = None;
+            }
             document.position = position;
             Ok(changed)
         })

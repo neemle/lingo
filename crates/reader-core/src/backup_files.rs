@@ -111,7 +111,7 @@ pub(crate) fn merge_existing_document(
             &ids,
         );
     }
-    if local.position == 0 {
+    if local.position == 0 && local.reading_token_utf16.is_none() {
         if let Some(position) = incoming
             .sentences
             .get(incoming.position)
@@ -119,6 +119,7 @@ pub(crate) fn merge_existing_document(
             .and_then(|id| local.sentences.iter().position(|sentence| sentence.id == *id))
         {
             local.position = position;
+            local.reading_token_utf16 = incoming.reading_token_utf16;
         }
     }
     let speech_resume = speech_resume.and_then(|mut resume| {
@@ -494,6 +495,9 @@ pub(crate) fn prepare_layout(
         ocr::update_transcript(&mut d, parsed.text)?;
         true
     } else {
+        if d.text != parsed.text {
+            d.reading_token_utf16 = None;
+        }
         d.text = parsed.text;
         d.sentences = segment(&d.text, &d.id);
         false
@@ -513,6 +517,7 @@ pub(crate) fn prepare_layout(
             &mut d, parser, created_at,
         ));
     }
+    d.reading_token_utf16 = crate::document_tokens::validated_cursor_offset(&d);
     d.position = d.position.min(d.sentences.len().saturating_sub(1));
     d.speech_resume = d
         .speech_resume
