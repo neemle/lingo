@@ -439,8 +439,10 @@ impl StoreWorker {
             .translate_paragraph_with_priority(document_id, sentence_id, target, background)
     }
 
-    pub fn run_translation_window(self, document_id: &str) -> Result<Option<ParagraphTranslation>> {
-        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?.run_translation_window(document_id)
+    pub fn run_translation_window(
+        self, document_id: &str, expected: Option<&crate::translation_queue::TranslationWindowAddress>,
+    ) -> Result<Option<ParagraphTranslation>> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?.run_translation_window(document_id, expected)
     }
 
     pub fn cached_translation(

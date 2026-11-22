@@ -355,6 +355,18 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public Task<SpeechAudio> SynthesizeSpeechAsync(string id, string sentenceId, uint speaker, float rate, string engine) =>
         Task.Run(() => client.SynthesizeSpeech(id, sentenceId, speaker, rate, engine));
 
+    public Task PrefetchSpeechAsync(string id, string sentenceId, uint speaker, float rate, string engine,
+        CancellationToken cancellation) =>
+        Task.Run(() => client.PrefetchSpeech(id, sentenceId, speaker, rate, engine), cancellation);
+
+    public Task<ParagraphTranslation?> PrefetchTranslationWindowAsync(
+        string id, string sentenceId, string revisionId, string target) =>
+        Task.Run(() =>
+        {
+            client.ScheduleTranslationWindow(id, sentenceId, revisionId, target);
+            return client.RunTranslationWindow(id, sentenceId, revisionId, target);
+        });
+
     public Task<MachineTranslation?> TranslateSentenceAsync(string id, string sentenceId, string target) =>
         Task.Run(() => client.TranslateSentence(id, sentenceId, target));
 

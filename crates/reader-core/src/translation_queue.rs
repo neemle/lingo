@@ -1,9 +1,17 @@
 use crate::{translation::ParagraphTranslation, valid_language, Document, Result, Store};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 const LEASE_SECONDS: i64 = 300;
 const RETRY_SECONDS: i64 = 15;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TranslationWindowAddress {
+    sentence_id: String,
+    revision_id: String,
+    target: String,
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,7 +98,9 @@ impl Store {
             .map_err(database_error)
     }
 
-    pub(crate) fn run_translation_window(&mut self, id: &str) -> Result<Option<ParagraphTranslation>> {
+    pub(crate) fn run_translation_window(
+        &mut self, id: &str, expected: Option<&TranslationWindowAddress>,
+    ) -> Result<Option<ParagraphTranslation>> {
         let tx = self.connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(database_error)?;
@@ -99,8 +109,14 @@ impl Store {
             "SELECT w.sentence_id,w.target,d.body FROM translation_windows w
              JOIN documents d ON d.id=w.document_id WHERE w.document_id=?1 AND w.available_at<=?2
                AND w.revision_id=json_extract(d.body,'$.currentRevisionId')
-               AND w.source=json_extract(d.body,'$.language')",
-            params![id, now],
+               AND w.source=json_extract(d.body,'$.language')
+               AND (?3 IS NULL OR (w.sentence_id=?3 AND w.revision_id=?4 AND w.target=?5))",
+            params![
+                id, now,
+                expected.map(|request| request.sentence_id.as_str()),
+                expected.map(|request| request.revision_id.as_str()),
+                expected.map(|request| request.target.as_str()),
+            ],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()

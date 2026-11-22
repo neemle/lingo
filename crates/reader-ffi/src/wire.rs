@@ -394,6 +394,7 @@ pub enum Command {
     },
     RunTranslationWindow {
         id: String,
+        expected: Option<reader_core::translation_queue::TranslationWindowAddress>,
     },
     CancelTranslationWindow {
         id: String,

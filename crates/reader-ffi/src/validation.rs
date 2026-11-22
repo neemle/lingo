@@ -194,7 +194,7 @@ fn validate(command: &Command) -> Result<()> {
         Command::DeleteDocument { id }
         | Command::ReadingCursor { id }
         | Command::PendingTranslationWindow { id }
-        | Command::RunTranslationWindow { id }
+        | Command::RunTranslationWindow { id, .. }
         | Command::CancelTranslationWindow { id }
         | Command::PdfReadingPage { id }
         | Command::SetPdfReadingPage { id, .. }

@@ -265,6 +265,18 @@ public sealed class CoreClient : IDisposable
         CallIndependent<string>(new { version = 1, operation = "prepare_ukrainian_speech", text });
     public SpeechAudio SynthesizeSpeech(string id, string sentenceId, uint speaker, float rate, string engine = "piper-uk") =>
         CallIndependent<SpeechAudio>(new { version = 1, operation = "synthesize_speech", id, sentenceId, engine, speaker, rate });
+    public void PrefetchSpeech(string id, string sentenceId, uint speaker, float rate, string engine) =>
+        CallIndependent<JsonElement>(new { version = 1, operation = "prefetch_speech", id, sentenceId, engine, speaker, rate });
+
+    public void ScheduleTranslationWindow(string id, string sentenceId, string revisionId, string target) =>
+        Call<JsonElement>(new { version = 1, operation = "schedule_translation_window", id, sentenceId, revisionId, target });
+
+    public ParagraphTranslation? RunTranslationWindow(string id, string sentenceId, string revisionId, string target) =>
+        CallIndependent<ParagraphTranslation?>(new
+        {
+            version = 1, operation = "run_translation_window", id,
+            expected = new { sentenceId, revisionId, target },
+        });
 
     public MachineTranslation? TranslateSentence(string id, string sentenceId, string target) =>
         CallIndependent<MachineTranslation?>(new { version = 1, operation = "translate_sentence", id, sentenceId, target });

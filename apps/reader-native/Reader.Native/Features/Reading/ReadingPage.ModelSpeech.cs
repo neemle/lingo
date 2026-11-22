@@ -12,7 +12,6 @@ public partial class ReadingPage
     private sealed record VoiceChoice(string Id, string Label, string? Engine = null, uint Speaker = 0, string? Revision = null);
     private sealed record SpeechSource(string Document, string Sentence, string Language, string SourceText, string SpeechText);
     private sealed record ClipKey(SpeechSource Source, string Engine, uint Speaker, float Rate);
-    private sealed record PendingClip(ClipKey Key, Task<SpeechAudio> Audio);
 
     private VoiceChoice[] availableVoices = [];
     private string? voiceLanguage;
@@ -20,7 +19,6 @@ public partial class ReadingPage
     private int voiceCatalogRevision;
     private readonly SemaphoreSlim modelInference = new(1);
     private CancellationTokenSource? modelSpeechRun;
-    private PendingClip? nextClip;
     private SpeechSource? activeSpeechSource;
     private Action? checkpointModelSpeech;
 
@@ -141,9 +139,7 @@ public partial class ReadingPage
     {
         var source = SpeechSourceFor(document, sentence);
         var key = new ClipKey(source, voice.Engine!, voice.Speaker, ratePercent / 100f);
-        var previous = nextClip;
-        nextClip = null;
-        var audio = previous?.Key == key ? previous.Audio : PrepareAudio(session, key, token);
+        var audio = PrepareAudio(session, key, token);
         IDispatcherTimer? timer = null;
         var playbackStartMs = 0;
         var lastCheckpointMs = startAtMs;
@@ -173,11 +169,8 @@ public partial class ReadingPage
                 timer.Start();
                 PauseSpeech.IsEnabled = true;
                 SpeechStatus.Text = "Озвучення поточного речення…";
-                if (ContinueSpeech.IsChecked && document.Position + 1 < document.Sentences.Length)
-                {
-                    var next = key with { Source = SpeechSourceFor(document, document.Sentences[document.Position + 1]) };
-                    nextClip = new(next, PrepareAudio(session, next, token));
-                }
+                if (ContinueSpeech.IsChecked)
+                    _ = PrefetchNextAudioAsync(session, key, token);
             });
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { return null; }
@@ -198,6 +191,20 @@ public partial class ReadingPage
         return task;
     }
 
+    private static async Task PrefetchNextAudioAsync(ReaderSession session, ClipKey current, CancellationToken token)
+    {
+        try
+        {
+            await session.PrefetchSpeechAsync(current.Source.Document, current.Source.Sentence,
+                current.Speaker, current.Rate, current.Engine, token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) {}
+        catch (Exception error)
+        {
+            System.Diagnostics.Debug.WriteLine(error.Message);
+        }
+    }
+
     private async Task<SpeechAudio> GenerateAudioAsync(ReaderSession session, ClipKey key, CancellationToken token)
     {
         await modelInference.WaitAsync(token);
@@ -213,7 +220,6 @@ public partial class ReadingPage
     {
         var previous = modelSpeechRun;
         modelSpeechRun = null;
-        nextClip = null;
         previous?.Cancel();
     }
 }

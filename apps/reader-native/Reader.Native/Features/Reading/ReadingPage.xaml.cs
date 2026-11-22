@@ -67,6 +67,7 @@ public partial class ReadingPage : ContentPage
         readingPageActive = true;
         autoTranslate = Preferences.Get(AutoTranslatePreference, false);
         lastAutoTranslation = null;
+        lastPrefetchOrigin = null;
         UpdateAutoTranslateButton();
         BindingContext = AppState.Session;
         AppState.Session.PropertyChanged += SessionChanged;

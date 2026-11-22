@@ -206,20 +206,23 @@ public partial class ReadingPage
     private async Task PrefetchTranslationAsync(TranslationKey origin, PrefetchCandidate candidate)
     {
         var session = AppState.Session;
-        if (session.Document is not { } before) return;
+        if (session.Document is not { CurrentRevisionId: { } revision } before) return;
         var key = candidate.Key;
         prefetching = true;
         lastPrefetchOrigin = origin;
-        if (prefetchAttempts.Count >= 2 * TranslationWindowLimit) prefetchAttempts.Dequeue();
-        prefetchAttempts.Enqueue((key, candidate.Pivot));
         try
         {
-            var result = await session.TranslateParagraphAsync(key.Document, key.Sentence, key.Target, background: true);
-            if (!readingPageActive || !autoTranslate || !TranslationVisible || TargetCode != key.Target ||
+            var result = await session.PrefetchTranslationWindowAsync(key.Document, key.Sentence, revision, key.Target);
+            if (result is null) return;
+            if (prefetchAttempts.Count >= 2 * TranslationWindowLimit) prefetchAttempts.Dequeue();
+            prefetchAttempts.Enqueue((key, candidate.Pivot));
+            if (!readingPageActive || !autoTranslate || !TranslationVisible || ActiveTranslationKey() != origin ||
+                TargetCode != key.Target ||
                 readiness is not { Ready: true } route || readinessPair != (key.Source, key.Target) ||
                 route.PivotLanguage != candidate.Pivot || result.PivotLanguage != candidate.Pivot ||
                 session.Document is not { } current || current.Id != key.Document || current.Language != key.Source ||
-                current.Text != before.Text || current.Sentences.ElementAtOrDefault(candidate.Position)?.Id != key.Sentence ||
+                current.CurrentRevisionId != revision || current.Text != before.Text ||
+                current.Sentences.ElementAtOrDefault(candidate.Position)?.Id != key.Sentence ||
                 HasMachineAt(current, key.Target, candidate.Position)) return;
 
             var scope = new TranslationScope(key.Document, key.Source, key.Target);
@@ -229,7 +232,11 @@ public partial class ReadingPage
             if (!translating && window.UnitFor(current.Position) is not null) UpdateTranslation();
         }
         catch (Exception) { }
-        finally { prefetching = false; }
+        finally
+        {
+            prefetching = false;
+            if (readingPageActive && ActiveTranslationKey() != origin) ScheduleAutoTranslation();
+        }
     }
 
     private sealed record AlignedUnit(int First, Sentence[] Sources, string? MachineText, bool JoinedLines,
