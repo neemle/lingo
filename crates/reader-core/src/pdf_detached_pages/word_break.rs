@@ -3,7 +3,7 @@ use crate::{
     document_tokens::word_parts, ocr, pdf_reading_position, translation::word_hyphen,
     Document, Result, Sentence, Store,
 };
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use unicode_segmentation::UnicodeSegmentation;
 use std::{borrow::Cow, ops::Range};
 
@@ -41,6 +41,69 @@ pub(crate) fn neighboring_fragments(
         _ => None,
     };
     Ok((previous, next))
+}
+
+// A word that crosses pages belongs to the page where it starts. Only use
+// adjacent detached pages, which use this same ownership rule when played.
+pub(super) fn narration(
+    db: &Connection, id: &str, page: u16, sentences: &[Sentence], position: usize,
+) -> Result<Option<String>> {
+    let source = &sentences[position].text;
+    let mut text = Cow::Borrowed(source.as_str());
+    if position == 0 && source.starts_with(char::is_lowercase) {
+        if let Some(previous) = page.checked_sub(1) {
+            if let Some(prefix) = narration_edge(db, id, previous, Neighbor::Previous, source.len())? {
+                if let Some(consumed) = continuation(source, word_hyphen(&prefix)) {
+                    text = Cow::Borrowed(source[consumed.len()..].trim_start());
+                }
+            }
+        }
+    }
+    if position == sentences.len() - 1 {
+        if let (Some(next), Some(prefix)) = (page.checked_add(1), word_hyphen(&text)) {
+            if let Some(suffix) = narration_edge(db, id, next, Neighbor::Next, source.len())? {
+                if let Some(added) = continuation(&suffix, Some(prefix)) {
+                    text = Cow::Owned(format!("{prefix}{added}"));
+                }
+            }
+        }
+    }
+    Ok((text != source.as_str()).then(|| text.into_owned()))
+}
+
+fn narration_edge(
+    db: &Connection, id: &str, page: u16, side: Neighbor, current_bytes: usize,
+) -> Result<Option<String>> {
+    let Some((cached, _)) = read(db, id, page)? else {
+        return Ok(None);
+    };
+    let budget = MAX_BOUNDARY_BYTES.saturating_sub(current_bytes);
+    let Some((start, text)) = edge(&cached, side, budget) else {
+        return Ok(None);
+    };
+    let offset = cached[..start].encode_utf16().count();
+    if annotations::speech_text(db, id, page, offset)?.is_some()
+        || crate::validate_speech_text(text).is_err()
+    {
+        return Ok(None);
+    }
+    Ok(Some(text.to_owned()))
+}
+
+fn continuation<'a>(text: &'a str, prefix: Option<&str>) -> Option<&'a str> {
+    let prefix = prefix?;
+    let (_, _, first_word) = word_parts(text).next()?;
+    if !text.starts_with(first_word) || !first_word.starts_with(char::is_lowercase)
+        || crate::validate_speech_text(prefix).is_err()
+        || prefix.len() + text.len() > 1000
+    {
+        return None;
+    }
+    let end = first_word.len();
+    let punctuation: usize = text[end..].chars()
+        .take_while(|c| matches!(c, '.' | ',' | '!' | '?' | ':' | ';' | '…' | '»' | ')' | '”'))
+        .map(char::len_utf8).sum();
+    Some(&text[..end + punctuation])
 }
 
 pub(crate) struct JoinedBoundary {

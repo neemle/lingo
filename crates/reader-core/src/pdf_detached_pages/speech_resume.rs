@@ -1,4 +1,4 @@
-use super::{annotations, database_error};
+use super::{database_error, narration_text};
 use crate::{Result, Sentence, SpeechResume, Store};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 pub(super) struct ArchivedSpeechResume {
     pub(super) position: usize,
     resume: SpeechResume,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    boundary_text: Option<String>,
 }
 
 impl ArchivedSpeechResume {
@@ -30,6 +32,26 @@ impl ArchivedSpeechResume {
         resume.sentence_id.clone_from(&sentence.id);
         Some(resume)
     }
+
+    pub(super) fn for_archive<'a>(
+        &self,
+        sentences: &[Sentence],
+        language: &str,
+        speech_text: impl FnOnce(usize) -> Option<&'a str>,
+    ) -> Option<SpeechResume> {
+        if let Some(text) = &self.boundary_text {
+            if text.trim().is_empty() || self.resume.model.is_none()
+                || crate::validate_speech_text(text).is_err()
+            {
+                return None;
+            }
+        }
+        let position = sentences.get(self.position)?.start_utf16;
+        if let Some(text) = speech_text(position) {
+            return self.for_sentences(sentences, language, |_| Some(text));
+        }
+        self.for_sentences(sentences, language, |_| self.boundary_text.as_deref())
+    }
 }
 
 impl Store {
@@ -50,14 +72,15 @@ impl Store {
                 .ok_or("Текст сторінки PDF недоступний.")?;
             let position = current.saved.min(current.sentences.len() - 1);
             let sentence = &current.sentences[position];
-            let speech = annotations::speech_text(&tx, id, page, sentence.start_utf16)?;
+            let (speech, boundary_text) = narration_text(&tx, id, page, &current.sentences, position)?;
             if sentence.id != sentence_id
                 || resume.sentence_id != sentence_id
-                || !valid(&resume, sentence, &current.language, speech.as_deref())
+                || boundary_text.as_deref() == Some("")
+                || !valid(&resume, sentence, &current.language, speech.as_deref().or(boundary_text.as_deref()))
             {
                 return Err("Позиція озвучення не відповідає поточному реченню PDF.".into());
             }
-            write(&tx, id, page, &ArchivedSpeechResume { position, resume })?;
+            write(&tx, id, page, &ArchivedSpeechResume { position, resume, boundary_text })?;
         } else {
             remove(&tx, id, page, sentence_id)?;
         }
@@ -120,7 +143,7 @@ pub(super) fn rebind<'a>(
     language: &str,
     speech_text: impl FnOnce(usize) -> Option<&'a str>,
 ) -> Option<ArchivedSpeechResume> {
-    let resume = checkpoint.for_sentences(sentences, language, speech_text)?;
+    let resume = checkpoint.for_archive(sentences, language, speech_text)?;
     Some(ArchivedSpeechResume {
         resume,
         ..checkpoint

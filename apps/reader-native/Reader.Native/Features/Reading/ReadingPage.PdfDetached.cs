@@ -490,6 +490,15 @@ public partial class ReadingPage
             while (ReferenceEquals(detachedAudioCancellation, cancellation) &&
                 detachedAddress == address && detachedSentence is { } sentence)
             {
+                if (sentence.Position == 0 || sentence.Position + 1 == sentence.Total)
+                {
+                    var latest = await AppState.Session.DetachedPdfSentenceAsync(
+                        address.Document, address.Page, position: null, sentenceId: sentence.Sentence.Id).WaitAsync(token);
+                    if (!ReferenceEquals(detachedAudioCancellation, cancellation) ||
+                        detachedAddress != address || !ReferenceEquals(detachedSentence, sentence) ||
+                        latest is null || latest.Position != sentence.Position) break;
+                    detachedSentence = sentence = latest;
+                }
                 var completed = await PlayDetachedSentenceAsync(address, sentence,
                     resumePlayback ? sentence.SpeechResume : null, token);
                 resumePlayback = false;
@@ -506,6 +515,11 @@ public partial class ReadingPage
                 await LoadDetachedSentenceAsync(address, next, automatic: true);
                 if (detachedSentence?.Position != next) break;
             }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) {}
+        catch (Exception error)
+        {
+            if (ReferenceEquals(detachedAudioCancellation, cancellation)) DetachedSentenceStatus.Text = error.Message;
         }
         finally
         {
@@ -526,7 +540,7 @@ public partial class ReadingPage
         UpdateDetachedControls();
         var session = AppState.Session;
         var sentence = current.Sentence;
-        var speechText = current.SpeechText ?? sentence.Text;
+        var speechText = current.SpeechText ?? current.NarrationText ?? sentence.Text;
         var hash = SpeechProgress.TextHash(sentence, speechText);
         SpeechResume? pending = null;
         IDispatcherTimer? timer = null;
@@ -552,6 +566,11 @@ public partial class ReadingPage
 
         try
         {
+            if (speechText.Length == 0)
+            {
+                Save(null);
+                return true;
+            }
             await loadingVoices.WaitAsync(token);
             if (run != detachedAudioRun) return false;
             var voice = SelectedVoice();
@@ -666,7 +685,7 @@ public partial class ReadingPage
     private bool CanResumeDetachedSpeech()
     {
         if (detachedSentence is not { SpeechResume: { } resume } current ||
-            !SpeechProgress.Matches(current.Sentence, resume, current.SpeechText)) return false;
+            !SpeechProgress.Matches(current.Sentence, resume, current.SpeechText ?? current.NarrationText)) return false;
 
         var voice = SelectedVoice();
         return voice?.Engine is not null

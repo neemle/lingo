@@ -33,6 +33,7 @@ const VERSION: u32 = 2;
 const PAGE_CACHE_VERSION: u32 = 3;
 const MODEL_HINT_VERSION: u32 = 4;
 const INTAKE_VERSION: u32 = 5;
+const BOUNDARY_SPEECH_VERSION: u32 = 6;
 const MANIFEST: &str = "manifest.json";
 const MAX_DOCUMENTS: usize = 32_768;
 const MAX_ARCHIVE_ENTRIES: usize = u16::MAX as usize - 1;
@@ -129,6 +130,9 @@ pub(crate) fn write(store: &Store, output: &mut File) -> Result<()> {
     )?;
     if !backup.pending_intake.is_empty() {
         backup.version = INTAKE_VERSION;
+    }
+    if pdf_detached_pages::has_boundary_speech_resume(&tx)? {
+        backup.version = BOUNDARY_SPEECH_VERSION;
     }
     validate_manifest(&backup)?;
     for id in &backup.pending_intake {
@@ -368,7 +372,7 @@ fn archive_entry_count(backup: &Manifest) -> usize {
 }
 
 fn validate_manifest(backup: &Manifest) -> Result<()> {
-    if !matches!(backup.version, VERSION | PAGE_CACHE_VERSION | MODEL_HINT_VERSION | INTAKE_VERSION) {
+    if !matches!(backup.version, VERSION | PAGE_CACHE_VERSION | MODEL_HINT_VERSION | INTAKE_VERSION | BOUNDARY_SPEECH_VERSION) {
         return Err("Невідома версія резервної копії.".into());
     }
     if archive_entry_count(backup) > MAX_ARCHIVE_ENTRIES {
@@ -380,7 +384,9 @@ fn validate_manifest(backup: &Manifest) -> Result<()> {
     {
         return Err("Некоректний опис архіву збережених підказок.".into());
     }
-    if (backup.version == INTAKE_VERSION) == backup.pending_intake.is_empty() {
+    if (backup.version == INTAKE_VERSION && backup.pending_intake.is_empty())
+        || (backup.version < INTAKE_VERSION && !backup.pending_intake.is_empty())
+    {
         return Err("Некоректний опис черги імпорту в резервній копії.".into());
     }
     intake_archive::validate_ids(&backup.pending_intake)?;

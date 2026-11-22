@@ -22,6 +22,7 @@ public sealed record DetachedPdfSentence(Sentence Sentence, int Position, int To
     public string? RevisionId { get; init; }
     public SpeechResume? SpeechResume { get; init; }
     public string? SpeechText { get; init; }
+    public string? NarrationText { get; init; }
 }
 
 public sealed record DetachedPdfOcrPage(string Revision, OcrLine[] Lines);
