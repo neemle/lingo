@@ -784,7 +784,9 @@ impl Store {
                 |row| row.get(0),
             )
             .map_err(|error| error.to_string())?;
-        serde_json::from_str(&body).map_err(|error| error.to_string())
+        let mut document = serde_json::from_str(&body).map_err(|error| error.to_string())?;
+        crate::document_layout::reflow_ocr_paragraphs(&mut document);
+        Ok(document)
     }
 
     pub fn translation_readiness(

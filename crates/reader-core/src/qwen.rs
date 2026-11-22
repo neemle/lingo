@@ -24,6 +24,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod passage_translation;
+pub use passage_translation::{PassageTranslation, TranslatePassageJob};
+
 pub(crate) const HINT_GENERATION_MODEL: &str = "qwen-2b";
 
 // The CPU uses reclaimable file-backed weights. Budget its anonymous context and

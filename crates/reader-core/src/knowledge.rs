@@ -357,6 +357,20 @@ impl Store {
         self.prepare_knowledge_package(language, source)?.run()
     }
 
+    pub(crate) fn repair_pdf_ocr(&self, language: &str, lines: &mut [crate::ocr::OcrLine]) -> Result<()> {
+        let index = self.open_knowledge_index(language)?;
+        let Some((_, db, version)) = versioned_index(&index)? else { return Ok(()); };
+        if version < 2 { return Ok(()); }
+        for line in lines.iter_mut().filter(|line| line.confidence.is_some_and(|value| value < 0.92)) {
+            if let Some(revised) = ocr_suggestions::revise_line(db, language, &line.text)? {
+                if revised.len() <= 8192 {
+                    line.correction = Some(revised);
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn has_dictionary(&self, language: &str) -> bool {
         lexicon::available(&self.knowledge_directory, language)
     }

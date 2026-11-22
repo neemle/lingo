@@ -232,6 +232,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::ExplainWord { .. }
         | Command::ExplainDetachedWord { .. }
         | Command::ReviewSentence { .. }
+        | Command::TranslateWithModel { .. }
         | Command::SemanticVocabulary { .. }
         | Command::InstallLexicalPackage { .. }
         | Command::ModelTransfer { .. }

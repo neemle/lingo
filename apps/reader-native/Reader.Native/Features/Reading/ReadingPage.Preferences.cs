@@ -15,7 +15,9 @@ public partial class ReadingPage
     private const string AutoTranslatePreference = "reader.translation.follow";
     private const string TargetPreferencePrefix = "reader.translation.target.";
     private const string VoicePreferencePrefix = "reader.speech.voice.";
-    private static readonly int[] DefaultSpeechRates = [75, 100, 125];
+    private const int DefaultSpeechRate = 85;
+    private static readonly int[] LegacySpeechRates = [75, 100, 125];
+    private static readonly int[] DefaultSpeechRates = [65, 75, DefaultSpeechRate, 100, 115, 125];
 
     private ReaderPreferences readerPreferences = new();
     private int[] speechRates = DefaultSpeechRates;
@@ -56,7 +58,7 @@ public partial class ReadingPage
                     Layout = Enum.IsDefined(layout) ? LayoutName(layout) : null,
                     AutoTranslate = legacy.ContainsKey(AutoTranslatePreference) ? legacy.Get(AutoTranslatePreference, false) : null,
                     ContinuousSpeech = legacy.ContainsKey(ContinuousPreference) ? legacy.Get(ContinuousPreference, false) : null,
-                    SpeechRatePercent = rate >= 0 && rate < DefaultSpeechRates.Length ? DefaultSpeechRates[rate] : null,
+                    SpeechRatePercent = rate >= 0 && rate < LegacySpeechRates.Length ? LegacySpeechRates[rate] : null,
                     TranslationTargets = targets,
                     SpeechVoices = voices,
                 });
@@ -79,7 +81,7 @@ public partial class ReadingPage
 
     private void ApplySpeechPreferences()
     {
-        var rate = readerPreferences.SpeechRatePercent ?? 100;
+        var rate = readerPreferences.SpeechRatePercent ?? DefaultSpeechRate;
         speechRates = DefaultSpeechRates.Contains(rate)
             ? DefaultSpeechRates : [.. DefaultSpeechRates.Append(rate).Order()];
         Rate.ItemsSource = speechRates.Select(value =>

@@ -270,6 +270,7 @@ fn validate(command: &Command) -> Result<()> {
         | Command::LookupDetachedPdfWord { id, .. }
         | Command::TranslateDictionaryGloss { id, .. }
         | Command::TranslateSelection { id, .. }
+        | Command::TranslateWithModel { id, .. }
         | Command::SaveDetachedPdfWord { id, .. }
         | Command::DetachedPdfOcr { id, .. }
         | Command::CorrectDetachedPdfOcr { id, .. }

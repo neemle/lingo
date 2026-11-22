@@ -557,6 +557,8 @@ impl Store {
                     .is_some_and(|lines| lines.iter().any(|line| line.source_span.is_none()))
                 {
                     ocr::refresh_provenance(&mut document);
+                } else {
+                    document_layout::reflow_ocr_paragraphs(&mut document);
                 }
                 document.speech_resume = resume
                     .as_deref()

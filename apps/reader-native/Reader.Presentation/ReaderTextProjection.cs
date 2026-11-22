@@ -15,9 +15,10 @@ public sealed class ReaderTextProjection
     private readonly int sourceLength;
     private readonly Marker[] markers;
 
-    public ReaderTextProjection(string source, IReadOnlyList<DocumentBlock> blocks)
+    public ReaderTextProjection(string source, IReadOnlyList<DocumentBlock> blocks, bool reflowPdf = false)
     {
         sourceLength = source.Length;
+        if (reflowPdf) source = JoinPdfLines(source, blocks);
         StringBuilder? display = null;
         var insertions = new List<Marker>();
         var previousStart = -1;
@@ -41,6 +42,23 @@ public sealed class ReaderTextProjection
         markers = insertions.ToArray();
         if (display is not null) display.Append(source.AsSpan(copied));
         Text = display?.ToString() ?? source;
+    }
+
+    private static string JoinPdfLines(string source, IReadOnlyList<DocumentBlock> blocks)
+    {
+        char[]? reflowed = null;
+        foreach (var block in blocks)
+        {
+            if (block.StartUtf16 < 0 || block.EndUtf16 > source.Length || block.EndUtf16 <= block.StartUtf16) continue;
+            foreach (var index in Enumerable.Range(block.StartUtf16, block.EndUtf16 - block.StartUtf16))
+            {
+                if (source[index] is not ('\r' or '\n')) continue;
+                reflowed ??= source.ToCharArray();
+                reflowed[index] = index == block.StartUtf16 + 1 && char.IsUpper(source[block.StartUtf16]) &&
+                    index + 1 < block.EndUtf16 && char.IsUpper(source[index + 1]) ? '\u200b' : ' ';
+            }
+        }
+        return reflowed is null ? source : new string(reflowed);
     }
 
     public string Text { get; }

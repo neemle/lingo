@@ -41,7 +41,7 @@ public partial class ReadingPage
             {
                 voices.AddRange(LocalSpeech.VoicesForLanguage(language).Select(voice =>
                     new VoiceChoice(voice.Id, $"{voice.Name} ({voice.Language})")));
-                if (language == "uk" && voices.Count > 0)
+                if (voices.Count > 0)
                     voices.Insert(0, new VoiceChoice(SystemDefaultVoice, "Системний вибір"));
             }
             catch (Exception problem) { error = $"Не вдалося отримати системні голоси. {problem.Message}"; }
@@ -70,7 +70,7 @@ public partial class ReadingPage
         try
         {
             availableVoices = voices.ToArray();
-            var automaticLabel = language == "uk" ? "Автоматично" : "Системний вибір";
+            const string automaticLabel = "Автоматично";
             VoicePicker.ItemsSource = DetachedVoicePicker.ItemsSource =
                 new[] { automaticLabel }.Concat(voices.Select(voice => voice.Label)).ToArray();
             var saved = language is not null && readerPreferences.SpeechVoices.TryGetValue(language, out var stored)
@@ -131,7 +131,8 @@ public partial class ReadingPage
         ? availableVoices[VoicePicker.SelectedIndex - 1] : null;
 
     private VoiceChoice? SelectedVoice() =>
-        PickedVoice() ?? (voiceLanguage == "uk" ? availableVoices.FirstOrDefault(voice => voice.Engine == "piper-uk") : null);
+        PickedVoice() ?? availableVoices.FirstOrDefault(voice =>
+            voice.Engine == (voiceLanguage == "uk" ? "piper-uk" : "supertonic-3"));
 
     private static int? ModelResumePosition(SpeechResume? resume, VoiceChoice? voice, string language, int ratePercent) =>
         resume?.Model is { } model && voice?.Revision is { } revision && model.Revision == revision &&

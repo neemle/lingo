@@ -8,6 +8,9 @@ public sealed class NativeReaderView : View
     private SourceRanges? sourceRanges;
     public static readonly BindableProperty TextProperty = BindableProperty.Create(
         nameof(Text), typeof(string), typeof(NativeReaderView), "");
+    public static readonly BindableProperty ReflowPdfProperty = BindableProperty.Create(
+        nameof(ReflowPdf), typeof(bool), typeof(NativeReaderView), false);
+    public bool ReflowPdf { get => (bool)GetValue(ReflowPdfProperty); set => SetValue(ReflowPdfProperty, value); }
     public static readonly BindableProperty BlocksProperty = BindableProperty.Create(
         nameof(Blocks), typeof(DocumentBlock[]), typeof(NativeReaderView));
     public static readonly BindableProperty HighlightStartProperty = BindableProperty.Create(

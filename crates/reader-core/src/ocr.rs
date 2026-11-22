@@ -177,6 +177,7 @@ pub(crate) fn refresh_provenance(document: &mut crate::Document) {
         return;
     };
     refresh_line_provenance(&document.text, lines, document.pdf_page_starts.as_deref());
+    crate::document_layout::reflow_ocr_paragraphs(document);
 }
 
 pub(crate) fn refresh_line_provenance(

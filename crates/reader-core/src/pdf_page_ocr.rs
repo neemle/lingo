@@ -423,7 +423,7 @@ impl Store {
     }
 
     pub fn complete_pdf_page(
-        &mut self, id: &str, page: u16, lines: Vec<ocr::OcrLine>, token: Option<&str>,
+        &mut self, id: &str, page: u16, mut lines: Vec<ocr::OcrLine>, token: Option<&str>,
         text_layer: Option<String>,
     ) -> Result<Document> {
         if token.is_some_and(|token| !self.owns_pdf_ocr_claim(id, page, token)) {
@@ -443,8 +443,24 @@ impl Store {
             return Err("Результат OCR містить рядки іншої сторінки або виправлення".into());
         }
 
+        let corrected_language = if !lines.is_empty() {
+            let language: String = self.connection.query_row(
+                "SELECT json_extract(body,'$.language') FROM documents WHERE id=?1", [id], |row| row.get(0),
+            ).map_err(database_error)?;
+            ocr::recognized_lines(&lines, page.checked_add(1).ok_or("Некоректна сторінка PDF.")?)?;
+            if self.repair_pdf_ocr(&language, &mut lines).is_err() {
+                lines.iter_mut().for_each(|line| line.correction = None);
+            }
+            Some(language)
+        } else {
+            None
+        };
+
         let mut updated = None;
         self.edit_document(id, |document, tx| {
+            if corrected_language.as_deref().is_some_and(|language| language != document.language) {
+                lines.iter_mut().for_each(|line| line.correction = None);
+            }
             if let Some(token) = token {
                 let current: bool = tx
                     .query_row(

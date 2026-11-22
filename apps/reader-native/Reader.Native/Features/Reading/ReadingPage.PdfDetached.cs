@@ -728,6 +728,7 @@ public partial class ReadingPage
         DetachedOpenTranslationPackages.IsVisible = DetachedReadiness.IsVisible && readiness is { Missing.Length: > 0 };
         DetachedEditTranslation.IsEnabled = available && !changingDetachedAnnotation && TargetCode is not null;
         DetachedEditTranslation.Text = ReviewedDetachedTranslation() is null ? "Свій переклад…" : "Редагувати переклад…";
+        UpdateModelTranslation();
         DetachedShareTranslation.IsVisible = available && !translatingDetachedSentence && CurrentDetachedTranslation() is not null;
         var playing = speakingDetachedSentence && !detachedPaused;
         DetachedSpeak.Text = playing ? "Ⅱ" : "▶";

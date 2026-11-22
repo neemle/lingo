@@ -368,6 +368,13 @@ pub enum Command {
         #[serde(rename = "documentId")]
         document_id: Option<String>,
     },
+    TranslateWithModel {
+        id: String,
+        page: Option<u16>,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        target: String,
+    },
     ReviewSentence {
         model: String,
         document: String,

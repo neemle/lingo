@@ -13,6 +13,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
     private string? renderedText;
     private ReaderTextProjection? projection;
     private DocumentBlock[] renderedBlocks = [];
+    private bool renderedReflow;
     private int renderedFontSize;
     private Reader.Presentation.TextSelection? highlightedSentence;
     private Reader.Presentation.TextSelection? spokenWord;
@@ -21,6 +22,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
         {
             [nameof(NativeReaderView.Text)] = MapText,
             [nameof(NativeReaderView.Blocks)] = MapText,
+            [nameof(NativeReaderView.ReflowPdf)] = MapText,
             [nameof(NativeReaderView.HighlightStart)] = MapText,
             [nameof(NativeReaderView.HighlightLength)] = MapText,
             [nameof(NativeReaderView.SpokenWord)] = MapSpokenWord,
@@ -121,11 +123,13 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
         var newText = handler.renderedText != source;
         var newFont = handler.renderedFontSize != view.ReadingFontSize;
         var blocks = view.Blocks;
+        var reflowChanged = handler.renderedReflow != view.ReflowPdf;
+        handler.renderedReflow = view.ReflowPdf;
         var newBlocks = !ReferenceEquals(handler.renderedBlocks, blocks) &&
             !handler.renderedBlocks.AsSpan().SequenceEqual(blocks);
         handler.renderedBlocks = blocks;
         var sentence = view.HighlightedSpan();
-        var newLayout = newText || newBlocks;
+        var newLayout = newText || newBlocks || reflowChanged;
         var newSentence = newLayout || sentence != handler.highlightedSentence;
         if (!newSentence && !newFont && !newBlocks) return;
 
@@ -138,7 +142,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
                     ?? UIFont.SystemFontOfSize(view.ReadingFontSize);
                 if (newLayout)
                 {
-                    handler.projection = new ReaderTextProjection(source, blocks);
+                    handler.projection = new ReaderTextProjection(source, blocks, view.ReflowPdf);
                     using var paragraph = new NSMutableParagraphStyle { LineSpacing = 6 };
                     using var text = new NSAttributedString(handler.projection.Text, new UIStringAttributes
                     {

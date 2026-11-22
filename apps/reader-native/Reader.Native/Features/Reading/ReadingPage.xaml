@@ -68,9 +68,18 @@
     <Label Text="{Binding Document.Title, TargetNullValue='Читання'}" Style="{StaticResource SerifTitle}"
      FontSize="40" LineBreakMode="TailTruncation" MaxLines="1" />
    </VerticalStackLayout>
-   <Button Grid.Column="1" Text="Оригінал" Style="{StaticResource OutlineButton}" VerticalOptions="Center"
-    IsVisible="{Binding CanViewOriginal}" Clicked="ViewOriginalClicked"
-    SemanticProperties.Description="Переглянути оригінал документа" />
+   <HorizontalStackLayout Grid.Column="1" Spacing="8" VerticalOptions="Center">
+    <Button x:Name="InlinePdfToggle" Text="Сторінка PDF" Style="{StaticResource OutlineButton}" IsVisible="False"
+     Clicked="ToggleInlinePdfClicked" SemanticProperties.Description="Перемкнути PDF і розпізнаний текст">
+     <Button.Triggers>
+      <DataTrigger TargetType="Button" Binding="{Binding Document.Format}" Value="pdf">
+       <Setter Property="IsVisible" Value="True" />
+      </DataTrigger>
+     </Button.Triggers>
+    </Button>
+    <Button Text="Оригінал" Style="{StaticResource OutlineButton}" IsVisible="{Binding CanViewOriginal}"
+     Clicked="ViewOriginalClicked" SemanticProperties.Description="Переглянути оригінал документа" />
+   </HorizontalStackLayout>
    <Grid Grid.Row="1" Grid.ColumnSpan="2" x:Name="PdfPageControls" IsVisible="False" Margin="0,8,0,0"
     ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
     <Button x:Name="PreviousPdfPage" Text="‹" Style="{StaticResource PlayerButton}" Clicked="PreviousPdfPageClicked"
@@ -132,7 +141,15 @@
       <controls:NativeReaderView Grid.Row="1" x:Name="SourceText" Text="{Binding Document.Text}" Blocks="{Binding Document.Blocks}"
        BackgroundColor="{StaticResource Panel}"
        SourceSelected="SourceSelected"
-       SemanticProperties.Description="Оригінальний текст. Виділіть слово для картки." />
+       SemanticProperties.Description="Оригінальний текст. Виділіть слово для картки.">
+       <controls:NativeReaderView.Triggers>
+        <DataTrigger TargetType="controls:NativeReaderView" Binding="{Binding Document.Format}" Value="pdf">
+         <Setter Property="ReflowPdf" Value="True" />
+        </DataTrigger>
+       </controls:NativeReaderView.Triggers>
+      </controls:NativeReaderView>
+      <Image Grid.Row="1" x:Name="InlinePdfImage" IsVisible="False" Aspect="AspectFit"
+       SemanticProperties.Description="Оригінальна сторінка PDF" />
      </Grid>
 
      <Grid Grid.Column="1" x:Name="TranslationPane" RowDefinitions="Auto,*,Auto" BackgroundColor="{StaticResource Panel}">
@@ -153,6 +170,11 @@
            FontSize="20" LineHeight="1.4" TextColor="#655F4D" />
          </Grid>
         </Border>
+        <Grid x:Name="ModelTranslationResult" ColumnDefinitions="Auto,*" ColumnSpacing="9" IsVisible="False">
+         <ActivityIndicator x:Name="ModelTranslationBusy" IsVisible="False" Color="{StaticResource Sage}"
+          WidthRequest="20" HeightRequest="20" VerticalOptions="Start" />
+         <Label Grid.Column="1" x:Name="ModelTranslationText" FontFamily="Georgia" FontSize="19" />
+        </Grid>
         <VerticalStackLayout x:Name="ParagraphPreview" Spacing="8" IsVisible="False" />
        </VerticalStackLayout>
       </ScrollView>
@@ -163,6 +185,8 @@
         Style="{StaticResource PlayerButton}" Clicked="TranslateOfflineClicked" />
        <Button x:Name="TranslateSentence" Text="Перекласти речення" Margin="0,3,5,0"
         Style="{StaticResource PlayerButton}" Clicked="TranslateSentenceClicked" />
+       <Button x:Name="TranslateWithModel" Text="Перекласти моделлю" Margin="0,3,5,0"
+        Style="{StaticResource PlayerButton}" Clicked="TranslateWithModelClicked" />
        <Button x:Name="ShareTranslationPair" Text="Поширити пару" Margin="0,3,5,0"
         Style="{StaticResource PlayerButton}" Clicked="ShareTranslationPairClicked" IsVisible="False"
         SemanticProperties.Description="Поширити оригінал і показаний переклад" />
@@ -177,11 +201,21 @@
      <Grid x:Name="DetachedPdfReader" IsVisible="False" RowDefinitions="*,Auto,Auto,Auto" RowSpacing="4">
       <controls:NativeReaderView x:Name="DetachedPdfText" BackgroundColor="{StaticResource Panel}"
        SourceSelected="DetachedPdfSelected" SemanticProperties.Description="Текст поточної сторінки PDF" />
+      <Image x:Name="DetachedInlinePdfImage" IsVisible="False" Aspect="AspectFit"
+       SemanticProperties.Description="Оригінальна сторінка PDF" />
       <ScrollView Grid.Row="1" MaximumHeightRequest="120" Margin="14,0" x:Name="DetachedTranslationPane" IsVisible="False">
        <Label x:Name="DetachedTranslation" FontFamily="Georgia" FontSize="19" LineHeight="1.4" />
       </ScrollView>
-      <Label Grid.Row="2" x:Name="DetachedReadiness" IsVisible="False" Margin="14,0"
-       Style="{StaticResource ReaderMeta}" LineBreakMode="WordWrap" />
+      <VerticalStackLayout Grid.Row="2" Margin="14,0">
+       <Label x:Name="DetachedReadiness" IsVisible="False" Style="{StaticResource ReaderMeta}" LineBreakMode="WordWrap" />
+       <Grid x:Name="DetachedModelTranslationResult" ColumnDefinitions="Auto,*" ColumnSpacing="9" IsVisible="False">
+        <ActivityIndicator x:Name="DetachedModelTranslationBusy" IsVisible="False" Color="{StaticResource Sage}"
+         WidthRequest="20" HeightRequest="20" VerticalOptions="Start" />
+        <ScrollView Grid.Column="1" MaximumHeightRequest="180">
+         <Label x:Name="DetachedModelTranslationText" FontFamily="Georgia" FontSize="18" />
+        </ScrollView>
+       </Grid>
+      </VerticalStackLayout>
       <FlexLayout Grid.Row="3" Padding="8,5" Wrap="Wrap" AlignItems="Center">
        <Button x:Name="DetachedPrevious" Text="‹" Clicked="PreviousDetachedSentenceClicked" Style="{StaticResource PlayerButton}"
         SemanticProperties.Description="Попереднє речення сторінки" />
@@ -197,6 +231,8 @@
         SemanticProperties.Description="Наступне речення сторінки" />
        <Button x:Name="DetachedTranslate" Text="Перекласти" Clicked="DetachedTranslateClicked"
         Margin="5,0" Style="{StaticResource PlayerButton}" />
+       <Button x:Name="DetachedTranslateWithModel" Text="Перекласти моделлю"
+        Style="{StaticResource PlayerButton}" Clicked="TranslateWithModelClicked" Margin="0,0,5,0" />
        <Button x:Name="DetachedAutoTranslate" Text="Автопереклад" Clicked="AutoTranslateClicked"
         Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedOpenTranslationPackages" Text="Мовні пакети" IsVisible="False"

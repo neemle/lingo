@@ -181,6 +181,31 @@ fn spacing_hint(
     }
 }
 
+/// Only change a missing form if exactly one candidate is observed beside both source neighbors.
+pub(super) fn revise_line(db: &Connection, language: &str, text: &str) -> Result<Option<String>> {
+    let words: Vec<_> = word_parts(text).take(120).collect();
+    let mut attested = db.prepare_cached("SELECT EXISTS(SELECT 1 FROM forms WHERE term=?1)")
+        .map_err(|error| error.to_string())?;
+    let mut edited = None;
+    for neighbors in words.windows(3).rev() {
+        let [(_, _, left), (offset, _, word), (_, _, right)] = neighbors else { continue; };
+        if !word.starts_with(char::is_lowercase) || word.chars().take(4).count() < 4 ||
+            attested_form(&mut attested, word)? {
+            continue;
+        }
+
+        let key = word_key(word);
+        let previous = neighbor_hash(&word_key(left));
+        let next = neighbor_hash(&word_key(right));
+        let suggestions = suggest_spelling(db, language, word, &key, Some(previous), Some(next))?;
+        if let Some(best) = suggestions.first().filter(|candidate| candidate.high_confidence) {
+            edited.get_or_insert_with(|| text.to_owned())
+                .replace_range(*offset..*offset + word.len(), &best.replacement);
+        }
+    }
+    Ok(edited)
+}
+
 pub(super) fn suggest_spelling(
     db: &Connection,
     language: &str,

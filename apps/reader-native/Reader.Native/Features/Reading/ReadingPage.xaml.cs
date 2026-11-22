@@ -115,6 +115,7 @@ public partial class ReadingPage : ContentPage
         if (args.PropertyName == nameof(ReaderSession.Snapshot))
         {
             SyncReaderPdf();
+            if (inlinePdf) _ = ShowInlinePdfAsync();
             SyncAnalysisPrefetch();
             SyncReadingHistory();
             UpdateHighlight();
@@ -312,6 +313,7 @@ public partial class ReadingPage : ContentPage
         OpenTranslationPackages.IsVisible = active && readiness is { Missing.Length: > 0 };
         if (DetachedPdfReader.IsVisible) UpdateDetachedControls();
         TargetLanguage.IsEnabled = (active || DetachedPdfReader.IsVisible) && !session.Busy;
+        UpdateModelTranslation();
         UpdateSourceLocation(document, session.Sentence);
         UpdateParagraphPreview(document, window, unit);
         TrackTranslationScroll(key);
@@ -697,7 +699,7 @@ public partial class ReadingPage : ContentPage
     }
 
     private int SpeechRatePercent => Rate.SelectedIndex >= 0 && Rate.SelectedIndex < speechRates.Length
-        ? speechRates[Rate.SelectedIndex] : 100;
+        ? speechRates[Rate.SelectedIndex] : DefaultSpeechRate;
 
     private void RefreshSpeechResume()
     {

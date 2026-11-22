@@ -28,6 +28,7 @@ internal sealed class NativeSpeech
         using var utterance = new AVSpeechUtterance(text)
         {
             Voice = voice,
+            PostUtteranceDelay = 0.18,
             Rate = Math.Clamp(AVSpeechUtterance.DefaultSpeechRate * rate,
                 AVSpeechUtterance.MinimumSpeechRate, AVSpeechUtterance.MaximumSpeechRate),
         };

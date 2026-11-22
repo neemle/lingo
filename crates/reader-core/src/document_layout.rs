@@ -148,6 +148,46 @@ pub(crate) fn from_transcript(text: String, page_starts: Option<Vec<Option<usize
     }
 }
 
+/// Recover paragraph ranges from OCR geometry without changing the recognized text or its offsets.
+pub(crate) fn reflow_ocr_paragraphs(document: &mut Document) {
+    let Some(lines) = document.ocr_lines.as_deref().filter(|lines| document.format == "pdf" && !lines.is_empty())
+    else { return; };
+    let mut starts = std::collections::BTreeSet::new();
+    let mut ranges = Vec::new();
+    for page in lines.chunk_by(|left, right| left.page == right.page) {
+        if page.iter().any(|line| line.source_span.is_none()) { continue; }
+        let page_number = usize::from(page[0].page);
+        starts.insert(page_number);
+        let mut heights: Vec<f64> = page.iter().map(|line| line.height).collect();
+        heights.sort_by(f64::total_cmp);
+        let height = heights[heights.len() / 2];
+        let mut left_edges: Vec<f64> = page.iter().filter(|line| line.width >= 0.2).map(|line| line.x).collect();
+        left_edges.sort_by(f64::total_cmp);
+        let body_left = left_edges.get(left_edges.len() / 4).copied().unwrap_or(page[0].x);
+        let mut begin = page[0].source_span.expect("verified OCR span").start_utf8;
+        for pair in page.windows(2) {
+            let [previous, next] = pair else { continue; };
+            let close_lines = next.y - previous.y <= (height * 1.9).max(0.045);
+            let indented = next.x >= body_left + 0.027 && next.x >= previous.x + 0.025 &&
+                previous.reading_text().trim_end_matches(['»', '”', '"', ')']).trim_end()
+                    .ends_with(['.', '!', '?', ':', '…']);
+            let footer = next.y >= 0.90 && next.reading_text().chars().all(|ch| ch.is_ascii_digit() || ch.is_whitespace() || ch == '-');
+            if close_lines && !indented && !footer { continue; }
+            let end = previous.source_span.expect("verified OCR span").end_utf8;
+            ranges.push(BlockRange { offset: begin..end, page: Some(page_number), ..BlockRange::default() });
+            begin = next.source_span.expect("verified OCR span").start_utf8;
+        }
+        let end = page.last().and_then(|line| line.source_span).expect("verified OCR span").end_utf8;
+        ranges.push(BlockRange { offset: begin..end, page: Some(page_number), ..BlockRange::default() });
+    }
+
+    ranges.retain(|range| document.text.get(range.offset.clone()).is_some());
+    let blocks = materialize_blocks(&document.text, ranges);
+    document.blocks.retain(|block| block.page.is_none_or(|page| !starts.contains(&page)));
+    document.blocks.extend(blocks);
+    document.blocks.sort_by_key(|block| block.start_utf8);
+}
+
 pub(crate) fn from_ocr(
     text: String,
     lines: &[crate::ocr::OcrLine],
