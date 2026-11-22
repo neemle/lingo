@@ -649,7 +649,7 @@ public partial class ReadingPage : ContentPage
         var voice = SelectedVoice();
         var modelVoice = voice?.Engine is not null;
         var ratePercent = SpeechRatePercent;
-        speech.PreferredVoice = modelVoice ? null : voice?.Id;
+        speech.PreferredVoice = modelVoice || voice?.Id == SystemDefaultVoice ? null : voice?.Id;
         speech.Rate = ratePercent / 100f;
         var receivedCue = false;
         var systemUsesSpeechOverride = false;

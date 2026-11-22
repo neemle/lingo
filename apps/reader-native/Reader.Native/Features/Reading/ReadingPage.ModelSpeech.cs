@@ -7,6 +7,8 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage
 {
+    private const string SystemDefaultVoice = "@system";
+
     private sealed record VoiceChoice(string Id, string Label, string? Engine = null, uint Speaker = 0, string? Revision = null);
     private sealed record SpeechSource(string Document, string Sentence, string Language, string SourceText, string SpeechText);
     private sealed record ClipKey(SpeechSource Source, string Engine, uint Speaker, float Rate);
@@ -43,6 +45,8 @@ public partial class ReadingPage
             {
                 voices.AddRange(LocalSpeech.VoicesForLanguage(language).Select(voice =>
                     new VoiceChoice(voice.Id, $"{voice.Name} ({voice.Language})")));
+                if (language == "uk" && voices.Count > 0)
+                    voices.Insert(0, new VoiceChoice(SystemDefaultVoice, "Системний вибір"));
             }
             catch (Exception problem) { error = $"Не вдалося отримати системні голоси. {problem.Message}"; }
 
@@ -70,14 +74,15 @@ public partial class ReadingPage
         try
         {
             availableVoices = voices.ToArray();
-            VoicePicker.ItemsSource = new[] { "Системний вибір" }.Concat(voices.Select(voice => voice.Label)).ToArray();
+            var automaticLabel = language == "uk" ? "Автоматично" : "Системний вибір";
+            VoicePicker.ItemsSource = new[] { automaticLabel }.Concat(voices.Select(voice => voice.Label)).ToArray();
             var saved = language is null ? "" : Preferences.Get(VoicePreference(language), "");
             var chosen = Array.FindIndex(availableVoices, voice => voice.Id == saved);
             VoicePicker.SelectedIndex = chosen + 1;
             VoicePicker.IsEnabled = voices.Count > 0;
             SetVoiceStatus(error ?? (language is null ? ""
                 : voices.Count == 0 ? "Голос цієї мови відсутній. Локальні голоси можна завантажити в Налаштуваннях."
-                : chosen < 0 && saved.Length > 0 ? "Збережений голос недоступний. Використано системний вибір."
+                : chosen < 0 && saved.Length > 0 ? "Збережений голос недоступний. Використано автоматичний вибір."
                 : ModelVoiceStatus()));
         }
         catch (Exception problem)
@@ -100,15 +105,23 @@ public partial class ReadingPage
     {
         if (loadingSpeechPreferences || voiceLanguage is null || VoicePicker.SelectedIndex < 0) return;
         if (utteranceActive) StopSpeech();
-        Preferences.Set(VoicePreference(voiceLanguage), SelectedVoice()?.Id ?? "");
+        Preferences.Set(VoicePreference(voiceLanguage), PickedVoice()?.Id ?? "");
         SetVoiceStatus(ModelVoiceStatus());
         RefreshSpeechResume();
     }
 
-    private string ModelVoiceStatus() => SelectedVoice()?.Engine is null ? "" : "Локальний голос · підсвічування речення";
+    private string ModelVoiceStatus()
+    {
+        var voice = SelectedVoice();
+        if (voice?.Engine is not null) return $"{voice.Label} · підсвічування речення";
+        return voiceLanguage == "uk" ? "Системний голос може ігнорувати наголоси." : "";
+    }
 
-    private VoiceChoice? SelectedVoice() => VoicePicker.SelectedIndex > 0 && VoicePicker.SelectedIndex <= availableVoices.Length
+    private VoiceChoice? PickedVoice() => VoicePicker.SelectedIndex > 0 && VoicePicker.SelectedIndex <= availableVoices.Length
         ? availableVoices[VoicePicker.SelectedIndex - 1] : null;
+
+    private VoiceChoice? SelectedVoice() =>
+        PickedVoice() ?? (voiceLanguage == "uk" ? availableVoices.FirstOrDefault(voice => voice.Engine == "piper-uk") : null);
 
     private static int? ModelResumePosition(SpeechResume? resume, VoiceChoice? voice, string language, int ratePercent) =>
         resume?.Model is { } model && voice?.Revision is { } revision && model.Revision == revision &&
