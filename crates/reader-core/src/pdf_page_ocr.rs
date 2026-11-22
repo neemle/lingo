@@ -5,6 +5,7 @@ use crate::{
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
+use std::collections::BTreeSet;
 
 const OCR_LEASE_SECONDS: i64 = 120;
 const OCR_RETRY_DELAY_SECONDS: i64 = 30;
@@ -26,6 +27,7 @@ pub struct PdfReadPage {
     pub state: PdfReadPageState,
     pub text: String,
     pub span: Option<ocr::OcrSpan>,
+    pub refresh_pending: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -45,6 +47,7 @@ pub struct PdfOcrRequest {
     pub page: u16,
     pub token: String,
     pub expires_at: i64,
+    pub language: String,
 }
 
 pub(crate) fn initialize(db: &Connection) -> Result<()> {
@@ -86,10 +89,61 @@ fn needed_pages(
             pages
                 .get(usize::from(page))
                 .is_some_and(|text| text.trim().is_empty())
-                && completed.binary_search(&page).is_err()
-                && !has_ocr_lines(document, page)
+                && (should_refresh(document, page)
+                    || (completed.binary_search(&page).is_err() && !has_ocr_lines(document, page)))
         })
         .collect())
+}
+
+fn should_refresh(document: &Document, page: u16) -> bool {
+    if !document.pdf_ocr_refresh_pages.contains(&page) {
+        return false;
+    }
+    if document.ocr_lines.iter().flatten().any(|line| line.page == page && line.correction.is_some()) {
+        return false;
+    }
+    if document.bookmarks.is_empty() && document.notes.is_empty()
+        && document.speech_text_overrides.is_empty() && document.reviewed_translations.is_empty()
+    {
+        return true;
+    }
+    let Some((start, end)) = crate::pdf_reading_position::page_bounds(document, page) else {
+        return true;
+    };
+    !document.sentences.iter().any(|sentence| {
+        sentence.start_utf16 < end && sentence.end_utf16 > start
+            && (document.bookmarks.contains(&sentence.id)
+                || document.notes.contains_key(&sentence.id)
+                || document.speech_text_overrides.contains_key(&sentence.id)
+                || document.reviewed_translations.values().any(|entries| entries.contains_key(&sentence.id)))
+    })
+}
+
+pub(crate) fn refresh_after_language_change(db: &Connection, document: &mut Document) -> Result<()> {
+    if document.format != "pdf" {
+        return Ok(());
+    }
+    let file_backed: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM file_originals WHERE document_id=?1)",
+        [&document.id],
+        |row| row.get(0),
+    ).map_err(database_error)?;
+    if !file_backed {
+        return Ok(());
+    }
+    document.pdf_ocr_refresh_pages.extend(completed_pages(db, &document.id)?);
+    document.pdf_ocr_refresh_pages.extend(document.ocr_lines.iter().flatten().map(|line| line.page));
+
+    // Leases taken before the language change must not write old-language results.
+    db.execute("DELETE FROM pdf_ocr_requests WHERE document_id=?1", [&document.id])
+        .map_err(database_error)?;
+    let focused: Option<u16> = db.query_row(
+        "SELECT page FROM pdf_reading_positions WHERE document_id=?1", [&document.id], |row| row.get(0),
+    ).optional().map_err(database_error)?;
+    if let Some(page) = focused {
+        schedule_window(db, document, page)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn schedule_window(db: &Connection, document: &Document, center: u16) -> Result<()> {
@@ -238,8 +292,14 @@ impl Store {
         let Some(page) = page else {
             return Ok(None);
         };
+        let language = tx.query_row(
+            "SELECT json_extract(body, '$.language') FROM documents WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        ).map_err(database_error)?;
         let request = PdfOcrRequest {
             page,
+            language,
             token: uuid::Uuid::new_v4().to_string(),
             expires_at: now + OCR_LEASE_SECONDS,
         };
@@ -326,21 +386,29 @@ impl Store {
                     |row| row.get(0),
                 )
                 .map_err(database_error)?;
-            if cached || has_ocr_lines(document, page) || !needs_text {
+            let refresh = token.is_some() && should_refresh(document, page);
+            if !needs_text || (!refresh && (cached || has_ocr_lines(document, page))) {
                 remove_request(tx, id, page)?;
                 updated = Some(document.clone());
                 return Ok(false);
             }
 
             mark_completed(tx, id, page)?;
+            let cleared_refresh = document.pdf_ocr_refresh_pages.remove(&page);
+            // An empty rerun must not erase a previous OCR result.
             if lines.is_empty() {
                 updated = Some(document.clone());
-                return Ok(false);
+                return Ok(cleared_refresh);
             }
 
             let existing = document.ocr_lines.get_or_insert_with(Vec::new);
             let insertion = existing.partition_point(|line| line.page < page);
-            existing.splice(insertion..insertion, lines);
+            let end = if refresh {
+                existing.partition_point(|line| line.page <= page)
+            } else {
+                insertion
+            };
+            existing.splice(insertion..end, lines);
             reflow_pdf_document(tx, document, pages)?;
             let focused: bool = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM pdf_reading_positions WHERE document_id=?1 AND page=?2)",
@@ -367,6 +435,7 @@ pub(crate) fn merge_backup_cache(
     merge_cached_pages(
         db, &incoming.source_hash, &incoming.language,
         incoming.ocr_lines.as_deref().unwrap_or_default(), incoming_pages, completed,
+        &incoming.pdf_ocr_refresh_pages,
     ).map(|_| ())
 }
 
@@ -377,6 +446,7 @@ pub(crate) fn merge_cached_pages(
     lines: &[ocr::OcrLine],
     incoming_pages: &[String],
     completed: &[u16],
+    stale: &BTreeSet<u16>,
 ) -> Result<bool> {
     let matched: Option<(String, String)> = db
         .query_row(
@@ -397,7 +467,12 @@ pub(crate) fn merge_cached_pages(
         return Ok(false);
     }
 
+    let local_completed = completed_pages(db, &local.id)?;
+    let mut adopted_pages = BTreeSet::new();
     for &page in completed {
+        if local_completed.binary_search(&page).is_err() && !has_ocr_lines(&local, page) {
+            adopted_pages.insert(page);
+        }
         mark_completed(db, &local.id, page)?;
     }
     let added: Vec<_> = lines
@@ -405,17 +480,26 @@ pub(crate) fn merge_cached_pages(
         .filter(|line| !has_ocr_lines(&local, line.page))
         .cloned()
         .collect();
-    if added.is_empty() {
+    for page in added.iter().map(|line| line.page).collect::<BTreeSet<_>>() {
+        remove_request(db, &local.id, page)?;
+        adopted_pages.insert(page);
+    }
+    if adopted_pages.is_empty() {
         return Ok(true);
     }
-
-    for page in added.iter().map(|line| line.page).collect::<std::collections::BTreeSet<_>>() {
-        remove_request(db, &local.id, page)?;
+    for page in adopted_pages {
+        if stale.contains(&page) {
+            local.pdf_ocr_refresh_pages.insert(page);
+        } else {
+            local.pdf_ocr_refresh_pages.remove(&page);
+        }
     }
-    let lines = local.ocr_lines.get_or_insert_with(Vec::new);
-    lines.extend(added);
-    lines.sort_by_key(|line| line.page);
-    reflow_pdf_document(db, &mut local, pages)?;
+    if !added.is_empty() {
+        let lines = local.ocr_lines.get_or_insert_with(Vec::new);
+        lines.extend(added);
+        lines.sort_by_key(|line| line.page);
+        reflow_pdf_document(db, &mut local, pages)?;
+    }
     let body = serde_json::to_string(&local).map_err(database_error)?;
     db.execute(
         "UPDATE documents SET body=?1 WHERE id=?2",
@@ -461,6 +545,7 @@ fn reading_page(
         state: PdfReadPageState::Unavailable,
         text: String::new(),
         span: None,
+        refresh_pending: file_backed && should_refresh(document, page),
     };
     let Some(start_utf16) = starts[index] else {
         result.state = if completed.binary_search(&page).is_ok() {

@@ -283,13 +283,15 @@ fn validate_manifest(backup: &Manifest) -> Result<()> {
                 || u16::try_from(pages.len()).ok() != doc.ocr_pdf_pages
                 || pages.is_empty()
                 || entry.ocr_completed_pages.windows(2).any(|pair| pair[0] >= pair[1])
-                || entry.ocr_completed_pages.iter().any(|&page| {
+                || entry.ocr_completed_pages.iter().chain(&doc.pdf_ocr_refresh_pages).any(|&page| {
                     !pages.get(usize::from(page)).is_some_and(|text| text.trim().is_empty())
                 })
             {
                 return Err("Некоректний запис великого PDF у резервній копії.".into());
             }
-        } else if entry.size > MAX_IMPORT as u64 || !entry.ocr_completed_pages.is_empty() {
+        } else if entry.size > MAX_IMPORT as u64 || !entry.ocr_completed_pages.is_empty()
+            || !doc.pdf_ocr_refresh_pages.is_empty()
+        {
             return Err("Оригінал у резервній копії перевищує допустимий розмір.".into());
         }
     }

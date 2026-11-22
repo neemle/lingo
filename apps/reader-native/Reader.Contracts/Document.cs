@@ -17,6 +17,7 @@ public sealed record Document(
     public DocumentBlock[] Blocks { get; init; } = [];
     public OcrLine[]? OcrLines { get; init; }
     public int? OcrPdfPages { get; init; }
+    public int[] PdfOcrRefreshPages { get; init; } = [];
     public int?[]? PdfPageStarts { get; init; }
     public SpeechResume? SpeechResume { get; init; }
     public string[] Bookmarks { get; init; } = [];

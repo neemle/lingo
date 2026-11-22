@@ -1,7 +1,10 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
 
@@ -90,6 +93,9 @@ pub struct Document {
     pub ocr_lines: Option<Vec<ocr::OcrLine>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ocr_pdf_pages: Option<u16>,
+    /// Cached pages eligible for a new OCR pass after the document language changes.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub pdf_ocr_refresh_pages: BTreeSet<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pdf_page_starts: Option<Vec<Option<usize>>>,
     pub created_at: i64,
@@ -750,6 +756,7 @@ impl Store {
             reviewed_translations: BTreeMap::new(),
             ocr_lines,
             ocr_pdf_pages,
+            pdf_ocr_refresh_pages: BTreeSet::new(),
             pdf_page_starts,
             created_at: now(),
             source_hash: hash,
@@ -929,7 +936,7 @@ impl Store {
 
     pub fn set_document_language(&mut self, id: &str, language: &str) -> Result<()> {
         valid_language(language)?;
-        self.edit_document(id, |document, _| {
+        self.edit_document(id, |document, tx| {
             if document.language == language {
                 return Ok(false);
             }
@@ -937,6 +944,7 @@ impl Store {
                 return Err("Для нової мови джерела вже збережено переклади. Збережіть їх окремо і видаліть із документа перед зміною мови.".into());
             }
             document.language = language.to_owned();
+            pdf_page_ocr::refresh_after_language_change(tx, document)?;
             Ok(true)
         })
     }

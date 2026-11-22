@@ -23,7 +23,7 @@ internal static class PdfPageOcr
                 try
                 {
                     OcrLine[] lines = [];
-                    await PdfScan.RecognizeAsync(path, document.Language, count, [claim.Page],
+                    await PdfScan.RecognizeAsync(path, claim.Language ?? document.Language, count, [claim.Page],
                         (_, recognized) => lines = recognized, cancellation);
                     cancellation.ThrowIfCancellationRequested();
                     await session.CachePdfOcrPageAsync(document.Id, claim, lines);

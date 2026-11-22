@@ -202,16 +202,21 @@ public partial class ReadingPage
     {
         if (pdfWindow is not { } window) return;
         var page = Array.Find(window.Pages, candidate => candidate.Page == window.Center);
-        var message = page?.State switch
+        var waiting = page is { State: "needsOcr" } or { State: "empty", RefreshPending: true };
+        var pendingMessage = pdfOcrError ?? (readerPdfOcr is not null
+            ? "Розпізнаємо текст цієї сторінки…"
+            : "Текст сторінки ще не розпізнано.");
+        var message = waiting ? pendingMessage : page?.State switch
         {
             "textLayer" or "recognized" => null,
             "empty" => "На цій сторінці не знайдено тексту.",
-            "needsOcr" when pdfOcrError is not null => pdfOcrError,
-            "needsOcr" => readerPdfOcr is not null ? "Розпізнаємо текст цієї сторінки…" : "Текст сторінки ще не розпізнано.",
             _ => "Для цієї сторінки немає тексту. Відкрийте оригінал.",
         };
         PdfPageStatus.Text = $"Сторінка {window.Center + 1} із {window.PageCount}";
-        if (pdfOcrError is not null && message is null)
+        if (page is { State: "recognized", RefreshPending: true })
+            PdfPageStatus.Text += pdfOcrError is not null ? " · помилка оновлення OCR"
+                : readerPdfOcr is not null ? " · оновлюємо OCR" : " · OCR потребує оновлення";
+        else if (pdfOcrError is not null && message is null)
             PdfPageStatus.Text += " · помилка OCR сусідньої сторінки";
         ShowPdfPageNotice(message);
         UpdatePdfPageButtons();
@@ -244,13 +249,15 @@ public partial class ReadingPage
         PreviousPdfPage.IsEnabled = enabled && pdfWindow is { Center: > 0 };
         NextPdfPage.IsEnabled = enabled && pdfWindow is { } window && window.Center + 1 < window.PageCount;
         RetryPdfOcr.IsVisible = enabled && readerPdfOcr is null
-            && pdfWindow?.Pages.Any(page => page.State == "needsOcr") == true;
+            && pdfWindow?.Pages.Any(RequiresPdfOcr) == true;
     }
+
+    private static bool RequiresPdfOcr(PdfReadPage page) => page.State == "needsOcr" || page.RefreshPending;
 
     private void StartReaderPdfOcr(ReaderSession session, Document document)
     {
         if (readerPdfOcr is not null || document.OcrPdfPages is null || pdfWindow is not { } window ||
-            !window.Pages.Any(page => page.State == "needsOcr")) return;
+            !window.Pages.Any(RequiresPdfOcr)) return;
         var run = new CancellationTokenSource();
         readerPdfOcr = run;
         _ = RecognizeReaderPdfAsync(session, document, window.Center, run);

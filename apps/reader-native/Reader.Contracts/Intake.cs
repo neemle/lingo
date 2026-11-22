@@ -7,8 +7,8 @@ public sealed record IntakeFile(string Kind, string Path);
 public sealed record IntakeBytes(string Kind, int[] Bytes);
 public sealed record IntakeLink(string Kind, string Url);
 
-public sealed record PdfOcrRequest(int Page, string Token, long ExpiresAt);
+public sealed record PdfOcrRequest(int Page, string Token, long ExpiresAt, string? Language = null);
 
-public sealed record PdfReadPage(int Page, string State, string Text, OcrSpan? Span);
+public sealed record PdfReadPage(int Page, string State, string Text, OcrSpan? Span, bool RefreshPending = false);
 
 public sealed record PdfReadWindow(int Center, int PageCount, PdfReadPage[] Pages, string Context, OcrSpan? ContextSpan);

@@ -100,7 +100,7 @@ pub(crate) fn focus_page_text(document: &mut Document, page: u16) -> (Option<usi
     (Some(position), changed)
 }
 
-fn page_bounds(document: &Document, page: u16) -> Option<(usize, usize)> {
+pub(crate) fn page_bounds(document: &Document, page: u16) -> Option<(usize, usize)> {
     if let Some(starts) = &document.pdf_page_starts {
         let index = usize::from(page);
         let start = *starts.get(index)?.as_ref()?;
