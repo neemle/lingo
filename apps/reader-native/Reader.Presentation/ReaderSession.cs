@@ -181,6 +181,10 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         Task.Run(() => client.CheckOptionalModelSpace(id, stagingRoot));
     public Task InstallOptionalModelAsync(string id, string stagingRoot) =>
         Task.Run(() => client.InstallOptionalModel(id, stagingRoot));
+    public Task ExportOptionalModelArchiveAsync(string id, string path) =>
+        Task.Run(() => client.ExportOptionalModelArchive(id, path));
+    public Task InstallOptionalModelArchiveAsync(string id, string path) =>
+        Task.Run(() => client.InstallOptionalModelArchive(id, path));
     public Task RollbackOptionalModelAsync(string id) => Task.Run(() => client.RollbackOptionalModel(id));
     public Task VerifyOptionalModelAsync(string id) => Task.Run(() => client.VerifyOptionalModel(id));
     public Task<bool> RemoveOptionalModelAsync(string id) => Task.Run(() => client.RemoveOptionalModel(id));

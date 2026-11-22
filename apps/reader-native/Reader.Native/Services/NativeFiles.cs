@@ -22,16 +22,23 @@ public static class NativeFiles
     }
 
     internal static async Task CopyBoundedAsync(Stream stream, Stream target, int maximum,
-        CancellationToken cancellation = default)
+        CancellationToken cancellation = default, IProgress<long>? progress = null)
     {
         var buffer = new byte[64 * 1024];
         long total = 0;
+        long reported = 0;
         int count;
         while ((count = await stream.ReadAsync(buffer.AsMemory(), cancellation).ConfigureAwait(false)) != 0)
         {
             if ((total += count) > maximum) throw new InvalidDataException("Файл перевищує допустимий розмір.");
             await target.WriteAsync(buffer.AsMemory(0, count), cancellation).ConfigureAwait(false);
+            if (progress is not null && total - reported >= 1024 * 1024)
+            {
+                progress.Report(total);
+                reported = total;
+            }
         }
+        if (reported != total) progress?.Report(total);
     }
 
     internal static Task<string?> ExportBytesAsync(Page owner, string name, byte[] bytes, bool share = false) =>

@@ -185,7 +185,9 @@
      <FlexLayout Wrap="Wrap" JustifyContent="Start">
       <Button x:Name="DownloadOptionalModel" Text="Завантажити" Clicked="DownloadOptionalModelClicked" IsEnabled="False"
        Style="{StaticResource AccentButton}" Margin="0,0,8,8" />
-      <Button x:Name="OpenOptionalModel" Text="Встановити з файлів" Clicked="OpenOptionalModelClicked" IsEnabled="False"
+      <Button x:Name="OpenOptionalModel" Text="Встановити з файлів чи ZIP" Clicked="OpenOptionalModelClicked" IsEnabled="False"
+       Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
+      <Button x:Name="ExportOptionalModel" Text="Зберегти модель як ZIP" Clicked="ExportOptionalModelClicked" IsEnabled="False"
        Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
       <Button x:Name="VerifyOptionalModel" Text="Перевірити файли" Clicked="VerifyOptionalModelClicked" IsEnabled="False"
        Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />

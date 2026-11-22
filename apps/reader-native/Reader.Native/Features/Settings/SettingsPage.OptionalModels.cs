@@ -64,6 +64,7 @@ public partial class SettingsPage
         OptionalModelChoice.IsEnabled = !optionalModelBusy;
         DownloadOptionalModel.IsEnabled = RemoveOptionalModel.IsEnabled = !optionalModelBusy && selected is not null;
         OpenOptionalModel.IsEnabled = !optionalModelBusy && optionalInventoryRead && selected is not null;
+        ExportOptionalModel.IsEnabled = !optionalModelBusy && selected is { FilesPresent: true };
         VerifyOptionalModel.IsEnabled = !optionalModelBusy && selected is { HasLocalFiles: true };
         RollbackOptionalModel.IsEnabled = !optionalModelBusy && selected is { HasRecoveryCopy: true };
         RepairOptionalModel.IsEnabled = !optionalModelBusy && selected is not null
@@ -133,7 +134,7 @@ public partial class SettingsPage
         {
             var files = (await FilePicker.Default.PickMultipleAsync(new PickOptions
             {
-                PickerTitle = $"Виберіть усі файли для «{model.Name}»",
+                PickerTitle = $"Виберіть ZIP або всі файли для «{model.Name}»",
             })).OfType<FileResult>().ToArray();
             if (files.Length == 0) return;
 
@@ -144,20 +145,41 @@ public partial class SettingsPage
             OptionalProgress.Progress = 0;
             OptionalModelStatus.Text = "Перевірка вільного місця…";
             var session = AppState.Session;
-            await session.CheckOptionalModelSpaceAsync(model.Id, staging);
-            var sources = files.Select(file => (file.FileName, (Func<Task<Stream>>)file.OpenReadAsync)).ToArray();
             var total = model.Assets.Sum(asset => asset.Bytes);
             var progress = new Progress<long>(bytes =>
             {
-                if (ReferenceEquals(optionalDownload, cancellation)) OptionalProgress.Progress = (double)bytes / total;
+                if (ReferenceEquals(optionalDownload, cancellation))
+                    OptionalProgress.Progress = Math.Min(1, (double)bytes / total);
             });
-            OptionalModelStatus.Text = $"Копіюємо локальні файли {model.Name}…";
-            await ModelDownload.StageOptionalModelFilesAsync(model, staging, sources, progress, cancellation.Token);
-            cancellation.Token.ThrowIfCancellationRequested();
+            if (files.Length == 1 && Path.GetExtension(files[0].FileName).Equals(".zip", StringComparison.OrdinalIgnoreCase))
+            {
+                var archive = Path.Combine(staging, "model.zip");
+                Directory.CreateDirectory(staging);
+                OptionalModelStatus.Text = $"Копіюємо архів {model.Name}…";
+                await using (var input = await files[0].OpenReadAsync())
+                await using (var output = File.Create(archive))
+                    await NativeFiles.CopyBoundedAsync(input, output, checked((int)(total + 1024 * 1024)),
+                        cancellation.Token, progress);
 
-            StopOptionalModel.IsVisible = false;
-            OptionalModelStatus.Text = "Перевірка файлів і контрольний запуск…";
-            await session.InstallOptionalModelAsync(model.Id, staging);
+                BeginActivation();
+                await session.InstallOptionalModelArchiveAsync(model.Id, archive);
+            }
+            else
+            {
+                await session.CheckOptionalModelSpaceAsync(model.Id, staging);
+                var sources = files.Select(file => (file.FileName, (Func<Task<Stream>>)file.OpenReadAsync)).ToArray();
+                OptionalModelStatus.Text = $"Копіюємо локальні файли {model.Name}…";
+                await ModelDownload.StageOptionalModelFilesAsync(model, staging, sources, progress, cancellation.Token);
+                BeginActivation();
+                await session.InstallOptionalModelAsync(model.Id, staging);
+            }
+
+            void BeginActivation()
+            {
+                cancellation.Token.ThrowIfCancellationRequested();
+                StopOptionalModel.IsVisible = false;
+                OptionalModelStatus.Text = "Перевірка файлів і контрольний запуск…";
+            }
             OptionalModelStatus.Text = $"Локальні файли {model.Name} перевірено й встановлено.";
         }
         catch (OperationCanceledException) when (optionalDownload?.IsCancellationRequested == true)
@@ -177,6 +199,26 @@ public partial class SettingsPage
             {
                 OptionalModelStatus.Text += "\nНе вдалося видалити тимчасові копії файлів.";
             }
+        }
+    }
+
+    private async void ExportOptionalModelClicked(object? sender, EventArgs args)
+    {
+        if (optionalModelBusy || SelectedOptionalModel is not { FilesPresent: true } model) return;
+        optionalModelBusy = true;
+        UpdateOptionalModelControls();
+        try
+        {
+            OptionalModelStatus.Text = $"Перевіряємо й пакуємо {model.Name}…";
+            var name = $"{model.Id}-{model.Revision[..8]}.zip";
+            OptionalModelStatus.Text = await NativeFiles.ExportAsync(this, name, share: false,
+                path => AppState.Session.ExportOptionalModelArchiveAsync(model.Id, path)) ?? "";
+        }
+        catch (Exception error) { OptionalModelStatus.Text = error.Message; }
+        finally
+        {
+            optionalModelBusy = false;
+            UpdateOptionalModelControls();
         }
     }
 

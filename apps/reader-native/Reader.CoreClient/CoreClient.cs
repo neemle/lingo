@@ -109,6 +109,10 @@ public sealed class CoreClient : IDisposable
         Call<JsonElement>(new { version = 1, operation = "check_optional_model_space", id, stagingRoot });
     public void InstallOptionalModel(string id, string stagingRoot) =>
         CallIndependent<JsonElement>(new { version = 1, operation = "install_optional_model", id, stagingRoot });
+    public void ExportOptionalModelArchive(string id, string path) =>
+        CallIndependent<JsonElement>(new { version = 1, operation = "export_optional_model_archive", id, path });
+    public void InstallOptionalModelArchive(string id, string path) =>
+        CallIndependent<JsonElement>(new { version = 1, operation = "install_optional_model_archive", id, path });
     public void RollbackOptionalModel(string id) =>
         Call<JsonElement>(new { version = 1, operation = "rollback_optional_model", id });
     public void VerifyOptionalModel(string id) =>
