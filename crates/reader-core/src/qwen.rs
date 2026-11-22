@@ -1,4 +1,5 @@
 use crate::{
+    document_tokens::word_parts,
     knowledge::{annotation_cache, resolve_text_selection, select_words, AnalysisScope},
     optional_models::OptionalModelJob,
     Document, Result, Sentence, Store,
@@ -250,6 +251,7 @@ impl Role {
 pub struct ExplainWordJob {
     work: HintWork<WordExplanation>,
     word: String,
+    genitive_preposition: Option<String>,
     system: &'static str,
 }
 
@@ -491,12 +493,29 @@ impl Store {
         cached_only: bool,
     ) -> Result<ExplainWordJob> {
         let word = example.word.to_owned();
-        let (version, system, encoded) = if let Some(offset) = example.offset {
-            let (start, _) = example
-                .sentence
-                .char_indices()
-                .nth(offset)
-                .ok_or("Некоректна позиція виділення.")?;
+        let positioned_start = example
+            .offset
+            .map(|offset| {
+                example
+                    .sentence
+                    .char_indices()
+                    .nth(offset)
+                    .map(|(byte, _)| byte)
+                    .ok_or("Некоректна позиція виділення.")
+            })
+            .transpose()?;
+        let unambiguous_start = positioned_start.or_else(|| {
+            let mut occurrences = example.sentence.match_indices(example.word);
+            let (start, _) = occurrences.next()?;
+            occurrences.next().is_none().then_some(start)
+        });
+        let genitive_preposition = if example.language == "uk" {
+            unambiguous_start
+                .and_then(|start| genitive_preposition(example.sentence, start, example.word))
+        } else {
+            None
+        };
+        let (version, system, encoded) = if let Some(start) = positioned_start {
             let selected = PositionedWordExample {
                 language: example.language,
                 before: &example.sentence[..start],
@@ -518,7 +537,12 @@ impl Store {
         let example = encoded.map_err(|error| error.to_string())?;
         let work =
             self.prepare_hint_work(model, document, version, system, example, cached_only)?;
-        Ok(ExplainWordJob { work, word, system })
+        Ok(ExplainWordJob {
+            work,
+            word,
+            genitive_preposition,
+            system,
+        })
     }
 }
 
@@ -536,6 +560,41 @@ fn selected_word<'a, 'b>(
     let start =
         crate::ocr::byte_at_utf16(&sentence.text, offset).ok_or("Некоректна позиція виділення.")?;
     Ok((sentence, left_trimmed.trim_end(), start))
+}
+
+fn genitive_preposition(sentence: &str, start: usize, selection: &str) -> Option<String> {
+    let tokens = word_parts(sentence).take_while(|(offset, _, _)| *offset <= start);
+    let mut previous: Option<(usize, &str)> = None;
+    for (offset, _, word) in tokens {
+        if offset == start {
+            if word != selection || !word.chars().any(char::is_alphabetic) {
+                return None;
+            }
+            let (end, preposition) = previous?;
+            let gap = &sentence[end..start];
+            if gap.is_empty() || !gap.chars().all(char::is_whitespace) || gap.contains(['\n', '\r'])
+            {
+                return None;
+            }
+            let lower = preposition.to_lowercase();
+            return matches!(
+                lower.as_str(),
+                "біля"
+                    | "поблизу"
+                    | "коло"
+                    | "навколо"
+                    | "довкола"
+                    | "без"
+                    | "від"
+                    | "до"
+                    | "після"
+                    | "внаслідок"
+            )
+            .then_some(lower);
+        }
+        previous = Some((offset + word.len(), word));
+    }
+    None
 }
 
 fn validate_word_request(model: &str, word: &str) -> Result<()> {
@@ -560,6 +619,14 @@ impl ExplainWordJob {
             .map(|result| {
                 result.map(|(mut explanation, cached)| {
                     explanation.cached = cached;
+                    if let Some(preposition) = &self.genitive_preposition {
+                        let text = &explanation.explanation;
+                        let gloss = text
+                            .split_once(" У цьому реченні — ")
+                            .map_or(text.as_str(), |(gloss, _)| gloss);
+                        explanation.explanation =
+                            format!("{gloss} Після «{preposition}» потрібен родовий відмінок.");
+                    }
                     explanation
                 })
             })
