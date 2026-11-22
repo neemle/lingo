@@ -192,6 +192,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
 
     public Task<string> InstallTranslationPackageAsync(string path) =>
         Task.Run(() => client.InstallTranslationPackage(path));
+    public Task VerifyTranslationPackageAsync(string source, string target) =>
+        Task.Run(() => client.VerifyTranslationPackage(source, target));
     public Task<bool> RemoveTranslationPackageAsync(string source, string target) =>
         Task.Run(() => client.RemoveTranslationPackage(source, target));
 

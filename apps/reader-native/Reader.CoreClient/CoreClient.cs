@@ -128,6 +128,8 @@ public sealed class CoreClient : IDisposable
         Call<OcrSuggestion[]?>(new { version = 1, operation = "suggest_ocr", language, text });
     public string InstallTranslationPackage(string path) =>
         Call<string>(new { version = 1, operation = "install_translation_package", path });
+    public void VerifyTranslationPackage(string source, string target) =>
+        CallIndependent<JsonElement>(new { version = 1, operation = "verify_translation_package", source, target });
     public bool RemoveTranslationPackage(string source, string target) =>
         Call<bool>(new { version = 1, operation = "remove_translation_package", source, target });
     public void CheckTranslationDownloadSpace(string source, string target, string stagingRoot, string archiveDirectory) =>

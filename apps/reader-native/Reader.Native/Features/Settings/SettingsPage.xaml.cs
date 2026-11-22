@@ -175,6 +175,8 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         DownloadTranslation.IsEnabled = !busy && downloadChoices.Length > 0;
         RemoveTranslation.IsVisible = removablePackages.Length > 0;
         RemoveTranslation.IsEnabled = !busy && RemoveTranslation.IsVisible;
+        VerifyTranslation.IsVisible = RemoveTranslation.IsVisible;
+        VerifyTranslation.IsEnabled = !busy && VerifyTranslation.IsVisible;
         RepairTranslation.IsVisible = RemoveTranslation.IsVisible;
         RepairTranslation.IsEnabled = !busy && RepairTranslation.IsVisible;
     }
@@ -251,6 +253,36 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
 
     private async void DownloadRequestedClicked(object? sender, EventArgs args) =>
         await RunTranslationDownloadAsync(requestedPackages, single: null);
+
+    private async void VerifyTranslationClicked(object? sender, EventArgs args)
+    {
+        if (changingTranslationFiles || activeDownload is not null || removablePackages.Length == 0) return;
+        changingTranslationFiles = true;
+        UpdateTranslationControls();
+        string? selectedRoutes = null;
+        try
+        {
+            var choices = removablePackages.ToDictionary(group => DescribeRoutes(group), group => group.First());
+            var choice = await DisplayActionSheetAsync("Перевірити цілісність пакета", "Скасувати", null, choices.Keys.ToArray());
+            if (choice is null || !choices.TryGetValue(choice, out var package)) return;
+
+            selectedRoutes = choice;
+            ModelStatus.Text = $"Перевіряємо контрольні суми SHA-256 пакета ({choice})…";
+            await AppState.Session.VerifyTranslationPackageAsync(package.Source, package.Target);
+            ModelStatus.Text = $"Контрольні суми SHA-256 пакета ({choice}) збігаються.";
+        }
+        catch (Exception error)
+        {
+            ModelStatus.Text = selectedRoutes is null
+                ? error.Message
+                : $"Не вдалося перевірити пакет ({selectedRoutes}). {error.Message} Щоб відновити файли, виберіть «Завантажити пакет повторно».";
+        }
+        finally
+        {
+            changingTranslationFiles = false;
+            UpdateTranslationControls();
+        }
+    }
 
     private async void RepairTranslationClicked(object? sender, EventArgs args)
     {
