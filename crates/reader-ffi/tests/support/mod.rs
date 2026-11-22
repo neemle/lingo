@@ -66,7 +66,7 @@ pub fn assert_error(value: &Value, code: &str) {
 
 pub struct StoreFixture {
     pub handle: u64,
-    dir: PathBuf,
+    pub dir: PathBuf,
 }
 
 impl StoreFixture {

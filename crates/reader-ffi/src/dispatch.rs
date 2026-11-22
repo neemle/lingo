@@ -192,6 +192,12 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::GradePractice { revision, grade } => value(store.grade_practice(revision, grade)),
         Command::Original { id } => value(store.original(&id)),
         Command::Export => value(store.export()),
+        Command::ExportBackupFile { path } => {
+            value(store.export_backup_file(std::path::Path::new(&path)))
+        }
+        Command::RestoreBackupFile { path } => {
+            value(store.restore_backup_file(std::path::Path::new(&path)))
+        }
         Command::Restore { backup } => value(store.restore(backup)),
     }
 }

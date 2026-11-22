@@ -32,29 +32,37 @@ public static class NativeFiles
         }
     }
 
-    internal static async Task<string?> ExportBytesAsync(Page owner, string name, byte[] bytes, bool share = false)
+    internal static Task<string?> ExportBytesAsync(Page owner, string name, byte[] bytes, bool share = false) =>
+        ExportAsync(owner, name, share, path => File.WriteAllBytesAsync(path, bytes));
+
+    internal static async Task<string?> ExportAsync(Page owner, string name, bool share, Func<string, Task> write)
     {
         if (!ExportDialog.Wait(0)) return null;
+        DirectoryInfo? staging = null;
+        var keepForShare = false;
         try
         {
+            var root = Path.Combine(FileSystem.CacheDirectory, "exports");
+            staging = Directory.CreateDirectory(Path.Combine(root, Guid.NewGuid().ToString("N")));
+            var path = Path.Combine(staging.FullName, Path.GetFileName(name));
+            await write(path);
             if (share)
             {
-                await ShareBytesAsync(name, bytes);
+                await Share.Default.RequestAsync(new ShareFileRequest("Поширити файл", new ShareFile(path)));
+                keepForShare = true;
                 return "Відкрито меню поширення.";
             }
             var window = owner.Window ?? throw new InvalidOperationException("Вікно застосунку закрито.");
-            return await NativeFileSave.SaveAsync(window, name, bytes) ? "Файл збережено." : null;
+            return await NativeFileSave.SaveAsync(window, path) ? "Файл збережено." : null;
         }
-        finally { ExportDialog.Release(); }
-    }
-
-    private static async Task ShareBytesAsync(string name, byte[] bytes)
-    {
-        var directory = Path.Combine(FileSystem.CacheDirectory, "exports", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, Path.GetFileName(name));
-        await File.WriteAllBytesAsync(path, bytes);
-        await Share.Default.RequestAsync(new ShareFileRequest("Поширити файл", new ShareFile(path)));
+        finally
+        {
+            try
+            {
+                if (!keepForShare) staging?.Delete(recursive: true);
+            }
+            finally { ExportDialog.Release(); }
+        }
     }
 
     public static byte[] Encode<T>(T value) => JsonSerializer.SerializeToUtf8Bytes(value,

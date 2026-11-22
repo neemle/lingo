@@ -139,12 +139,16 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
     {
         try
         {
-            var backup = await AppState.Session.ExportAsync();
-            var bytes = await Task.Run(() => NativeFiles.Encode(backup));
-            Status.Text = await NativeFiles.ExportBytesAsync(this, "reader-backup.json", bytes,
-                share: sender is Button { CommandParameter: "share" }) ?? "";
+            Status.Text = "Готуємо резервну копію…";
+            Status.Text = await NativeFiles.ExportAsync(this, "reader-backup.json",
+                share: sender is Button { CommandParameter: "share" },
+                write: AppState.Session.ExportBackupFileAsync) ?? "";
         }
-        catch (Exception error) { await DisplayAlertAsync("Резервна копія", error.Message, "Гаразд"); }
+        catch (Exception error)
+        {
+            Status.Text = "";
+            await DisplayAlertAsync("Резервна копія", error.Message, "Гаразд");
+        }
     }
 
     private async void RestoreClicked(object? sender, EventArgs args)
@@ -153,16 +157,33 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         {
             var file = await FilePicker.Default.PickAsync(new PickOptions { PickerTitle = "Архів Читай JSON" });
             if (file is null) return;
-            var bytes = await NativeFiles.ReadBoundedAsync(file, 256 * 1024 * 1024);
-            var backup = await Task.Run(() => NativeFiles.Decode<Backup>(bytes));
             if (!await DisplayAlertAsync("Відновити архів?",
                 "Документи й слова з архіву буде додано до локальної бібліотеки.", "Відновити", "Скасувати")) return;
-            await AppState.Session.RestoreAsync(backup);
-            Status.Text = AppState.Session.Error.Length == 0 ? "Архів відновлено." : "Відновлення не підтверджено.";
-            if (AppState.Session.Error.Length == 0 && backup.Resources is { Length: > 0 })
-                await ReportBackupResourcesAsync(backup.Resources);
+            Status.Text = "Відновлюємо архів…";
+            var resources = await RestoreArchiveAsync(file);
+            Status.Text = resources is null ? "Відновлення не підтверджено." : "Архів відновлено.";
+            if (resources is { Length: > 0 }) await ReportBackupResourcesAsync(resources);
         }
-        catch (Exception error) { await DisplayAlertAsync("Відновлення", error.Message, "Гаразд"); }
+        catch (Exception error)
+        {
+            Status.Text = "";
+            await DisplayAlertAsync("Відновлення", error.Message, "Гаразд");
+        }
+    }
+
+    private static async Task<BackupResource[]?> RestoreArchiveAsync(FileResult file)
+    {
+        var directory = Directory.CreateTempSubdirectory("lingo-restore-");
+        try
+        {
+            var path = Path.Combine(directory.FullName, "reader-backup.json");
+            await using (var source = await file.OpenReadAsync())
+            await using (var destination = new FileStream(path, FileMode.CreateNew, FileAccess.Write,
+                FileShare.None, 64 * 1024, FileOptions.Asynchronous))
+                await NativeFiles.CopyBoundedAsync(source, destination, Reader.CoreClient.CoreClient.MaxBackupFileBytes);
+            return await AppState.Session.RestoreBackupFileAsync(path);
+        }
+        finally { directory.Delete(recursive: true); }
     }
 
     private async void OriginalClicked(object? sender, EventArgs args)

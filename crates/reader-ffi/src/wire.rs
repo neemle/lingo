@@ -242,6 +242,12 @@ pub enum Command {
         id: String,
     },
     Export,
+    ExportBackupFile {
+        path: String,
+    },
+    RestoreBackupFile {
+        path: String,
+    },
     Restore {
         backup: Backup,
     },

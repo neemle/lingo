@@ -11,6 +11,7 @@ public sealed class CoreClient : IDisposable
     private readonly StoreHandle handle;
     private bool disposed;
     public const int MaxImportBytes = 20 * 1024 * 1024;
+    public const int MaxBackupFileBytes = 1024 * 1024 * 1024;
 
     public CoreClient(string databasePath)
     {
@@ -34,6 +35,10 @@ public sealed class CoreClient : IDisposable
         Call<string?>(new { version = 1, operation = "detect_document_language", name,
             bytes = bytes.Select(value => (int)value).ToArray() });
     public Backup Export() => Call<Backup>(new { version = 1, operation = "export" });
+    public void ExportBackupFile(string path) =>
+        Call<JsonElement>(new { version = 1, operation = "export_backup_file", path });
+    public BackupResource[] RestoreBackupFile(string path) =>
+        Call<BackupResource[]>(new { version = 1, operation = "restore_backup_file", path });
     public Original Original(string id) => Call<Original>(new { version = 1, operation = "original", id });
     public Document Import(string name, ReadOnlySpan<byte> bytes, string language, string? sourceUrl = null)
     {

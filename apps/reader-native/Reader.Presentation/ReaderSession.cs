@@ -239,6 +239,20 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     });
 
     public Task<Backup> ExportAsync() => Task.Run(client.Export);
+    public Task ExportBackupFileAsync(string path) => Task.Run(() => client.ExportBackupFile(path));
+    public async Task<BackupResource[]?> RestoreBackupFileAsync(string path)
+    {
+        BackupResource[]? resources = null;
+        await RunAsync(() =>
+        {
+            var restored = client.RestoreBackupFile(path);
+            var state = Read();
+            resources = restored;
+            return state;
+        });
+        return resources;
+    }
+
     public Task<Original> OriginalAsync(string id) => Task.Run(() => client.Original(id));
     public Task RestoreAsync(Backup backup) => RunAsync(() =>
     {

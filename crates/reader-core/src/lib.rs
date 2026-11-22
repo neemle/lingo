@@ -5,6 +5,9 @@ use std::{collections::BTreeMap, path::Path};
 use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
 
+mod backup_files;
+mod backup_limits;
+pub use backup_files::MAX_BACKUP_FILE_BYTES;
 mod backup_resources;
 pub use backup_resources::BackupResource;
 mod card_learning;
@@ -256,10 +259,10 @@ pub struct Snapshot {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Backup {
+pub struct Backup<Originals = Vec<Original>> {
     pub version: u32,
     pub snapshot: Snapshot,
-    pub originals: Vec<Original>,
+    pub originals: Originals,
     #[serde(default)]
     pub reviews: Vec<ReviewEvent>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1130,38 +1133,6 @@ impl Store {
                 },
             )
             .map_err(|e| e.to_string())
-    }
-    pub fn export(&self) -> Result<Backup> {
-        let tx = self
-            .connection
-            .unchecked_transaction()
-            .map_err(|error| error.to_string())?;
-        let snapshot = self.snapshot()?;
-        let originals = snapshot
-            .documents
-            .iter()
-            .map(|d| self.original(&d.id))
-            .collect::<Result<Vec<_>>>()?;
-        let (dictionary_sources, review_records) =
-            dictionary_transfer::export_details(&tx, &snapshot.vocabulary)?;
-        let (dictionary_review_origins, reviews) = review_records
-            .into_iter()
-            .map(|record| (record.id, record.event))
-            .unzip();
-        let backup = Backup {
-            version: 1,
-            snapshot,
-            originals,
-            reviews,
-            dictionary_sources,
-            dictionary_review_origins,
-            practice: practice::read(&tx)?,
-            resources: self.backup_resources(),
-            reading_sessions: reading_history::export(&tx)?,
-            document_revisions: document_revisions::export(&tx)?,
-        };
-        tx.commit().map_err(|error| error.to_string())?;
-        Ok(backup)
     }
     pub fn restore(&mut self, backup: Backup) -> Result<()> {
         if backup.version != 1 {

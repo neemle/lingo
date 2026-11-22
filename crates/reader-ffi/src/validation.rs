@@ -25,6 +25,14 @@ fn validate(command: &Command) -> Result<()> {
                 "Database path must be nonempty and bounded",
             ))
         }
+        Command::ExportBackupFile { path } | Command::RestoreBackupFile { path }
+            if path.is_empty() || path.len() > 4096 || path.contains('\0') =>
+        {
+            Err(Error::new(
+                "invalid_argument",
+                "Backup file path must be nonempty and bounded",
+            ))
+        }
         Command::Import { bytes, name, .. }
         | Command::DetectDocumentLanguage { bytes, name }
         | Command::ImportImage { bytes, name, .. }
