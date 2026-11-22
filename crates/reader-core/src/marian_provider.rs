@@ -117,6 +117,76 @@ impl TranslationPackageVerification {
     }
 }
 
+/// A synthetic direct-translation probe independent of the store connection.
+pub struct TranslationPackageValidation {
+    directory: PathBuf,
+    package: &'static Package,
+    input: &'static str,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationPackageValidationResult {
+    pub source: &'static str,
+    pub target: &'static str,
+    pub repository: &'static str,
+    pub revision: &'static str,
+    pub input: &'static str,
+    pub output: String,
+}
+
+impl TranslationPackageValidation {
+    pub fn run(self) -> Result<TranslationPackageValidationResult> {
+        let mut provider = MarianProvider::interactive(&self.directory);
+        if !provider.files_present(self.package) {
+            return Err("Пакет перекладу не встановлено або він неповний.".into());
+        }
+        let segments = [self.input.to_owned()];
+        let output = provider
+            .translate(
+                &self.package.edge(),
+                &segments,
+                None,
+                TranslationSettings::default(),
+            )?
+            .pop()
+            .ok_or("Модель не повернула пробний переклад.")?;
+        if !contains_book_term(self.package.target, &output) {
+            return Err("У пробному перекладі немає очікуваного слова цільовою мовою.".into());
+        }
+
+        Ok(TranslationPackageValidationResult {
+            source: self.package.source,
+            target: self.package.target,
+            repository: self.package.repository,
+            revision: self.package.revision,
+            input: self.input,
+            output,
+        })
+    }
+}
+
+fn probe_input(language: &str) -> Option<&'static str> {
+    match language {
+        "en" => Some("I am reading a book."),
+        "fr" => Some("Je lis un livre."),
+        "uk" => Some("Я читаю книжку."),
+        _ => None,
+    }
+}
+
+fn contains_book_term(language: &str, output: &str) -> bool {
+    output.unicode_words().any(|word| {
+        let word = word.to_lowercase();
+        match language {
+            "en" => matches!(word.as_str(), "book" | "books"),
+            "fr" => matches!(word.as_str(), "livre" | "livres" | "bouquin" | "bouquins"),
+            "uk" => word.starts_with("книг") || word.starts_with("книж"),
+            _ => false,
+        }
+    })
+}
+
 /// Owns the model root so package maintenance can run independently of the store connection.
 pub struct TranslationPackageFiles {
     directory: PathBuf,
@@ -373,6 +443,25 @@ impl Store {
         Ok(TranslationPackageVerification {
             directory: self.model_directory.clone(),
             package,
+        })
+    }
+
+    pub fn prepare_translation_package_validation(
+        &self,
+        source: &str,
+        target: &str,
+    ) -> Result<TranslationPackageValidation> {
+        let input = probe_input(source)
+            .filter(|_| probe_input(target).is_some())
+            .ok_or("Пробний переклад доступний для української, французької й англійської мов.")?;
+        let package = catalog::PACKAGES
+            .iter()
+            .find(|package| package.source == source && package.target == target)
+            .ok_or("Для цієї мовної пари немає прямого пакета.")?;
+        Ok(TranslationPackageValidation {
+            directory: self.model_directory.clone(),
+            package,
+            input,
         })
     }
 

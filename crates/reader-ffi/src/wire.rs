@@ -190,6 +190,10 @@ pub enum Command {
         source: String,
         target: String,
     },
+    ValidateTranslationPackage {
+        source: String,
+        target: String,
+    },
     RemoveTranslationPackage {
         source: String,
         target: String,

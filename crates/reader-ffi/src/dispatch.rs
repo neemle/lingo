@@ -172,7 +172,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::SuggestOcr { language, text } => value(store.suggest_ocr(&language, &text)),
         Command::InstallTranslationPackage { .. }
         | Command::RemoveTranslationPackage { .. }
-        | Command::VerifyTranslationPackage { .. } => Err(Error::new(
+        | Command::VerifyTranslationPackage { .. }
+        | Command::ValidateTranslationPackage { .. } => Err(Error::new(
             "internal_error",
             "Translation package maintenance must run outside the store lock",
         )),
