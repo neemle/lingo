@@ -1,5 +1,5 @@
 use crate::{card_learning::answer_key, dictionary_transfer, Result, Store, Vocabulary};
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -160,7 +160,7 @@ fn align_question(connection: &Connection, progress: &mut PracticeProgress) -> R
                 "Словникову картку не знайдено."
             })?;
     let reverse = progress.direction == "reverse";
-    question.answers = card.practice_answers(reverse);
+    question.answers = question_answers(connection, &card, reverse)?;
     question.prompt = if reverse { card.translation } else { card.word };
     let correct_options = question
         .options
@@ -248,15 +248,41 @@ fn prompt(card: &Vocabulary, reverse: bool) -> &str {
     }
 }
 
+fn matches_prompt(card: &Vocabulary, reverse: bool, normalized: &str) -> bool {
+    answer_key(prompt(card, reverse)) == normalized
+        || reverse && card.accepted_translations.iter().any(|variant| answer_key(variant) == normalized)
+}
+
+fn question_answers(db: &Connection, card: &Vocabulary, reverse: bool) -> Result<Vec<String>> {
+    let mut answers = card.practice_answers(reverse);
+    if !reverse {
+        return Ok(answers);
+    }
+    let key = answer_key(&card.translation);
+    let mut seen = BTreeSet::from([answer_key(&card.word)]);
+    let mut query = db.prepare(
+        "SELECT body FROM vocabulary WHERE id<>?1
+         AND json_extract(body, '$.language')=?2 AND json_extract(body, '$.targetLanguage')=?3
+         ORDER BY id",
+    ).map_err(|error| error.to_string())?;
+    let rows = query.query_map(params![card.id, card.language, card.target_language], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?;
+    for body in rows {
+        let other: Vocabulary = serde_json::from_str(&body.map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+        if matches_prompt(&other, true, &key) && seen.insert(answer_key(&other.word)) {
+            answers.push(other.word);
+        }
+    }
+    Ok(answers)
+}
+
 fn choices(card: &Vocabulary, candidates: &[Vocabulary], reverse: bool) -> Vec<String> {
     let same_pair = |other: &&Vocabulary| {
         card.language == other.language && card.target_language == other.target_language
     };
     let key = answer_key(prompt(card, reverse));
-    let could_answer = |other: &&Vocabulary| {
-        answer_key(prompt(other, reverse)) == key
-            || reverse && other.accepted_translations.iter().any(|variant| answer_key(variant) == key)
-    };
+    let could_answer = |other: &&Vocabulary| matches_prompt(other, reverse, &key);
     // Another sense with the same prompt may also be a valid answer.
     let mut excluded: BTreeSet<_> = candidates
         .iter()
@@ -344,7 +370,7 @@ impl Store {
                 progress.question = Some(SavedQuestion {
                     card_id: card.id.clone(),
                     prompt: prompt(card, reverse).to_owned(),
-                    answers: card.practice_answers(reverse),
+                    answers: question_answers(&tx, card, reverse)?,
                     options,
                     revealed: false,
                     given_answer: None,
