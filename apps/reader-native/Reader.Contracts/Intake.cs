@@ -18,6 +18,7 @@ public sealed record DetachedPdfSentence(Sentence Sentence, int Position, int To
 {
     public Dictionary<string, string> ReviewedTranslations { get; init; } = [];
     public SpeechResume? SpeechResume { get; init; }
+    public string? SpeechText { get; init; }
 }
 
 public sealed record DetachedPdfOcrPage(string Revision, OcrLine[] Lines);

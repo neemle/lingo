@@ -10,6 +10,7 @@ pub enum DetachedPdfAnnotationChange {
     Bookmark { saved: bool },
     Note { text: String },
     Translation { target: String, text: String },
+    SpeechText { text: String },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -20,6 +21,8 @@ pub(crate) struct ArchivedAnnotation {
     pub note: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub translations: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speech_text: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -51,6 +54,14 @@ pub(super) fn initialize(db: &Connection) -> Result<()> {
             text TEXT NOT NULL,
             PRIMARY KEY(document_id,page,start_utf16,target),
             FOREIGN KEY(document_id,page) REFERENCES pdf_detached_pages(document_id,page) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS pdf_detached_speech_text (
+            document_id TEXT NOT NULL,
+            page INTEGER NOT NULL,
+            start_utf16 INTEGER NOT NULL CHECK(start_utf16 >= 0),
+            text TEXT NOT NULL,
+            PRIMARY KEY(document_id,page,start_utf16),
+            FOREIGN KEY(document_id,page) REFERENCES pdf_detached_pages(document_id,page) ON DELETE CASCADE
         );",
     )
     .map_err(database_error)
@@ -59,7 +70,8 @@ pub(super) fn initialize(db: &Connection) -> Result<()> {
 pub(crate) fn has_annotations(db: &Connection, id: &str, page: u16) -> Result<bool> {
     db.query_row(
         "SELECT EXISTS(SELECT 1 FROM pdf_detached_annotations WHERE document_id=?1 AND page=?2
-                       UNION ALL SELECT 1 FROM pdf_detached_translations WHERE document_id=?1 AND page=?2)",
+                       UNION ALL SELECT 1 FROM pdf_detached_translations WHERE document_id=?1 AND page=?2
+                       UNION ALL SELECT 1 FROM pdf_detached_speech_text WHERE document_id=?1 AND page=?2)",
         params![id, page],
         |row| row.get(0),
     ).map_err(database_error)
@@ -95,6 +107,18 @@ pub(super) fn reviewed_for_page(
     rows.collect::<rusqlite::Result<_>>().map_err(database_error)
 }
 
+pub(super) fn speech_text(db: &Connection, id: &str, page: u16, start: usize) -> Result<Option<String>> {
+    db.query_row(
+        "SELECT text FROM pdf_detached_speech_text WHERE document_id=?1 AND page=?2 AND start_utf16=?3",
+        params![id, page, start], |row| row.get(0),
+    ).optional().map_err(database_error)
+}
+
+pub(super) fn archived_speech_text(items: &[ArchivedAnnotation], start: usize) -> Option<&str> {
+    items.binary_search_by_key(&start, |item| item.start_utf16).ok()
+        .and_then(|index| items[index].speech_text.as_deref())
+}
+
 pub(super) fn read(
     db: &Connection, id: &str, page: u16, start: usize,
 ) -> Result<(bool, Option<String>)> {
@@ -124,6 +148,7 @@ pub(super) fn list(db: &Connection, id: &str, page: u16) -> Result<Vec<ArchivedA
         bookmarked: row.get(1)?,
         note: row.get(2)?,
         translations: BTreeMap::new(),
+        speech_text: None,
     })).map_err(database_error)?;
     for row in rows {
         let row = row.map_err(database_error)?;
@@ -139,9 +164,21 @@ pub(super) fn list(db: &Connection, id: &str, page: u16) -> Result<Vec<ArchivedA
     for row in rows {
         let (start_utf16, target, text) = row.map_err(database_error)?;
         let item = marks.entry(start_utf16).or_insert_with(|| ArchivedAnnotation {
-            start_utf16, bookmarked: false, note: None, translations: BTreeMap::new(),
+            start_utf16, bookmarked: false, note: None, translations: BTreeMap::new(), speech_text: None,
         });
         item.translations.insert(target, text);
+    }
+    let mut statement = db.prepare(
+        "SELECT start_utf16,text FROM pdf_detached_speech_text WHERE document_id=?1 AND page=?2",
+    ).map_err(database_error)?;
+    let rows = statement.query_map(params![id, page], |row| Ok((row.get::<_, usize>(0)?, row.get::<_, String>(1)?)))
+        .map_err(database_error)?;
+    for row in rows {
+        let (start_utf16, text) = row.map_err(database_error)?;
+        let item = marks.entry(start_utf16).or_insert_with(|| ArchivedAnnotation {
+            start_utf16, bookmarked: false, note: None, translations: BTreeMap::new(), speech_text: None,
+        });
+        item.speech_text = Some(text);
     }
     Ok(marks.into_values().collect())
 }
@@ -156,6 +193,12 @@ pub(super) fn merge(db: &Connection, id: &str, page: u16, annotations: &[Archive
                     bookmarked=max(bookmarked,excluded.bookmarked),
                     note=coalesce(note,excluded.note)",
                 params![id, page, item.start_utf16, item.bookmarked, item.note],
+            ).map_err(database_error)?;
+        }
+        if let Some(text) = &item.speech_text {
+            db.execute(
+                "INSERT OR IGNORE INTO pdf_detached_speech_text VALUES (?1,?2,?3,?4)",
+                params![id, page, item.start_utf16, text],
             ).map_err(database_error)?;
         }
         for (target, text) in &item.translations {
@@ -184,6 +227,30 @@ impl Store {
                 let text = text.trim();
                 validate_note(text)?;
                 current.note = (!text.is_empty()).then(|| text.to_owned());
+            }
+            DetachedPdfAnnotationChange::SpeechText { text } => {
+                let text = text.trim();
+                let replacement = (!text.is_empty() && text != current.sentence.text).then_some(text);
+                if replacement != current.speech_text.as_deref() {
+                    if let Some(text) = replacement {
+                        crate::validate_speech_text(text)?;
+                        tx.execute(
+                            "INSERT INTO pdf_detached_speech_text VALUES (?1,?2,?3,?4)
+                             ON CONFLICT(document_id,page,start_utf16) DO UPDATE SET text=excluded.text",
+                            params![id, page, start, text],
+                        ).map_err(database_error)?;
+                    } else {
+                        tx.execute(
+                            "DELETE FROM pdf_detached_speech_text WHERE document_id=?1 AND page=?2 AND start_utf16=?3",
+                            params![id, page, start],
+                        ).map_err(database_error)?;
+                    }
+                    super::speech_resume::remove(&tx, id, page, sentence_id)?;
+                    current.speech_text = replacement.map(str::to_owned);
+                    current.speech_resume = None;
+                }
+                tx.commit().map_err(database_error)?;
+                return Ok(current);
             }
             DetachedPdfAnnotationChange::Translation { target, text } => {
                 crate::valid_language(&target)?;
@@ -234,6 +301,9 @@ impl Store {
         let Some(cached) = self.detached_pdf_sentences(id, page)? else { return Ok(Vec::new()); };
         let items = list(&self.connection, id, page)?;
         Ok(items.into_iter().filter_map(|item| {
+            if !item.bookmarked && item.note.is_none() && item.translations.is_empty() {
+                return None;
+            }
             let position = cached.sentences.binary_search_by_key(&item.start_utf16, |sentence| sentence.start_utf16)
                 .ok()?;
             Some(DetachedPdfAnnotationItem {

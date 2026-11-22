@@ -32,22 +32,57 @@ public partial class ReadingPage
         try
         {
             StopSpeech();
-            await ShowSpeechTextEditorAsync(document, sentence);
+            await ShowSpeechTextEditorAsync(document.Language, sentence,
+                document.SpeechTextOverrides.GetValueOrDefault(sentence.Id), async text =>
+                {
+                    await session.WaitUntilIdleAsync();
+                    await session.SetSpeechTextAsync(document.Id, sentence.Id, text);
+                    if (session.Error.Length > 0) throw new InvalidOperationException(session.Error);
+                });
         }
         catch (Exception error) { await DisplayAlertAsync("Вимова речення", error.Message, "Гаразд"); }
         finally { editingSpeechText = false; }
     }
 
-    private async Task ShowSpeechTextEditorAsync(Document document, Sentence sentence)
+    private async void EditDetachedSpeechTextClicked(object? sender, EventArgs args)
+    {
+        var session = AppState.Session;
+        if (editingSpeechText || session.Busy || loadingDetachedSentence ||
+            detachedAddress is not { } address || detachedSentence is not { } current) return;
+
+        editingSpeechText = true;
+        try
+        {
+            ClearDetachedSpeech();
+            await ShowSpeechTextEditorAsync(current.Language, current.Sentence, current.SpeechText, async text =>
+            {
+                await session.WaitUntilIdleAsync();
+                if (session.Document?.Id != address.Document)
+                    throw new InvalidOperationException("Документ змінився.");
+                var updated = await session.UpdateDetachedPdfAnnotationAsync(
+                    address.Document, address.Page, current.Sentence.Id, new { kind = "speechText", text });
+                if (ReferenceEquals(detachedAddress, address) && detachedSentence?.Sentence.Id == current.Sentence.Id)
+                {
+                    detachedSentence = updated;
+                    UpdateDetachedControls();
+                }
+            });
+        }
+        catch (Exception error) { await DisplayAlertAsync("Вимова речення", error.Message, "Гаразд"); }
+        finally { editingSpeechText = false; }
+    }
+
+    private async Task ShowSpeechTextEditorAsync(string language, Sentence sentence, string? speechText,
+        Func<string, Task> saveText)
     {
         var resources = Application.Current!.Resources;
-        var editor = new Editor { Text = EffectiveSpeechText(document, sentence), HeightRequest = 160 };
+        var editor = new Editor { Text = speechText ?? sentence.Text, HeightRequest = 160 };
         SemanticProperties.SetDescription(editor, "Текст для озвучення");
         var status = new Label { TextColor = (Color)resources["Accent"] };
         var controls = new HorizontalStackLayout { Spacing = 8 };
         var form = new VerticalStackLayout { Padding = 24, Spacing = 12, MaximumWidthRequest = 680 };
         form.Children.Add(new Label { Text = "Вимова речення", Style = (Style)resources["SerifTitle"] });
-        var instruction = document.Language == "uk"
+        var instruction = language == "uk"
             ? "Редагується лише текст для озвучення. Поставте курсор після голосної та натисніть «Поставити наголос». Наприклад, «відчинені ві́кна» й «біля вікна́»."
             : "Редагується лише текст для озвучення.";
         form.Children.Add(new Label { Text = instruction });
@@ -65,13 +100,13 @@ public partial class ReadingPage
         {
             Text = "Відновити оригінал",
             Style = (Style)resources["OutlineButton"],
-            IsVisible = document.SpeechTextOverrides.ContainsKey(sentence.Id),
+            IsVisible = speechText is not null,
         };
         var accent = new Button
         {
             Text = "Поставити наголос",
             Style = (Style)resources["OutlineButton"],
-            IsVisible = document.Language == "uk",
+            IsVisible = language == "uk",
         };
         controls.Children.Add(save);
         controls.Children.Add(accent);
@@ -114,13 +149,9 @@ public partial class ReadingPage
             controls.IsEnabled = false;
             try
             {
-                var session = AppState.Session;
-                await session.WaitUntilIdleAsync();
-                await session.SetSpeechTextAsync(document.Id, sentence.Id, text);
-                if (session.Error.Length == 0 && Navigation.ModalStack.LastOrDefault() == page)
+                await saveText(text);
+                if (Navigation.ModalStack.LastOrDefault() == page)
                     await Navigation.PopModalAsync();
-                else
-                    status.Text = session.Error;
             }
             catch (Exception error) { status.Text = error.Message; }
             finally { controls.IsEnabled = true; }

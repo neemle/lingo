@@ -57,6 +57,8 @@ pub struct DetachedPdfSentence {
     pub reviewed_translations: std::collections::BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speech_resume: Option<crate::SpeechResume>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speech_text: Option<String>,
 }
 
 pub(crate) struct CachedSentences {
@@ -82,12 +84,12 @@ impl Store {
         };
         let total = sentences.len();
         let position = requested.unwrap_or(saved).min(total - 1);
+        let speech_text = annotations::speech_text(&self.connection, id, page, sentences[position].start_utf16)?;
         let checkpoint = speech_resume::read(&self.connection, id, page)?;
         let speech_resume = checkpoint.as_ref()
-            .filter(|checkpoint| speech_resume::matches_original(checkpoint, &sentences))
-            .and_then(|checkpoint| checkpoint.for_sentences(&sentences, &language));
+            .filter(|checkpoint| checkpoint.position == position && speech_resume::matches_original(checkpoint, &sentences))
+            .and_then(|checkpoint| checkpoint.for_sentences(&sentences, &language, |_| speech_text.as_deref()));
         let sentence = sentences.into_iter().nth(position).ok_or("Речення PDF не знайдено.")?;
-        let speech_resume = speech_resume.filter(|resume| resume.sentence_id == sentence.id);
         if expected.is_some_and(|expected| sentence.id != expected) {
             return Err("Речення в результатах пошуку змінилося.".into());
         }
@@ -101,7 +103,7 @@ impl Store {
         }
         let (bookmarked, note) = annotations::read(&self.connection, id, page, sentence.start_utf16)?;
         let reviewed_translations = annotations::reviewed(&self.connection, id, page, sentence.start_utf16)?;
-        Ok(Some(DetachedPdfSentence { sentence, position, total, language, bookmarked, note, reviewed_translations, speech_resume }))
+        Ok(Some(DetachedPdfSentence { sentence, position, total, language, bookmarked, note, reviewed_translations, speech_resume, speech_text }))
     }
     pub(crate) fn detached_pdf_speech_source(
         &self, id: &str, page: u16, sentence_id: &str, next: bool,
@@ -112,9 +114,10 @@ impl Store {
         if sentences[position].id != sentence_id {
             return Err("Позиція читання сторінки PDF змінилася.".into());
         }
-        Ok(sentences.into_iter().nth(position + usize::from(next)).map(|sentence| {
-            (sentence.id, crate::speech::SpeechSource { language, text: sentence.text })
-        }))
+        let Some(sentence) = sentences.into_iter().nth(position + usize::from(next)) else { return Ok(None); };
+        let text = annotations::speech_text(&self.connection, id, page, sentence.start_utf16)?
+            .unwrap_or(sentence.text);
+        Ok(Some((sentence.id, crate::speech::SpeechSource { language, text })))
     }
 
     pub(crate) fn detached_pdf_sentences(&self, id: &str, page: u16) -> Result<Option<CachedSentences>> {
@@ -230,7 +233,7 @@ impl ArchivedPage {
                 return Err("Некоректний порядок приміток до сторінки PDF.".into());
             }
             for item in &self.annotations {
-                if (!item.bookmarked && item.note.is_none() && item.translations.is_empty())
+                if (!item.bookmarked && item.note.is_none() && item.translations.is_empty() && item.speech_text.is_none())
                     || sentences.binary_search_by_key(&item.start_utf16, |sentence| sentence.start_utf16).is_err()
                 {
                     return Err("Примітка до сторінки PDF не має речення.".into());
@@ -239,6 +242,12 @@ impl ArchivedPage {
                     annotations::validate_note(note)?;
                     if note.trim().is_empty() {
                         return Err("Порожня нотатка до сторінки PDF.".into());
+                    }
+                }
+                if let Some(text) = &item.speech_text {
+                    crate::validate_speech_text(text)?;
+                    if text.trim().is_empty() {
+                        return Err("Порожній текст озвучення PDF у резервній копії.".into());
                     }
                 }
                 for (target, text) in &item.translations {
@@ -254,7 +263,8 @@ impl ArchivedPage {
             let prefix = sentence_prefix(&document.id, self.page, &page_revision(&self.text));
             let sentences = crate::segment(&self.text, &prefix);
             if !speech_resume::matches_original(checkpoint, &sentences)
-                || checkpoint.for_sentences(&sentences, &document.language).is_none()
+                || checkpoint.for_sentences(&sentences, &document.language,
+                    |start| annotations::archived_speech_text(&self.annotations, start)).is_none()
             {
                 return Err("Некоректна позиція озвучення PDF у резервній копії.".into());
             }
@@ -304,16 +314,18 @@ pub(crate) fn visit_cached_pages(
         let position: Option<usize> = row.get(4).map_err(database_error)?;
         let page = row.get(0).map_err(database_error)?;
         let language: String = row.get(5).map_err(database_error)?;
+        let annotations = annotations::list(db, id, page)?;
         let checkpoint = speech_resume::read(db, id, page)?.filter(|checkpoint| {
             let prefix = sentence_prefix(id, page, &page_revision(&text));
             let sentences = crate::segment(&text, &prefix);
             speech_resume::matches_original(checkpoint, &sentences)
-                && checkpoint.for_sentences(&sentences, &language).is_some()
+                && checkpoint.for_sentences(&sentences, &language,
+                    |start| annotations::archived_speech_text(&annotations, start)).is_some()
         });
         visit(ArchivedPage {
             page,
             speech_resume: checkpoint,
-            annotations: annotations::list(db, id, page)?,
+            annotations,
             position: position.filter(|&position| has_sentence(&text, position)),
             text,
             language: row.get(2).map_err(database_error)?,
@@ -350,12 +362,14 @@ pub(crate) fn adopt_cached_page(db: &Connection, document: &crate::Document, pag
     if let Some(checkpoint) = page.speech_resume {
         let prefix = sentence_prefix(&document.id, page.page, &page_revision(&page.text));
         let sentences = crate::segment(&page.text, &prefix);
+        let annotations = annotations::list(db, &document.id, page.page)?;
+        let speech_text = |start| annotations::archived_speech_text(&annotations, start);
         let local_valid = speech_resume::read(db, &document.id, page.page)?.is_some_and(|local| {
             speech_resume::matches_original(&local, &sentences)
-                && local.for_sentences(&sentences, &document.language).is_some()
+                && local.for_sentences(&sentences, &document.language, speech_text).is_some()
         });
         if !local_valid {
-            if let Some(checkpoint) = speech_resume::rebind(checkpoint, &sentences, &document.language) {
+            if let Some(checkpoint) = speech_resume::rebind(checkpoint, &sentences, &document.language, speech_text) {
                 speech_resume::write(db, &document.id, page.page, &checkpoint)?;
             }
         }

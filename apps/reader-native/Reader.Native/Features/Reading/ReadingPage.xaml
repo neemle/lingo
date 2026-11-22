@@ -189,6 +189,8 @@
         Margin="5,0" SemanticProperties.Description="Озвучити речення сторінки" />
        <Button x:Name="DetachedStopSpeech" Text="■" Clicked="StopClicked" IsVisible="False"
         Style="{StaticResource PlayerButton}" Margin="0,0,5,0" SemanticProperties.Description="Зупинити озвучення" />
+       <Button x:Name="DetachedEditSpeechText" Text="Вимова…" Clicked="EditDetachedSpeechTextClicked"
+        Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedResumeSpeech" Text="Продовжити озвучення" IsVisible="False"
         Clicked="DetachedResumeSpeechClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedNext" Text="›" Clicked="NextDetachedSentenceClicked" Style="{StaticResource PlayerButton}"

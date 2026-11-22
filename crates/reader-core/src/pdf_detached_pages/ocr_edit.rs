@@ -196,6 +196,12 @@ fn move_sentence_anchors(
                     existing.note = Some(note);
                 }
             }
+            if let Some(text) = item.speech_text {
+                if existing.speech_text.as_ref().is_some_and(|previous| previous != &text) {
+                    return Err("Виправлення об’єднує речення з різними варіантами вимови.".into());
+                }
+                existing.speech_text = Some(text);
+            }
             for (target, text) in item.translations {
                 if existing
                     .translations
@@ -222,5 +228,9 @@ fn move_sentence_anchors(
         params![id, page],
     )
     .map_err(database_error)?;
+    db.execute(
+        "DELETE FROM pdf_detached_speech_text WHERE document_id=?1 AND page=?2",
+        params![id, page],
+    ).map_err(database_error)?;
     annotations::merge(db, id, page, &moved.into_values().collect::<Vec<_>>())
 }
