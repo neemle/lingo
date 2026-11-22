@@ -825,6 +825,23 @@ impl Store {
         })
     }
 
+    pub fn rename_document(&mut self, id: &str, title: &str) -> Result<()> {
+        if title.chars().any(char::is_control) {
+            return Err("Назва документа містить керівні символи.".into());
+        }
+        let title = title.trim();
+        if title.is_empty() || title.encode_utf16().count() > 240 {
+            return Err("Введіть назву документа довжиною до 240 символів.".into());
+        }
+        self.edit_document(id, |document, _| {
+            if document.title == title {
+                return Ok(false);
+            }
+            document.title = title.to_owned();
+            Ok(true)
+        })
+    }
+
     pub fn set_document_language(&mut self, id: &str, language: &str) -> Result<()> {
         valid_language(language)?;
         self.edit_document(id, |document, _| {

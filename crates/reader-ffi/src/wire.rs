@@ -73,6 +73,10 @@ pub enum Command {
         id: String,
         language: String,
     },
+    RenameDocument {
+        id: String,
+        title: String,
+    },
     Position {
         id: String,
         position: usize,
