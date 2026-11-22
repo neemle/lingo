@@ -17,6 +17,7 @@ internal sealed class OriginalPage : ContentPage
     private readonly string documentId;
     private readonly Picker linePicker = new() { Title = "Розпізнані рядки" };
     private readonly Button edit = new() { Text = "Виправити" };
+    private readonly Button suggest = new() { Text = "Підказки" };
     private readonly Button reset = new() { Text = "Скинути" };
     private readonly Label editStatus = new();
     private int[] currentLineIndices = [];
@@ -52,9 +53,10 @@ internal sealed class OriginalPage : ContentPage
         SemanticProperties.SetDescription(linePicker, "Рядок для виправлення");
         SemanticProperties.SetDescription(reset, "Відновити початковий результат OCR для рядка");
         linePicker.SelectedIndexChanged += (_, _) => UpdateEditButtons();
-        edit.Clicked += async (_, _) => await CorrectAsync(reset: false);
-        reset.Clicked += async (_, _) => await CorrectAsync(reset: true);
-        var editButtons = new HorizontalStackLayout { Spacing = 8, Children = { edit, reset } };
+        edit.Clicked += async (_, _) => await CorrectAsync(LineAction.Edit);
+        suggest.Clicked += async (_, _) => await CorrectAsync(LineAction.Suggest);
+        reset.Clicked += async (_, _) => await CorrectAsync(LineAction.Reset);
+        var editButtons = new HorizontalStackLayout { Spacing = 8, Children = { suggest, edit, reset } };
         var editor = new Grid { ColumnSpacing = 8, ColumnDefinitions = new ColumnDefinitionCollection
         {
             new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Auto),
@@ -149,13 +151,17 @@ internal sealed class OriginalPage : ContentPage
         var index = LineIndex();
         linePicker.IsEnabled = !loading && !editing && currentLineIndices.Length > 0;
         edit.IsEnabled = !loading && !editing && index >= 0;
+        suggest.IsEnabled = edit.IsEnabled;
         reset.IsEnabled = edit.IsEnabled && lines[index].Correction is not null;
     }
 
-    private async Task CorrectAsync(bool reset)
+    private enum LineAction { Edit, Suggest, Reset }
+
+    private async Task CorrectAsync(LineAction action)
     {
         var index = LineIndex();
-        if (index < 0 || loading || editing || session.Busy || session.Document?.Id != documentId) return;
+        if (index < 0 || loading || editing || session.Busy || session.Document is not { } document ||
+            document.Id != documentId) return;
         var line = lines[index];
         editing = true;
         previous.IsEnabled = next.IsEnabled = false;
@@ -163,7 +169,7 @@ internal sealed class OriginalPage : ContentPage
         try
         {
             string? text = null;
-            if (!reset)
+            if (action == LineAction.Edit)
             {
                 text = await DisplayPromptAsync("Виправити рядок",
                     $"Розпізнано: {line.Text}", accept: "Зберегти", cancel: "Скасувати",
@@ -175,7 +181,13 @@ internal sealed class OriginalPage : ContentPage
                     return;
                 }
             }
-            if (session.Document?.Id != documentId) return;
+            if (action == LineAction.Suggest)
+            {
+                text = await PickSuggestionAsync(document.Language, line.Correction ?? line.Text);
+                if (text is null) return;
+            }
+            if (session.Document?.Id != documentId || session.Document.OcrLines is not { } current ||
+                index >= current.Length || current[index] != line) return;
             await session.CorrectOcrLineAsync(documentId, index, text);
             if (session.Error.Length != 0)
             {
@@ -187,7 +199,7 @@ internal sealed class OriginalPage : ContentPage
                 lines = updated;
                 RebuildLineChoices();
             }
-            editStatus.Text = reset ? "Початковий текст відновлено." : "Виправлення збережено.";
+            editStatus.Text = action == LineAction.Reset ? "Початковий текст відновлено." : "Виправлення збережено.";
         }
         catch (Exception error) { editStatus.Text = error.Message; }
         finally
@@ -197,6 +209,33 @@ internal sealed class OriginalPage : ContentPage
             next.IsEnabled = pageIndex + 1 < pageCount;
             UpdateEditButtons();
         }
+    }
+
+    private async Task<string?> PickSuggestionAsync(string language, string text)
+    {
+        editStatus.Text = "Пошук у мовному пакеті…";
+        var suggestions = await session.SuggestOcrAsync(language, text);
+        if (suggestions is null)
+        {
+            editStatus.Text = "Встановіть пакет аналізу цієї мови в налаштуваннях.";
+            return null;
+        }
+        if (suggestions.Length == 0)
+        {
+            editStatus.Text = "У мовному пакеті немає підказок для цього рядка.";
+            return null;
+        }
+        editStatus.Text = "";
+        var choices = suggestions.ToDictionary(suggestion =>
+            $"{suggestion.Source} → {suggestion.Replacement} · позиція {suggestion.StartUtf16 + 1}");
+        var picked = await DisplayActionSheetAsync("Підказки з мовного пакета", "Скасувати", null, choices.Keys.ToArray());
+        if (picked is null || !choices.TryGetValue(picked, out var selected)) return null;
+
+        var range = SourceRanges.Selection(text, selected.StartUtf16, selected.LengthUtf16);
+        return range is not null && range.Text == selected.Source
+            ? string.Concat(text.AsSpan(0, range.StartUtf16), selected.Replacement,
+                text.AsSpan(range.StartUtf16 + range.LengthUtf16))
+            : null;
     }
 
     private sealed class LineOverlay(int width, int height, OcrLine[] lines) : IDrawable

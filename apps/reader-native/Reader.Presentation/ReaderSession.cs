@@ -131,6 +131,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         Task.Run(() => client.InstallKnowledgePackage(language, path));
     public Task<WordLookup?> LookupWordAsync(string language, string word, WordContext? context = null) =>
         Task.Run(() => client.LookupWord(language, word, context));
+    public Task<OcrSuggestion[]?> SuggestOcrAsync(string language, string text) =>
+        Task.Run(() => client.SuggestOcr(language, text));
 
     public Task<string> InstallTranslationPackageAsync(string path) =>
         Task.Run(() => client.InstallTranslationPackage(path));

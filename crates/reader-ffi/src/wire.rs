@@ -93,6 +93,10 @@ pub enum Command {
         word: String,
         context: Option<reader_core::knowledge::WordContext>,
     },
+    SuggestOcr {
+        language: String,
+        text: String,
+    },
     InstallTranslationPackage {
         path: String,
     },

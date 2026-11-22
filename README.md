@@ -78,8 +78,7 @@ Speech uses installed system voices, supports pause/resume, and can advance thro
 The reader remembers the voice per source language, speed, and continuous reading setting.
 If the voice supplies word boundaries, **Продовжити зі збереженого слова** resumes at the last saved word
 after reopening. The checkpoint is included in backups and discarded if the sentence text changes.
-Individual words are highlighted only when the voice provides matching boundary events. Automatic OCR suggestions,
-additional offline translation pairs,
+Individual words are highlighted only when the voice provides matching boundary events. Additional offline translation pairs,
 mobile releases, signed installers and the 4 GiB hardware target remain unverified or unimplemented.
 
 ## Photo and PDF OCR
@@ -90,6 +89,8 @@ original. The **Оригінал** action shows a preview with optional line ove
 recognized text and line positions. In the preview, choose a recognized line and select **Виправити**
 or **Скинути**. Line corrections change the reading text while retaining the original image/PDF,
 recognition confidence, and raw OCR output. An edit that would detach an annotated sentence is rejected.
+With a grammar package installed, **Підказки** shows observed alternatives for unfamiliar words in the selected
+line. Select a replacement to apply it. The reader checks for common OCR confusions and one-character edits.
 
 For a scanned or mixed PDF, use **Розпізнати PDF** in the library. It reads each available text layer
 and runs OCR only on pages without extractable text, up to 40 pages. The original is preserved, and

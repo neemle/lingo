@@ -10,6 +10,8 @@ use std::{
 use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
+mod ocr_suggestions;
+
 struct Pack {
     language: &'static str,
     name: &'static str,
@@ -132,6 +134,19 @@ impl Pack {
 }
 
 impl Store {
+    fn open_knowledge_index(&self, language: &str) -> Result<Option<(&'static Pack, Connection)>> {
+        let Some(pack) = PACKS.iter().find(|pack| pack.language == language) else {
+            return Ok(None);
+        };
+        let path = pack.path(&self.knowledge_directory);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|error| error.to_string())?;
+        Ok(Some((pack, db)))
+    }
+
     pub fn knowledge_packages(&self) -> Vec<KnowledgePackage> {
         PACKS
             .iter()
@@ -181,15 +196,9 @@ impl Store {
         word: &str,
         context: Option<&WordContext>,
     ) -> Result<Option<WordLookup>> {
-        let Some(pack) = PACKS.iter().find(|pack| pack.language == language) else {
+        let Some((pack, db)) = self.open_knowledge_index(language)? else {
             return Ok(None);
         };
-        let path = pack.path(&self.knowledge_directory);
-        if !path.is_file() {
-            return Ok(None);
-        }
-        let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|error| error.to_string())?;
         let index_version: u32 = db
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| error.to_string())?;
@@ -466,5 +475,28 @@ mod tests {
         assert!(!old.package.context_available);
         assert_eq!(old.analyses[0].part_of_speech, "VERB");
         assert_eq!(old.analyses[0].context_observations, 0);
+    }
+
+    #[test]
+    fn ocr_suggestions_rank_confusions_and_preserve_utf16_offsets() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(&directory.path().join("user.sqlite")).unwrap();
+        let path = PACKS[0].path(&store.knowledge_directory);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        build_pack(
+            &path,
+            "1\tmagic\tmagic\tNOUN\t_\t_\n2\tbook\tbook\tNOUN\t_\t_\n".as_bytes(),
+        )
+        .unwrap();
+        let text = "😀 Magic, RNAGIC and B0ok.";
+        let suggestions = store.suggest_ocr("en", text).unwrap().unwrap();
+        let changes = serde_json::to_value(suggestions).unwrap();
+        let first = &changes[0];
+        assert_eq!(first["source"], "RNAGIC");
+        assert_eq!(first["replacement"], "MAGIC");
+        assert_eq!(first["startUtf16"], "😀 Magic, ".encode_utf16().count());
+        assert_eq!(first["lengthUtf16"], 6);
+        assert_eq!(changes[1]["replacement"], "Book");
+        assert!(store.suggest_ocr("fr", text).unwrap().is_none());
     }
 }

@@ -82,6 +82,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             word,
             context,
         } => value(store.lookup_word(&language, &word, context.as_ref())),
+        Command::SuggestOcr { language, text } => value(store.suggest_ocr(&language, &text)),
         Command::InstallTranslationPackage { path } => {
             value(store.install_translation_package(std::path::Path::new(&path)))
         }
