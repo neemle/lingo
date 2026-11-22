@@ -11,7 +11,10 @@ internal sealed class OriginalPage : ContentPage
     private readonly Label status = new() { VerticalOptions = LayoutOptions.Center };
     private readonly Button previous = new() { Text = "←" };
     private readonly Button next = new() { Text = "→" };
+    private readonly Button toggle = new();
+    private readonly Button wordCard = new() { Text = "Картка слова" };
     private readonly Func<int, Task<PhotoPreview>> loadPage;
+    private readonly Func<TextSelection, Task> showWord;
     private OcrLine[] lines;
     private readonly ReaderSession session;
     private readonly string documentId;
@@ -22,18 +25,22 @@ internal sealed class OriginalPage : ContentPage
     private readonly Label editStatus = new();
     private int[] currentLineIndices = [];
     private bool editing;
+    private bool openingWord;
     private readonly int pageCount;
     private int pageIndex;
     private bool loading;
     private (int Start, int End)? focus;
     private int previewWidth;
     private int previewHeight;
+    private (int LineIndex, OcrWord Word, TextSelection Selection)? activeWord;
+    private SourceRanges? wordRanges;
 
     internal OriginalPage(string filename, int pageCount, int initialPage, bool isPdf,
         Func<int, Task<PhotoPreview>> loadPage, string documentId, ReaderSession session, OcrLine[] lines,
-        TextSelection? selection)
+        TextSelection? selection, Func<TextSelection, Task> showWord)
     {
         this.loadPage = loadPage;
+        this.showWord = showWord;
         this.lines = lines;
         this.documentId = documentId;
         this.session = session;
@@ -49,14 +56,17 @@ internal sealed class OriginalPage : ContentPage
         previous.Clicked += async (_, _) => await LoadAsync(pageIndex - 1);
         next.Clicked += async (_, _) => await LoadAsync(pageIndex + 1);
         overlay.IsVisible = lines.Any(line => Overlaps(line.SourceSpan, focus));
-        var toggle = new Button { Text = OverlayLabel(), IsVisible = lines.Length > 0 };
+        toggle.Text = OverlayLabel();
+        toggle.IsVisible = lines.Length > 0;
         toggle.Clicked += (_, _) =>
         {
             overlay.IsVisible = !overlay.IsVisible;
             overlay.Invalidate();
             toggle.Text = OverlayLabel();
         };
-        var controls = new HorizontalStackLayout { Spacing = 8, Children = { previous, next, toggle, status } };
+        wordCard.IsVisible = lines.Any(line => line.Words is { Length: > 0 });
+        wordCard.Clicked += async (_, _) => await OpenWordAsync();
+        var controls = new HorizontalStackLayout { Spacing = 8, Children = { previous, next, toggle, wordCard, status } };
         SemanticProperties.SetDescription(linePicker, "Рядок для виправлення");
         SemanticProperties.SetDescription(reset, "Відновити початковий результат OCR для рядка");
         linePicker.SelectedIndexChanged += (_, _) => UpdateEditButtons();
@@ -85,6 +95,9 @@ internal sealed class OriginalPage : ContentPage
             },
         };
         var surface = new Grid { Children = { image, overlay } };
+        var tap = new TapGestureRecognizer();
+        tap.Tapped += (_, args) => SelectWordAt(surface, args);
+        surface.GestureRecognizers.Add(tap);
         Grid.SetRow(surface, 1);
         content.Children.Add(controls);
         content.Children.Add(surface);
@@ -105,7 +118,7 @@ internal sealed class OriginalPage : ContentPage
 
     private async Task LoadAsync(int index)
     {
-        if (loading || editing || index < 0 || index >= pageCount) return;
+        if (loading || editing || openingWord || index < 0 || index >= pageCount) return;
         loading = true;
         previous.IsEnabled = next.IsEnabled = false;
         status.Text = "Завантаження сторінки…";
@@ -113,6 +126,11 @@ internal sealed class OriginalPage : ContentPage
         try
         {
             var preview = await loadPage(index);
+            if (index != pageIndex && activeWord is not null)
+            {
+                activeWord = null;
+                focus = SentenceRange();
+            }
             pageIndex = index;
             image.Source = ImageSource.FromStream(() => new MemoryStream(preview.Bytes, writable: false));
             previewWidth = preview.Width;
@@ -138,6 +156,89 @@ internal sealed class OriginalPage : ContentPage
 
     private static bool Overlaps(OcrSpan? span, (int Start, int End)? focus) =>
         span is { } source && focus is { } range && source.StartUtf16 < range.End && source.EndUtf16 > range.Start;
+
+    private static RectF AspectFit(RectF area, int width, int height)
+    {
+        if (width <= 0 || height <= 0 || area.Width <= 0 || area.Height <= 0) return default;
+        var scale = Math.Min(area.Width / width, area.Height / height);
+        var fittedWidth = width * scale;
+        var fittedHeight = height * scale;
+        return new RectF(area.X + (area.Width - fittedWidth) / 2, area.Y + (area.Height - fittedHeight) / 2,
+            fittedWidth, fittedHeight);
+    }
+
+    private void SelectWordAt(View surface, TappedEventArgs args)
+    {
+        if (loading || editing || openingWord || session.Busy || args.GetPosition(surface) is not { } point) return;
+        var fitted = AspectFit(new RectF(0, 0, (float)surface.Width, (float)surface.Height), previewWidth, previewHeight);
+        if (fitted.Width <= 0 || fitted.Height <= 0) return;
+        var x = (point.X - fitted.X) / fitted.Width;
+        var y = (point.Y - fitted.Y) / fitted.Height;
+        if (!(x >= 0 && x < 1 && y >= 0 && y < 1)) return;
+
+        for (var choice = 0; choice < currentLineIndices.Length; choice++)
+        {
+            var index = currentLineIndices[choice];
+            foreach (var word in lines[index].Words ?? [])
+            {
+                if (x < word.X || x >= word.X + word.Width || y < word.Y || y >= word.Y + word.Height ||
+                    CurrentWord(index, word) is not { } selected) continue;
+                activeWord = (index, word, selected);
+                focus = (selected.StartUtf16, selected.StartUtf16 + selected.LengthUtf16);
+                overlay.IsVisible = true;
+                toggle.Text = OverlayLabel();
+                linePicker.SelectedIndex = choice;
+                UpdateOverlay();
+                UpdateEditButtons();
+                return;
+            }
+        }
+    }
+
+    private TextSelection? CurrentWord(int index, OcrWord word)
+    {
+        if (session.Document is not { OcrLines: { } current } document || document.Id != documentId ||
+            index < 0 || index >= current.Length || current[index].Page != pageIndex ||
+            current[index].Words?.Contains(word) != true || word.SourceSpan is not { } span ||
+            span.StartUtf16 < 0 || span.EndUtf16 <= span.StartUtf16 || span.EndUtf16 > document.Text.Length)
+            return null;
+
+        if (wordRanges is null || wordRanges.Text != document.Text) wordRanges = new SourceRanges(document.Text);
+        var length = span.EndUtf16 - span.StartUtf16;
+        var selected = wordRanges.Selection(span.StartUtf16, length);
+        return selected is not null && selected.StartUtf16 == span.StartUtf16 &&
+            selected.LengthUtf16 == length && selected.Text == word.Text
+            ? selected : null;
+    }
+
+    private async Task OpenWordAsync()
+    {
+        if (loading || editing || openingWord || session.Busy || activeWord is not { } active ||
+            Navigation.NavigationStack.LastOrDefault() != this) return;
+        if (CurrentWord(active.LineIndex, active.Word) != active.Selection)
+        {
+            activeWord = null;
+            focus = SentenceRange();
+            UpdateOverlay();
+            UpdateEditButtons();
+            return;
+        }
+
+        openingWord = true;
+        UpdateEditButtons();
+        try
+        {
+            await Navigation.PopAsync();
+            if (!session.Busy && CurrentWord(active.LineIndex, active.Word) == active.Selection)
+                await showWord(active.Selection);
+        }
+        catch (Exception error) { editStatus.Text = error.Message; }
+        finally
+        {
+            openingWord = false;
+            UpdateEditButtons();
+        }
+    }
 
     private void UpdateOverlay()
     {
@@ -171,8 +272,10 @@ internal sealed class OriginalPage : ContentPage
     private void UpdateEditButtons()
     {
         var index = LineIndex();
-        linePicker.IsEnabled = !loading && !editing && currentLineIndices.Length > 0;
-        edit.IsEnabled = !loading && !editing && index >= 0;
+        var canInteract = !loading && !editing && !openingWord;
+        linePicker.IsEnabled = canInteract && currentLineIndices.Length > 0;
+        wordCard.IsEnabled = canInteract && activeWord is not null;
+        edit.IsEnabled = canInteract && index >= 0;
         suggest.IsEnabled = edit.IsEnabled;
         reset.IsEnabled = edit.IsEnabled && lines[index].Correction is not null;
     }
@@ -182,7 +285,7 @@ internal sealed class OriginalPage : ContentPage
     private async Task CorrectAsync(LineAction action)
     {
         var index = LineIndex();
-        if (index < 0 || loading || editing || session.Busy || session.Document is not { } document ||
+        if (index < 0 || loading || editing || openingWord || session.Busy || session.Document is not { } document ||
             document.Id != documentId) return;
         var line = lines[index];
         editing = true;
@@ -220,6 +323,7 @@ internal sealed class OriginalPage : ContentPage
             if (session.Document?.OcrLines is { } updated)
             {
                 lines = updated;
+                activeWord = null;
                 focus = SentenceRange();
                 UpdateOverlay();
                 RebuildLineChoices();
@@ -267,12 +371,8 @@ internal sealed class OriginalPage : ContentPage
     {
         public void Draw(ICanvas canvas, RectF area)
         {
-            if (width <= 0 || height <= 0) return;
-            var scale = Math.Min(area.Width / width, area.Height / height);
-            var contentWidth = width * scale;
-            var contentHeight = height * scale;
-            var left = area.X + (area.Width - contentWidth) / 2;
-            var top = area.Y + (area.Height - contentHeight) / 2;
+            var fitted = AspectFit(area, width, height);
+            if (fitted.Width <= 0 || fitted.Height <= 0) return;
             canvas.FillColor = Color.FromArgb("#55E39137");
             var outline = Color.FromArgb("#66714D");
             var highlight = Color.FromArgb("#B7532F");
@@ -291,8 +391,8 @@ internal sealed class OriginalPage : ContentPage
 
             void DrawBox(double x, double y, double boxWidth, double boxHeight, bool selected)
             {
-                var box = new RectF(left + (float)x * contentWidth, top + (float)y * contentHeight,
-                    (float)boxWidth * contentWidth, (float)boxHeight * contentHeight);
+                var box = new RectF(fitted.X + (float)x * fitted.Width, fitted.Y + (float)y * fitted.Height,
+                    (float)boxWidth * fitted.Width, (float)boxHeight * fitted.Height);
                 canvas.StrokeColor = selected ? highlight : outline;
                 if (selected) canvas.FillRectangle(box);
                 canvas.DrawRectangle(box);

@@ -338,7 +338,9 @@ public partial class ReadingPage : ContentPage
             await session.SetReviewedTranslationAsync(document.Id, sentence.Id, target, text);
     }
 
-    private async void SourceSelected(object? sender, TextSelection selected)
+    private async void SourceSelected(object? sender, TextSelection selected) => await ShowWordAsync(selected);
+
+    private async Task ShowWordAsync(TextSelection selected)
     {
         var session = AppState.Session;
         if (session.Document is not { } doc) return;
@@ -491,10 +493,18 @@ public partial class ReadingPage : ContentPage
             var isPdf = document.Format == "pdf";
             var total = isPdf ? await PdfScan.PageCountAsync(bytes) : 1;
             var initial = Math.Clamp(session.OriginalPageIndex(), 0, total - 1);
-            if (session.Document?.Id != document.Id) return;
+            if (session.Document is not { } current || current.Id != document.Id || !readingPageActive) return;
             await Navigation.PushAsync(new OriginalPage(original.Name, total, initial, isPdf,
                 page => isPdf ? PdfScan.PreviewAsync(bytes, page) : PhotoOcr.PreviewAsync(bytes),
-                document.Id, session, document.OcrLines ?? [], selection));
+                document.Id, session, current.OcrLines ?? [], selection, selected =>
+                {
+                    if (!readingPageActive || session.Busy || session.Document is not { } active || active.Id != document.Id ||
+                        selected.StartUtf16 < 0 || selected.LengthUtf16 <= 0 ||
+                        selected.StartUtf16 > active.Text.Length - selected.LengthUtf16 ||
+                        !active.Text.AsSpan(selected.StartUtf16, selected.LengthUtf16).SequenceEqual(selected.Text))
+                        return Task.CompletedTask;
+                    return ShowWordAsync(selected);
+                }));
         }
         catch (Exception error) { await DisplayAlertAsync("Оригінал", error.Message, "Гаразд"); }
     }
