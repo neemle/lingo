@@ -15,6 +15,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
     private TranslationPair[] requestedPackages = [];
     private CancellationTokenSource? activeDownload;
     private bool changingTranslationFiles;
+    private bool changingKnowledgePackage;
     private bool settingsVisible;
     private bool settingsLoaded;
     private bool focusTranslationPending;
@@ -104,30 +105,67 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         }
     }
 
-    private async void InstallKnowledgeClicked(object? sender, EventArgs args)
+    private async void InstallKnowledgeClicked(object? sender, EventArgs args) =>
+        await InstallKnowledgeAsync(download: true);
+
+    private async void OpenKnowledgeClicked(object? sender, EventArgs args) =>
+        await InstallKnowledgeAsync(download: false);
+
+    private async Task InstallKnowledgeAsync(bool download)
     {
-        InstallKnowledge.IsEnabled = false;
+        if (changingKnowledgePackage) return;
+        changingKnowledgePackage = true;
+        InstallKnowledge.IsEnabled = OpenKnowledge.IsEnabled = false;
+        string? cleanupPath = null;
         try
         {
             var packages = await AppState.Session.KnowledgePackagesAsync();
-            var choices = packages.Where(package => !package.SyntaxAvailable || !package.ExpressionsAvailable).ToDictionary(package =>
-                $"{DocumentLanguages.Name(package.Language)} · {package.License} · {package.Bytes / 1_000_000d:F0} МБ");
+            var choices = packages.Where(package => !download || !package.SyntaxAvailable || !package.ExpressionsAvailable)
+                .ToDictionary(package =>
+                    $"{DocumentLanguages.Name(package.Language)} · {package.License} · {package.Bytes / 1_000_000d:F0} МБ");
             if (choices.Count == 0) return;
             var choice = await DisplayActionSheetAsync("Пакети Universal Dependencies", "Скасувати", null, choices.Keys.ToArray());
             if (choice is null || !choices.TryGetValue(choice, out var selected)) return;
-            KnowledgeStatus.Text = $"Завантаження {selected.Name}…";
+
             var root = Path.Combine(FileSystem.CacheDirectory, "knowledge-downloads");
-            var path = await Downloader.FetchKnowledgeAsync(selected, root, CancellationToken.None);
+            string path;
+            if (download)
+            {
+                KnowledgeStatus.Text = $"Завантаження {selected.Name}…";
+                path = await Downloader.FetchKnowledgeAsync(selected, root, CancellationToken.None);
+            }
+            else
+            {
+                var file = await FilePicker.Default.PickAsync(new PickOptions { PickerTitle = $"Файл .conllu для {selected.Name}" });
+                if (file is null) return;
+                Directory.CreateDirectory(root);
+                path = Path.Combine(root, $"{Guid.NewGuid():N}.conllu");
+                cleanupPath = path;
+                KnowledgeStatus.Text = $"Копіювання файлу для {selected.Name}…";
+                await using var input = await file.OpenReadAsync();
+                await using var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                    64 * 1024, FileOptions.Asynchronous);
+                await NativeFiles.CopyBoundedAsync(input, output, checked((int)selected.Bytes));
+            }
+
             KnowledgeStatus.Text = "Створення локального індексу…";
             await AppState.Session.InstallKnowledgePackageAsync(selected.Language, path);
+            cleanupPath = path;
             KnowledgeStatus.Text = $"Встановлено {selected.Name}. Аналіз слів працює офлайн.";
             await RefreshKnowledgePackagesAsync();
-            try { File.Delete(path); }
-            catch (IOException) { KnowledgeStatus.Text += " Не вдалося видалити тимчасову копію."; }
-            catch (UnauthorizedAccessException) { KnowledgeStatus.Text += " Не вдалося видалити тимчасову копію."; }
         }
         catch (Exception error) { KnowledgeStatus.Text = error.Message; }
-        finally { InstallKnowledge.IsEnabled = true; }
+        finally
+        {
+            if (cleanupPath is not null)
+            {
+                try { File.Delete(cleanupPath); }
+                catch (IOException) { KnowledgeStatus.Text += " Не вдалося видалити тимчасову копію."; }
+                catch (UnauthorizedAccessException) { KnowledgeStatus.Text += " Не вдалося видалити тимчасову копію."; }
+            }
+            changingKnowledgePackage = false;
+            InstallKnowledge.IsEnabled = OpenKnowledge.IsEnabled = true;
+        }
     }
 
     private async Task RefreshTranslationPackagesAsync()

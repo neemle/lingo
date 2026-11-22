@@ -121,7 +121,7 @@ public sealed class CoreClient : IDisposable
     public KnowledgePackage[] KnowledgePackages() =>
         Call<KnowledgePackage[]>(new { version = 1, operation = "knowledge_packages" });
     public KnowledgePackage InstallKnowledgePackage(string language, string path) =>
-        Call<KnowledgePackage>(new { version = 1, operation = "install_knowledge_package", language, path });
+        CallIndependent<KnowledgePackage>(new { version = 1, operation = "install_knowledge_package", language, path });
     public WordLookup? LookupWord(string language, string word, WordContext? context = null) =>
         Call<WordLookup?>(new { version = 1, operation = "lookup_word", language, word, context });
     public OcrSuggestion[]? SuggestOcr(string language, string text) =>

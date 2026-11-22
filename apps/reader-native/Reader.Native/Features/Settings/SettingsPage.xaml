@@ -144,7 +144,9 @@
     <VerticalStackLayout Spacing="12">
      <Label Text="Граматичний аналіз" Style="{StaticResource ResourceTitle}" SemanticProperties.HeadingLevel="Level2" />
      <Label x:Name="KnowledgePackages" Style="{StaticResource ResourceDetail}" />
-     <Button x:Name="InstallKnowledge" Text="Встановити або оновити пакет аналізу" Clicked="InstallKnowledgeClicked"
+     <Button x:Name="InstallKnowledge" Text="Завантажити або оновити пакет аналізу" Clicked="InstallKnowledgeClicked"
+      Style="{StaticResource OutlineButton}" HorizontalOptions="Start" />
+     <Button x:Name="OpenKnowledge" Text="Встановити з файлу .conllu" Clicked="OpenKnowledgeClicked"
       Style="{StaticResource OutlineButton}" HorizontalOptions="Start" />
      <Label x:Name="KnowledgeStatus" Style="{StaticResource ResourceDetail}" />
     </VerticalStackLayout>
