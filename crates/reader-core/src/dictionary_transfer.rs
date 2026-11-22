@@ -36,6 +36,16 @@ pub struct DictionarySource {
     pub source_hash: Option<String>,
     #[serde(default)]
     pub entry_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<DictionaryExample>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DictionaryExample {
+    entry_id: String,
+    surface: String,
+    sentence: String,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -59,6 +69,17 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
          );
          CREATE INDEX IF NOT EXISTS dictionary_document_cards
             ON dictionary_card_sources(document_id, card_id);
+         CREATE TABLE IF NOT EXISTS dictionary_card_contexts (
+            card_id TEXT NOT NULL,
+            document_id TEXT NOT NULL,
+            surface TEXT NOT NULL,
+            sentence TEXT NOT NULL,
+            UNIQUE (card_id, document_id, surface, sentence),
+            FOREIGN KEY (card_id, document_id) REFERENCES dictionary_card_sources(card_id, document_id)
+                ON DELETE CASCADE
+         );
+         CREATE INDEX IF NOT EXISTS dictionary_document_contexts
+            ON dictionary_card_contexts(document_id, card_id);
          CREATE TABLE IF NOT EXISTS dictionary_review_origins (
             origin TEXT PRIMARY KEY,
             event_id INTEGER NOT NULL UNIQUE REFERENCES review_events(id) ON DELETE CASCADE
@@ -148,7 +169,11 @@ pub(crate) fn find_collection(
 
 impl Store {
     pub fn dictionary_collection(&self, document_id: Option<&str>) -> Result<Vec<Vocabulary>> {
-        collection_cards(&self.connection, document_id, None)
+        let mut cards = collection_cards(&self.connection, document_id, None)?;
+        if let Some(id) = document_id {
+            apply_collection_contexts(&self.connection, id, &mut cards)?;
+        }
+        Ok(cards)
     }
 
     pub fn dictionary_sources(&self) -> Result<Vec<DictionarySource>> {
@@ -161,7 +186,7 @@ impl Store {
 
     pub fn export_dictionary(&self, document_id: Option<&str>) -> Result<DictionaryArchive> {
         let tx = self.connection.unchecked_transaction().map_err(error)?;
-        let entries = self.dictionary_collection(document_id)?;
+        let entries = collection_cards(&tx, document_id, None)?;
         let (sources, reviews) = export_details(&tx, &entries)?;
         let practice = if document_id.is_none() {
             practice::read(&tx)?.filter(|progress| progress.question.is_some())
@@ -189,6 +214,33 @@ impl Store {
     }
 }
 
+fn apply_collection_contexts(db: &Connection, id: &str, cards: &mut [Vocabulary]) -> Result<()> {
+    if cards.is_empty() {
+        return Ok(());
+    }
+    let Some((document_id, hash)) = find_collection(db, id, None)? else {
+        return Ok(());
+    };
+    let mut query = db.prepare(
+        "SELECT card_id, sentence FROM dictionary_card_contexts
+         WHERE document_id=?1 OR document_id IN (
+             SELECT document_id FROM dictionary_sources WHERE source_hash=?2
+         )
+         ORDER BY rowid",
+    ).map_err(error)?;
+    let rows = query.query_map(params![document_id, hash], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }).map_err(error)?;
+    let contexts = rows.collect::<rusqlite::Result<BTreeMap<_, _>>>().map_err(error)?;
+    for card in cards {
+        if let Some(sentence) = contexts.get(&card.id) {
+            card.context.clone_from(sentence);
+            card.document_id.clone_from(&document_id);
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn export_details(
     db: &Connection,
     entries: &[Vocabulary],
@@ -200,7 +252,25 @@ pub(crate) fn export_details(
         .filter(|review| ids.contains(review.event.entry_id.as_str()))
         .collect();
 
-    Ok((sources_for(db, entries)?, reviews))
+    let mut sources = sources_for(db, entries)?;
+    let mut query = db.prepare(
+        "SELECT document_id, card_id, surface, sentence FROM dictionary_card_contexts ORDER BY rowid",
+    ).map_err(error)?;
+    let rows = query.query_map([], |row| Ok((
+        row.get::<_, String>(0)?,
+        DictionaryExample { entry_id: row.get(1)?, surface: row.get(2)?, sentence: row.get(3)? },
+    ))).map_err(error)?;
+    let mut examples = BTreeMap::<String, Vec<DictionaryExample>>::new();
+    for row in rows {
+        let (document_id, example) = row.map_err(error)?;
+        if ids.contains(example.entry_id.as_str()) {
+            examples.entry(document_id).or_default().push(example);
+        }
+    }
+    for source in &mut sources {
+        source.examples = examples.remove(&source.document_id).unwrap_or_default();
+    }
+    Ok((sources, reviews))
 }
 
 fn sources_for(db: &Connection, entries: &[Vocabulary]) -> Result<Vec<DictionarySource>> {
@@ -237,6 +307,7 @@ fn sources_for(db: &Connection, entries: &[Vocabulary]) -> Result<Vec<Dictionary
                 title,
                 source_hash,
                 entry_ids: cards.into_iter().collect(),
+                examples: Vec::new(),
             })
         })
         .collect()
@@ -297,6 +368,10 @@ fn restore_archive(
                 params![card_ids[entry], sources[source.document_id.as_str()]],
             )
             .map_err(error)?;
+        }
+        for example in &source.examples {
+            write_context(tx, &card_ids[&example.entry_id], &sources[source.document_id.as_str()],
+                &example.surface, &example.sentence)?;
         }
     }
 
@@ -449,6 +524,7 @@ pub(crate) fn restore_backup_dictionary(
                     title: doc.map(|doc| doc.title.clone()),
                     source_hash: doc.map(|doc| doc.source_hash.clone()),
                     entry_ids: Vec::new(),
+                    examples: Vec::new(),
                 }
             });
             source.entry_ids.push(card.id.clone());
@@ -623,7 +699,9 @@ pub(crate) fn retain_removed_document_source(db: &Connection, id: &str) -> Resul
     Ok(())
 }
 
-pub(crate) fn link_card_document(db: &Connection, card_id: &str, document_id: &str) -> Result<()> {
+pub(crate) fn remember_card_context(
+    db: &Connection, card_id: &str, document_id: &str, surface: &str, sentence: &str,
+) -> Result<()> {
     let Some((title, source_hash)) = source_metadata(db, document_id)? else {
         return Ok(());
     };
@@ -634,13 +712,31 @@ pub(crate) fn link_card_document(db: &Connection, card_id: &str, document_id: &s
             title,
             source_hash,
             entry_ids: Vec::new(),
+            examples: Vec::new(),
         },
     )?;
     db.execute(
         "INSERT OR IGNORE INTO dictionary_card_sources(card_id,document_id) VALUES (?1,?2)",
         params![card_id, document_id],
-    )
-    .map_err(error)?;
+    ).map_err(error)?;
+    if valid_example(surface, sentence) {
+        write_context(db, card_id, &document_id, surface, sentence)?;
+    }
+    Ok(())
+}
+
+fn valid_example(surface: &str, sentence: &str) -> bool {
+    !surface.trim().is_empty() && surface.len() <= 500
+        && !sentence.trim().is_empty() && sentence.len() <= 64 * 1024
+        && !surface.contains('\0') && !sentence.contains('\0')
+}
+
+fn write_context(db: &Connection, card_id: &str, document_id: &str, surface: &str, sentence: &str) -> Result<()> {
+    db.execute(
+        "INSERT OR IGNORE INTO dictionary_card_contexts(card_id,document_id,surface,sentence)
+         VALUES (?1,?2,?3,?4)",
+        params![card_id, document_id, surface, sentence],
+    ).map_err(error)?;
     Ok(())
 }
 
@@ -820,6 +916,8 @@ fn validate_archive(archive: &DictionaryArchive) -> Result<()> {
                 .entry_ids
                 .iter()
                 .any(|id| !cards.contains(id.as_str()))
+            || source.examples.iter().any(|example|
+                !source.entry_ids.contains(&example.entry_id) || !valid_example(&example.surface, &example.sentence))
         {
             return Err("Некоректне джерело карток в архіві словника".into());
         }

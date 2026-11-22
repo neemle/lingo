@@ -208,7 +208,7 @@ impl Store {
         let cached = self.detached_pdf_sentences(document_id, page)?
             .ok_or("Текст сторінки PDF недоступний.")?;
         let (sentence, _) = resolve_text_selection(&cached.sentences, input.start_utf16, &input.selected_text)?;
-        self.save_word_for_document(crate::Vocabulary {
+        self.save_word(crate::Vocabulary {
             id: String::new(),
             word: input.selected_text,
             translation: input.translation,
@@ -222,7 +222,7 @@ impl Store {
             expression: input.expression,
             sense: input.sense,
             accepted_translations: Vec::new(),
-        }, true)
+        })
     }
 
     /// Warm one sentence in the current reading window. A changed cursor or

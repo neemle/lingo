@@ -1187,11 +1187,7 @@ impl Store {
         })
     }
 
-    pub fn save_word(&mut self, entry: Vocabulary) -> Result<Vocabulary> {
-        self.save_word_for_document(entry, false)
-    }
-
-    fn save_word_for_document(&mut self, mut entry: Vocabulary, link_document: bool) -> Result<Vocabulary> {
+    pub fn save_word(&mut self, mut entry: Vocabulary) -> Result<Vocabulary> {
         valid_language(&entry.language)?;
         valid_language(&entry.target_language)?;
         entry.word = entry.word.trim().to_owned();
@@ -1203,6 +1199,7 @@ impl Store {
         {
             return Err("Вкажіть слово й переклад (до 500 / 2000 символів)".into());
         }
+        let surface = entry.word.clone();
         if let Some(sense) = &mut entry.sense {
             sense.surface.clone_from(&entry.word);
         }
@@ -1259,9 +1256,7 @@ impl Store {
                 ],
             )
             .map_err(|e| e.to_string())?;
-            if (link_document || card.sense.is_some()) && card.document_id != entry.document_id {
-                dictionary_transfer::link_card_document(&tx, &card.id, &entry.document_id)?;
-            }
+            dictionary_transfer::remember_card_context(&tx, &card.id, &entry.document_id, &surface, &entry.context)?;
             tx.commit().map_err(|e| e.to_string())?;
             return Ok(card);
         }
@@ -1301,9 +1296,7 @@ impl Store {
                     ],
                 )
                 .map_err(|error| error.to_string())?;
-                if link_document && card.document_id != entry.document_id {
-                    dictionary_transfer::link_card_document(&tx, &card.id, &entry.document_id)?;
-                }
+                dictionary_transfer::remember_card_context(&tx, &card.id, &entry.document_id, &surface, &entry.context)?;
                 tx.commit().map_err(|error| error.to_string())?;
                 return Ok(card);
             }
@@ -1316,6 +1309,7 @@ impl Store {
             params![entry.id, key, serde_json::to_string(&entry).unwrap()],
         )
         .map_err(|e| e.to_string())?;
+        dictionary_transfer::remember_card_context(&tx, &entry.id, &entry.document_id, &surface, &entry.context)?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(entry)
     }

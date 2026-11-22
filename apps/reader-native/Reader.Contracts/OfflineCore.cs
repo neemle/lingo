@@ -22,7 +22,10 @@ public sealed record DictionaryArchive(int Version, Vocabulary[] Entries, Dictio
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] PracticeProgress? Practice = null);
 public sealed record DictionaryReview(string Id, string EntryId, string Direction, byte Grade, long ReviewedAt,
     string? Answer = null, long? ElapsedMs = null);
-public sealed record DictionarySource(string DocumentId, string? Title, string? SourceHash, string[] EntryIds);
+public sealed record DictionarySource(string DocumentId, string? Title, string? SourceHash, string[] EntryIds,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DictionaryExample[]? Examples = null);
+
+public sealed record DictionaryExample(string EntryId, string Surface, string Sentence);
 public sealed record DictionaryImport(int AddedCards, int ExistingCards, int AddedReviews, bool RestoredPractice = false);
 
 public sealed record SpeechAudio(int SampleRate, int Samples, int[] WavBytes);
