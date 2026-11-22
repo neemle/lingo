@@ -1,7 +1,7 @@
 use crate::{
     backup_limits::{LimitedReader, LimitedWriter},
     dictionary_transfer, document_layout, document_revisions, now, ocr, pdf_layers, pdf_reading_position, practice,
-    reading_history, segment, valid_language, validate_sentence_note, validate_speech_text,
+    reading_history, valid_language, validate_sentence_note, validate_speech_text,
     validate_translation, Backup, BackupResource, Document, Original, Result, Snapshot,
     SpeechResume, Store,
 };
@@ -502,7 +502,7 @@ pub(crate) fn prepare_layout(
         if !current.matches_text(&d.text) {
             return Err("Архів не містить підтвердженого тексту поточної ревізії".into());
         }
-        d.sentences = segment(&d.text, &d.id);
+        d.sentences = crate::pdf_sentences::segment(&d.text, &d.id, d.pdf_soft_lines);
         ocr::update_transcript(&mut d, parsed.text)?;
         true
     } else {
@@ -510,7 +510,7 @@ pub(crate) fn prepare_layout(
             d.reading_token_utf16 = None;
         }
         d.text = parsed.text;
-        d.sentences = segment(&d.text, &d.id);
+        d.sentences = crate::pdf_sentences::segment(&d.text, &d.id, d.pdf_soft_lines);
         false
     };
     d.blocks = parsed.blocks;
@@ -529,6 +529,7 @@ pub(crate) fn prepare_layout(
             &mut d, parser, created_at,
         ));
     }
+    crate::pdf_sentences::upgrade_document(&mut d);
     d.reading_token_utf16 = crate::document_tokens::validated_cursor_offset(&d);
     d.position = d.position.min(d.sentences.len().saturating_sub(1));
     d.speech_resume = d

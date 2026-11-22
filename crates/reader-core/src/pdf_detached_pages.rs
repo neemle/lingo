@@ -1,6 +1,5 @@
 use crate::{ocr, Result, Sentence, Store};
 use serde::{Deserialize, Serialize};
-use unicode_segmentation::UnicodeSegmentation;
 use sha2::{Digest, Sha256};
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -16,7 +15,7 @@ pub use find::{DetachedPdfFindCursor, DetachedPdfFindPage};
 pub use annotations::{DetachedPdfAnnotationChange, DetachedPdfAnnotationItem};
 pub(crate) use annotations::has_reviewed_target;
 
-pub(crate) fn initialize(db: &Connection) -> Result<()> {
+pub(crate) fn initialize(db: &mut Connection) -> Result<()> {
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS pdf_detached_pages (
             document_id TEXT NOT NULL REFERENCES file_originals(document_id) ON DELETE CASCADE,
@@ -24,6 +23,7 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
             ocr_language TEXT,
             text TEXT NOT NULL,
             lines TEXT,
+            soft_lines INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY(document_id, page)
         );
         CREATE TABLE IF NOT EXISTS pdf_detached_positions (
@@ -42,7 +42,67 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
         );",
     )
     .map_err(database_error)?;
-    annotations::initialize(db)
+    annotations::initialize(db)?;
+    upgrade_legacy_pages(db)
+}
+
+fn upgrade_legacy_pages(db: &mut Connection) -> Result<()> {
+    let has_layout = |db: &Connection| {
+        db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('pdf_detached_pages') WHERE name='soft_lines')",
+            [], |row| row.get::<_, bool>(0)).map_err(database_error)
+    };
+    if has_layout(db)? {
+        return Ok(());
+    }
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(database_error)?;
+    if !has_layout(&tx)? {
+        tx.execute("ALTER TABLE pdf_detached_pages ADD COLUMN soft_lines INTEGER NOT NULL DEFAULT 0", [])
+            .map_err(database_error)?;
+        let pages = {
+            let mut query = tx.prepare(
+                "SELECT p.document_id,p.page FROM pdf_detached_pages p
+                 WHERE NOT EXISTS(SELECT 1 FROM pdf_detached_speech_resume r WHERE r.document_id=p.document_id AND r.page=p.page)",
+            ).map_err(database_error)?;
+            let rows = query.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u16>(1)?)))
+                .map_err(database_error)?;
+            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(database_error)?
+        };
+        for (id, page) in pages {
+            let Some((text, _)) = read(&tx, &id, page)? else { continue; };
+            let anchors = annotations::list(&tx, &id, page)?;
+            let previous = crate::segment(&text, "");
+            let current = crate::segment_pdf(&text, "");
+            if !anchors_unchanged(&anchors, &previous, &current) {
+                continue;
+            }
+            let saved: Option<usize> = tx.query_row(
+                "SELECT sentence FROM pdf_detached_positions WHERE document_id=?1 AND page=?2",
+                params![id, page], |row| Ok(row.get::<_, u32>(0)? as usize),
+            ).optional().map_err(database_error)?;
+            if let Some(position) = saved {
+                let position = remap_position(position, &previous, &current);
+                write_position(&tx, &id, page, position)?;
+            }
+            tx.execute("UPDATE pdf_detached_pages SET soft_lines=1 WHERE document_id=?1 AND page=?2",
+                params![id, page]).map_err(database_error)?;
+        }
+    }
+    tx.commit().map_err(database_error)
+}
+
+fn anchors_unchanged(anchors: &[annotations::ArchivedAnnotation], before: &[Sentence], after: &[Sentence]) -> bool {
+    anchors.iter().all(|anchor| {
+        let index = |sentences: &[Sentence]| sentences.binary_search_by_key(&anchor.start_utf16, |s| s.start_utf16);
+        match (index(before), index(after)) {
+            (Ok(old), Ok(new)) => before[old].text == after[new].text,
+            _ => false,
+        }
+    })
+}
+
+fn remap_position(position: usize, before: &[Sentence], after: &[Sentence]) -> usize {
+    let offset = before.get(position).or_else(|| before.last()).map_or(0, |s| s.start_utf16);
+    crate::pdf_sentences::position_at(after, offset)
 }
 
 #[derive(Serialize)]
@@ -146,17 +206,17 @@ impl Store {
     }
 
     pub(crate) fn detached_pdf_sentences(&self, id: &str, page: u16) -> Result<Option<CachedSentences>> {
-        let result: Option<(String, String, usize)> = self.connection.query_row(
-            "SELECT p.text, json_extract(d.body, '$.language'), coalesce(c.sentence,0)
+        let result: Option<(String, String, usize, bool)> = self.connection.query_row(
+            "SELECT p.text, json_extract(d.body, '$.language'), coalesce(c.sentence,0),p.soft_lines
              FROM pdf_detached_pages p JOIN documents d ON d.id=p.document_id
              LEFT JOIN pdf_detached_positions c ON c.document_id=p.document_id AND c.page=p.page
              WHERE p.document_id=?1 AND p.page=?2",
             params![id, page],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, u32>(2)? as usize)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, u32>(2)? as usize, row.get(3)?)),
         ).optional().map_err(database_error)?;
-        let Some((text, language, saved)) = result else { return Ok(None); };
+        let Some((text, language, saved, soft_lines)) = result else { return Ok(None); };
         let revision = page_revision(&text);
-        let sentences = crate::segment(&text, &sentence_prefix(id, page, &revision));
+        let sentences = crate::pdf_sentences::segment(&text, &sentence_prefix(id, page, &revision), soft_lines);
         Ok((!sentences.is_empty()).then_some(CachedSentences { language, text, saved, sentences, revision }))
     }
 }
@@ -216,7 +276,7 @@ pub(crate) fn read(db: &Connection, id: &str, page: u16) -> Result<Option<(Strin
 }
 
 pub(crate) fn write_text_layer(db: &Connection, id: &str, page: u16, text: &str) -> Result<()> {
-    write(db, id, page, text, None, None)
+    write(db, id, page, text, None, None, true)
 }
 
 pub(crate) fn write_ocr(
@@ -232,18 +292,18 @@ pub(crate) fn write_ocr(
     }
     let text = ocr::recognized_lines(lines, page_count)?;
     let payload = serde_json::to_string(lines).map_err(database_error)?;
-    write(db, id, page, &text, Some(language), Some(&payload))
+    write(db, id, page, &text, Some(language), Some(&payload), true)
 }
 
 fn write(
-    db: &Connection, id: &str, page: u16, text: &str, language: Option<&str>, lines: Option<&str>,
+    db: &Connection, id: &str, page: u16, text: &str, language: Option<&str>, lines: Option<&str>, soft_lines: bool,
 ) -> Result<()> {
     db.execute(
-        "INSERT INTO pdf_detached_pages (document_id, page, ocr_language, text, lines)
-         VALUES (?1,?2,?3,?4,?5)
+        "INSERT INTO pdf_detached_pages (document_id, page, ocr_language, text, lines, soft_lines)
+         VALUES (?1,?2,?3,?4,?5,?6)
          ON CONFLICT(document_id,page) DO UPDATE SET
             ocr_language=excluded.ocr_language, text=excluded.text, lines=excluded.lines",
-        params![id, page, language, text, lines],
+        params![id, page, language, text, lines, soft_lines],
     )
     .map_err(database_error)?;
     Ok(())
@@ -257,6 +317,8 @@ pub(crate) struct ArchivedPage {
     pub language: Option<String>,
     pub lines: Option<Vec<ocr::OcrLine>>,
     pub position: Option<usize>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    soft_lines: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<annotations::ArchivedAnnotation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -269,13 +331,13 @@ impl ArchivedPage {
             || self.text.len() > crate::MAX_IMPORT || self.text.contains('\0')
             || document.pdf_page_starts.as_ref().and_then(|starts| starts.get(usize::from(self.page)))
                 != Some(&None)
-            || self.position.is_some_and(|position| !has_sentence(&self.text, position))
+            || self.position.is_some_and(|position| !has_sentence(&self.text, position, self.soft_lines))
         {
             return Err("Некоректна окрема сторінка PDF у резервній копії.".into());
         }
 
         if !self.annotations.is_empty() {
-            let sentences = crate::segment(&self.text, "");
+            let sentences = crate::pdf_sentences::segment(&self.text, "", self.soft_lines);
             if self.annotations.windows(2).any(|pair| pair[0].start_utf16 >= pair[1].start_utf16) {
                 return Err("Некоректний порядок приміток до сторінки PDF.".into());
             }
@@ -308,7 +370,7 @@ impl ArchivedPage {
         }
         if let Some(checkpoint) = &self.speech_resume {
             let prefix = sentence_prefix(&document.id, self.page, &page_revision(&self.text));
-            let sentences = crate::segment(&self.text, &prefix);
+            let sentences = crate::pdf_sentences::segment(&self.text, &prefix, self.soft_lines);
             if !speech_resume::matches_original(checkpoint, &sentences)
                 || checkpoint.for_archive(&sentences, &document.language,
                     |start| annotations::archived_speech_text(&self.annotations, start)).is_none()
@@ -331,8 +393,13 @@ impl ArchivedPage {
     }
 }
 
-fn has_sentence(text: &str, position: usize) -> bool {
-    text.split_sentence_bounds().filter(|part| !part.trim().is_empty()).nth(position).is_some()
+fn has_sentence(text: &str, position: usize, soft_lines: bool) -> bool {
+    crate::pdf_sentences::segment(text, "", soft_lines).get(position).is_some()
+}
+
+fn page_soft_lines(db: &Connection, id: &str, page: u16) -> Result<bool> {
+    db.query_row("SELECT soft_lines FROM pdf_detached_pages WHERE document_id=?1 AND page=?2",
+        params![id, page], |row| row.get(0)).map_err(database_error)
 }
 
 pub(crate) fn has_boundary_speech_resume(db: &Connection) -> Result<bool> {
@@ -355,7 +422,7 @@ pub(crate) fn visit_cached_pages(
     db: &Connection, id: &str, mut visit: impl FnMut(ArchivedPage) -> Result<()>,
 ) -> Result<()> {
     let mut query = db.prepare(
-        "SELECT p.page,p.text,p.ocr_language,p.lines,c.sentence,json_extract(d.body,'$.language')
+        "SELECT p.page,p.text,p.ocr_language,p.lines,c.sentence,json_extract(d.body,'$.language'),p.soft_lines
          FROM pdf_detached_pages p
          JOIN documents d ON d.id=p.document_id
          LEFT JOIN pdf_detached_positions c ON c.document_id=p.document_id AND c.page=p.page
@@ -368,10 +435,11 @@ pub(crate) fn visit_cached_pages(
         let position = row.get::<_, Option<u32>>(4).map_err(database_error)?.map(|value| value as usize);
         let page = row.get(0).map_err(database_error)?;
         let language: String = row.get(5).map_err(database_error)?;
+        let soft_lines: bool = row.get(6).map_err(database_error)?;
         let annotations = annotations::list(db, id, page)?;
         let checkpoint = speech_resume::read(db, id, page)?.filter(|checkpoint| {
             let prefix = sentence_prefix(id, page, &page_revision(&text));
-            let sentences = crate::segment(&text, &prefix);
+            let sentences = crate::pdf_sentences::segment(&text, &prefix, soft_lines);
             speech_resume::matches_original(checkpoint, &sentences)
                 && checkpoint.for_archive(&sentences, &language,
                     |start| annotations::archived_speech_text(&annotations, start)).is_some()
@@ -380,7 +448,8 @@ pub(crate) fn visit_cached_pages(
             page,
             speech_resume: checkpoint,
             annotations,
-            position: position.filter(|&position| has_sentence(&text, position)),
+            position: position.filter(|&position| has_sentence(&text, position, soft_lines)),
+            soft_lines,
             text,
             language: row.get(2).map_err(database_error)?,
             lines: encoded.as_deref().map(serde_json::from_str).transpose().map_err(database_error)?,
@@ -390,7 +459,7 @@ pub(crate) fn visit_cached_pages(
 }
 
 /// Keep a local page and cursor when present. A cursor only transfers to identical text.
-pub(crate) fn adopt_cached_page(db: &Connection, document: &crate::Document, page: ArchivedPage) -> Result<()> {
+pub(crate) fn adopt_cached_page(db: &Connection, document: &crate::Document, mut page: ArchivedPage) -> Result<()> {
     if document.pdf_page_starts.as_ref().and_then(|starts| starts.get(usize::from(page.page)))
         != Some(&None)
     {
@@ -400,9 +469,27 @@ pub(crate) fn adopt_cached_page(db: &Connection, document: &crate::Document, pag
         if text != page.text {
             return Ok(());
         }
+        let local_mode = page_soft_lines(db, &document.id, page.page)?;
+        if local_mode != page.soft_lines {
+            let from = crate::pdf_sentences::segment(&text, "", page.soft_lines);
+            let to = crate::pdf_sentences::segment(&text, "", local_mode);
+            if !anchors_unchanged(&page.annotations, &from, &to) {
+                return Err("Архів і локальна копія PDF мають різні межі для збережених приміток.".into());
+            }
+            page.position = page.position.map(|position| remap_position(position, &from, &to));
+            page.soft_lines = local_mode;
+        }
     } else {
+        if !page.soft_lines && page.speech_resume.is_none() {
+            let previous = crate::segment(&page.text, "");
+            let current = crate::segment_pdf(&page.text, "");
+            if anchors_unchanged(&page.annotations, &previous, &current) {
+                page.position = page.position.map(|position| remap_position(position, &previous, &current));
+                page.soft_lines = true;
+            }
+        }
         let payload = page.lines.as_ref().map(serde_json::to_string).transpose().map_err(database_error)?;
-        write(db, &document.id, page.page, &page.text, page.language.as_deref(), payload.as_deref())?;
+        write(db, &document.id, page.page, &page.text, page.language.as_deref(), payload.as_deref(), page.soft_lines)?;
         db.execute(
             "DELETE FROM pdf_ocr_completed_pages WHERE document_id=?1 AND page=?2",
             params![document.id, page.page],
@@ -415,7 +502,7 @@ pub(crate) fn adopt_cached_page(db: &Connection, document: &crate::Document, pag
     annotations::merge(db, &document.id, page.page, &page.annotations)?;
     if let Some(checkpoint) = page.speech_resume {
         let prefix = sentence_prefix(&document.id, page.page, &page_revision(&page.text));
-        let sentences = crate::segment(&page.text, &prefix);
+        let sentences = crate::pdf_sentences::segment(&page.text, &prefix, page.soft_lines);
         let annotations = annotations::list(db, &document.id, page.page)?;
         let speech_text = |start| annotations::archived_speech_text(&annotations, start);
         let local_valid = speech_resume::read(db, &document.id, page.page)?.is_some_and(|local| {

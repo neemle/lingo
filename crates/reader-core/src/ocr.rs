@@ -367,7 +367,7 @@ pub(crate) fn update_transcript_with_page_starts(
 ) -> Result<()> {
     use std::collections::HashMap;
 
-    let sentences = crate::segment(&text, &document.id);
+    let sentences = crate::pdf_sentences::segment(&text, &document.id, document.pdf_soft_lines);
     let old_pages = document
         .pdf_page_starts
         .as_deref()

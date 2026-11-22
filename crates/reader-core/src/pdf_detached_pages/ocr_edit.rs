@@ -46,7 +46,7 @@ impl Store {
                         .filter(|span| candidate.text == word && span.start_utf16 == start_utf16)
                 })
                 .ok_or("Слово більше не відповідає тексту сторінки PDF.")?;
-            let sentences = crate::segment(&text, "");
+            let sentences = crate::pdf_sentences::segment(&text, "", super::page_soft_lines(tx, id, page)?);
             let position =
                 sentences.partition_point(|sentence| sentence.end_utf16 <= span.start_utf16);
             if !sentences.get(position).is_some_and(|sentence| {
@@ -193,8 +193,9 @@ fn move_sentence_anchors(
     new: &str,
     edit: Edit,
 ) -> Result<()> {
-    let old_sentences = crate::segment(old, "");
-    let new_sentences = crate::segment(new, "");
+    let soft_lines = super::page_soft_lines(db, id, page)?;
+    let old_sentences = crate::pdf_sentences::segment(old, "", soft_lines);
+    let new_sentences = crate::pdf_sentences::segment(new, "", soft_lines);
     let saved: Option<usize> = db
         .query_row(
             "SELECT sentence FROM pdf_detached_positions WHERE document_id=?1 AND page=?2",

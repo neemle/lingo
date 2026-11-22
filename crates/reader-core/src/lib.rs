@@ -39,6 +39,7 @@ mod pdf_page_ocr;
 mod pdf_detached_pages;
 pub use pdf_detached_pages::{DetachedPdfAnnotationChange, DetachedPdfAnnotationItem, DetachedPdfFindCursor, DetachedPdfFindPage, DetachedPdfOcrPage, DetachedPdfSentence, DetachedPdfTranslation};
 mod pdf_reading_position;
+mod pdf_sentences;
 pub use pdf_page_ocr::{PdfReadPage, PdfReadPageState, PdfReadWindow};
 pub mod practice;
 pub mod qwen;
@@ -104,6 +105,8 @@ pub struct Document {
     pub pdf_pending_text_pages: BTreeSet<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pdf_page_starts: Option<Vec<Option<usize>>>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) pdf_soft_lines: bool,
     pub created_at: i64,
     pub source_hash: String,
     pub format: String,
@@ -403,10 +406,33 @@ pub fn now() -> i64 {
         .as_secs() as i64
 }
 pub fn segment(text: &str, id: &str) -> Vec<Sentence> {
+    segment_with_boundaries(text, text, id)
+}
+
+pub(crate) fn segment_pdf(text: &str, id: &str) -> Vec<Sentence> {
+    let mut softened = text.as_bytes().to_vec();
+    let mut start = 0;
+    let mut lines = text.split_inclusive('\n').peekable();
+    while let Some(line) = lines.next() {
+        let end = start + line.len();
+        if line.ends_with('\n') && !line.trim().is_empty()
+            && lines.peek().is_some_and(|next| !next.trim().is_empty())
+        {
+            let ending = if line.ends_with("\r\n") { 2 } else { 1 };
+            softened[end - ending..end].fill(b' ');
+        }
+        start = end;
+    }
+    let boundaries = String::from_utf8(softened).expect("Replacing line breaks with spaces preserves UTF-8");
+    segment_with_boundaries(text, &boundaries, id)
+}
+
+fn segment_with_boundaries(text: &str, boundary_text: &str, id: &str) -> Vec<Sentence> {
     let mut previous_end = 0;
     let mut utf16_end = 0;
-    text.split_sentence_bound_indices()
-        .filter_map(|(offset, part)| {
+    boundary_text.split_sentence_bound_indices()
+        .filter_map(|(offset, boundary_part)| {
+            let part = &text[offset..offset + boundary_part.len()];
             let trimmed = part.trim();
             if trimmed.is_empty() {
                 return None;
@@ -460,7 +486,7 @@ pub struct Store {
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         let mut connection = Connection::open(path).map_err(|e| e.to_string())?;
-        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, body TEXT NOT NULL, source_hash TEXT UNIQUE NOT NULL); CREATE TABLE IF NOT EXISTS originals (document_id TEXT PRIMARY KEY REFERENCES documents(id), name TEXT NOT NULL, bytes BLOB NOT NULL); CREATE TABLE IF NOT EXISTS vocabulary (id TEXT PRIMARY KEY, word_key TEXT UNIQUE NOT NULL, body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS review_events (id INTEGER PRIMARY KEY, entry_id TEXT NOT NULL, direction TEXT NOT NULL, grade INTEGER NOT NULL, reviewed_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS translation_cache (key TEXT PRIMARY KEY, body TEXT NOT NULL); PRAGMA user_version=1;").map_err(|e| e.to_string())?;
+        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, body TEXT NOT NULL, source_hash TEXT UNIQUE NOT NULL); CREATE TABLE IF NOT EXISTS originals (document_id TEXT PRIMARY KEY REFERENCES documents(id), name TEXT NOT NULL, bytes BLOB NOT NULL); CREATE TABLE IF NOT EXISTS vocabulary (id TEXT PRIMARY KEY, word_key TEXT UNIQUE NOT NULL, body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS review_events (id INTEGER PRIMARY KEY, entry_id TEXT NOT NULL, direction TEXT NOT NULL, grade INTEGER NOT NULL, reviewed_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS translation_cache (key TEXT PRIMARY KEY, body TEXT NOT NULL);").map_err(|e| e.to_string())?;
         connection.execute("CREATE TABLE IF NOT EXISTS speech_resume (document_id TEXT PRIMARY KEY REFERENCES documents(id), body TEXT NOT NULL)", [])
             .map_err(|e| e.to_string())?;
         connection.execute("CREATE TABLE IF NOT EXISTS practice (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)", [])
@@ -480,12 +506,13 @@ impl Store {
         file_originals::initialize(&connection)?;
         intake::initialize(&connection)?;
         pdf_page_ocr::initialize(&connection)?;
-        pdf_detached_pages::initialize(&connection)?;
+        pdf_detached_pages::initialize(&mut connection)?;
         pdf_reading_position::initialize(&connection)?;
         reader_preferences::initialize(&connection)?;
         translation_queue::initialize(&connection)?;
         translation::initialize_cache_ownership(&connection)?;
         knowledge::annotation_cache::initialize(&connection)?;
+        pdf_sentences::upgrade_documents(&mut connection)?;
         let file_original_directory = file_originals::directory(path);
         file_originals::cleanup_orphans(&mut connection, &file_original_directory);
         Ok(Self {
@@ -771,8 +798,14 @@ impl Store {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("Document.txt");
+        let format = Path::new(name)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("txt")
+            .to_lowercase();
+        let sentences = if format == "pdf" { segment_pdf(&text, &id) } else { segment(&text, &id) };
         let mut document = Document {
-            sentences: segment(&text, &id),
+            sentences,
             id,
             title: Path::new(name)
                 .file_stem()
@@ -797,14 +830,11 @@ impl Store {
             pdf_ocr_refresh_pages: BTreeSet::new(),
             pdf_pending_text_pages: BTreeSet::new(),
             pdf_page_starts,
+            pdf_soft_lines: format == "pdf",
             created_at: now(),
             source_hash: hash,
             source_url: source_url.map(str::to_owned),
-            format: Path::new(name)
-                .extension()
-                .and_then(|x| x.to_str())
-                .unwrap_or("txt")
-                .to_lowercase(),
+            format,
         };
         ocr::refresh_provenance(&mut document);
         let parser_version = document_revisions::parser_version(&document);

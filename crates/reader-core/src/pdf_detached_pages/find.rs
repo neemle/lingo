@@ -63,7 +63,7 @@ impl Store {
             None
         };
         let mut statement = self.connection.prepare(
-            "SELECT page,text FROM pdf_detached_pages WHERE document_id=?1 AND page>=?2 ORDER BY page LIMIT ?3",
+            "SELECT page,text,soft_lines FROM pdf_detached_pages WHERE document_id=?1 AND page>=?2 ORDER BY page LIMIT ?3",
         ).map_err(database_error)?;
         let mut pages = statement.query(params![id, start.page, MAX_SCAN_PAGES as u32 + 1]).map_err(database_error)?;
         let mut scanned = 0;
@@ -79,7 +79,7 @@ impl Store {
 
             let text: String = row.get(1).map_err(database_error)?;
             let prefix = super::sentence_prefix(id, page, &super::page_revision(&text));
-            let sentences = crate::segment(&text, &prefix);
+            let sentences = crate::pdf_sentences::segment(&text, &prefix, row.get(2).map_err(database_error)?);
             let (projection, original) = if let Some((target, source, _)) = &routes {
                 (Some(self.project_pdf_translation_page(id, page, target, text, sentences, source.clone())?), Vec::new())
             } else {
