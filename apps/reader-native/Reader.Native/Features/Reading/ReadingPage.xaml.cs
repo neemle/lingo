@@ -16,6 +16,10 @@ public partial class ReadingPage : ContentPage
     private (string Document, string Sentence, string Source, string Target, string Text)? machineKey;
     private Reader.Contracts.MachineTranslation? machineTranslation;
     private string? machineStatus;
+    private (string Source, string Target)? readinessPair;
+    private TranslationReadiness? readiness;
+    private string? readinessError;
+    private int readinessRequest;
     private string? TargetCode
     {
         get
@@ -50,6 +54,7 @@ public partial class ReadingPage : ContentPage
         BindingContext = AppState.Session;
         AppState.Session.PropertyChanged += SessionChanged;
         UpdateHighlight();
+        readinessPair = null;
         UpdateTranslation();
         RefreshSpeechResume();
         loadingSpeechPreferences = true;
@@ -66,6 +71,7 @@ public partial class ReadingPage : ContentPage
     protected override void OnDisappearing()
     {
         StopSpeech();
+        readinessRequest++;
         selection = null;
         WordCard.IsVisible = false;
         Translation.Text = "";
@@ -137,20 +143,67 @@ public partial class ReadingPage : ContentPage
         var active = session.Sentence is not null && TargetCode is not null;
         var text = TargetCode is { } target ? session.ReviewedTranslation(target) : null;
         var key = ActiveTranslationKey();
+        if (key is { } current && readinessPair != (current.Source, current.Target))
+            RefreshReadiness((current.Source, current.Target));
         var machine = key is not null && key == machineKey ? machineTranslation : null;
         var machineLabel = machine?.JoinedLines == true
             ? "Машинний переклад об’єднаних рядків" : "Машинний переклад";
         TranslationNotice.Text = !active ? "Відкрийте документ для читання."
             : text is not null ? "Ваш переклад активного речення"
-            : machine?.PivotLanguage is { } pivot ? $"{machineLabel} через {pivot}"
+            : machine?.PivotLanguage is { } pivot ? $"{machineLabel} через {DocumentLanguages.Name(pivot)}"
             : machine is not null ? machineLabel
             : key == machineKey && machineStatus is not null ? machineStatus
-            : "Перекладу ще немає.";
+            : ReadinessMessage();
         SegmentTranslation.Text = text ?? machine?.Text ?? "";
         EditTranslation.Text = text is null ? "Додати свій переклад" : "Змінити переклад";
         EditTranslation.IsEnabled = active && !session.Busy && !translating;
-        TranslateOffline.IsEnabled = active && !session.Busy && !translating && text is null;
+        TranslateOffline.IsEnabled = active && !session.Busy && !translating && text is null && readiness?.Ready == true;
+        OpenTranslationPackages.IsVisible = active && readiness is { Missing.Length: > 0 };
         TargetLanguage.IsEnabled = active && !session.Busy;
+    }
+
+    private string ReadinessMessage()
+    {
+        if (readinessError is not null) return readinessError;
+        if (readiness is null) return "Перевіряємо мовні пакети…";
+        if (readiness.Ready)
+            return readiness.PivotLanguage is { } pivot
+                ? $"Доступний офлайн-переклад через {DocumentLanguages.Name(pivot)}."
+                : "Доступний прямий офлайн-переклад.";
+        if (readiness.Missing.Length == 0) return "Для цієї пари в каталозі немає офлайн-моделі.";
+        var pairs = readiness.Missing.Select(pair => $"{DocumentLanguages.Name(pair.Source)} → {DocumentLanguages.Name(pair.Target)}");
+        return $"Потрібні мовні пакети · {string.Join(", ", pairs)}";
+    }
+
+    private async void RefreshReadiness((string Source, string Target) pair)
+    {
+        var request = ++readinessRequest;
+        readinessPair = pair;
+        readiness = null;
+        readinessError = null;
+        try
+        {
+            var status = await AppState.Session.TranslationReadinessAsync(pair.Source, pair.Target);
+            if (request != readinessRequest) return;
+            readiness = status;
+        }
+        catch (Exception error)
+        {
+            if (request != readinessRequest) return;
+            readinessError = error.Message;
+        }
+        UpdateTranslation();
+    }
+
+    private async void OpenTranslationPackagesClicked(object? sender, EventArgs args)
+    {
+        if (readiness is not { Missing.Length: > 0 } state) return;
+        try
+        {
+            await Shell.Current.GoToAsync("//settings",
+                new ShellNavigationQueryParameters { ["translationPackages"] = state.Missing });
+        }
+        catch (Exception error) { TranslationNotice.Text = error.Message; }
     }
 
     private (string Document, string Sentence, string Source, string Target, string Text)? ActiveTranslationKey()
@@ -164,7 +217,7 @@ public partial class ReadingPage : ContentPage
     private async void TranslateOfflineClicked(object? sender, EventArgs args)
     {
         var session = AppState.Session;
-        if (translating || session.Busy || ActiveTranslationKey() is not { } key) return;
+        if (translating || session.Busy || readiness?.Ready != true || ActiveTranslationKey() is not { } key) return;
         translating = true;
         machineKey = key;
         machineTranslation = null;
@@ -173,7 +226,8 @@ public partial class ReadingPage : ContentPage
         try
         {
             machineTranslation = await session.TranslateSentenceAsync(key.Document, key.Sentence, key.Target);
-            machineStatus = machineTranslation is null ? "Для цієї пари не встановлено мовний пакет." : null;
+            machineStatus = null;
+            if (machineTranslation is null) readinessPair = null;
         }
         catch (Exception error) { machineStatus = error.Message; }
         finally

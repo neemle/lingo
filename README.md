@@ -102,6 +102,7 @@ The unpackaged Windows build can read and preview photos restored from a backup.
 
 ## Offline translation packages
 
+The reader shows which route is available and sends you to the needed download when a package is missing.
 Choose a language pair in **Налаштування** and select **Завантажити пакет**. The download can be stopped
 and resumed. Translation uses local files after installation.
 For offline setup, the app also accepts a ZIP prepared from the pinned Helsinki-NLP packages below.

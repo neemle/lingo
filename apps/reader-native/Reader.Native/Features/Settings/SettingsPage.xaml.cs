@@ -4,16 +4,30 @@ using Reader.Presentation;
 
 namespace Reader.Native.Features.Settings;
 
-public partial class SettingsPage : ContentPage
+public partial class SettingsPage : ContentPage, IQueryAttributable
 {
     private static readonly ModelDownload Downloader = new(new HttpClient(new HttpClientHandler
     {
         UseCookies = false,
     }));
     private TranslationPackageStatus[] downloadChoices = [];
+    private TranslationPair[] requestedPackages = [];
     private CancellationTokenSource? activeDownload;
 
     public SettingsPage() { InitializeComponent(); BindingContext = AppState.Session; }
+
+    public void ApplyQueryAttributes(IDictionary<string, object> query)
+    {
+        if (query.TryGetValue("translationPackages", out var value) && value is TranslationPair[] packages)
+        {
+            requestedPackages = packages;
+            var index = RequestedPackageIndex();
+            if (index >= 0) ModelChoice.SelectedIndex = index;
+        }
+    }
+
+    private int RequestedPackageIndex() => requestedPackages.Select(pair => Array.FindIndex(downloadChoices,
+        package => package.Source == pair.Source && package.Target == pair.Target)).FirstOrDefault(index => index >= 0, -1);
 
     protected override async void OnAppearing()
     {
@@ -28,7 +42,7 @@ public partial class SettingsPage : ContentPage
         {
             var packages = await AppState.Session.KnowledgePackagesAsync();
             KnowledgePackages.Text = string.Join(Environment.NewLine, packages.Select(package =>
-                $"{LanguageName(package.Language)} · {package.Name} {package.Version} · {package.License} · " +
+                $"{DocumentLanguages.Name(package.Language)} · {package.Name} {package.Version} · {package.License} · " +
                 (package.ExpressionsAvailable ? "встановлено" : package.Installed
                     ? "доступне оновлення індексу" : "доступно для завантаження")));
             InstallKnowledge.IsVisible = packages.Any(package => !package.ExpressionsAvailable);
@@ -43,7 +57,7 @@ public partial class SettingsPage : ContentPage
         {
             var packages = await AppState.Session.KnowledgePackagesAsync();
             var choices = packages.Where(package => !package.ExpressionsAvailable).ToDictionary(package =>
-                $"{LanguageName(package.Language)} · {package.License} · {package.Bytes / 1_000_000d:F0} МБ");
+                $"{DocumentLanguages.Name(package.Language)} · {package.License} · {package.Bytes / 1_000_000d:F0} МБ");
             if (choices.Count == 0) return;
             var choice = await DisplayActionSheetAsync("Пакети Universal Dependencies", "Скасувати", null, choices.Keys.ToArray());
             if (choice is null || !choices.TryGetValue(choice, out var selected)) return;
@@ -68,28 +82,22 @@ public partial class SettingsPage : ContentPage
         {
             var packages = await AppState.Session.TranslationPackagesAsync();
             TranslationPackages.Text = string.Join(Environment.NewLine, packages.Select(package =>
-                $"{LanguageName(package.Source)} → {LanguageName(package.Target)}: " +
+                $"{DocumentLanguages.Name(package.Source)} → {DocumentLanguages.Name(package.Target)}: " +
                 (package.FilesPresent ? "файли на місці" : "пакет відсутній")));
             var previous = ModelChoice.SelectedIndex >= 0 && ModelChoice.SelectedIndex < downloadChoices.Length
                 ? downloadChoices[ModelChoice.SelectedIndex].Revision : null;
             downloadChoices = packages.Where(package => !package.FilesPresent).ToArray();
             ModelChoice.ItemsSource = downloadChoices.Select(package =>
-                $"{LanguageName(package.Source)} → {LanguageName(package.Target)} " +
+                $"{DocumentLanguages.Name(package.Source)} → {DocumentLanguages.Name(package.Target)} " +
                 $"({package.Assets.Sum(asset => asset.Bytes) / 1_000_000d:F0} МБ)").ToArray();
-            ModelChoice.SelectedIndex = downloadChoices.Length == 0 ? -1
+            var requested = RequestedPackageIndex();
+            ModelChoice.SelectedIndex = downloadChoices.Length == 0 ? -1 : requested >= 0 ? requested
                 : Math.Max(0, Array.FindIndex(downloadChoices, package => package.Revision == previous));
             DownloadTranslation.IsEnabled = activeDownload is null && downloadChoices.Length > 0;
         }
         catch (Exception error) { TranslationPackages.Text = error.Message; }
     }
 
-    private static string LanguageName(string code) => code switch
-    {
-        "en" => "Англійська",
-        "fr" => "Французька",
-        "uk" => "Українська",
-        _ => code,
-    };
 
     private async void ExportClicked(object? sender, EventArgs args)
     {

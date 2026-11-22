@@ -87,6 +87,10 @@ pub enum Command {
         text: String,
     },
     TranslationPackages,
+    TranslationReadiness {
+        source: String,
+        target: String,
+    },
     KnowledgePackages,
     InstallKnowledgePackage {
         language: String,

@@ -91,6 +91,82 @@ pub fn resolve_route(installed: &[ModelEdge], source: &str, target: &str) -> Res
     }))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationPair {
+    pub source: String,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationReadiness {
+    pub ready: bool,
+    pub pivot_language: Option<String>,
+    pub missing: Vec<TranslationPair>,
+}
+
+pub(crate) fn route_readiness(
+    catalog: &[ModelEdge],
+    installed: &[ModelEdge],
+    source: &str,
+    target: &str,
+) -> Result<TranslationReadiness> {
+    if let Some(route) = resolve_route(installed, source, target)? {
+        return Ok(TranslationReadiness {
+            ready: true,
+            pivot_language: route.pivot_language().map(str::to_owned),
+            missing: Vec::new(),
+        });
+    }
+
+    let pair = |edge: &ModelEdge| TranslationPair {
+        source: edge.source.clone(),
+        target: edge.target.clone(),
+    };
+    if let Some(edge) = catalog
+        .iter()
+        .find(|edge| edge.source == source && edge.target == target)
+    {
+        return Ok(TranslationReadiness {
+            ready: false,
+            pivot_language: None,
+            missing: vec![pair(edge)],
+        });
+    }
+    let (pivot_language, missing) = catalog
+        .iter()
+        .filter(|edge| edge.source == source)
+        .flat_map(|first| {
+            catalog
+                .iter()
+                .filter(move |second| second.source == first.target && second.target == target)
+                .map(move |second| (first, second))
+        })
+        .map(|(first, second)| {
+            let missing: Vec<_> = [first, second]
+                .into_iter()
+                .filter(|edge| !installed.contains(edge))
+                .map(pair)
+                .collect();
+            (first.target.clone(), missing)
+        })
+        .min_by(|(left, left_missing), (right, right_missing)| {
+            (left_missing.len(), left != "en", left).cmp(&(
+                right_missing.len(),
+                right != "en",
+                right,
+            ))
+        })
+        .map(|(pivot, missing)| (Some(pivot), missing))
+        .unwrap_or_default();
+    Ok(TranslationReadiness {
+        ready: false,
+        pivot_language,
+        missing,
+    })
+}
+
 pub trait TranslationProvider {
     /// Inspect the local inventory without downloading or loading models for inference.
     fn installed_models(&self) -> Result<Vec<ModelEdge>>;
@@ -167,9 +243,59 @@ pub(crate) fn input_for_sentence(document: &crate::Document, selected: usize) ->
 }
 
 #[cfg(test)]
-mod reflow_tests {
+mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn readiness_prefers_a_working_pivot_and_identifies_only_missing_packages() {
+        let edge = |source: &str, target: &str| ModelEdge {
+            source: source.into(),
+            target: target.into(),
+            revision: format!("{source}-{target}"),
+            quality: None,
+        };
+        let direct = edge("fr", "uk");
+        let first = edge("fr", "en");
+        let second = edge("en", "uk");
+        let catalog = [direct.clone(), first.clone(), second.clone()];
+        let installed = [first.clone(), second];
+        let via = route_readiness(&catalog, &installed, "fr", "uk").unwrap();
+        assert!(via.ready && via.missing.is_empty());
+        assert_eq!(via.pivot_language.as_deref(), Some("en"));
+        assert!(
+            route_readiness(&catalog, std::slice::from_ref(&direct), "fr", "uk")
+                .unwrap()
+                .pivot_language
+                .is_none()
+        );
+
+        let missing_direct =
+            route_readiness(&catalog, std::slice::from_ref(&first), "fr", "uk").unwrap();
+        assert_eq!(
+            missing_direct.missing,
+            [TranslationPair {
+                source: "fr".into(),
+                target: "uk".into()
+            }]
+        );
+        let needs_second =
+            route_readiness(&catalog[1..], std::slice::from_ref(&first), "fr", "uk").unwrap();
+        assert!(!needs_second.ready);
+        assert_eq!(
+            needs_second.missing,
+            [TranslationPair {
+                source: "en".into(),
+                target: "uk".into()
+            }]
+        );
+        let unsupported = route_readiness(&catalog, &installed, "uk", "fr").unwrap();
+        assert!(
+            !unsupported.ready
+                && unsupported.missing.is_empty()
+                && unsupported.pivot_language.is_none()
+        );
+    }
 
     #[test]
     fn pdf_reflow_joins_only_continuing_lines_and_keeps_stored_fragments() {

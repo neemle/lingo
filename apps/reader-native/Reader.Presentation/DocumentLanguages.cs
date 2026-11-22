@@ -8,4 +8,6 @@ public static class DocumentLanguages
         ("es", "Іспанська"), ("it", "Італійська"), ("pt", "Португальська"), ("pl", "Польська"),
         ("nl", "Нідерландська"), ("cs", "Чеська"), ("ro", "Румунська"), ("sv", "Шведська"),
     ];
+
+    public static string Name(string code) => All.FirstOrDefault(language => language.Code == code).Name ?? code;
 }

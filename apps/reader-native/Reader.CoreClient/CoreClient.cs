@@ -70,6 +70,8 @@ public sealed class CoreClient : IDisposable
         Call<JsonElement>(new { version = 1, operation = "set_reviewed_translation", id, sentenceId, target, text });
     public TranslationPackageStatus[] TranslationPackages() =>
         Call<TranslationPackageStatus[]>(new { version = 1, operation = "translation_packages" });
+    public TranslationReadiness GetTranslationReadiness(string source, string target) =>
+        Call<TranslationReadiness>(new { version = 1, operation = "translation_readiness", source, target });
     public KnowledgePackage[] KnowledgePackages() =>
         Call<KnowledgePackage[]>(new { version = 1, operation = "knowledge_packages" });
     public KnowledgePackage InstallKnowledgePackage(string language, string path) =>

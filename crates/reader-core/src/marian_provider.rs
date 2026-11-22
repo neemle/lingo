@@ -13,8 +13,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     translation::{
-        input_for_sentence, AlignedTranslation, ModelEdge, TranslationProvider, TranslationRequest,
-        TranslationSettings,
+        input_for_sentence, route_readiness, AlignedTranslation, ModelEdge, TranslationProvider,
+        TranslationReadiness, TranslationRequest, TranslationSettings,
     },
     Result, Store,
 };
@@ -37,6 +37,17 @@ struct Package {
     pub revision: &'static str,
     pub sizes: [u64; 5],
     pub hashes: [&'static str; 5],
+}
+
+impl Package {
+    fn edge(&self) -> ModelEdge {
+        ModelEdge {
+            source: self.source.into(),
+            target: self.target.into(),
+            revision: self.revision.into(),
+            quality: None,
+        }
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -144,6 +155,18 @@ impl Store {
         )
     }
 
+    pub fn translation_readiness(
+        &self,
+        source: &str,
+        target: &str,
+    ) -> Result<TranslationReadiness> {
+        let provider = MarianProvider {
+            directory: &self.model_directory,
+        };
+        let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
+        route_readiness(&catalog, &provider.installed_models()?, source, target)
+    }
+
     fn translate_sentence(
         &mut self,
         package_dir: &Path,
@@ -208,12 +231,7 @@ impl TranslationProvider for MarianProvider<'_> {
         Ok(catalog::PACKAGES
             .iter()
             .filter(|model| self.files_present(model))
-            .map(|model| ModelEdge {
-                source: model.source.into(),
-                target: model.target.into(),
-                revision: model.revision.into(),
-                quality: None,
-            })
+            .map(Package::edge)
             .collect())
     }
 

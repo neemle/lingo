@@ -72,6 +72,8 @@
        Clicked="EditTranslationClicked" />
       <Button x:Name="TranslateOffline" Text="Перекласти офлайн" Margin="0,4,0,0"
        Clicked="TranslateOfflineClicked" />
+      <Button x:Name="OpenTranslationPackages" Text="Потрібні мовні пакети" Margin="0,4,0,0"
+       IsVisible="False" Clicked="OpenTranslationPackagesClicked" />
      </FlexLayout>
     </Grid>
    </Border>
