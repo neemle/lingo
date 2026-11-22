@@ -129,8 +129,11 @@ public sealed class CoreClient : IDisposable
     public PdfReadWindow PdfReadWindow(string id, int center) =>
         Call<PdfReadWindow>(new { version = 1, operation = "pdf_read_window", id, center });
 
-    public DetachedPdfSentence? DetachedPdfSentence(string id, int page, int? position) =>
-        Call<DetachedPdfSentence?>(new { version = 1, operation = "detached_pdf_sentence", id, page, position });
+    public DetachedPdfSentence? DetachedPdfSentence(string id, int page, int? position, string? sentenceId = null) =>
+        Call<DetachedPdfSentence?>(new { version = 1, operation = "detached_pdf_sentence", id, page, position, sentenceId });
+
+    public DetachedPdfFindPage FindDetachedPdfText(string id, string query, DetachedPdfFindCursor start, int limit) =>
+        CallIndependent<DetachedPdfFindPage>(new { version = 1, operation = "find_detached_pdf_text", id, query, start, limit });
 
     public DetachedPdfAnnotationItem[] DetachedPdfAnnotations(string id, int page) =>
         Call<DetachedPdfAnnotationItem[]>(new { version = 1, operation = "detached_pdf_annotations", id, page });

@@ -98,8 +98,10 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             }
         }
         Command::PdfReadWindow { id, center } => value(store.pdf_read_window(&id, center)),
-        Command::DetachedPdfSentence { id, page, position } =>
-            value(store.detached_pdf_sentence(&id, page, position)),
+        Command::DetachedPdfSentence { id, page, position, sentence_id } =>
+            value(store.select_detached_pdf_sentence(&id, page, position, sentence_id.as_deref())),
+        Command::FindDetachedPdfText { id, query, start, limit } =>
+            value(store.find_detached_pdf_text(&id, &query, start, limit)),
         Command::DetachedPdfAnnotations { id, page } => value(store.detached_pdf_annotations(&id, page)),
         Command::UpdateDetachedPdfAnnotation { id, page, sentence_id, change } =>
             value(store.update_detached_pdf_annotation(&id, page, &sentence_id, change)),

@@ -115,6 +115,14 @@ pub enum Command {
         id: String,
         page: u16,
         position: Option<usize>,
+        #[serde(rename = "sentenceId")]
+        sentence_id: Option<String>,
+    },
+    FindDetachedPdfText {
+        id: String,
+        query: String,
+        start: reader_core::DetachedPdfFindCursor,
+        limit: usize,
     },
     DetachedPdfAnnotations { id: String, page: u16 },
     UpdateDetachedPdfAnnotation {

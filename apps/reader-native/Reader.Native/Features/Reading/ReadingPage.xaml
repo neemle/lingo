@@ -27,7 +27,7 @@
  </ContentPage.Resources>
  <ContentPage.MenuBarItems>
   <MenuBarItem Text="Читання">
-   <MenuFlyoutItem Text="Знайти в документі…" Clicked="FindInDocumentClicked" IsEnabled="{Binding CanBookmark}">
+   <MenuFlyoutItem Text="Знайти в документі…" Clicked="FindInDocumentClicked" IsEnabled="{Binding CanInteract}">
     <MenuFlyoutItem.KeyboardAccelerators>
      <KeyboardAccelerator Modifiers="{OnPlatform MacCatalyst=Cmd, WinUI=Ctrl}" Key="F" />
     </MenuFlyoutItem.KeyboardAccelerators>
@@ -189,6 +189,8 @@
         SemanticProperties.Description="Наступне речення сторінки" />
        <Button x:Name="DetachedTranslate" Text="Перекласти" Clicked="DetachedTranslateClicked"
         Margin="5,0" Style="{StaticResource PlayerButton}" />
+       <Button Text="Знайти" Clicked="FindInDocumentClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}"
+        SemanticProperties.Description="Знайти в документі" />
        <Button x:Name="DetachedAnalyze" Text="Аналіз речення" Clicked="DetachedAnalyzeClicked"
         Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedAnalyzeSelection" Text="Аналіз виділення" IsVisible="False"

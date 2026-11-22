@@ -17,3 +17,7 @@ public sealed record DetachedPdfSentence(Sentence Sentence, int Position, int To
     bool Bookmarked = false, string? Note = null);
 
 public sealed record DetachedPdfAnnotationItem(int Position, string Text, bool Bookmarked, string? Note);
+
+public sealed record DetachedPdfFindCursor(int Page, int Position);
+public sealed record DetachedPdfFindHit(int Page, int Position, string SentenceId, string Text);
+public sealed record DetachedPdfFindPage(DetachedPdfFindHit[] Matches, DetachedPdfFindCursor? Next);

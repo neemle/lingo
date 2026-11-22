@@ -5,6 +5,8 @@ use sha2::{Digest, Sha256};
 use rusqlite::{params, Connection, OptionalExtension};
 
 mod annotations;
+mod find;
+pub use find::{DetachedPdfFindCursor, DetachedPdfFindPage};
 pub use annotations::{DetachedPdfAnnotationChange, DetachedPdfAnnotationItem};
 pub(crate) use annotations::has_annotations;
 
@@ -52,11 +54,21 @@ impl Store {
     pub fn detached_pdf_sentence(
         &self, id: &str, page: u16, requested: Option<usize>,
     ) -> Result<Option<DetachedPdfSentence>> {
+        self.select_detached_pdf_sentence(id, page, requested, None)
+    }
+
+    pub fn select_detached_pdf_sentence(
+        &self, id: &str, page: u16, requested: Option<usize>, expected: Option<&str>,
+    ) -> Result<Option<DetachedPdfSentence>> {
         let Some(CachedSentences { language, saved, sentences, .. }) = self.detached_pdf_sentences(id, page)? else {
             return Ok(None);
         };
         let total = sentences.len();
         let position = requested.unwrap_or(saved).min(total - 1);
+        let sentence = sentences.into_iter().nth(position).ok_or("Речення PDF не знайдено.")?;
+        if expected.is_some_and(|expected| sentence.id != expected) {
+            return Err("Речення в результатах пошуку змінилося.".into());
+        }
         if requested.is_some() {
             self.connection.execute(
                 "INSERT INTO pdf_detached_positions (document_id,page,sentence)
@@ -65,7 +77,6 @@ impl Store {
                 params![id, page, position],
             ).map_err(database_error)?;
         }
-        let sentence = sentences.into_iter().nth(position).ok_or("Речення PDF не знайдено.")?;
         let (bookmarked, note) = annotations::read(&self.connection, id, page, sentence.start_utf16)?;
         Ok(Some(DetachedPdfSentence { sentence, position, total, language, bookmarked, note }))
     }
@@ -93,8 +104,8 @@ impl Store {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional().map_err(database_error)?;
         let Some((text, language, saved)) = result else { return Ok(None); };
-        let revision = format!("{:x}", Sha256::digest(text.as_bytes()));
-        let sentences = crate::segment(&text, &format!("{id}:{page}:{revision}"));
+        let revision = page_revision(&text);
+        let sentences = crate::segment(&text, &sentence_prefix(id, page, &revision));
         Ok((!sentences.is_empty()).then_some(CachedSentences { language, saved, sentences, revision }))
     }
 }
@@ -283,6 +294,14 @@ pub(crate) fn adopt_cached_page(db: &Connection, document: &crate::Document, pag
         ).map_err(database_error)?;
     }
     Ok(())
+}
+
+fn page_revision(text: &str) -> String {
+    format!("{:x}", Sha256::digest(text.as_bytes()))
+}
+
+fn sentence_prefix(document_id: &str, page: u16, revision: &str) -> String {
+    format!("{document_id}:{page}:{revision}")
 }
 
 fn database_error(error: impl std::fmt::Display) -> String {

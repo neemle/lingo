@@ -449,6 +449,13 @@ impl StoreWorker {
             .translate_installed_sentence(document_id, sentence_id, target)
     }
 
+    pub fn find_detached_pdf_text(
+        self, id: &str, query: &str, start: crate::DetachedPdfFindCursor, limit: usize,
+    ) -> Result<crate::DetachedPdfFindPage> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_ONLY)?
+            .find_detached_pdf_text(id, query, start, limit)
+    }
+
     pub fn translate_detached_pdf_sentence(
         self, id: &str, page: u16, sentence_id: &str, target: &str,
     ) -> Result<Option<AlignedTranslation>> {

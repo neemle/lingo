@@ -7,7 +7,11 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage
 {
     private bool findingInDocument;
-    private sealed record DocumentFindSelection(int Position, bool Translation);
+    private sealed record DocumentFindSelection(int Position, bool Translation,
+        int? PhysicalPage = null, string? SentenceId = null);
+    private sealed record DocumentFindCursor(int Position, int? PhysicalPage = null);
+    private sealed record DocumentFindHit(string Text, DocumentFindSelection Selection);
+    private sealed record DocumentFindPage(DocumentFindHit[] Matches, DocumentFindCursor? Next);
 
     private async void FindInDocumentClicked(object? sender, EventArgs args)
     {
@@ -19,12 +23,24 @@ public partial class ReadingPage
             var target = TargetCode;
             if (await ShowDocumentFindAsync(session, document, target) is not { } match) return;
             await session.WaitUntilIdleAsync();
-            var position = match.Position;
             if (!readingPageActive || session.Document is not { } current || current.Id != document.Id ||
-                current.CurrentRevisionId != document.CurrentRevisionId || current.Language != document.Language ||
-                (match.Translation && TargetCode != target) ||
-                position >= current.Sentences.Length || current.Sentences[position] != document.Sentences[position])
+                current.Language != document.Language || (match.Translation && TargetCode != target))
                 return;
+
+#if MACCATALYST
+            if (match.PhysicalPage is int page && match.SentenceId is { } sentenceId)
+            {
+                await pdfWindowRead;
+                if (!readingPageActive || session.Document?.Id != document.Id) return;
+                await OpenPdfPageAsync(page);
+                if (detachedAddress is { } address && address.Document == document.Id && address.Page == page)
+                    await LoadDetachedSentenceAsync(address, match.Position, sentenceId);
+                return;
+            }
+#endif
+            var position = match.Position;
+            if (current.CurrentRevisionId != document.CurrentRevisionId ||
+                position >= current.Sentences.Length || current.Sentences[position] != document.Sentences[position]) return;
 
             if ((match.Translation && readingLayout == ReaderLayout.Source) ||
                 (!match.Translation && readingLayout == ReaderLayout.Translation))
@@ -32,6 +48,14 @@ public partial class ReadingPage
                 readingLayout = ReaderLayout.Automatic;
                 ArrangeReadingColumns();
             }
+#if MACCATALYST
+            if (current.Format == "pdf" && position == current.Position)
+            {
+                await pdfWindowRead;
+                if (!readingPageActive || session.Document?.Id != document.Id) return;
+                await OpenPdfPageAsync(session.OriginalPageIndex());
+            }
+#endif
             StopSpeech();
             await session.SelectSentenceAsync(position);
         }
@@ -89,11 +113,11 @@ public partial class ReadingPage
         var page = new ContentPage { Title = "Пошук у документі", Content = form };
         var closed = new TaskCompletionSource<DocumentFindSelection?>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var cancellation = new CancellationTokenSource();
-        var earlierPages = new Stack<int>();
+        var earlierPages = new Stack<DocumentFindCursor>();
         var query = "";
         var inTranslation = false;
-        var currentStart = 0;
-        int? nextStart = null;
+        var currentStart = new DocumentFindCursor(0);
+        DocumentFindCursor? nextStart = null;
         var searching = false;
         page.Disappearing += (_, _) => closed.TrySetResult(null);
         page.Loaded += (_, _) => page.Dispatcher.Dispatch(() => entry.Focus());
@@ -124,10 +148,10 @@ public partial class ReadingPage
             query = entry.Text?.Trim() ?? "";
             inTranslation = target is not null && scope.SelectedIndex == 1;
             earlierPages.Clear();
-            await ShowResultsAsync(0);
+            await ShowResultsAsync(new DocumentFindCursor(0));
         }
 
-        async Task ShowResultsAsync(int start)
+        async Task ShowResultsAsync(DocumentFindCursor start)
         {
             searching = true;
             search.IsEnabled = scope.IsEnabled = previous.IsEnabled = next.IsEnabled = false;
@@ -145,19 +169,19 @@ public partial class ReadingPage
 
                 status.Text = "Шукаємо…";
                 var page = inTranslation && target is not null
-                    ? await FindTranslatedAsync(target, start, token)
+                    ? await FindTranslatedAsync(target, start.Position, token)
                     : await FindOriginalAsync(start, token);
                 if (token.IsCancellationRequested || closed.Task.IsCompleted) return;
-                nextStart = page.NextStart;
+                nextStart = page.Next;
                 status.Text = page.Matches.Length > 0 ? $"Збіги · сторінка {earlierPages.Count + 1}"
                     : inTranslation ? "Збігів у збереженому перекладі немає." : "Збігів не знайдено.";
                 foreach (var match in page.Matches)
                 {
-                    if (match.Position < 0 || match.Position >= document.Sentences.Length) continue;
-                    var text = inTranslation ? DocumentFind.MatchingExcerpt(match.Text, query) : match.Text;
-                    var result = new Button { Text = BookmarkLabel(match.Position, text),
-                        Style = outline, HorizontalOptions = LayoutOptions.Fill };
-                    var selection = new DocumentFindSelection(match.Position, inTranslation);
+                    var selection = match.Selection;
+                    var text = selection.Translation ? DocumentFind.MatchingExcerpt(match.Text, query) : match.Text;
+                    var label = BookmarkLabel(selection.Position, text);
+                    if (selection.PhysicalPage is int physicalPage) label = $"PDF {physicalPage + 1} · {label}";
+                    var result = new Button { Text = label, Style = outline, HorizontalOptions = LayoutOptions.Fill };
                     result.Clicked += (_, _) => closed.TrySetResult(selection);
                     results.Children.Add(result);
                 }
@@ -172,19 +196,55 @@ public partial class ReadingPage
                 {
                     search.IsEnabled = scope.IsEnabled = true;
                     previous.IsVisible = previous.IsEnabled = earlierPages.Count > 0;
-                    next.IsVisible = next.IsEnabled = nextStart.HasValue;
+                    next.IsVisible = next.IsEnabled = nextStart is not null;
                 }
             }
         }
 
-        async Task<TranslationFindPage> FindOriginalAsync(int start, CancellationToken token)
+        async Task<DocumentFindPage> FindOriginalAsync(DocumentFindCursor start, CancellationToken token)
         {
-            var found = await Task.Run(() => DocumentFind.FindPage(document.Sentences, query, start, token), token);
-            return new(found.Positions.Select(position => new TranslationFindHit(position, document.Sentences[position].Text))
-                .ToArray(), found.NextStart);
+            var matches = new List<DocumentFindHit>(DocumentFind.PageSize);
+            if (start.PhysicalPage is null)
+            {
+                var found = await Task.Run(() => DocumentFind.FindPage(document.Sentences, query, start.Position, token), token);
+                matches.AddRange(found.Positions.Select(position => new DocumentFindHit(document.Sentences[position].Text,
+                    new DocumentFindSelection(position, Translation: false))));
+                if (found.NextStart is int nextPosition)
+                    return new(matches.ToArray(), new DocumentFindCursor(nextPosition));
+            }
+#if MACCATALYST
+            if (document.Format == "pdf")
+            {
+                var cursor = new DetachedPdfFindCursor(start.PhysicalPage ?? 0,
+                    start.PhysicalPage is null ? 0 : start.Position);
+                var space = DocumentFind.PageSize - matches.Count;
+                var found = await FindDetachedAsync(cursor, Math.Max(1, space), token);
+                if (space == 0 && found.Matches.FirstOrDefault() is { } first)
+                    return new(matches.ToArray(), new DocumentFindCursor(first.Position, first.Page));
+                matches.AddRange(found.Matches.Select(hit => new DocumentFindHit(hit.Text,
+                    new DocumentFindSelection(hit.Position, Translation: false, PhysicalPage: hit.Page, SentenceId: hit.SentenceId))));
+                return new(matches.ToArray(), found.Next is { } remaining
+                    ? new DocumentFindCursor(remaining.Position, remaining.Page) : null);
+            }
+#endif
+            return new(matches.ToArray(), null);
         }
 
-        async Task<TranslationFindPage> FindTranslatedAsync(string language, int start, CancellationToken token)
+#if MACCATALYST
+        async Task<DetachedPdfFindPage> FindDetachedAsync(DetachedPdfFindCursor start, int limit, CancellationToken token)
+        {
+            while (true)
+            {
+                token.ThrowIfCancellationRequested();
+                var found = await session.FindDetachedPdfTextAsync(document.Id, query, start, limit, token);
+                if (found.Matches.Length > 0 || found.Next is not { } next || next == start)
+                    return found;
+                start = next;
+            }
+        }
+#endif
+
+        async Task<DocumentFindPage> FindTranslatedAsync(string language, int start, CancellationToken token)
         {
             while (true)
             {
@@ -192,7 +252,9 @@ public partial class ReadingPage
                 var found = await session.FindTranslationPageAsync(document.Id, language, query, start, token);
                 if (found.Matches.Length > 0 || found.NextStart is not int nextPosition ||
                     nextPosition <= start || nextPosition >= document.Sentences.Length)
-                    return found;
+                    return new(found.Matches.Where(hit => hit.Position >= 0 && hit.Position < document.Sentences.Length)
+                        .Select(hit => new DocumentFindHit(hit.Text, new DocumentFindSelection(hit.Position, Translation: true))).ToArray(),
+                        found.NextStart is int next ? new DocumentFindCursor(next) : null);
                 start = nextPosition;
             }
         }

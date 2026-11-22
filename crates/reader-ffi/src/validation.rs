@@ -207,6 +207,11 @@ fn validate(command: &Command) -> Result<()> {
         {
             Err(Error::new("invalid_argument", "Invalid PDF OCR request token"))
         }
+        Command::DetachedPdfSentence { id, sentence_id: Some(sentence_id), .. }
+            if !valid_token_address(id, sentence_id) =>
+        {
+            Err(Error::new("invalid_argument", "Invalid PDF sentence address"))
+        }
         Command::UpdateDetachedPdfAnnotation { id, sentence_id, .. } if !valid_token_address(id, sentence_id) =>
         {
             Err(Error::new("invalid_argument", "Invalid PDF annotation address"))
@@ -226,6 +231,7 @@ fn validate(command: &Command) -> Result<()> {
         | Command::OpenPdfReadingPage { id, .. }
         | Command::PdfReadWindow { id, .. }
         | Command::DetachedPdfSentence { id, .. }
+        | Command::FindDetachedPdfText { id, .. }
         | Command::DetachedPdfAnnotations { id, .. }
         | Command::AnalyzeDetachedPdf { id, .. }
         | Command::PdfOcrNeededPages { id, .. }

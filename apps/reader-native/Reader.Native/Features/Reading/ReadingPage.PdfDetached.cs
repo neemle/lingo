@@ -12,6 +12,7 @@ public partial class ReadingPage
     private DetachedPdfSentence? detachedSentence;
     private TextSelection? detachedSelection;
     private bool loadingDetachedSentence;
+    private int detachedSentenceRequest;
     private bool changingDetachedAnnotation;
     private bool translatingDetachedSentence;
     private bool speakingDetachedSentence;
@@ -42,16 +43,17 @@ public partial class ReadingPage
         ResetDetachedTranslation();
     }
 
-    private async Task LoadDetachedSentenceAsync(DetachedAddress address, int? position)
+    private async Task LoadDetachedSentenceAsync(DetachedAddress address, int? position, string? sentenceId = null)
     {
+        var request = ++detachedSentenceRequest;
         loadingDetachedSentence = true;
         detachedSelection = null;
         ClearDetachedSpeech();
         ResetDetachedTranslation();
         try
         {
-            var result = await AppState.Session.DetachedPdfSentenceAsync(address.Document, address.Page, position);
-            if (!ReferenceEquals(detachedAddress, address)) return;
+            var result = await AppState.Session.DetachedPdfSentenceAsync(address.Document, address.Page, position, sentenceId);
+            if (request != detachedSentenceRequest || !ReferenceEquals(detachedAddress, address)) return;
             detachedSentence = result;
             if (result is not { } current) return;
             var sentence = current.Sentence;
@@ -62,11 +64,11 @@ public partial class ReadingPage
         }
         catch (Exception error)
         {
-            if (ReferenceEquals(detachedAddress, address)) DetachedSentenceStatus.Text = error.Message;
+            if (request == detachedSentenceRequest && ReferenceEquals(detachedAddress, address)) DetachedSentenceStatus.Text = error.Message;
         }
         finally
         {
-            if (ReferenceEquals(detachedAddress, address))
+            if (request == detachedSentenceRequest && ReferenceEquals(detachedAddress, address))
             {
                 loadingDetachedSentence = false;
                 UpdateDetachedControls();
