@@ -15,6 +15,7 @@ use crate::{
         activate_verified_package, copy_and_hash, lock_package, model_error, package_directory,
         remove_package_directory,
     },
+    resources::RESOURCES,
     space::{ensure_capacity, PACKAGE_OVERHEAD},
     translation::{
         input_for_sentence, route_readiness, AlignedTranslation, ModelEdge, TranslationProvider,
@@ -374,6 +375,7 @@ impl TranslationProvider for MarianProvider<'_> {
                     && package.target == edge.target
             })
             .ok_or("Невідомий мовний пакет")?;
+        let _working = RESOURCES.interactive();
         let _lock = self.lock(package, false)?;
         let directory = self.read_path(package);
         verify_files(&directory, package, &ASSETS[..4])?;

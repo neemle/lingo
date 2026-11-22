@@ -3,6 +3,7 @@ use crate::{
         activate_verified_package, copy_and_hash, lock_package, model_error, package_directory,
         remove_package_directory,
     },
+    resources::{MemoryReadiness, ModelBudget, RESOURCES},
     space::{ensure_capacity, PACKAGE_OVERHEAD},
     Result, Store,
 };
@@ -19,6 +20,7 @@ struct Model {
     license: &'static str,
     repo: &'static str,
     revision: &'static str,
+    budget: ModelBudget,
     assets: &'static [Asset],
 }
 
@@ -37,6 +39,10 @@ const MODELS: &[Model] = &[
         license: "Apache-2.0",
         repo: "ggml-org/Qwen3.5-0.8B-GGUF",
         revision: "004fd086eccea9f7cf867aa07ba328773beef81d",
+        budget: ModelBudget {
+            working_mib: 1536,
+            minimum_total_mib: 0,
+        },
         assets: &[Asset {
             name: "model.gguf",
             remote_path: "Qwen3.5-0.8B-Q4_0.gguf",
@@ -50,6 +56,10 @@ const MODELS: &[Model] = &[
         license: "Apache-2.0",
         repo: "unsloth/Qwen3.5-2B-GGUF",
         revision: "f6d5376be1edb4d416d56da11e5397a961aca8ae",
+        budget: ModelBudget {
+            working_mib: 2560,
+            minimum_total_mib: 6144,
+        },
         assets: &[Asset {
             name: "model.gguf",
             remote_path: "Qwen3.5-2B-Q4_K_M.gguf",
@@ -63,6 +73,10 @@ const MODELS: &[Model] = &[
         license: "MIT",
         repo: "intfloat/multilingual-e5-small",
         revision: "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+        budget: ModelBudget {
+            working_mib: 1024,
+            minimum_total_mib: 0,
+        },
         assets: &[
             Asset {
                 name: "model.onnx",
@@ -89,6 +103,7 @@ pub struct OptionalModel {
     revision: &'static str,
     files_present: bool,
     has_local_files: bool,
+    memory: MemoryReadiness,
     assets: Vec<OptionalAsset>,
 }
 
@@ -154,7 +169,68 @@ fn verify_asset(path: &Path, asset: &Asset, output: impl Write) -> Result<()> {
     Ok(())
 }
 
+/// A pinned model and its storage location, independent of the SQLite connection.
+pub struct OptionalModelJob {
+    model: &'static Model,
+    paths: ModelPaths,
+}
+
+impl OptionalModelJob {
+    /// Keep the installed weights stable throughout a bounded inference call.
+    /// Providers should check the yield callback between batches and tokens.
+    pub fn run<T>(
+        self,
+        inference: impl FnOnce(&Path, &dyn Fn() -> bool) -> Result<T>,
+    ) -> Result<T> {
+        let permit = RESOURCES.optional()?;
+        let memory = self.model.budget.readiness();
+        if memory.available_mib.is_none() {
+            return Err("Не вдалося визначити доступну пам’ять. Модель пропущено.".into());
+        }
+        if memory
+            .total_mib
+            .is_some_and(|total| total < memory.minimum_total_mib)
+        {
+            return Err(format!(
+                "Для {} потрібно щонайменше {} МіБ RAM.",
+                self.model.name, memory.minimum_total_mib
+            ));
+        }
+        if !memory.ready {
+            return Err(format!(
+                "Для {} потрібно {} МіБ доступної пам’яті.",
+                self.model.name, memory.required_mib
+            ));
+        }
+        let installed = self.paths.installed();
+        if !package_directory(installed)? {
+            return Err("Модель відсутня.".into());
+        }
+        let _gate = lock_package(&self.paths.lock, false)?;
+        let installed = self.paths.installed();
+        let requested_yield = || permit.should_yield();
+        for asset in self.model.assets {
+            if requested_yield() {
+                return Err("Аналіз відкладено, щоб виконати переклад.".into());
+            }
+            verify_asset(&installed.join(asset.name), asset, io::sink())?;
+        }
+        if requested_yield() {
+            return Err("Аналіз відкладено, щоб виконати переклад.".into());
+        }
+        inference(installed, &requested_yield)
+    }
+}
+
 impl Store {
+    pub fn prepare_optional_model(&self, id: &str) -> Result<OptionalModelJob> {
+        let model = model(id)?;
+        Ok(OptionalModelJob {
+            model,
+            paths: ModelPaths::new(&self.optional_model_directory, model.id),
+        })
+    }
+
     pub fn optional_models(&self) -> Vec<OptionalModel> {
         MODELS
             .iter()
@@ -173,6 +249,7 @@ impl Store {
                     has_local_files: [&paths.active, &paths.previous, &paths.removed]
                         .iter()
                         .any(|path| path.symlink_metadata().is_ok()),
+                    memory: model.budget.readiness(),
                     assets: model
                         .assets
                         .iter()
@@ -296,6 +373,10 @@ mod tests {
             license: "MIT",
             repo: "",
             revision: "v1",
+            budget: ModelBudget {
+                working_mib: 0,
+                minimum_total_mib: 0,
+            },
             assets: &[Asset {
                 name: "model.onnx",
                 remote_path: "",

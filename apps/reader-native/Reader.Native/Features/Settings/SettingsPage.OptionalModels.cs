@@ -42,6 +42,18 @@ public partial class SettingsPage
     private void UpdateOptionalModelControls()
     {
         var selected = SelectedOptionalModel;
+        var memory = selected?.Memory;
+        OptionalModelMemory.IsVisible = memory is not null;
+        OptionalModelMemory.Text = memory switch
+        {
+            null => "",
+            { TotalMib: null } => "Доступну пам’ять визначити не вдалося.",
+            { TotalMib: long total, MinimumTotalMib: var minimum } when total < minimum =>
+                $"Для запуску потрібно щонайменше {minimum} МіБ RAM.",
+            { AvailableMib: long available, RequiredMib: var required } =>
+                $"Пам’ять під час перевірки — {available} МіБ доступно, {required} МіБ потрібно для запуску.",
+            _ => "Доступну пам’ять визначити не вдалося.",
+        };
         OptionalModelChoice.IsEnabled = !optionalModelBusy;
         DownloadOptionalModel.IsEnabled = RemoveOptionalModel.IsEnabled = !optionalModelBusy && selected is not null;
         VerifyOptionalModel.IsEnabled = !optionalModelBusy && selected is { FilesPresent: true };

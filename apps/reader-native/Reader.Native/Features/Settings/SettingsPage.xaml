@@ -35,6 +35,7 @@
   <Label x:Name="KnowledgeStatus" TextColor="#63725C" />
   <Label Text="Додаткові локальні моделі" FontSize="22" FontAttributes="Bold" />
   <Picker x:Name="OptionalModelChoice" Title="Додаткова модель" SelectedIndexChanged="OptionalModelChanged" />
+  <Label x:Name="OptionalModelMemory" IsVisible="False" />
   <FlexLayout Wrap="Wrap" JustifyContent="Start">
    <Button x:Name="DownloadOptionalModel" Text="Завантажити" Clicked="DownloadOptionalModelClicked" IsEnabled="False" Margin="0,0,8,0" />
    <Button x:Name="VerifyOptionalModel" Text="Перевірити файли" Clicked="VerifyOptionalModelClicked" IsEnabled="False" Margin="0,0,8,0" />

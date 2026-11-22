@@ -16,6 +16,7 @@ pub mod ocr;
 pub mod optional_models;
 pub mod pdf_layers;
 pub mod practice;
+mod resources;
 mod space;
 pub mod translation;
 
