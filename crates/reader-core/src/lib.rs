@@ -1211,8 +1211,14 @@ impl Store {
             page: None,
             sentence_start_utf16: sentence.start_utf16,
         };
+        let projected = pdf_detached_pages::word_break::project_canonical_selection(
+            self, &document, sentence, selection.start_utf16, &entry.word,
+        )?;
+        if selection.reconstructed_text.as_deref().is_some_and(|expected| projected.text != expected) {
+            return Err("Текст сусідньої сторінки змінився. Перекладіть виділення знову.".into());
+        }
+        (entry.word, entry.context) = (projected.text.into_owned(), projected.context.into_owned());
         entry.language = document.language;
-        entry.context.clone_from(&sentence.text);
         self.save_word_with_anchor(entry, Some(anchor))
     }
 

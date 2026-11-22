@@ -64,6 +64,7 @@ pub struct DictionarySentenceAnchor {
 pub struct DictionarySelection {
     pub(crate) revision_id: String,
     pub(crate) start_utf16: usize,
+    pub(crate) reconstructed_text: Option<String>,
 }
 
 #[derive(Serialize)]

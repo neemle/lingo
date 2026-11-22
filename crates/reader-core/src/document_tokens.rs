@@ -219,8 +219,12 @@ impl Store {
         let sentence = find_sentence(&document, sentence_id)?;
         let word = word_at(&sentence.text, start_utf16)
             .ok_or("Токен речення не знайдено")?;
-        let context = knowledge::WordContext::new(sentence.text.clone(), start_utf16);
-        let mut lookup = self.lookup_word(&document.language, word, Some(&context))?;
+        let mut lookup = if let Some(boundary) = knowledge::BoundaryAnalysis::canonical(self, &document, sentence)? {
+            boundary.lookup_word(self, &document.language, start_utf16)?
+        } else {
+            let context = knowledge::WordContext::new(sentence.text.clone(), start_utf16);
+            self.lookup_word(&document.language, word, Some(&context))?
+        };
         if let Some(lookup) = &mut lookup {
             lookup.bind_expression_tokens(|offset| token_id(revision, sentence_id, offset));
         }

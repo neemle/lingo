@@ -463,8 +463,8 @@ public sealed class CoreClient : IDisposable
 
     public Vocabulary SaveWord(Vocabulary entry) =>
         Call<Vocabulary>(new { version = 1, operation = "save_word", entry });
-    public Vocabulary SaveSelectedWord(Vocabulary entry, string revisionId, int startUtf16) =>
-        Call<Vocabulary>(new { version = 1, operation = "save_word", entry, selection = new { revisionId, startUtf16 } });
+    public Vocabulary SaveSelectedWord(Vocabulary entry, string revisionId, int startUtf16, string? reconstructedText = null) =>
+        Call<Vocabulary>(new { version = 1, operation = "save_word", entry, selection = new { revisionId, startUtf16, reconstructedText } });
     public Vocabulary SetVocabularyVariants(string id, string[] acceptedTranslations, string? translation = null) =>
         Call<Vocabulary>(new { version = 1, operation = "set_vocabulary_variants", id, acceptedTranslations, translation });
     public bool DeleteVocabularyCard(string id) =>

@@ -3,7 +3,7 @@ use crate::{
     knowledge::{annotation_cache, resolve_text_selection, select_words, AnalysisScope},
     optional_models::OptionalModelJob,
     pdf_detached_pages::word_break,
-    Document, Result, Sentence, Store,
+    Result, Sentence, Store,
 };
 use llama_cpp_2::{
     context::LlamaContext,
@@ -274,32 +274,19 @@ impl Store {
         if model != HINT_GENERATION_MODEL {
             return Err("Для локальних підказок використовуйте Qwen 2B.".into());
         }
-        let (language, sentences) = if let Some(page) = page {
-            let current = self
-                .detached_pdf_sentences(document, page)?
+        let detached;
+        let canonical = page.is_none().then(|| self.token_document(document)).transpose()?;
+        let (language, sentences, current_revision) = if let Some(page) = page {
+            detached = self.detached_pdf_sentences(document, page)?
                 .ok_or("Текст сторінки PDF недоступний.")?;
-            if revision.is_some_and(|expected| expected != current.revision) {
-                return Err("Текст змінився. Відкрийте перевірку знову.".into());
-            }
-            (current.language, current.sentences)
+            (detached.language.as_str(), detached.sentences.as_slice(), Some(detached.revision.as_str()))
         } else {
-            let body: String = self
-                .connection
-                .query_row(
-                    "SELECT body FROM documents WHERE id=?1",
-                    [document],
-                    |row| row.get(0),
-                )
-                .map_err(|_| "Документ відсутній.".to_owned())?;
-            let document: Document =
-                serde_json::from_str(&body).map_err(|error| error.to_string())?;
-            if revision
-                .is_some_and(|expected| document.current_revision_id.as_deref() != Some(expected))
-            {
-                return Err("Текст змінився. Відкрийте перевірку знову.".into());
-            }
-            (document.language, document.sentences)
+            let current = canonical.as_ref().ok_or("Документ відсутній.")?;
+            (current.language.as_str(), current.sentences.as_slice(), current.current_revision_id.as_deref())
         };
+        if revision.is_some_and(|expected| current_revision != Some(expected)) {
+            return Err("Текст змінився. Відкрийте перевірку знову.".into());
+        }
         let exact_sentence = || {
             sentence_id
                 .and_then(|id| sentences.iter().find(|sentence| sentence.id == id))
@@ -332,11 +319,13 @@ impl Store {
                 sentences.first().filter(|first| first.id == sentence.id),
                 sentences.last().filter(|last| last.id == sentence.id),
             )?
+        } else if let Some(document) = &canonical {
+            word_break::canonical_fragments(self, document, sentence)?
         } else {
             (None, None)
         };
         let examples = review_examples(
-            &language,
+            language,
             &sentence.text,
             scope,
             previous.as_deref(),
@@ -394,16 +383,8 @@ impl Store {
         cached_only: bool,
     ) -> Result<ExplainWordJob> {
         validate_word_request(model, word)?;
-        let body: String = self
-            .connection
-            .query_row(
-                "SELECT body FROM documents WHERE id=?1",
-                [document],
-                |row| row.get(0),
-            )
-            .map_err(|_| "Документ відсутній.".to_string())?;
         let document_id = document;
-        let document: Document = serde_json::from_str(&body).map_err(|error| error.to_string())?;
+        let document = self.token_document(document_id)?;
         let sentence = document
             .sentences
             .iter()
@@ -413,15 +394,18 @@ impl Store {
             .text
             .find(word)
             .ok_or("Виділеного слова немає в реченні.")?;
-        let (context, _) = word_context(&sentence.text, word, start);
+        let start_utf16 = sentence.start_utf16 + sentence.text[..start].encode_utf16().count();
+        let projected = word_break::project_canonical_selection(self, &document, sentence, start_utf16, word)?;
+        validate_word_request(model, &projected.text)?;
+        let (context, offset) = word_context(&projected.context, &projected.text, projected.start_utf8);
         self.prepare_word_example(
             model,
             document_id,
             WordExample {
                 language: &document.language,
-                word,
+                word: &projected.text,
                 sentence: context,
-                offset: None,
+                offset: (projected.context.as_ref() != sentence.text).then_some(offset),
             },
             cached_only,
         )
@@ -446,9 +430,14 @@ impl Store {
         if sentence.id != sentence_id {
             return Err("Виділення вже не належить вибраному реченню.".into());
         }
-        let (context, offset) = word_context(&sentence.text, selected, start);
+        let projected = word_break::project_canonical_selection(
+            self, &document, sentence, start_utf16, word,
+        )?;
+        validate_word_request(model, &projected.text)?;
+        let (context, offset) = word_context(&projected.context, &projected.text, projected.start_utf8);
         // A legacy result remains valid if the text identifies only one occurrence.
-        let unique = sentence.text.find(selected) == Some(start)
+        let unique = projected.context.as_ref() == sentence.text
+            && sentence.text.find(selected) == Some(start)
             && !sentence.text[start + selected.chars().next().map_or(0, char::len_utf8)..]
                 .contains(selected);
         self.prepare_word_example(
@@ -456,7 +445,7 @@ impl Store {
             document_id,
             WordExample {
                 language: &document.language,
-                word: selected,
+                word: &projected.text,
                 sentence: context,
                 offset: (!unique).then_some(offset),
             },

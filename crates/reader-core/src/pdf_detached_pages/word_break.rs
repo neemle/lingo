@@ -43,6 +43,40 @@ pub(crate) fn neighboring_fragments(
     Ok((previous, next))
 }
 
+/// Resolve the detached neighbor of a canonical PDF sentence at a physical page edge.
+pub(crate) fn canonical_fragments(
+    store: &Store, document: &Document, sentence: &Sentence,
+) -> Result<(Option<String>, Option<String>)> {
+    let Some(starts) = &document.pdf_page_starts else { return Ok((None, None)); };
+    let page_at = |offset| starts.iter().rposition(|start| start.is_some_and(|start| start <= offset));
+    let previous_page = sentence.text.starts_with(char::is_lowercase)
+        .then(|| page_at(sentence.start_utf16)).flatten()
+        .and_then(|page| {
+            let previous = page.checked_sub(1)?;
+            let start = ocr::byte_at_utf16(&document.text, starts[page]?)?;
+            (starts[previous].is_none()
+                && document.text.get(start..sentence.start_utf8)?.trim().is_empty())
+                .then(|| u16::try_from(previous).ok()).flatten()
+        });
+    let next_page = word_hyphen(&sentence.text)
+        .and_then(|_| page_at(sentence.end_utf16.checked_sub(1)?))
+        .and_then(|page| {
+            let next = page + 1;
+            if starts.get(next)? != &None { return None; }
+            let (_, end) = pdf_reading_position::page_bounds(document, u16::try_from(page).ok()?)?;
+            let end = ocr::byte_at_utf16(&document.text, end)?;
+            document.text.get(sentence.end_utf8..end)?.trim().is_empty()
+                .then(|| u16::try_from(next).ok()).flatten()
+        });
+    let previous = previous_page.map(|page| excerpt(
+        store, &document.id, page, None, Neighbor::Previous, sentence.text.len(),
+    )).transpose()?.flatten();
+    let next = next_page.map(|page| excerpt(
+        store, &document.id, page, None, Neighbor::Next, sentence.text.len(),
+    )).transpose()?.flatten();
+    Ok((previous, next))
+}
+
 // A word that crosses pages belongs to the page where it starts. Only use
 // adjacent detached pages, which use this same ownership rule when played.
 pub(super) fn narration(
@@ -139,12 +173,25 @@ pub(crate) fn project_selection<'a>(
         store, id, page, None, sentences.first().filter(|first| first.id == sentence.id),
         sentences.last().filter(|last| last.id == sentence.id),
     )?;
+    project_fragments(sentence, start_utf16, selected, previous.as_deref(), next.as_deref())
+}
+
+pub(crate) fn project_canonical_selection<'a>(
+    store: &Store, document: &Document, sentence: &'a Sentence, start_utf16: usize, selected: &'a str,
+) -> Result<ProjectedSelection<'a>> {
+    let (previous, next) = canonical_fragments(store, document, sentence)?;
+    project_fragments(sentence, start_utf16, selected, previous.as_deref(), next.as_deref())
+}
+
+fn project_fragments<'a>(
+    sentence: &'a Sentence, start_utf16: usize, selected: &'a str, previous: Option<&str>, next: Option<&str>,
+) -> Result<ProjectedSelection<'a>> {
     let trimmed = selected.trim_start();
     let leading = selected[..selected.len() - trimmed.len()].encode_utf16().count();
     let local = start_utf16 + leading - sentence.start_utf16;
     let start_utf8 = ocr::byte_at_utf16(&sentence.text, local)
         .ok_or("Некоректна позиція виділення.")?;
-    let Some(joined) = join_fragments(&sentence.text, previous.as_deref(), next.as_deref()) else {
+    let Some(joined) = join_fragments(&sentence.text, previous, next) else {
         return Ok(ProjectedSelection {
             text: trimmed.trim_end().into(), context: sentence.text.as_str().into(), start_utf8,
         });

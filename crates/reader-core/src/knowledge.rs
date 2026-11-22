@@ -16,6 +16,7 @@ mod grammar_cues;
 mod lexicon;
 mod ocr_suggestions;
 mod scoped_analysis;
+pub(crate) use scoped_analysis::BoundaryAnalysis;
 mod syntax;
 mod syntax_parse;
 

@@ -116,7 +116,7 @@ struct SyntaxCandidate {
     observations: u32,
 }
 
-struct BoundaryAnalysis {
+pub(crate) struct BoundaryAnalysis {
     text: String,
     visible_start: usize,
     projected: BTreeMap<usize, (usize, std::ops::Range<usize>)>,
@@ -132,9 +132,16 @@ impl BoundaryAnalysis {
             store, id, page, None, sentences.first().filter(|first| first.id == sentence.id),
             sentences.last().filter(|last| last.id == sentence.id),
         )?;
-        let Some(joined) = word_break::join_fragments(&sentence.text, previous.as_deref(), next.as_deref()) else {
-            return Ok(None);
-        };
+        Ok(Self::from_fragments(sentence, previous.as_deref(), next.as_deref()))
+    }
+
+    pub(crate) fn canonical(store: &Store, document: &Document, sentence: &Sentence) -> Result<Option<Self>> {
+        let (previous, next) = crate::pdf_detached_pages::word_break::canonical_fragments(store, document, sentence)?;
+        Ok(Self::from_fragments(sentence, previous.as_deref(), next.as_deref()))
+    }
+
+    fn from_fragments(sentence: &Sentence, previous: Option<&str>, next: Option<&str>) -> Option<Self> {
+        let joined = crate::pdf_detached_pages::word_break::join_fragments(&sentence.text, previous, next)?;
         let mut projected = BTreeMap::new();
         let mut original = BTreeMap::new();
         let mut joined_words = word_parts(&joined.text).peekable();
@@ -149,7 +156,19 @@ impl BoundaryAnalysis {
             }
         }
         drop(joined_words);
-        Ok(Some(Self { text: joined.text, visible_start: joined.center.start, projected, original }))
+        Some(Self { text: joined.text, visible_start: joined.center.start, projected, original })
+    }
+
+    pub(crate) fn lookup_word(
+        &self, store: &Store, language: &str, offset: usize,
+    ) -> Result<Option<WordLookup>> {
+        let Some((start, word)) = self.project_word(offset) else { return Ok(None); };
+        let context = WordContext::new(self.text.clone(), start);
+        let mut lookup = store.lookup_word(language, word, Some(&context))?;
+        if let Some(lookup) = &mut lookup {
+            self.localize_lookup(lookup);
+        }
+        Ok(lookup)
     }
 
     fn project_word(&self, offset: usize) -> Option<(usize, &str)> {
@@ -187,8 +206,9 @@ impl Store {
         let document = self.token_document(document_id)?;
         let sentence = analysis_sentence(&document, sentence_id, expected_revision)?;
         let index = self.open_knowledge_index(&document.language)?;
+        let boundary = BoundaryAnalysis::canonical(self, &document, sentence)?;
         self.analyze_scope(
-            &document.language, sentence, expected_revision, &scope, versioned_index(&index)?, None,
+            &document.language, sentence, expected_revision, &scope, versioned_index(&index)?, boundary.as_ref(),
         )
     }
 
@@ -204,8 +224,9 @@ impl Store {
         let language = &document.language;
         let index = self.open_knowledge_index(language)?;
         let lexical = lexicon::index_identity(&self.knowledge_directory, language);
+        let boundary = BoundaryAnalysis::canonical(self, &document, sentence)?;
         self.cached_scope(
-            (&document.id, language), sentence, expected_revision, &scope, versioned_index(&index)?, lexical, None,
+            (&document.id, language), sentence, expected_revision, &scope, versioned_index(&index)?, lexical, boundary.as_ref(),
         )
     }
 
@@ -249,11 +270,9 @@ impl Store {
         let (word, offset) = match scope {
             AnalysisScope::Word { start_utf16 } => {
                 if let Some(boundary) = &boundary {
-                    if let Some((offset, word)) = boundary.project_word(start_utf16) {
-                        let context = WordContext::new(boundary.text.clone(), offset);
-                        let mut lookup = self.lookup_word(&cached.language, word, Some(&context))?;
+                    if boundary.project_word(start_utf16).is_some() {
+                        let mut lookup = boundary.lookup_word(self, &cached.language, start_utf16)?;
                         if let Some(lookup) = &mut lookup {
-                            boundary.localize_lookup(lookup);
                             lookup.bind_expression_tokens(|start| token_id(&cached.revision, &sentence.id, start));
                         }
                         return Ok(lookup);
@@ -325,6 +344,8 @@ impl Store {
         if !(-1..=1).contains(&step) {
             return Err("Фоновий аналіз доступний лише для сусідніх речень.".into());
         }
+        let detached;
+        let canonical = page.is_none().then(|| self.token_document(document_id)).transpose()?;
         let (language, sentences, position, revision) = if let Some(page) = page {
             if self.pdf_reading_page(document_id)? != Some(page) {
                 return Ok(());
@@ -332,13 +353,15 @@ impl Store {
             let Some(cached) = self.detached_pdf_sentences(document_id, page)? else {
                 return Ok(());
             };
-            let position = cached.saved.min(cached.sentences.len() - 1);
-            (cached.language, cached.sentences, position, Some(cached.revision))
+            detached = cached;
+            let position = detached.saved.min(detached.sentences.len() - 1);
+            (detached.language.as_str(), detached.sentences.as_slice(), position, Some(detached.revision.as_str()))
+        } else if let Some(document) = &canonical {
+            (document.language.as_str(), document.sentences.as_slice(), document.position, document.current_revision_id.as_deref())
         } else {
-            let document = self.token_document(document_id)?;
-            (document.language, document.sentences, document.position, document.current_revision_id)
+            return Ok(());
         };
-        if revision.as_deref() != Some(expected_revision)
+        if revision != Some(expected_revision)
             || sentences.get(position).map(|item| item.id.as_str()) != Some(anchor_id)
         {
             return Ok(());
@@ -351,13 +374,17 @@ impl Store {
         else {
             return Ok(());
         };
-        let language = language.as_str();
         let index = self.open_knowledge_index(language)?;
         let lookup_index = versioned_index(&index)?;
         let lexical = lexicon::index_identity(&self.knowledge_directory, language);
         if lookup_index.is_some() || lexical.is_some() {
-            let boundary = page.map(|page| BoundaryAnalysis::read(self, document_id, page, &sentences, sentence))
-                .transpose()?.flatten();
+            let boundary = if let Some(page) = page {
+                BoundaryAnalysis::read(self, document_id, page, sentences, sentence)?
+            } else if let Some(document) = &canonical {
+                BoundaryAnalysis::canonical(self, document, sentence)?
+            } else {
+                None
+            };
             self.cached_scope(
                 (document_id, language), sentence, expected_revision, &AnalysisScope::Sentence { start: 0 },
                 lookup_index, lexical, boundary.as_ref(),

@@ -7,6 +7,7 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage
 {
     private bool translatingSelection;
+    private (string Document, string Revision, TextSelection Selection, string Target, string Text, string Source)? wordTranslation;
     private (string Target, string Text, string Source)? detachedWordTranslation;
 
     private async void TranslateSelectionClicked(object? sender, EventArgs args)
@@ -16,7 +17,12 @@ public partial class ReadingPage
         await ShowSelectionTranslationAsync(document.Id, document.Language, revision, target, currentSelection, null,
             () => readingPageActive && selection == currentSelection && TargetCode == target &&
                   AppState.Session.Document is { } active && active.Id == document.Id && active.CurrentRevisionId == revision,
-            result => Translation.Text = result.Text);
+            result =>
+            {
+                Translation.Text = result.Text;
+                wordTranslation = (document.Id, revision, currentSelection, target, result.Text,
+                    result.SourceText ?? currentSelection.Text.Trim());
+            });
     }
 
     private async void TranslateDetachedSelectionClicked(object? sender, EventArgs args)

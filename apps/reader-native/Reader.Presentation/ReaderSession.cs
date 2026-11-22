@@ -569,7 +569,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     });
 
     public Task SaveWordAsync(TextSelection selection, string translation, string targetLanguage,
-        LemmaSnapshot? analysis = null, ExpressionSnapshot? expression = null, SenseSnapshot? sense = null) => RunAsync(() =>
+        LemmaSnapshot? analysis = null, ExpressionSnapshot? expression = null, SenseSnapshot? sense = null,
+        string? reconstructedText = null) => RunAsync(() =>
     {
         if (Document is not { } doc) return Read();
         if (targetLanguage == doc.Language || !DocumentLanguages.All.Any(language => language.Code == targetLanguage))
@@ -579,7 +580,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         var entry = new Vocabulary("", selection.Text, translation, doc.Language, targetLanguage,
             context, doc.Id, new ReviewState(), new ReviewState()) { Analysis = analysis, Expression = expression, Sense = sense };
         if (doc.CurrentRevisionId is { } revisionId)
-            client.SaveSelectedWord(entry, revisionId, selection.StartUtf16);
+            client.SaveSelectedWord(entry, revisionId, selection.StartUtf16, reconstructedText);
         else
             client.SaveWord(entry);
         return Read();

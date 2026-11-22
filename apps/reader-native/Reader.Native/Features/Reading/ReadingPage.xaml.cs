@@ -421,6 +421,7 @@ public partial class ReadingPage : ContentPage
         WordExplanationText.Text = "";
         WordExplanationText.IsVisible = false;
         selection = selected;
+        wordTranslation = null;
         vocabularyReadings = [];
         VocabularyReading.IsVisible = false;
         SelectedWord.Text = selected.Text;
@@ -532,7 +533,12 @@ public partial class ReadingPage : ContentPage
             (!string.Equals(lemma.Lemma.Trim().Normalize(), sense.Lemma.Normalize(), StringComparison.OrdinalIgnoreCase) ||
              lemma.PartOfSpeech != sense.PartOfSpeech))
             lemma = null;
-        await AppState.Session.SaveWordAsync(selected, Translation.Text ?? "", target, lemma, reading?.Expression, selectedSense);
+        var session = AppState.Session;
+        var text = Translation.Text ?? "";
+        var reconstructed = wordTranslation is { } draft && draft.Selection == selected &&
+            draft.Target == target && draft.Text == text && session.Document is { } document &&
+            document.Id == draft.Document && document.CurrentRevisionId == draft.Revision ? draft.Source : null;
+        await session.SaveWordAsync(selected, text, target, lemma, reading?.Expression, selectedSense, reconstructed);
         if (selection == selected && TargetCode == target && AppState.Session.Error.Length == 0)
         {
             WordCard.IsVisible = false;

@@ -794,30 +794,34 @@ impl Store {
     pub fn translate_selected_text(
         &mut self, id: &str, target: &str, selection: &TranslationSelection,
     ) -> Result<Option<SelectedTranslation>> {
-        let (language, sentences, revision) = if let Some(page) = selection.page {
+        use crate::pdf_detached_pages::word_break;
+        fn resolve<'a>(sentences: &'a [crate::Sentence], revision: Option<&str>, selection: &TranslationSelection) -> Result<&'a crate::Sentence> {
+            if revision != Some(selection.revision_id.as_str()) {
+                return Err("Текст змінився. Виділіть фрагмент знову.".into());
+            }
+            let (sentence, _) = crate::knowledge::resolve_text_selection(
+                sentences, selection.start_utf16, &selection.text,
+            )?;
+            Ok(sentence)
+        }
+        let (language, source, context) = if let Some(page) = selection.page {
             let cached = self.detached_pdf_sentences(id, page)?
                 .ok_or("Текст сторінки PDF недоступний.")?;
-            (cached.language, cached.sentences, Some(cached.revision))
+            let sentence = resolve(&cached.sentences, Some(cached.revision.as_str()), selection)?;
+            let projected = word_break::project_selection(
+                self, (id, page), &cached.sentences, sentence, selection.start_utf16, &selection.text,
+            )?;
+            (cached.language, projected.text.into_owned(), projected.context.into_owned())
         } else {
             let document = self.translation_document(id)?;
-            (document.language, document.sentences, document.current_revision_id)
-        };
-        if revision.as_deref() != Some(&selection.revision_id) {
-            return Err("Текст змінився. Виділіть фрагмент знову.".into());
-        }
-        let (sentence, _) = crate::knowledge::resolve_text_selection(
-            &sentences, selection.start_utf16, &selection.text,
-        )?;
-        let (source, context) = if let Some(page) = selection.page {
-            let projected = crate::pdf_detached_pages::word_break::project_selection(
-                self, (id, page), &sentences, sentence, selection.start_utf16, &selection.text,
+            let sentence = resolve(&document.sentences, document.current_revision_id.as_deref(), selection)?;
+            let projected = word_break::project_canonical_selection(
+                self, &document, sentence, selection.start_utf16, &selection.text,
             )?;
-            (projected.text, projected.context)
-        } else {
-            (selection.text.trim().into(), sentence.text.as_str().into())
+            (document.language, projected.text.into_owned(), projected.context.into_owned())
         };
         let context = (context != source && context.len() <= 768).then_some(context.as_ref());
-        let input = [source.as_ref().to_owned()];
+        let input = [source.clone()];
         let directory = self.model_directory.clone();
         let result = self.translate_aligned(
             &mut MarianProvider::interactive(&directory),
@@ -834,7 +838,7 @@ impl Store {
             None => self.translation_cache_routes(&language, target)?
                 .cached_contextual_selection(self, &source, context, target)?,
         };
-        Ok(result.map(|translation| SelectedTranslation { translation, source_text: source.into_owned() }))
+        Ok(result.map(|translation| SelectedTranslation { translation, source_text: source }))
     }
 
     pub fn translation_routes(&self) -> Result<Vec<TranslationRouteStatus>> {
