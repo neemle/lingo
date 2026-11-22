@@ -40,6 +40,12 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
     match command {
         Command::Open { .. } => Err(Error::new("invalid_handle", "Open requires handle zero")),
         Command::Snapshot => value(store.snapshot()),
+        Command::StageIntake { .. } => Err(Error::new("invalid_state", "Intake needs staging")),
+        Command::ListIntake { start } => value(store.list_intake(start)),
+        Command::IntakeItem { id } => value(store.intake_item(&id)),
+        Command::IntakePayload { id } => value(store.intake_payload(&id)),
+        Command::CompleteIntake { id, result } => value(store.complete_intake(&id, result)),
+        Command::DiscardIntake { id } => value(store.discard_intake(&id)),
         Command::ReaderPreferences => value(store.reader_preferences()),
         Command::UpdateReaderPreference { change } => value(store.update_reader_preference(change)),
         Command::RecentReadingSessions => value(store.recent_reading_sessions()),

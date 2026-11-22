@@ -86,7 +86,15 @@ pub fn recognized_text(
         .and_then(|part| part.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    let valid = match (extension.as_str(), pdf_pages) {
+    if !valid_image_source(&extension, bytes, pdf_pages) {
+        return Err("Формат зображення не підтримується або файл пошкоджений".into());
+    }
+
+    recognized_lines(lines, pdf_pages.unwrap_or(1))
+}
+
+pub(crate) fn valid_image_source(extension: &str, bytes: &[u8], pdf_pages: Option<u16>) -> bool {
+    match (extension, pdf_pages) {
         ("pdf", Some(1..)) => bytes.starts_with(b"%PDF-"),
         ("png", None) => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
         ("jpg" | "jpeg", None) => bytes.starts_with(b"\xff\xd8\xff"),
@@ -103,12 +111,7 @@ pub fn recognized_text(
                 })
         }
         _ => false,
-    };
-    if !valid {
-        return Err("Формат зображення не підтримується або файл пошкоджений".into());
     }
-
-    recognized_lines(lines, pdf_pages.unwrap_or(1))
 }
 
 pub(crate) fn recognized_lines(lines: &[OcrLine], pages: u16) -> Result<String> {

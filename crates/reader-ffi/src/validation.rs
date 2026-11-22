@@ -19,6 +19,14 @@ pub fn decode(input: &[u8]) -> Result<Command> {
 
 fn validate(command: &Command) -> Result<()> {
     match command {
+        Command::IntakeItem { id }
+        | Command::IntakePayload { id }
+        | Command::CompleteIntake { id, .. }
+        | Command::DiscardIntake { id }
+            if id.len() != 36 || !id.bytes().all(|byte| byte.is_ascii_hexdigit() || byte == b'-') =>
+        {
+            Err(Error::new("invalid_argument", "Invalid intake identifier"))
+        }
         Command::Open { path } if path.is_empty() || path.len() > 4096 || path.contains('\0') => {
             Err(Error::new(
                 "invalid_argument",

@@ -66,6 +66,16 @@ impl Registry {
             .map_err(gateway::domain)
     }
 
+    pub fn insert_intake(
+        &mut self, handle: u64, prepared: reader_core::intake::PreparedIntake,
+    ) -> Result<reader_core::intake::IntakeItem> {
+        self.stores
+            .get_mut(&handle)
+            .ok_or_else(|| Error::new("invalid_handle", "Store handle is missing or closed"))?
+            .insert_intake(prepared)
+            .map_err(gateway::domain)
+    }
+
     pub fn close(&mut self, handle: u64) -> bool {
         self.stores.remove(&handle).is_some()
     }

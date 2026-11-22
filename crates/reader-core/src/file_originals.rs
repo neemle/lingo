@@ -56,23 +56,11 @@ pub fn prepare_pdf_import(
     let page_text_json = serde_json::to_string(&page_text).map_err(storage_error)?;
     let (text, starts) = pdf_layers::merge_page_text(page_text, &lines)?;
     let extracted = document_layout::from_transcript(text, Some(starts));
-    if !path.symlink_metadata().map_err(storage_error)?.is_file() {
-        return Err("Виберіть звичайний файл PDF".into());
-    }
-    let mut input = File::open(path).map_err(storage_error)?;
-    let metadata = input.metadata().map_err(storage_error)?;
-    if !metadata.is_file() || metadata.len() > MAX_PDF_BYTES {
-        return Err("Потрібен звичайний файл PDF розміром до 4 ГіБ".into());
-    }
-    let mut header = [0; 5];
-    if input.read_exact(&mut header).is_err() || &header != b"%PDF-" {
-        return Err("Файл PDF пошкоджено або він не є PDF".into());
-    }
-    input.rewind().map_err(storage_error)?;
+    let (input, expected_size) = open_pdf_source(path)?;
     ensure_root(root)?;
     let mut original = stage_original(root)?;
     let (size, hash) = copy_pdf(input, original.as_file_mut())?;
-    if size != metadata.len() {
+    if size != expected_size {
         return Err("Розмір файлу PDF змінився під час імпорту".into());
     }
     original.as_file().sync_all().map_err(storage_error)?;
@@ -87,6 +75,23 @@ pub fn prepare_pdf_import(
         lines,
         extracted,
     })
+}
+
+pub(crate) fn open_pdf_source(path: &Path) -> Result<(File, u64)> {
+    if !path.symlink_metadata().map_err(storage_error)?.is_file() {
+        return Err("Виберіть звичайний файл PDF".into());
+    }
+    let mut input = File::open(path).map_err(storage_error)?;
+    let metadata = input.metadata().map_err(storage_error)?;
+    if !metadata.is_file() || metadata.len() > MAX_PDF_BYTES {
+        return Err("Потрібен звичайний файл PDF розміром до 4 ГіБ".into());
+    }
+    let mut header = [0; 5];
+    if input.read_exact(&mut header).is_err() || &header != b"%PDF-" {
+        return Err("Файл PDF пошкоджено або він не є PDF".into());
+    }
+    input.rewind().map_err(storage_error)?;
+    Ok((input, metadata.len()))
 }
 
 pub(crate) fn pdf_name(name: &str) -> Result<&str> {
@@ -105,7 +110,7 @@ pub(crate) fn pdf_name(name: &str) -> Result<&str> {
     Ok(name)
 }
 
-fn copy_pdf(mut input: impl Read, output: &mut File) -> Result<(u64, String)> {
+pub(crate) fn copy_pdf(mut input: impl Read, output: &mut File) -> Result<(u64, String)> {
     let mut buffer = vec![0; 64 * 1024];
     let mut digest = Sha256::new();
     let mut size = 0;
@@ -378,12 +383,18 @@ pub(crate) fn cleanup_orphans(connection: &mut Connection, root: &Path) {
         let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
             continue;
         };
-        if !Uuid::parse_str(stem).is_ok_and(|id| id.to_string() == stem) {
+        let intake_id = stem.strip_prefix(".intake-");
+        let id = intake_id.unwrap_or(stem);
+        if !Uuid::parse_str(id).is_ok_and(|uuid| uuid.to_string() == id) {
             continue;
         }
         let exists = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM file_originals WHERE document_id=?1)",
-            [stem],
+            if intake_id.is_some() {
+                "SELECT EXISTS(SELECT 1 FROM intake WHERE id=?1 AND document_id IS NULL)"
+            } else {
+                "SELECT EXISTS(SELECT 1 FROM file_originals WHERE document_id=?1)"
+            },
+            [id],
             |row| row.get::<_, bool>(0),
         );
         if matches!(exists, Ok(false)) {

@@ -19,6 +19,7 @@ pub mod document_revisions;
 pub mod document_tokens;
 pub mod e5;
 pub mod file_originals;
+pub mod intake;
 pub mod knowledge;
 pub mod language_detection;
 mod marian_deadline;
@@ -441,6 +442,7 @@ impl Store {
         ocr_jobs::initialize(&connection)?;
         document_revisions::initialize(&mut connection)?;
         file_originals::initialize(&connection)?;
+        intake::initialize(&connection)?;
         pdf_page_ocr::initialize(&connection)?;
         pdf_reading_position::initialize(&connection)?;
         reader_preferences::initialize(&connection)?;

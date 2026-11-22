@@ -342,19 +342,21 @@ impl TranslationPackageFiles {
     }
 }
 
-/// Owned settings for reading a document and updating its translation cache off the main store.
-pub struct TranslationWorker {
+/// Owned paths for opening an independent connection to a library.
+pub struct StoreWorker {
     database: PathBuf,
     model_directory: PathBuf,
     optional_model_directory: PathBuf,
     knowledge_directory: PathBuf,
 }
 
-impl TranslationWorker {
+impl StoreWorker {
     fn open(self, mode: OpenFlags) -> Result<Store> {
         let connection =
             Connection::open_with_flags(&self.database, mode | OpenFlags::SQLITE_OPEN_NO_MUTEX)
                 .map_err(|error| error.to_string())?;
+        connection.pragma_update(None, "foreign_keys", true)
+            .map_err(|error| error.to_string())?;
         Ok(Store {
             connection,
             model_directory: self.model_directory,
@@ -362,6 +364,16 @@ impl TranslationWorker {
             knowledge_directory: self.knowledge_directory,
             file_original_directory: crate::file_originals::directory(&self.database),
         })
+    }
+
+    pub fn complete_intake(
+        self, id: &str, result: crate::intake::IntakeImport,
+    ) -> Result<crate::intake::IntakeItem> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?.complete_intake(id, result)
+    }
+
+    pub fn discard_intake(self, id: &str) -> Result<bool> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?.discard_intake(id)
     }
 
     pub fn translate_sentence(
@@ -411,13 +423,17 @@ impl TranslationWorker {
 }
 
 impl Store {
-    pub fn prepare_translation_worker(&self) -> Option<TranslationWorker> {
+    pub fn prepare_translation_worker(&self) -> Option<StoreWorker> {
+        self.prepare_store_worker()
+    }
+
+    pub fn prepare_store_worker(&self) -> Option<StoreWorker> {
         // SQLite resolves the file name and reports an empty name for temporary and in-memory databases.
         let database = Path::new(self.connection.path()?);
         if !database.is_absolute() {
             return None;
         }
-        Some(TranslationWorker {
+        Some(StoreWorker {
             database: database.to_owned(),
             model_directory: self.model_directory.clone(),
             optional_model_directory: self.optional_model_directory.clone(),

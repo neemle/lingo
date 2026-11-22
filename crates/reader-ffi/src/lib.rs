@@ -53,6 +53,22 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         unsafe { std::slice::from_raw_parts(input, len as usize) }
     };
     let command = validation::decode(bytes)?;
+    if let Command::StageIntake { input } = command {
+        let root = registry::lock()?.store(handle)?.pdf_original_root().to_owned();
+        let prepared = reader_core::intake::prepare(&root, input).map_err(gateway::domain)?;
+        let item = registry::lock()?.insert_intake(handle, prepared)?;
+        return encode_job(Ok(item));
+    }
+    let command = match command {
+        Command::CompleteIntake { id, result } => {
+            let worker = registry::lock()?.store(handle)?.prepare_store_worker();
+            if let Some(worker) = worker {
+                return encode_job(worker.complete_intake(&id, result));
+            }
+            Command::CompleteIntake { id, result }
+        }
+        other => other,
+    };
     if let Command::ImportPdfFile {
         path,
         name,
@@ -89,6 +105,12 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
     }
 
     match &command {
+        Command::DiscardIntake { id } => {
+            let worker = registry::lock()?.store(handle)?.prepare_store_worker();
+            if let Some(worker) = worker {
+                return encode_job(worker.discard_intake(id));
+            }
+        }
         Command::TranslateParagraph {
             id,
             sentence_id,

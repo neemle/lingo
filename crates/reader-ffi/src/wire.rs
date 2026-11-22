@@ -18,6 +18,26 @@ pub enum Command {
         path: String,
     },
     Snapshot,
+    StageIntake {
+        input: reader_core::intake::IntakeInput,
+    },
+    ListIntake {
+        #[serde(default)]
+        start: usize,
+    },
+    IntakeItem {
+        id: String,
+    },
+    IntakePayload {
+        id: String,
+    },
+    CompleteIntake {
+        id: String,
+        result: reader_core::intake::IntakeImport,
+    },
+    DiscardIntake {
+        id: String,
+    },
     ReaderPreferences,
     UpdateReaderPreference {
         change: reader_core::reader_preferences::ReaderPreferenceChange,
