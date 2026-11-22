@@ -644,6 +644,7 @@ public partial class ReadingPage : ContentPage
         if (!speechPreferencesReady || loadingSpeechPreferences || Rate.SelectedIndex < 0) return;
         SaveReaderPreference(ReaderPreferenceChange.SpeechPlayback(SpeechRatePercent, ContinueSpeech.IsChecked));
         if (!utteranceActive) RefreshSpeechResume();
+        if (detachedAddress is not null) UpdateDetachedControls();
     }
 
     private int SpeechRatePercent => Rate.SelectedIndex >= 0 && Rate.SelectedIndex < speechRates.Length

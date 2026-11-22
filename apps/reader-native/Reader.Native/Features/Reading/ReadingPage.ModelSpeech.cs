@@ -91,6 +91,7 @@ public partial class ReadingPage
         }
         finally { loadingSpeechPreferences = false; }
         if (!utteranceActive) RefreshSpeechResume();
+        if (detachedAddress is not null) UpdateDetachedControls();
     }
 
     private void SetVoiceStatus(string status)
@@ -109,6 +110,7 @@ public partial class ReadingPage
         SaveReaderPreference(ReaderPreferenceChange.SpeechVoice(voiceLanguage, PickedVoice()?.Id));
         SetVoiceStatus(ModelVoiceStatus());
         RefreshSpeechResume();
+        if (detachedAddress is not null) UpdateDetachedControls();
     }
 
     private void DetachedVoiceChanged(object? sender, EventArgs args)

@@ -125,6 +125,13 @@ pub enum Command {
         start: reader_core::DetachedPdfFindCursor,
         limit: usize,
     },
+    SetDetachedPdfSpeechResume {
+        id: String,
+        page: u16,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        resume: Option<reader_core::SpeechResume>,
+    },
     DetachedPdfOcr { id: String, page: u16 },
     CorrectDetachedPdfOcr {
         id: String,
