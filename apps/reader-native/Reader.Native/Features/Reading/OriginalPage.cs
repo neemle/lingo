@@ -12,6 +12,7 @@ internal sealed class OriginalPage : ContentPage
     private readonly Button previous = new() { Text = "←" };
     private readonly Button next = new() { Text = "→" };
     private readonly Button toggle = new();
+    private readonly Button readPage = new() { Text = "Читати сторінку" };
     private readonly Button wordCard = new() { Text = "Картка слова" };
     private readonly Func<int, Task<PhotoPreview>> loadPage;
     private readonly Func<TextSelection, Task> showWord;
@@ -25,7 +26,7 @@ internal sealed class OriginalPage : ContentPage
     private readonly Label editStatus = new();
     private int[] currentLineIndices = [];
     private bool editing;
-    private bool openingWord;
+    private bool leavingOriginal;
     private readonly int pageCount;
     private int pageIndex;
     private bool loading;
@@ -66,7 +67,13 @@ internal sealed class OriginalPage : ContentPage
         };
         wordCard.IsVisible = lines.Any(line => line.Words is { Length: > 0 });
         wordCard.Clicked += async (_, _) => await OpenWordAsync();
-        var controls = new HorizontalStackLayout { Spacing = 8, Children = { previous, next, toggle, wordCard, status } };
+        readPage.IsVisible = isPdf;
+        readPage.Clicked += async (_, _) => await ReadPageAsync();
+        var controls = new HorizontalStackLayout
+        {
+            Spacing = 8,
+            Children = { previous, next, readPage, toggle, wordCard, status },
+        };
         SemanticProperties.SetDescription(linePicker, "Рядок для виправлення");
         SemanticProperties.SetDescription(reset, "Відновити початковий результат OCR для рядка");
         linePicker.SelectedIndexChanged += (_, _) => UpdateEditButtons();
@@ -118,7 +125,7 @@ internal sealed class OriginalPage : ContentPage
 
     private async Task LoadAsync(int index)
     {
-        if (loading || editing || openingWord || index < 0 || index >= pageCount) return;
+        if (loading || editing || leavingOriginal || index < 0 || index >= pageCount) return;
         loading = true;
         previous.IsEnabled = next.IsEnabled = false;
         status.Text = "Завантаження сторінки…";
@@ -169,7 +176,7 @@ internal sealed class OriginalPage : ContentPage
 
     private void SelectWordAt(View surface, TappedEventArgs args)
     {
-        if (loading || editing || openingWord || session.Busy || args.GetPosition(surface) is not { } point) return;
+        if (loading || editing || leavingOriginal || session.Busy || args.GetPosition(surface) is not { } point) return;
         var fitted = AspectFit(new RectF(0, 0, (float)surface.Width, (float)surface.Height), previewWidth, previewHeight);
         if (fitted.Width <= 0 || fitted.Height <= 0) return;
         var x = (point.X - fitted.X) / fitted.Width;
@@ -213,7 +220,7 @@ internal sealed class OriginalPage : ContentPage
 
     private async Task OpenWordAsync()
     {
-        if (loading || editing || openingWord || session.Busy || activeWord is not { } active ||
+        if (loading || editing || leavingOriginal || session.Busy || activeWord is not { } active ||
             Navigation.NavigationStack.LastOrDefault() != this) return;
         if (CurrentWord(active.LineIndex, active.Word) != active.Selection)
         {
@@ -224,7 +231,7 @@ internal sealed class OriginalPage : ContentPage
             return;
         }
 
-        openingWord = true;
+        leavingOriginal = true;
         UpdateEditButtons();
         try
         {
@@ -235,7 +242,36 @@ internal sealed class OriginalPage : ContentPage
         catch (Exception error) { editStatus.Text = error.Message; }
         finally
         {
-            openingWord = false;
+            leavingOriginal = false;
+            UpdateEditButtons();
+        }
+    }
+
+    private async Task ReadPageAsync()
+    {
+        if (!readPage.IsEnabled || session.Busy || session.Document is not { } document || document.Id != documentId ||
+            DocumentPages.SentencePosition(document, pageIndex) is not int position ||
+            Navigation.NavigationStack.LastOrDefault() != this)
+            return;
+
+        leavingOriginal = true;
+        UpdateEditButtons();
+        try
+        {
+            await session.SelectSentenceAsync(position);
+            if (session.Error.Length > 0)
+            {
+                status.Text = session.Error;
+                return;
+            }
+            if (session.Document?.Id == documentId && session.Document.Position == position &&
+                Navigation.NavigationStack.LastOrDefault() == this)
+                await Navigation.PopAsync();
+        }
+        catch (Exception error) { status.Text = error.Message; }
+        finally
+        {
+            leavingOriginal = false;
             UpdateEditButtons();
         }
     }
@@ -272,9 +308,12 @@ internal sealed class OriginalPage : ContentPage
     private void UpdateEditButtons()
     {
         var index = LineIndex();
-        var canInteract = !loading && !editing && !openingWord;
+        var canInteract = !loading && !editing && !leavingOriginal;
         linePicker.IsEnabled = canInteract && currentLineIndices.Length > 0;
         wordCard.IsEnabled = canInteract && activeWord is not null;
+        readPage.IsEnabled = readPage.IsVisible && canInteract && image.Source is not null &&
+            session.Document is { } document && document.Id == documentId &&
+            DocumentPages.SentencePosition(document, pageIndex).HasValue;
         edit.IsEnabled = canInteract && index >= 0;
         suggest.IsEnabled = edit.IsEnabled;
         reset.IsEnabled = edit.IsEnabled && lines[index].Correction is not null;
@@ -285,7 +324,7 @@ internal sealed class OriginalPage : ContentPage
     private async Task CorrectAsync(LineAction action)
     {
         var index = LineIndex();
-        if (index < 0 || loading || editing || openingWord || session.Busy || session.Document is not { } document ||
+        if (index < 0 || loading || editing || leavingOriginal || session.Busy || session.Document is not { } document ||
             document.Id != documentId) return;
         var line = lines[index];
         editing = true;
