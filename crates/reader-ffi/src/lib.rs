@@ -144,6 +144,13 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
+        Command::InstallKnowledgePackage { language, path } => {
+            let job = registry::lock()?
+                .store(handle)?
+                .prepare_knowledge_package(language, std::path::Path::new(path))
+                .map_err(gateway::domain)?;
+            return encode_job(job.run());
+        }
         Command::InstallLexicalPackage { language, path } => {
             let job = registry::lock()?
                 .store(handle)?

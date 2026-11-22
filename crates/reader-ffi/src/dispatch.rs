@@ -161,9 +161,10 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             value(store.export_dictionary(document_id.as_deref()))
         }
         Command::ImportDictionary { archive } => value(store.import_dictionary(archive)),
-        Command::InstallKnowledgePackage { language, path } => {
-            value(store.install_knowledge_package(&language, std::path::Path::new(&path)))
-        }
+        Command::InstallKnowledgePackage { .. } => Err(Error::new(
+            "internal_error",
+            "Knowledge package installation must run outside the store lock",
+        )),
         Command::LookupWord {
             language,
             word,

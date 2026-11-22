@@ -1,4 +1,4 @@
-use crate::{Result, Store};
+use crate::{model_storage::lock_package, Result, Store};
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -152,6 +152,44 @@ impl Pack {
     }
 }
 
+pub struct KnowledgePackageInstall {
+    pack: &'static Pack,
+    source: PathBuf,
+    destination: PathBuf,
+}
+
+impl KnowledgePackageInstall {
+    pub fn run(self) -> Result<KnowledgePackage> {
+        let pack = self.pack;
+        let mut file = fs::File::open(&self.source).map_err(|error| error.to_string())?;
+        let mut data = Vec::with_capacity(pack.bytes);
+        (&mut file)
+            .take(pack.bytes as u64 + 1)
+            .read_to_end(&mut data)
+            .map_err(|error| error.to_string())?;
+        if data.len() != pack.bytes || format!("{:x}", Sha256::digest(&data)) != pack.sha256 {
+            return Err("Розмір або SHA-256 мовного пакета не збігається з каталогом.".into());
+        }
+        let directory = self
+            .destination
+            .parent()
+            .ok_or("Невірний шлях мовного пакета.")?;
+        fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+        let _lock = lock_package(&directory.join(".install-knowledge.lock"), true)?;
+        let staging =
+            tempfile::NamedTempFile::new_in(directory).map_err(|error| error.to_string())?;
+        build_pack(staging.path(), BufReader::new(Cursor::new(data)))?;
+        staging
+            .as_file()
+            .sync_all()
+            .map_err(|error| error.to_string())?;
+        staging
+            .persist(&self.destination)
+            .map_err(|error| error.to_string())?;
+        Ok(pack.describe(INDEX_VERSION))
+    }
+}
+
 impl Store {
     fn open_knowledge_index(&self, language: &str) -> Result<Option<(&'static Pack, Connection)>> {
         let Some(pack) = PACKS.iter().find(|pack| pack.language == language) else {
@@ -173,40 +211,28 @@ impl Store {
             .collect()
     }
 
+    pub fn prepare_knowledge_package(
+        &self,
+        language: &str,
+        source: &Path,
+    ) -> Result<KnowledgePackageInstall> {
+        let pack = PACKS
+            .iter()
+            .find(|pack| pack.language == language)
+            .ok_or("Для цієї мови немає пакета граматичного аналізу.")?;
+        Ok(KnowledgePackageInstall {
+            pack,
+            source: source.to_owned(),
+            destination: pack.path(&self.knowledge_directory),
+        })
+    }
+
     pub fn install_knowledge_package(
         &self,
         language: &str,
         source: &Path,
     ) -> Result<KnowledgePackage> {
-        let pack = PACKS
-            .iter()
-            .find(|pack| pack.language == language)
-            .ok_or("Для цієї мови немає пакета граматичного аналізу.")?;
-        let mut file = fs::File::open(source).map_err(|error| error.to_string())?;
-        let mut data = Vec::with_capacity(pack.bytes);
-        (&mut file)
-            .take(pack.bytes as u64 + 1)
-            .read_to_end(&mut data)
-            .map_err(|error| error.to_string())?;
-        if data.len() != pack.bytes || format!("{:x}", Sha256::digest(&data)) != pack.sha256 {
-            return Err("Розмір або SHA-256 мовного пакета не збігається з каталогом.".into());
-        }
-        let destination = pack.path(&self.knowledge_directory);
-        let directory = destination
-            .parent()
-            .ok_or("Невірний шлях мовного пакета.")?;
-        fs::create_dir_all(directory).map_err(|error| error.to_string())?;
-        let staging =
-            tempfile::NamedTempFile::new_in(directory).map_err(|error| error.to_string())?;
-        build_pack(staging.path(), BufReader::new(Cursor::new(data)))?;
-        staging
-            .as_file()
-            .sync_all()
-            .map_err(|error| error.to_string())?;
-        staging
-            .persist(&destination)
-            .map_err(|error| error.to_string())?;
-        Ok(pack.describe(INDEX_VERSION))
+        self.prepare_knowledge_package(language, source)?.run()
     }
 
     pub fn lookup_word(
