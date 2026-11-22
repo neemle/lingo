@@ -809,9 +809,10 @@ impl Store {
             &sentences, selection.start_utf16, &selection.text,
         )?;
         let (source, context) = if let Some(page) = selection.page {
-            crate::pdf_detached_pages::word_break::project_selection(
+            let projected = crate::pdf_detached_pages::word_break::project_selection(
                 self, (id, page), &sentences, sentence, selection.start_utf16, &selection.text,
-            )?
+            )?;
+            (projected.text, projected.context)
         } else {
             (selection.text.trim().into(), sentence.text.as_str().into())
         };

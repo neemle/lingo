@@ -61,23 +61,32 @@ pub(crate) fn join_fragments(
     })
 }
 
+pub(crate) struct ProjectedSelection<'a> {
+    pub text: Cow<'a, str>,
+    pub context: Cow<'a, str>,
+    pub start_utf8: usize,
+}
+
 pub(crate) fn project_selection<'a>(
     store: &Store, location: (&str, u16), sentences: &[Sentence], sentence: &'a Sentence,
     start_utf16: usize, selected: &'a str,
-) -> Result<(Cow<'a, str>, Cow<'a, str>)> {
+) -> Result<ProjectedSelection<'a>> {
     let (id, page) = location;
     let (previous, next) = neighboring_fragments(
         store, id, page, None, sentences.first().filter(|first| first.id == sentence.id),
         sentences.last().filter(|last| last.id == sentence.id),
     )?;
     let trimmed = selected.trim_start();
-    let Some(joined) = join_fragments(&sentence.text, previous.as_deref(), next.as_deref()) else {
-        return Ok((trimmed.trim_end().into(), sentence.text.as_str().into()));
-    };
     let leading = selected[..selected.len() - trimmed.len()].encode_utf16().count();
     let local = start_utf16 + leading - sentence.start_utf16;
-    let start = ocr::byte_at_utf16(&sentence.text, local)
-        .ok_or("Некоректна позиція виділення.")? + joined.center.start;
+    let start_utf8 = ocr::byte_at_utf16(&sentence.text, local)
+        .ok_or("Некоректна позиція виділення.")?;
+    let Some(joined) = join_fragments(&sentence.text, previous.as_deref(), next.as_deref()) else {
+        return Ok(ProjectedSelection {
+            text: trimmed.trim_end().into(), context: sentence.text.as_str().into(), start_utf8,
+        });
+    };
+    let start = start_utf8 + joined.center.start;
     let end = (start + trimmed.trim_end().len()).min(joined.center.end);
     let mut extent = start..end;
     for (offset, _, word) in word_parts(&joined.text) {
@@ -89,7 +98,11 @@ pub(crate) fn project_selection<'a>(
             extent.end = extent.end.max(word_end);
         }
     }
-    Ok((joined.text[extent].to_owned().into(), joined.text.into()))
+    Ok(ProjectedSelection {
+        start_utf8: extent.start,
+        text: joined.text[extent].to_owned().into(),
+        context: joined.text.into(),
+    })
 }
 
 fn excerpt(

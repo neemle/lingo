@@ -286,13 +286,13 @@ impl Store {
             return Err("Текст сторінки PDF змінився. Виділіть фрагмент знову.".into());
         }
         let (sentence, _) = resolve_text_selection(&cached.sentences, input.start_utf16, &input.selected_text)?;
-        let (word, _) = crate::pdf_detached_pages::word_break::project_selection(
+        let projected = crate::pdf_detached_pages::word_break::project_selection(
             self, (document_id, page), &cached.sentences, sentence, input.start_utf16, &input.selected_text,
         )?;
-        if input.reconstructed_text.as_deref().is_some_and(|expected| word != expected) {
+        if input.reconstructed_text.as_deref().is_some_and(|expected| projected.text != expected) {
             return Err("Текст сусідньої сторінки змінився. Перекладіть виділення знову.".into());
         }
-        let word = word.into_owned();
+        let word = projected.text.into_owned();
         let anchor = crate::dictionary_transfer::DictionarySentenceAnchor {
             sentence_id: sentence.id.clone(),
             revision_id: cached.revision,
