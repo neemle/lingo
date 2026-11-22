@@ -55,6 +55,7 @@ public partial class ReadingPage : ContentPage
         DetachedWordCard.PropertyChanged += WordPopupVisibilityChanged;
         SourceText.PropertyChanged += InlinePdfWordChanged;
         SourceText.ViewportMoved += (_, _) => ScheduleSourceViewportSync();
+        DetachedPdfText.ViewportMoved += (_, _) => ScheduleSourceViewportSync();
         DetachedPdfText.PropertyChanged += InlinePdfWordChanged;
         SegmentTranslation.PropertyChanged += PopupTranslationTextChanged;
         ModelTranslationText.PropertyChanged += PopupTranslationTextChanged;
@@ -226,6 +227,14 @@ public partial class ReadingPage : ContentPage
         ReadingColumns.RowSpacing = stacked ? 1 : 0;
         Grid.SetColumn(TranslationPane, columns ? 1 : 0);
         Grid.SetRow(TranslationPane, stacked ? 1 : 0);
+        DetachedSourcePane.IsVisible = sourceVisible;
+        DetachedTargetPane.IsVisible = TranslationVisible;
+        DetachedReadingColumns.ColumnDefinitions[1].Width = columns ? GridLength.Star : 0;
+        DetachedReadingColumns.RowDefinitions[1].Height = stacked ? GridLength.Star : 0;
+        DetachedReadingColumns.ColumnSpacing = columns ? 1 : 0;
+        DetachedReadingColumns.RowSpacing = stacked ? 1 : 0;
+        Grid.SetColumn(DetachedTargetPane, columns ? 1 : 0);
+        Grid.SetRow(DetachedTargetPane, stacked ? 1 : 0);
         var layout = Layouts.First(item => item.Mode == readingLayout);
         ReaderLayoutButton.Text = layout.Compact;
         SemanticProperties.SetDescription(ReaderLayoutButton, $"Розкладка читання · {layout.Label}. Змінити розкладку");

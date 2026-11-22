@@ -9,7 +9,7 @@ mod ocr_edit;
 mod speech_resume;
 mod translation;
 pub(crate) mod word_break;
-pub use translation::DetachedPdfTranslation;
+pub use translation::{DetachedPdfPassage, DetachedPdfTranslation};
 pub use ocr_edit::DetachedPdfOcrPage;
 pub use find::{DetachedPdfFindCursor, DetachedPdfFindPage};
 pub use annotations::{DetachedPdfAnnotationChange, DetachedPdfAnnotationItem};
@@ -176,11 +176,20 @@ impl Store {
     pub fn select_detached_pdf_sentence(
         &self, id: &str, page: u16, requested: Option<usize>, expected: Option<&str>,
     ) -> Result<Option<DetachedPdfSentence>> {
+        self.select_detached_pdf_sentence_at(id, page, requested, expected, None)
+    }
+
+    pub fn select_detached_pdf_sentence_at(
+        &self, id: &str, page: u16, requested: Option<usize>, expected: Option<&str>, source_offset: Option<usize>,
+    ) -> Result<Option<DetachedPdfSentence>> {
         let Some(CachedSentences { language, saved, sentences, revision, .. }) = self.detached_pdf_sentences(id, page)? else {
             return Ok(None);
         };
         let total = sentences.len();
-        let position = requested.unwrap_or(saved).min(total - 1);
+        let from_offset = source_offset.map(|offset| {
+            sentences.partition_point(|sentence| sentence.end_utf16 <= offset).min(total - 1)
+        });
+        let position = from_offset.or(requested).unwrap_or(saved).min(total - 1);
         let (speech_text, narration_text) = narration_text(&self.connection, id, page, &sentences, position)?;
         let checkpoint = speech_resume::read(&self.connection, id, page)?;
         let speech_resume = checkpoint.as_ref()
@@ -190,7 +199,7 @@ impl Store {
         if expected.is_some_and(|expected| sentence.id != expected) {
             return Err("Речення в результатах пошуку змінилося.".into());
         }
-        if requested.is_some() {
+        if requested.is_some() || source_offset.is_some() {
             write_position(&self.connection, id, page, position)?;
         }
         let (bookmarked, note) = annotations::read(&self.connection, id, page, sentence.start_utf16)?;

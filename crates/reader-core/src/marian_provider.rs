@@ -482,6 +482,13 @@ impl StoreWorker {
         self.open(flags)?.detached_pdf_translation(id, page, sentence_id, target, cached_only, background)
     }
 
+    pub fn detached_pdf_passage(
+        self, id: &str, page: u16, sentence_id: &str, target: &str, cached_only: bool, background: bool,
+    ) -> Result<crate::DetachedPdfPassage> {
+        let flags = if cached_only { OpenFlags::SQLITE_OPEN_READ_ONLY } else { OpenFlags::SQLITE_OPEN_READ_WRITE };
+        self.open(flags)?.detached_pdf_passage(id, page, sentence_id, target, cached_only, background)
+    }
+
     pub fn translate_detached_pdf_sentence(
         self, id: &str, page: u16, sentence_id: &str, target: &str,
     ) -> Result<Option<AlignedTranslation>> {

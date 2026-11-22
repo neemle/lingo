@@ -198,10 +198,7 @@ public partial class ReadingPage
 
         if (detached)
         {
-            if (detachedAddress is not { } address) return;
-            if (detachedSentence is not { } current || selected.StartUtf16 < current.Sentence.StartUtf16 ||
-                selected.StartUtf16 >= current.Sentence.EndUtf16) return;
-            ShowDetachedWord(selected, (view, point));
+            await ShowDetachedSelectionAsync(selected, (view, point));
         }
         else
         {
@@ -211,10 +208,12 @@ public partial class ReadingPage
 
     private (int Start, int End)? VisibleInlinePdfOffsets()
     {
-        if (!inlinePdfFitWidth || !InlinePdfViewport.IsVisible || InlinePdfSurface.Height <= 0 ||
-            InlinePdfHighlight.Drawable is not PdfReadingHighlight drawing) return null;
-        var top = InlinePdfViewport.ScrollY / InlinePdfSurface.Height;
-        return drawing.VisibleOffsets(top, top + InlinePdfViewport.Height / InlinePdfSurface.Height);
+        var (viewport, surface) = ActiveInlinePdf();
+        var overlay = DetachedPdfReader.IsVisible ? DetachedInlinePdfHighlight : InlinePdfHighlight;
+        if (!inlinePdfFitWidth || !viewport.IsVisible || surface.Height <= 0 ||
+            overlay.Drawable is not PdfReadingHighlight drawing) return null;
+        var top = viewport.ScrollY / surface.Height;
+        return drawing.VisibleOffsets(top, top + viewport.Height / surface.Height);
     }
 
     private void InlinePdfWordChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)

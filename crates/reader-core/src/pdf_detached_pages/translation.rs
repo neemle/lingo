@@ -13,6 +13,21 @@ pub struct DetachedPdfTranslation {
     pub(super) start_position: usize,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetachedPdfPassage {
+    active: Option<DetachedPdfTranslation>,
+    rows: Vec<DetachedPdfPassageRow>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DetachedPdfPassageRow {
+    position: usize,
+    sentence_count: usize,
+    text: String,
+}
+
 pub(super) struct PageProjection {
     document: Document,
     physical: Range<usize>,
@@ -47,6 +62,65 @@ impl Store {
         cached_only: bool,
         background: bool,
     ) -> Result<Option<DetachedPdfTranslation>> {
+        let (projection, selected) = self.detached_page_projection(id, page, sentence_id, target)?;
+        if cached_only {
+            let routes = self.translation_cache_routes(&projection.document.language, target)?;
+            return cached_page_translation(self, &routes, &projection, selected, target);
+        }
+        let position = projection.physical.start + selected;
+        let translated =
+            self.translate_document_paragraph(&projection.document, position, target, background, PageBoundaries::Projected)?;
+        if let Some(active) = active_translation(&projection.document, position, translated) {
+            return Ok(Some(projection.localize(active)));
+        }
+        let routes = self.translation_cache_routes(&projection.document.language, target)?;
+        cached_page_translation(self, &routes, &projection, selected, target)
+    }
+
+    pub fn detached_pdf_passage(
+        &mut self,
+        id: &str,
+        page: u16,
+        sentence_id: &str,
+        target: &str,
+        cached_only: bool,
+        background: bool,
+    ) -> Result<DetachedPdfPassage> {
+        let (projection, selected) = self.detached_page_projection(id, page, sentence_id, target)?;
+        let document = &projection.document;
+        let position = projection.physical.start + selected;
+        let routes = self.translation_cache_routes(&document.language, target)?;
+        let paragraph = if cached_only {
+            routes.cached_window(self, document, position, target, PageBoundaries::Projected)?.paragraph
+        } else {
+            self.translate_document_paragraph(document, position, target, background, PageBoundaries::Projected)?
+        };
+        let mut rows = Vec::new();
+        for unit in &paragraph.units {
+            let mut positions = projection.physical_sentences().iter().enumerate()
+                .filter(|(_, sentence)| unit.sentence_ids.contains(&sentence.id))
+                .map(|(index, _)| index);
+            if let (Some(first), Some(text)) = (positions.next(), &unit.translation) {
+                rows.push(DetachedPdfPassageRow {
+                    position: first,
+                    sentence_count: 1 + positions.count(),
+                    text: text.clone(),
+                });
+            }
+        }
+        rows.sort_by_key(|row| row.position);
+        let active = active_translation(document, position, paragraph)
+            .map(|result| projection.localize(result));
+        let active = match active {
+            Some(active) => Some(active),
+            None => cached_page_translation(self, &routes, &projection, selected, target)?,
+        };
+        Ok(DetachedPdfPassage { active, rows })
+    }
+
+    fn detached_page_projection(
+        &self, id: &str, page: u16, sentence_id: &str, target: &str,
+    ) -> Result<(PageProjection, usize)> {
         let CachedSentences {
             language,
             text,
@@ -60,20 +134,8 @@ impl Store {
         if sentences[selected].id != sentence_id {
             return Err("Позиція читання сторінки PDF змінилася.".into());
         }
-        let projection =
-            self.project_pdf_translation_page(id, page, target, text, sentences, language)?;
-        if cached_only {
-            let routes = self.translation_cache_routes(&projection.document.language, target)?;
-            return cached_page_translation(self, &routes, &projection, selected, target);
-        }
-        let position = projection.physical.start + selected;
-        let translated =
-            self.translate_document_paragraph(&projection.document, position, target, background, PageBoundaries::Projected)?;
-        if let Some(active) = active_translation(&projection.document, position, translated) {
-            return Ok(Some(projection.localize(active)));
-        }
-        let routes = self.translation_cache_routes(&projection.document.language, target)?;
-        cached_page_translation(self, &routes, &projection, selected, target)
+        let projection = self.project_pdf_translation_page(id, page, target, text, sentences, language)?;
+        Ok((projection, selected))
     }
 
     pub(crate) fn detached_sentence_input(

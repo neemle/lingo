@@ -225,8 +225,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<int[]> UnreadPdfTextPagesAsync(string id, CancellationToken cancellation) =>
         Task.Run(() => client.UnreadPdfTextPages(id), cancellation);
 
-    public Task<DetachedPdfSentence?> DetachedPdfSentenceAsync(string id, int page, int? position, string? sentenceId = null) =>
-        Task.Run(() => client.DetachedPdfSentence(id, page, position, sentenceId));
+    public Task<DetachedPdfSentence?> DetachedPdfSentenceAsync(string id, int page, int? position, string? sentenceId = null, int? sourceOffset = null) =>
+        Task.Run(() => client.DetachedPdfSentence(id, page, position, sentenceId, sourceOffset));
 
     public Task<DetachedPdfFindPage> FindDetachedPdfTextAsync(
         string id, string query, DetachedPdfFindCursor start, int limit, CancellationToken cancellation, string? target = null) =>
@@ -258,6 +258,10 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<DetachedPdfTranslation?> DetachedPdfTranslationAsync(string id, int page, string sentenceId, string target,
         bool cachedOnly, bool background = false) =>
         Task.Run(() => client.GetDetachedPdfTranslation(id, page, sentenceId, target, cachedOnly, background));
+
+    public Task<DetachedPdfPassage> DetachedPdfPassageAsync(string id, int page, string sentenceId, string target,
+        bool cachedOnly, bool background = false) =>
+        Task.Run(() => client.GetDetachedPdfPassage(id, page, sentenceId, target, cachedOnly, background));
 
     public Task<MachineTranslation?> TranslateDetachedPdfSentenceAsync(string id, int page, string sentenceId, string target) =>
         Task.Run(() => client.TranslateDetachedPdfSentence(id, page, sentenceId, target));

@@ -25,6 +25,7 @@ public partial class ReadingPage
     private CancellationTokenSource? detachedAudioCancellation;
     private CancellationTokenSource? detachedSpeechTravel;
     private int detachedTranslationRun;
+    private bool detachedTranslationScrollPending;
 
 #if MACCATALYST
     private void ShowDetachedPdfPage(Document document, PdfReadPage page)
@@ -54,7 +55,7 @@ public partial class ReadingPage
     }
 
     private async Task LoadDetachedSentenceAsync(
-        DetachedAddress address, int? position, string? sentenceId = null, bool automatic = false)
+        DetachedAddress address, int? position, string? sentenceId = null, bool automatic = false, int? sourceOffset = null)
     {
         if (!automatic)
         {
@@ -70,7 +71,7 @@ public partial class ReadingPage
         ResetDetachedTranslation();
         try
         {
-            var result = await AppState.Session.DetachedPdfSentenceAsync(address.Document, address.Page, position, sentenceId);
+            var result = await AppState.Session.DetachedPdfSentenceAsync(address.Document, address.Page, position, sentenceId, sourceOffset);
             if (request != detachedSentenceRequest || !ReferenceEquals(detachedAddress, address)) return;
             detachedSentence = result;
             if (result is not { } current) return;
@@ -109,7 +110,20 @@ public partial class ReadingPage
         return next >= 0 && next < current.Total ? LoadDetachedSentenceAsync(address, next) : Task.CompletedTask;
     }
 
-    private void DetachedPdfSelected(object? sender, TextSelection selected) => ShowDetachedWord(selected);
+    private async void DetachedPdfSelected(object? sender, TextSelection selected) =>
+        await ShowDetachedSelectionAsync(selected);
+
+    private async Task ShowDetachedSelectionAsync(TextSelection selected,
+        (VisualElement View, Point Point)? pdfAnchor = null)
+    {
+        if (detachedAddress is not { } address || loadingDetachedSentence) return;
+        if (detachedSentence?.Sentence is not { } active || selected.StartUtf16 < active.StartUtf16 ||
+            selected.StartUtf16 >= active.EndUtf16)
+            await LoadDetachedSentenceAsync(address, position: null, sourceOffset: selected.StartUtf16);
+        if (ReferenceEquals(detachedAddress, address) && detachedSentence?.Sentence is { } hit &&
+            selected.StartUtf16 >= hit.StartUtf16 && selected.StartUtf16 < hit.EndUtf16)
+            ShowDetachedWord(selected, pdfAnchor);
+    }
 
     private void ShowDetachedWord(TextSelection selected, (VisualElement View, Point Point)? pdfAnchor = null)
     {
@@ -362,13 +376,16 @@ public partial class ReadingPage
         var run = ++detachedTranslationRun;
         translatingDetachedSentence = true;
         UpdateDetachedControls();
-        ShowDetachedTranslation("Перекладаємо офлайн…");
+        if (ReviewedDetachedTranslation() is null) ShowDetachedTranslation("Перекладаємо офлайн…");
         try
         {
-            var translated = await AppState.Session.DetachedPdfTranslationAsync(
+            var translated = await AppState.Session.DetachedPdfPassageAsync(
                 address.Document, address.Page, current.Sentence.Id, target, cachedOnly: false, background: background);
             if (run != detachedTranslationRun) return;
-            if (translated is null)
+            RenderDetachedPassage(address, current, translated.Rows);
+            if (ReviewedDetachedTranslation() is not null)
+                ShowDetachedReviewedTranslation();
+            else if (translated.Active is not { } active)
             {
                 if (!background)
                 {
@@ -378,11 +395,11 @@ public partial class ReadingPage
                 else ShowDetachedTranslation("");
             }
             else
-                ShowDetachedMachineTranslation(translated, current.Language, target);
+                ShowDetachedMachineTranslation(active, current.Language, target);
         }
         catch (Exception error)
         {
-            if (run == detachedTranslationRun) ShowDetachedTranslation(error.Message);
+            if (run == detachedTranslationRun && ReviewedDetachedTranslation() is null) ShowDetachedTranslation(error.Message);
         }
         finally
         {
@@ -398,20 +415,22 @@ public partial class ReadingPage
     {
         if (!readingPageActive || loadingDetachedSentence || translatingDetachedSentence ||
             detachedAddress is not { } address || detachedSentence is not { } current || TargetCode is not { } target ||
-            CurrentDetachedTranslation() is not null || detachedCacheLookupRun == detachedTranslationRun) return;
+            detachedCacheLookupRun == detachedTranslationRun) return;
         var run = detachedTranslationRun;
         detachedCacheLookupRun = run;
         try
         {
-            var cached = await AppState.Session.DetachedPdfTranslationAsync(
+            var cached = await AppState.Session.DetachedPdfPassageAsync(
                 address.Document, address.Page, current.Sentence.Id, target, cachedOnly: true);
-            if (run != detachedTranslationRun || CurrentDetachedTranslation() is not null) return;
-            if (cached is not null)
+            if (run != detachedTranslationRun) return;
+            RenderDetachedPassage(address, current, cached.Rows);
+            if (cached.Active is { } active && ReviewedDetachedTranslation() is null)
             {
-                ShowDetachedMachineTranslation(cached, current.Language, target);
+                ShowDetachedMachineTranslation(active, current.Language, target);
                 UpdateDetachedControls();
             }
-            else if (autoTranslate && !speakingDetachedSentence && !AppState.Session.Busy)
+            else if (CurrentDetachedTranslation() is null && autoTranslate &&
+                !speakingDetachedSentence && !AppState.Session.Busy)
             {
                 await Task.Delay(250);
                 if (run == detachedTranslationRun && readingPageActive && autoTranslate && !speakingDetachedSentence &&
@@ -435,6 +454,7 @@ public partial class ReadingPage
         detachedTranslationRun++;
         translatingDetachedSentence = false;
         detachedMachineTranslation = null;
+        ClearDetachedPassageRows();
         ShowDetachedReviewedTranslation();
         UpdateDetachedControls();
         _ = RestoreDetachedTranslationAsync();
@@ -459,6 +479,62 @@ public partial class ReadingPage
     {
         DetachedTranslation.Text = value;
         DetachedTranslationPane.IsVisible = value.Length != 0;
+        if (DetachedTranslationPane.IsVisible) FollowDetachedTranslation();
+    }
+
+    private void ClearDetachedPassageRows()
+    {
+        DetachedPassageBefore.Children.Clear();
+        DetachedPassageAfter.Children.Clear();
+        DetachedPassageBefore.IsVisible = DetachedPassageAfter.IsVisible = false;
+    }
+
+    private void RenderDetachedPassage(DetachedAddress address, DetachedPdfSentence active, DetachedPdfPassageRow[] rows)
+    {
+        ClearDetachedPassageRows();
+        foreach (var row in rows)
+        {
+            if (active.Position >= row.Position && active.Position < row.Position + row.SentenceCount) continue;
+            var label = new Label
+            {
+                Text = row.Text, FontFamily = "Georgia", FontSize = Math.Max(16, SourceText.ReadingFontSize - 4),
+                LineHeight = 1.4, TextColor = Color.FromArgb("#655F4D"), Margin = new Thickness(12, 0),
+            };
+            var select = new TapGestureRecognizer();
+            select.Tapped += async (_, _) =>
+            {
+                if (ReferenceEquals(detachedAddress, address) && !loadingDetachedSentence && !AppState.Session.Busy)
+                    await LoadDetachedSentenceAsync(address, row.Position);
+            };
+            label.GestureRecognizers.Add(select);
+            var pane = row.Position < active.Position ? DetachedPassageBefore : DetachedPassageAfter;
+            pane.Children.Add(label);
+            pane.IsVisible = true;
+        }
+        if (DetachedTranslationPane.IsVisible) FollowDetachedTranslation();
+    }
+
+    private void DetachedTranslationViewportReady(object? sender, EventArgs args)
+    {
+        if (DetachedTranslationPane.IsVisible) FollowDetachedTranslation();
+    }
+
+    private void FollowDetachedTranslation()
+    {
+        if (detachedTranslationScrollPending || !DetachedTranslationViewport.IsVisible ||
+            DetachedTranslationViewport.Height <= 0) return;
+        detachedTranslationScrollPending = true;
+        if (!Dispatcher.Dispatch(async () =>
+        {
+            detachedTranslationScrollPending = false;
+            if (!DetachedPdfReader.IsVisible || !DetachedTranslationPane.IsVisible) return;
+            var viewport = DetachedTranslationViewport;
+            var top = viewport.ScrollY;
+            if (DetachedTranslationPane.Y >= top && DetachedTranslationPane.Y + DetachedTranslationPane.Height <= top + viewport.Height)
+                return;
+            try { await viewport.ScrollToAsync(DetachedTranslationPane, ScrollToPosition.MakeVisible, animated: false); }
+            catch (Exception error) when (error is InvalidOperationException or OperationCanceledException) { }
+        })) detachedTranslationScrollPending = false;
     }
 
     private async void DetachedSpeakClicked(object? sender, EventArgs args) => await SpeakDetachedAsync(resumePlayback: false);
@@ -720,7 +796,7 @@ public partial class ReadingPage
         var routeSelected = detachedSentence is { } loaded && TargetCode is { } target
             && readinessPair == (loaded.Language, target);
         DetachedTranslate.IsEnabled = available && !translatingDetachedSentence && routeSelected
-            && readiness?.Ready == true && ReviewedDetachedTranslation() is null;
+            && readiness?.Ready == true;
         DetachedReadiness.IsVisible = available && routeSelected && !translatingDetachedSentence
             && CurrentDetachedTranslation() is null;
         if (DetachedReadiness.IsVisible) DetachedReadiness.Text = ReadinessMessage();

@@ -115,8 +115,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             }
         }
         Command::PdfReadWindow { id, center } => value(store.pdf_read_window(&id, center)),
-        Command::DetachedPdfSentence { id, page, position, sentence_id } =>
-            value(store.select_detached_pdf_sentence(&id, page, position, sentence_id.as_deref())),
+        Command::DetachedPdfSentence { id, page, position, sentence_id, source_offset } =>
+            value(store.select_detached_pdf_sentence_at(&id, page, position, sentence_id.as_deref(), source_offset)),
         Command::UnreadPdfTextPages { id } => value(store.unread_pdf_text_pages(&id)),
         Command::FindDetachedPdfText { id, query, start, limit, target } =>
             value(store.find_detached_pdf_text(&id, &query, start, limit, target.as_deref())),
@@ -130,6 +130,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::DetachedPdfAnnotations { id, page } => value(store.detached_pdf_annotations(&id, page)),
         Command::UpdateDetachedPdfAnnotation { id, page, sentence_id, change } =>
             value(store.update_detached_pdf_annotation(&id, page, &sentence_id, change)),
+        Command::DetachedPdfPassage { id, page, sentence_id, target, cached_only, background } =>
+            value(store.detached_pdf_passage(&id, page, &sentence_id, &target, cached_only, background)),
         Command::DetachedPdfTranslation { id, page, sentence_id, target, cached_only, background } =>
             value(store.detached_pdf_translation(&id, page, &sentence_id, &target, cached_only, background)),
         Command::TranslateDetachedPdfSentence { id, page, sentence_id, target } =>

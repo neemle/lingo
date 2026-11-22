@@ -158,8 +158,8 @@ public sealed class CoreClient : IDisposable
     public int[] UnreadPdfTextPages(string id) =>
         Call<int[]>(new { version = 1, operation = "unread_pdf_text_pages", id });
 
-    public DetachedPdfSentence? DetachedPdfSentence(string id, int page, int? position, string? sentenceId = null) =>
-        Call<DetachedPdfSentence?>(new { version = 1, operation = "detached_pdf_sentence", id, page, position, sentenceId });
+    public DetachedPdfSentence? DetachedPdfSentence(string id, int page, int? position, string? sentenceId = null, int? sourceOffset = null) =>
+        Call<DetachedPdfSentence?>(new { version = 1, operation = "detached_pdf_sentence", id, page, position, sentenceId, sourceOffset });
 
     public DetachedPdfFindPage FindDetachedPdfText(string id, string query, DetachedPdfFindCursor start, int limit, string? target = null) =>
         CallIndependent<DetachedPdfFindPage>(new { version = 1, operation = "find_detached_pdf_text", id, query, start, limit, target });
@@ -190,6 +190,13 @@ public sealed class CoreClient : IDisposable
         CallIndependent<DetachedPdfTranslation?>(new
         {
             version = 1, operation = "detached_pdf_translation", id, page, sentenceId, target, cachedOnly, background,
+        });
+
+    public DetachedPdfPassage GetDetachedPdfPassage(string id, int page, string sentenceId, string target,
+        bool cachedOnly, bool background) =>
+        CallIndependent<DetachedPdfPassage>(new
+        {
+            version = 1, operation = "detached_pdf_passage", id, page, sentenceId, target, cachedOnly, background,
         });
 
     public MachineTranslation? TranslateDetachedPdfSentence(string id, int page, string sentenceId, string target) =>

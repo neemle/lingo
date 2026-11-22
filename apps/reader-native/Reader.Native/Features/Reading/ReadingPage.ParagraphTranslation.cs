@@ -47,11 +47,20 @@ public partial class ReadingPage
         {
             while (Environment.TickCount64 - lastSourceViewportMovement < 220)
                 await Task.Delay(220);
-            var session = AppState.Session;
-            if (!CanSyncSourceViewport() || session.Document is not { } document ||
-                session.Sentence is not { } active) return;
+            if (!CanSyncSourceViewport()) return;
+            var detached = DetachedPdfReader.IsVisible;
+            var source = detached ? DetachedPdfText : SourceText;
+            var visible = inlinePdf ? VisibleInlinePdfOffsets() : source.VisibleOffsets?.Invoke();
+            if (detached)
+            {
+                if (detachedAddress is { } address && detachedSentence?.Sentence is { } current &&
+                    visible is { } page && (page.Start >= current.EndUtf16 || page.End <= current.StartUtf16))
+                    await LoadDetachedSentenceAsync(address, position: null, sourceOffset: page.Start);
+                return;
+            }
 
-            var visible = inlinePdf ? VisibleInlinePdfOffsets() : SourceText.VisibleOffsets?.Invoke();
+            var session = AppState.Session;
+            if (session.Document is not { } document || session.Sentence is not { } active) return;
             if (visible is not { } range || (range.Start < active.EndUtf16 && range.End > active.StartUtf16)) return;
             var position = Array.FindIndex(document.Sentences,
                 sentence => sentence.EndUtf16 > range.Start && sentence.StartUtf16 < range.End);
@@ -61,7 +70,8 @@ public partial class ReadingPage
     }
 
     private bool CanSyncSourceViewport() => readingPageActive && TranslationVisible && SourcePane.IsVisible &&
-        !PdfPageNotice.IsVisible && !WordOverlay.IsVisible && !utteranceActive && !AppState.Session.Busy;
+        !WordOverlay.IsVisible && !utteranceActive && !AppState.Session.Busy &&
+        (DetachedPdfReader.IsVisible ? !loadingDetachedSentence && !speakingDetachedSentence : !PdfPageNotice.IsVisible);
 
     private void TrackTranslationScroll(TranslationKey? key)
     {
