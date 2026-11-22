@@ -216,13 +216,14 @@ public partial class VocabularyPage : ContentPage
                 var options = sources.Select((source, index) =>
                 {
                     var context = string.Join(' ', source.Sentence.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-                    if (context.Length > 95) context = context[..95] + "…";
+                    if (context.Length > 95) context = context[..(char.IsHighSurrogate(context[94]) ? 94 : 95)] + "…";
                     var page = source.Page is int number ? $"стор. {number + 1}, " : "";
                     return (index.ToString(), $"{index + 1}. {source.Title} · {page}речення {source.Position + 1}\n{context}");
                 });
                 var choice = await NativeChoices.ChooseAsync(this, "Джерела картки", card.Word, options);
-                if (!int.TryParse(choice, out var index) || index < 0 || index >= sources.Length ||
-                    Shell.Current.CurrentPage != this || AppState.Session.Busy) return;
+                if (!int.TryParse(choice, out var index) || index < 0 || index >= sources.Length) return;
+                await AppState.Session.WaitUntilIdleAsync();
+                if (Shell.Current.CurrentPage != this) return;
                 chosen = sources[index];
             }
             await AppState.OpenAsync(chosen.DocumentId, chosen);
