@@ -13,8 +13,11 @@ use std::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
+mod search;
+
 const REVISION: &str = "enwiktionary-2026-10-01-kaikki-2026-10-30";
-const INDEX_VERSION: u32 = 1;
+const INDEX_VERSION: u32 = 2;
+const LEGACY_INDEX_VERSION: u32 = 1;
 const MAX_UNPACKED_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 const MAX_LINE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_SENSES_PER_TERM: i64 = 48;
@@ -136,11 +139,18 @@ struct WiktextractExample {
 }
 
 impl Pack {
-    fn path(&self, root: &Path) -> PathBuf {
+    fn path(&self, root: &Path, version: u32) -> PathBuf {
         root.join(self.language)
             .join("lexicon")
             .join(REVISION)
-            .join(format!("meanings-v{INDEX_VERSION}.sqlite"))
+            .join(format!("meanings-v{version}.sqlite"))
+    }
+
+    fn installed_path(&self, root: &Path) -> Option<(PathBuf, u32)> {
+        [INDEX_VERSION, LEGACY_INDEX_VERSION]
+            .into_iter()
+            .map(|version| (self.path(root, version), version))
+            .find(|(path, _)| path.is_file())
     }
 
     fn describe(&self, installed: bool) -> LexicalPackage {
@@ -159,13 +169,12 @@ impl Pack {
         }
     }
 
-    fn open(&self, root: &Path) -> Result<Option<Connection>> {
-        let path = self.path(root);
-        if !path.is_file() {
+    fn open(&self, root: &Path) -> Result<Option<(Connection, u32)>> {
+        let Some((path, version)) = self.installed_path(root) else {
             return Ok(None);
-        }
+        };
         Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map(Some)
+            .map(|db| Some((db, version)))
             .map_err(lexical_error)
     }
 }
@@ -180,7 +189,7 @@ impl Store {
     pub fn lexical_packages(&self) -> Vec<LexicalPackage> {
         PACKS
             .iter()
-            .map(|pack| pack.describe(pack.path(&self.knowledge_directory).is_file()))
+            .map(|pack| pack.describe(pack.installed_path(&self.knowledge_directory).is_some()))
             .collect()
     }
 
@@ -193,7 +202,7 @@ impl Store {
         Ok(LexicalPackageInstall {
             pack,
             source: source.to_owned(),
-            destination: pack.path(&self.knowledge_directory),
+            destination: pack.path(&self.knowledge_directory, INDEX_VERSION),
         })
     }
 
@@ -282,6 +291,7 @@ fn build_index(path: &Path, language: &str, mut input: impl BufRead) -> Result<(
          ) WITHOUT ROWID;",
     )
     .map_err(lexical_error)?;
+    db.execute_batch(search::SCHEMA).map_err(lexical_error)?;
     let tx = db.transaction().map_err(lexical_error)?;
     let mut line = Vec::new();
     let mut unpacked = 0;
@@ -293,6 +303,7 @@ fn build_index(path: &Path, language: &str, mut input: impl BufRead) -> Result<(
         let mut insert_link = tx
             .prepare("INSERT OR IGNORE INTO lemma_links VALUES (?1,?2)")
             .map_err(lexical_error)?;
+        let mut insert_search = tx.prepare(search::INSERT).map_err(lexical_error)?;
         loop {
             line.clear();
             let bytes = (&mut input)
@@ -333,6 +344,7 @@ fn build_index(path: &Path, language: &str, mut input: impl BufRead) -> Result<(
                 insert
                     .execute(params![term, ordinal, body])
                     .map_err(lexical_error)?;
+                search::index(&mut insert_search, language, &term, ordinal, &sense)?;
                 ordinal += 1;
             }
         }
@@ -424,7 +436,7 @@ pub(super) fn lookup(
     let Some(pack) = find_pack(language) else {
         return Ok((None, Vec::new()));
     };
-    let Some(db) = pack.open(root)? else {
+    let Some((db, version)) = pack.open(root)? else {
         return Ok((Some(pack.describe(false)), Vec::new()));
     };
 
@@ -459,18 +471,47 @@ pub(super) fn lookup(
     }
 
     let mut query = db
-        .prepare("SELECT body FROM meanings WHERE term=?1 ORDER BY ordinal LIMIT ?2")
+        .prepare("SELECT ordinal, body FROM meanings WHERE term=?1 ORDER BY ordinal LIMIT ?2")
         .map_err(lexical_error)?;
     let mut unique = BTreeSet::new();
     let mut candidates = Vec::new();
     for key in keys {
-        let rows = query
+        let mut rows = query
             .query_map(params![key, MAX_SENSES_PER_TERM], |row| {
-                row.get::<_, String>(0)
+                Ok((row.get(0)?, row.get(1)?))
             })
+            .map_err(lexical_error)?
+            .collect::<rusqlite::Result<Vec<(i64, String)>>>()
             .map_err(lexical_error)?;
-        for row in rows {
-            let body = row.map_err(lexical_error)?;
+        // Use postings to shortlist contextual evidence and recover matching senses past the exact cutoff.
+        let hits = if version == INDEX_VERSION && rows.len() > 1 && context.is_some() {
+            let after = rows
+                .last()
+                .filter(|_| rows.len() as i64 == MAX_SENSES_PER_TERM)
+                .map_or(i64::MAX, |(ordinal, _)| *ordinal);
+            search::matching(
+                &db,
+                &key,
+                after,
+                &selected,
+                &context_words,
+                gloss_anchor.as_deref(),
+            )?
+        } else {
+            None
+        };
+        let indexed_matches = hits.map(|hits| {
+            let ordinals = hits
+                .iter()
+                .map(|(ordinal, _)| *ordinal)
+                .collect::<BTreeSet<_>>();
+            rows.extend(
+                hits.into_iter()
+                    .filter_map(|(ordinal, body)| Some((ordinal, body?))),
+            );
+            ordinals
+        });
+        for (ordinal, body) in rows {
             let sense: Sense = serde_json::from_str(&body).map_err(lexical_error)?;
             if !unique.insert(sense.id.clone()) {
                 continue;
@@ -490,20 +531,28 @@ pub(super) fn lookup(
                         .any(|(_, analysis)| analysis.grammar_evidence.is_some()),
                 )
             });
-            let example_matches = sense
-                .examples
-                .iter()
-                .map(|example| {
-                    contextual_overlap(language, &example.text, &context_words, &key, &selected)
-                })
-                .max()
-                .unwrap_or_default();
+            let has_context = indexed_matches
+                .as_ref()
+                .is_none_or(|hits| hits.contains(&ordinal));
+            let example_matches = if has_context {
+                sense
+                    .examples
+                    .iter()
+                    .map(|example| {
+                        contextual_overlap(language, &example.text, &context_words, &key, &selected)
+                    })
+                    .max()
+                    .unwrap_or_default()
+            } else {
+                0
+            };
             // An of-complement gives more direct lexical evidence than unrelated words elsewhere in the sentence.
-            let gloss_matches = gloss_anchor.as_ref().is_some_and(|anchor| {
-                *anchor != key
-                    && *anchor != selected
-                    && content_words(language, &sense.gloss).contains(anchor)
-            });
+            let gloss_matches = has_context
+                && gloss_anchor.as_ref().is_some_and(|anchor| {
+                    *anchor != key
+                        && *anchor != selected
+                        && content_words(language, &sense.gloss).contains(anchor)
+                });
 
             candidates.push((
                 sense,
@@ -550,7 +599,7 @@ pub(super) fn lookup(
 }
 
 pub(super) fn available(root: &Path, language: &str) -> bool {
-    find_pack(language).is_some_and(|pack| pack.path(root).is_file())
+    find_pack(language).is_some_and(|pack| pack.installed_path(root).is_some())
 }
 
 fn lexical_key(language: &str, word: &str) -> String {
@@ -651,4 +700,93 @@ fn article_url(word: &str, language: &str) -> String {
 
 fn lexical_error(error: impl Display) -> String {
     format!("Помилка словникового пакета. {error}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn indexed_dictionary_context_recovers_senses_after_the_exact_cutoff() {
+        let directory = tempfile::tempdir().unwrap();
+        for (language, term, sentence, example, gloss) in [
+            (
+                "fr",
+                "MOULE",
+                "📘 La MOULE à gâteau évoque l'été.",
+                Some("Une moule à gâteau évoque l’été."),
+                "Sense matched in an accented example",
+            ),
+            (
+                "uk",
+                "вікна",
+                "🪟 Наші вікна прикрашають розкішними шторами.",
+                Some("Ві́кна прикрашають розкі́шними шторами."),
+                "Sense with Ukrainian stress marks in the example",
+            ),
+            (
+                "en",
+                "bank",
+                "The bank of the river was steep.",
+                None,
+                "A slope alongside a river",
+            ),
+        ] {
+            let mut senses: Vec<_> = (0..MAX_SENSES_PER_TERM)
+                .map(|i| json!({ "glosses": [format!("Unrelated definition {i}")] }))
+                .collect();
+            senses.push(json!({ "glosses": [gloss], "examples": example.into_iter()
+                .map(|text| json!({ "type": "example", "text": text })).collect::<Vec<_>>() }));
+            let data = [
+                json!({ "word": term, "lang_code": language, "pos": "noun", "senses": senses }),
+                json!({ "word": "different", "lang_code": language, "pos": "noun",
+                    "senses": [{ "glosses": [gloss] }] }),
+            ]
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+            let pack = find_pack(language).unwrap();
+            let old = pack.path(directory.path(), LEGACY_INDEX_VERSION);
+            fs::create_dir_all(old.parent().unwrap()).unwrap();
+            build_index(&old, language, data.as_bytes()).unwrap();
+            Connection::open(&old)
+                .unwrap()
+                .execute_batch("DROP TABLE meaning_search")
+                .unwrap();
+            assert!(available(directory.path(), language));
+            let context = WordContext {
+                sentence: sentence.to_owned(),
+                start_utf16: sentence[..sentence.find(term).unwrap()]
+                    .encode_utf16()
+                    .count(),
+            };
+            let find = |context: Option<&WordContext>| {
+                lookup(
+                    directory.path(),
+                    language,
+                    &word_key(term),
+                    &[],
+                    &[],
+                    context,
+                    None,
+                )
+                .unwrap()
+                .1
+            };
+            assert!(find(Some(&context))
+                .iter()
+                .all(|row| row.sense.gloss != gloss));
+
+            let current = pack.path(directory.path(), INDEX_VERSION);
+            build_index(&current, language, data.as_bytes()).unwrap();
+            let indexed = find(Some(&context));
+            assert_eq!(indexed[0].sense.gloss, gloss);
+            if example.is_some() {
+                assert_eq!(indexed[0].context_matches, 3);
+            }
+            assert!(find(None).iter().all(|row| row.sense.gloss != gloss));
+        }
+    }
 }
