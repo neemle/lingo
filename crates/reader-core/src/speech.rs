@@ -1,4 +1,4 @@
-use crate::{pdf_reading_position, resources::InferencePriority, tts::SpeechAudio, Document, Result, Sentence, Store};
+use crate::{pdf_detached_pages::word_break, pdf_reading_position, resources::InferencePriority, tts::SpeechAudio, Document, Result, Sentence, Store};
 use rusqlite::OptionalExtension;
 use serde::Serialize;
 
@@ -134,7 +134,8 @@ impl Store {
                 }
             }
         }
-        Ok(candidate.map(|sentence| canonical_speech(&document, sentence)))
+        candidate.map(|sentence| self.canonical_speech(&document, sentence)).transpose()
+            .map(|speech| speech.filter(|(_, source)| !source.text.is_empty()))
     }
 
     fn first_speech_on_pdf_page(
@@ -142,7 +143,7 @@ impl Store {
     ) -> Result<Option<(String, SpeechSource)>> {
         if let Some((document, start)) = canonical {
             if pdf_reading_position::page_bounds(document, page).is_some() {
-                return Ok(first_canonical_on_page(document, page, start));
+                return self.first_canonical_on_page(document, page, start);
             }
         }
         let detached = self.first_detached_pdf_speech_source(document_id, page)?;
@@ -150,7 +151,7 @@ impl Store {
             return Ok(detached);
         }
         let document = self.speech_document(document_id)?;
-        Ok(first_canonical_on_page(&document, page, 0))
+        self.first_canonical_on_page(&document, page, 0)
     }
 
     fn speech_document(&self, document_id: &str) -> Result<Document> {
@@ -160,19 +161,32 @@ impl Store {
             .ok_or("Документ для озвучення не знайдено")?;
         serde_json::from_str(&body).map_err(|error| error.to_string())
     }
-}
+    pub fn speech_narration(&self, document_id: &str, sentence_id: &str) -> Result<Option<String>> {
+        let document = self.speech_document(document_id)?;
+        let Some(sentence) = document.sentences.iter().find(|sentence| sentence.id == sentence_id) else {
+            return Ok(None);
+        };
+        word_break::canonical_narration(&self.connection, &document, sentence)
+    }
 
-fn first_canonical_on_page(document: &Document, page: u16, start: usize) -> Option<(String, SpeechSource)> {
-    let (left, right) = pdf_reading_position::page_bounds(document, page)?;
-    let sentences = &document.sentences[start..];
-    let index = sentences.partition_point(|sentence| sentence.end_utf16 <= left);
-    let sentence = sentences.get(index).filter(|sentence| sentence.start_utf16 < right)?;
-    Some(canonical_speech(document, sentence))
-}
+    fn first_canonical_on_page(
+        &self, document: &Document, page: u16, start: usize,
+    ) -> Result<Option<(String, SpeechSource)>> {
+        let Some((left, right)) = pdf_reading_position::page_bounds(document, page) else { return Ok(None); };
+        let sentences = &document.sentences[start..];
+        let index = sentences.partition_point(|sentence| sentence.end_utf16 <= left);
+        for sentence in sentences[index..].iter().take_while(|sentence| sentence.start_utf16 < right) {
+            let speech = self.canonical_speech(document, sentence)?;
+            if !speech.1.text.is_empty() {
+                return Ok(Some(speech));
+            }
+        }
+        Ok(None)
+    }
 
-fn canonical_speech(document: &Document, sentence: &Sentence) -> (String, SpeechSource) {
-    (sentence.id.clone(), SpeechSource {
-        language: document.language.clone(),
-        text: document.speech_text(sentence).to_owned(),
-    })
+    fn canonical_speech(&self, document: &Document, sentence: &Sentence) -> Result<(String, SpeechSource)> {
+        let text = word_break::canonical_narration(&self.connection, document, sentence)?
+            .unwrap_or_else(|| document.speech_text(sentence).to_owned());
+        Ok((sentence.id.clone(), SpeechSource { language: document.language.clone(), text }))
+    }
 }

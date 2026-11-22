@@ -304,6 +304,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         return Read();
     });
 
+    public string? GetSpeechNarration(string id, string sentenceId) => client.SpeechNarration(id, sentenceId);
     public SpeechResume? GetSpeechResume(string id) => client.SpeechResume(id);
 
     public void SetSpeechResume(string id, string sentenceId, string textHash, int? offsetUtf16) =>

@@ -15,6 +15,12 @@ enum Neighbor {
     Next,
 }
 
+#[derive(Clone, Copy)]
+enum EdgeUse<'a> {
+    Lookup(Option<&'a str>),
+    Speech,
+}
+
 pub(crate) fn neighboring_fragments(
     store: &Store,
     id: &str,
@@ -25,10 +31,10 @@ pub(crate) fn neighboring_fragments(
 ) -> Result<(Option<String>, Option<String>)> {
     let previous = match (page.checked_sub(1), first) {
         (Some(page), Some(first)) if first.text.starts_with(char::is_lowercase) => excerpt(
-            store,
+            &store.connection,
             id,
             page,
-            target,
+            EdgeUse::Lookup(target),
             Neighbor::Previous,
             first.text.len(),
         )?,
@@ -36,7 +42,7 @@ pub(crate) fn neighboring_fragments(
     };
     let next = match (page.checked_add(1), last) {
         (Some(page), Some(last)) if crate::translation::word_hyphen(&last.text).is_some() => {
-            excerpt(store, id, page, target, Neighbor::Next, last.text.len())?
+            excerpt(&store.connection, id, page, EdgeUse::Lookup(target), Neighbor::Next, last.text.len())?
         }
         _ => None,
     };
@@ -52,6 +58,13 @@ pub(crate) fn canonical_fragments(
 
 pub(crate) fn canonical_edge_fragments(
     store: &Store, document: &Document, target: Option<&str>,
+    first: Option<&Sentence>, last: Option<&Sentence>,
+) -> Result<(Option<String>, Option<String>)> {
+    canonical_edges(&store.connection, document, EdgeUse::Lookup(target), first, last)
+}
+
+fn canonical_edges(
+    db: &Connection, document: &Document, usage: EdgeUse<'_>,
     first: Option<&Sentence>, last: Option<&Sentence>,
 ) -> Result<(Option<String>, Option<String>)> {
     let Some(starts) = &document.pdf_page_starts else { return Ok((None, None)); };
@@ -76,59 +89,53 @@ pub(crate) fn canonical_edge_fragments(
         Some((u16::try_from(next).ok()?, last.text.len()))
     });
     let previous = previous.map(|(page, bytes)| excerpt(
-        store, &document.id, page, target, Neighbor::Previous, bytes,
+        db, &document.id, page, usage, Neighbor::Previous, bytes,
     )).transpose()?.flatten();
     let next = next.map(|(page, bytes)| excerpt(
-        store, &document.id, page, target, Neighbor::Next, bytes,
+        db, &document.id, page, usage, Neighbor::Next, bytes,
     )).transpose()?.flatten();
     Ok((previous, next))
 }
 
-// A word that crosses pages belongs to the page where it starts. Only use
-// adjacent detached pages, which use this same ownership rule when played.
+// A word spoken across pages belongs to the page where it starts.
 pub(super) fn narration(
     db: &Connection, id: &str, page: u16, sentences: &[Sentence], position: usize,
 ) -> Result<Option<String>> {
     let source = &sentences[position].text;
-    let mut text = Cow::Borrowed(source.as_str());
-    if position == 0 && source.starts_with(char::is_lowercase) {
-        if let Some(previous) = page.checked_sub(1) {
-            if let Some(prefix) = narration_edge(db, id, previous, Neighbor::Previous, source.len())? {
-                if let Some(consumed) = continuation(source, word_hyphen(&prefix)) {
-                    text = Cow::Borrowed(source[consumed.len()..].trim_start());
-                }
-            }
-        }
-    }
-    if position == sentences.len() - 1 {
-        if let (Some(next), Some(prefix)) = (page.checked_add(1), word_hyphen(&text)) {
-            if let Some(suffix) = narration_edge(db, id, next, Neighbor::Next, source.len())? {
-                if let Some(added) = continuation(&suffix, Some(prefix)) {
-                    text = Cow::Owned(format!("{prefix}{added}"));
-                }
-            }
-        }
-    }
-    Ok((text != source.as_str()).then(|| text.into_owned()))
+    let previous = if position == 0 && source.starts_with(char::is_lowercase) {
+        page.checked_sub(1).map(|page| excerpt(
+            db, id, page, EdgeUse::Speech, Neighbor::Previous, source.len(),
+        )).transpose()?.flatten()
+    } else { None };
+    let next = if position == sentences.len() - 1 && word_hyphen(source).is_some() {
+        page.checked_add(1).map(|page| excerpt(
+            db, id, page, EdgeUse::Speech, Neighbor::Next, source.len(),
+        )).transpose()?.flatten()
+    } else { None };
+    Ok(narration_fragments(source, previous.as_deref(), next.as_deref()))
 }
 
-fn narration_edge(
-    db: &Connection, id: &str, page: u16, side: Neighbor, current_bytes: usize,
+pub(crate) fn canonical_narration(
+    db: &Connection, document: &Document, sentence: &Sentence,
 ) -> Result<Option<String>> {
-    let Some((cached, _)) = read(db, id, page)? else {
-        return Ok(None);
-    };
-    let budget = MAX_BOUNDARY_BYTES.saturating_sub(current_bytes);
-    let Some((start, text)) = edge(&cached, side, budget) else {
-        return Ok(None);
-    };
-    let offset = cached[..start].encode_utf16().count();
-    if annotations::speech_text(db, id, page, offset)?.is_some()
-        || crate::validate_speech_text(text).is_err()
-    {
+    if document.speech_text_overrides.contains_key(&sentence.id) {
         return Ok(None);
     }
-    Ok(Some(text.to_owned()))
+    let (previous, next) = canonical_edges(db, document, EdgeUse::Speech, Some(sentence), Some(sentence))?;
+    Ok(narration_fragments(&sentence.text, previous.as_deref(), next.as_deref()))
+}
+
+fn narration_fragments(source: &str, previous: Option<&str>, next: Option<&str>) -> Option<String> {
+    let mut text = Cow::Borrowed(source);
+    if let Some(consumed) = continuation(source, previous.and_then(word_hyphen)) {
+        text = Cow::Borrowed(source[consumed.len()..].trim_start());
+    }
+    if let (Some(next), Some(prefix)) = (next, word_hyphen(&text)) {
+        if let Some(added) = continuation(next, Some(prefix)) {
+            text = Cow::Owned(format!("{prefix}{added}"));
+        }
+    }
+    (text != source).then(|| text.into_owned())
 }
 
 fn continuation<'a>(text: &'a str, prefix: Option<&str>) -> Option<&'a str> {
@@ -136,6 +143,7 @@ fn continuation<'a>(text: &'a str, prefix: Option<&str>) -> Option<&'a str> {
     let (_, _, first_word) = word_parts(text).next()?;
     if !text.starts_with(first_word) || !first_word.starts_with(char::is_lowercase)
         || crate::validate_speech_text(prefix).is_err()
+        || crate::validate_speech_text(text).is_err()
         || prefix.len() + text.len() > 1000
     {
         return None;
@@ -223,35 +231,34 @@ fn project_fragments<'a>(
 }
 
 fn excerpt(
-    store: &Store,
+    db: &Connection,
     id: &str,
     page: u16,
-    target: Option<&str>,
+    usage: EdgeUse<'_>,
     side: Neighbor,
     center_bytes: usize,
 ) -> Result<Option<String>> {
-    let budget = MAX_BOUNDARY_BYTES.saturating_sub(center_bytes.saturating_add(2));
+    let overhead = match usage { EdgeUse::Lookup(_) => 2, EdgeUse::Speech => 0 };
+    let budget = MAX_BOUNDARY_BYTES.saturating_sub(center_bytes.saturating_add(overhead));
     if budget == 0 {
         return Ok(None);
     }
-    if let Some((text, _)) = read(&store.connection, id, page)? {
+    if let Some((text, _)) = read(db, id, page)? {
         let Some((start, part)) = edge(&text, side, budget) else {
             return Ok(None);
         };
-        if let Some(target) = target {
-            let start_utf16 = text[..start].encode_utf16().count();
-            if annotations::reviewed(&store.connection, id, page, start_utf16)?.contains_key(target) {
-                return Ok(None);
-            }
+        let offset = text[..start].encode_utf16().count();
+        match usage {
+            EdgeUse::Lookup(Some(target)) if annotations::reviewed(db, id, page, offset)?.contains_key(target) => return Ok(None),
+            EdgeUse::Speech if annotations::speech_text(db, id, page, offset)?.is_some() => return Ok(None),
+            _ => {}
         }
         return Ok(Some(part.to_owned()));
     }
 
     // Read the canonical body only when the immediate neighbor has a text span.
     let path = format!("$.pdfPageStarts[{page}]");
-    let body: Option<String> = store
-        .connection
-        .query_row(
+    let body: Option<String> = db.query_row(
             "SELECT body FROM documents WHERE id=?1 AND json_type(body,?2)='integer'",
             params![id, path],
             |row| row.get(0),
@@ -278,12 +285,16 @@ fn excerpt(
     else {
         return Ok(None);
     };
-    if let Some(items) = target.and_then(|target| document.reviewed_translations.get(target)) {
-        let absolute = start_byte + relative;
-        let index = document
-            .sentences
-            .partition_point(|sentence| sentence.end_utf8 <= absolute);
-        if document.sentences.get(index).is_some_and(|sentence| items.contains_key(&sentence.id)) {
+    let absolute = start_byte + relative;
+    let index = document.sentences.partition_point(|sentence| sentence.end_utf8 <= absolute);
+    if let Some(sentence) = document.sentences.get(index) {
+        let has_override = match usage {
+            EdgeUse::Lookup(Some(target)) => document.reviewed_translations.get(target)
+                .is_some_and(|items| items.contains_key(&sentence.id)),
+            EdgeUse::Speech => document.speech_text_overrides.contains_key(&sentence.id),
+            EdgeUse::Lookup(None) => false,
+        };
+        if has_override {
             return Ok(None);
         }
     }

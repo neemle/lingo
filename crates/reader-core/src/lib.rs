@@ -119,7 +119,13 @@ impl Document {
         self.sentences
             .iter()
             .find(|sentence| resume.sentence_id == sentence.id)
-            .is_some_and(|sentence| resume.matches(self.speech_text(sentence), &sentence.text))
+            .is_some_and(|sentence| {
+                let narration = resume.boundary_text.as_deref().filter(|text| {
+                    self.pdf_page_starts.is_some() && resume.model.is_some() && !text.is_empty()
+                        && validate_speech_text(text).is_ok() && !self.speech_text_overrides.contains_key(&sentence.id)
+                });
+                resume.matches(narration.unwrap_or_else(|| self.speech_text(sentence)), &sentence.text)
+            })
     }
 }
 
@@ -131,6 +137,8 @@ pub struct SpeechResume {
     pub offset_utf16: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<ModelSpeechResume>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    boundary_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -524,7 +532,8 @@ impl Store {
                 document.speech_resume = resume
                     .as_deref()
                     .and_then(|body| serde_json::from_str::<SpeechResume>(body).ok())
-                    .filter(|resume| document.matches_speech_resume(resume));
+                    .filter(|resume| document.matches_speech_resume(resume))
+                    .filter(|resume| self.matches_boundary_resume(&document, resume));
                 Ok(document)
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1016,7 +1025,22 @@ impl Store {
     }
 
     pub fn speech_resume(&self, id: &str) -> Result<Option<SpeechResume>> {
-        Self::read_speech_resume(&self.connection, id)
+        let resume = Self::read_speech_resume(&self.connection, id)?;
+        if let Some(resume) = resume.as_ref().filter(|resume| resume.boundary_text.is_some()) {
+            if !self.matches_boundary_resume(&self.token_document(id)?, resume) {
+                return Ok(None);
+            }
+        }
+        Ok(resume)
+    }
+
+    fn matches_boundary_resume(&self, document: &Document, resume: &SpeechResume) -> bool {
+        let Some(boundary) = &resume.boundary_text else { return true; };
+        document.sentences.iter().find(|sentence| sentence.id == resume.sentence_id)
+            .is_some_and(|sentence| {
+                matches!(pdf_detached_pages::word_break::canonical_narration(&self.connection, document, sentence),
+                    Ok(Some(actual)) if &actual == boundary)
+            })
     }
 
     pub fn set_speech_resume(
@@ -1032,6 +1056,7 @@ impl Store {
                 text_hash: text_hash.into(),
                 offset_utf16,
                 model: None,
+                boundary_text: None,
             };
             Self::write_speech_resume(&self.connection, id, &resume)
         } else {
@@ -1053,6 +1078,12 @@ impl Store {
         if !model.valid() {
             return Err("Некоректна позиція локального голосу".into());
         }
+        let boundary_text = self.speech_narration(id, sentence_id)?;
+        if boundary_text.as_ref().is_some_and(|actual| {
+            actual.is_empty() || text_hash != format!("{:x}", Sha256::digest(actual.as_bytes()))
+        }) {
+            return Err("Текст для озвучення змінився. Запустіть відтворення знову.".into());
+        }
         Self::write_speech_resume(
             &self.connection,
             id,
@@ -1061,6 +1092,7 @@ impl Store {
                 text_hash: text_hash.into(),
                 offset_utf16: 0,
                 model: Some(model),
+                boundary_text,
             },
         )
     }

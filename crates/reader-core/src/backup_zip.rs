@@ -131,7 +131,9 @@ pub(crate) fn write(store: &Store, output: &mut File) -> Result<()> {
     if !backup.pending_intake.is_empty() {
         backup.version = INTAKE_VERSION;
     }
-    if pdf_detached_pages::has_boundary_speech_resume(&tx)? {
+    if backup.snapshot.documents.iter().any(|doc| {
+        doc.speech_resume.as_ref().is_some_and(|resume| resume.boundary_text.is_some())
+    }) || pdf_detached_pages::has_boundary_speech_resume(&tx)? {
         backup.version = BOUNDARY_SPEECH_VERSION;
     }
     validate_manifest(&backup)?;

@@ -803,7 +803,9 @@ public partial class ReadingPage : ContentPage
             SpeechStatus.Text = modelVoice ? "Готуємо локальне озвучення…" : "Озвучення поточного речення…";
 
             RecordReadingActivity();
-            if (modelVoice)
+            if (speechText.Length == 0)
+                status = LocalSpeech.CompletedStatus;
+            else if (modelVoice)
             {
                 status = await PlayModelAsync(session, doc, sentence, voice!, ratePercent, startAtMs, textHash, request, token);
                 if (request != speechRequest) return;
@@ -816,7 +818,7 @@ public partial class ReadingPage : ContentPage
                     SpeechStatus.Text = "Озвучення поточного речення…";
                 }
             }
-            if (!modelVoice)
+            if (!modelVoice && speechText.Length > 0)
             {
                 var fallbackReason = status != LocalSpeech.CompletedStatus ? status : null;
                 systemUsesSpeechOverride = hasSpeechOverride;

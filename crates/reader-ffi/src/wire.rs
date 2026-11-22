@@ -322,6 +322,11 @@ pub enum Command {
     SpeechResume {
         id: String,
     },
+    SpeechNarration {
+        id: String,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+    },
     SetSpeechResume {
         id: String,
         #[serde(rename = "sentenceId")]

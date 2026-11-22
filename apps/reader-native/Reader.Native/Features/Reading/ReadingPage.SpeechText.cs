@@ -11,8 +11,16 @@ public partial class ReadingPage
     private const int MaxSpeechTextBytes = 1000;
     private bool editingSpeechText;
 
-    private static string EffectiveSpeechText(Document document, Sentence sentence) =>
-        document.SpeechTextOverrides.GetValueOrDefault(sentence.Id) ?? sentence.Text;
+    private static string EffectiveSpeechText(Document document, Sentence sentence)
+    {
+        if (document.SpeechTextOverrides.TryGetValue(sentence.Id, out var saved))
+            return saved;
+        var text = sentence.Text;
+        if (document.PdfPageStarts is { Length: > 0 } && text.Length > 0 &&
+            (char.IsLower(text[0]) || text[^1] is '-' or '\u00ad' or '\u2010'))
+            return AppState.Session.GetSpeechNarration(document.Id, sentence.Id) ?? text;
+        return text;
+    }
 
     private static async Task<string> PrepareSystemSpeechAsync(ReaderSession session, string language, string text)
     {
