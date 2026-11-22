@@ -159,7 +159,7 @@ When multiple directions share a package, removing the package disables all of t
 In **Налаштування → Додаткові локальні моделі**, choose a model to download, verify or remove.
 Stopping a download keeps the partial files so the next attempt can resume. Each completed file must match
 its pinned SHA-256 before the model is activated. An interrupted replacement preserves the previous files.
-Select a word and choose **Пояснити з Qwen** for a local explanation with Qwen 2B. Previously saved Qwen 0.8B hints are still available from cache. The app checks available
+Select a word and choose **Пояснити з Qwen** for a local explanation with Qwen 2B. Repeat requests reuse saved Qwen 2B hints. The app checks available
 memory before loading the model and labels the result with the model name. Qwen is optional for reading,
 translation and the vocabulary.
 
@@ -168,7 +168,6 @@ then choose **За змістом (E5)** to rank saved cards by meaning across l
 uses different words. ONNX Runtime runs locally and retains recently computed vectors in memory during
 the session. Text search is available without the E5 model.
 
-- [Qwen3.5-0.8B GGUF](https://huggingface.co/ggml-org/Qwen3.5-0.8B-GGUF/tree/004fd086eccea9f7cf867aa07ba328773beef81d), four-bit, Apache-2.0.
 - [Qwen3.5-2B GGUF](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/tree/f6d5376be1edb4d416d56da11e5397a961aca8ae), four-bit, Apache-2.0.
 - [Multilingual E5 Small ONNX](https://huggingface.co/intfloat/multilingual-e5-small/tree/614241f622f53c4eeff9890bdc4f31cfecc418b3/onnx), MIT.
 

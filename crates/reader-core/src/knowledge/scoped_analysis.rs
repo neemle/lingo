@@ -1,5 +1,5 @@
 use super::{
-    annotation_cache, expressions::ExpressionMatch, lexicon, ocr_suggestions::SpellingSuggestion,
+    annotation_cache, expressions::ExpressionMatch, lexicon, ocr_suggestions::{spacing_suggestions, SpacingSuggestion, SpellingSuggestion},
     syntax_parse, versioned_index, KnowledgePackage, Pack, WordAnalysis, WordContext, WordLookup, PACKS,
 };
 use crate::{
@@ -17,8 +17,8 @@ const SENTENCE_PAGE_SIZE: usize = 24;
 const MAX_READINGS: usize = 8;
 const MAX_PREFETCH_SENTENCE_BYTES: usize = 4096;
 // Bump when generated annotations or their serialized representation changes.
-const SENTENCE_ANNOTATION_VERSION: u32 = 1;
-const SELECTION_ANNOTATION_VERSION: u32 = 2;
+const SENTENCE_ANNOTATION_VERSION: u32 = 2;
+const SELECTION_ANNOTATION_VERSION: u32 = 3;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
@@ -75,6 +75,7 @@ pub struct LinguisticAnalysis {
     language: String,
     package: Option<KnowledgePackage>,
     words: Vec<AnalyzedWord>,
+    spacing_suggestions: Vec<SpacingSuggestion>,
     expressions: Vec<ExpressionMatch>,
     syntax_candidates: Vec<SyntaxCandidate>,
     syntax_parse: Option<syntax_parse::SyntaxParse>,
@@ -445,6 +446,12 @@ impl Store {
             AnalysisScope::Expression { member_starts_utf16 } => Some(member_starts_utf16),
             _ => None,
         };
+        let spacing_suggestions = if let Some((_, db, _)) = lookup_index.filter(|(_, _, version)| *version >= 2) {
+            let offsets: Vec<_> = selected.iter().map(|&(_, offset, _)| offset).collect();
+            spacing_suggestions(db, sentence, &offsets)?
+        } else {
+            Vec::new()
+        };
         let mut words = Vec::with_capacity(selected.len());
         let mut expressions = BTreeMap::new();
         let mut dependencies = BTreeMap::new();
@@ -532,6 +539,7 @@ impl Store {
             language: language.to_owned(),
             package,
             words,
+            spacing_suggestions,
             expressions: expressions.into_values().collect(),
             syntax_candidates: dependencies.into_values().collect(),
             next_start,

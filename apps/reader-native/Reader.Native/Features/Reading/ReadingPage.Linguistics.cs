@@ -166,6 +166,7 @@ public partial class ReadingPage
         private readonly VerticalStackLayout results = new() { Spacing = 9 };
         private readonly Button more = new() { Text = "Наступні слова", IsVisible = false };
         private readonly HashSet<(string Dependent, string Head, string Relation)> displayedLinks = [];
+        private readonly HashSet<(int Start, int End, string Replacement)> displayedSpacing = [];
         private int? nextStart = 0;
         private bool started;
         private bool loading;
@@ -272,6 +273,9 @@ public partial class ReadingPage
                 if (page.SyntaxParse is { } parse) ShowParse(parse);
                 foreach (var expression in page.Expressions)
                     Add($"«{expression.Text}» · сталий вираз · {expression.Observations} збігів");
+                foreach (var suggestion in page.SpacingSuggestions)
+                    if (displayedSpacing.Add((suggestion.Span.StartUtf16, suggestion.Span.EndUtf16, suggestion.Replacement)))
+                        Add($"Пробіли · «{suggestion.Source}» → «{suggestion.Replacement}»");
                 foreach (var word in page.Words) ShowWord(word);
                 if (page.SyntaxParse is not { Links.Length: > 0 })
                     foreach (var link in page.SyntaxCandidates) ShowLink(link);

@@ -1,6 +1,6 @@
-use super::word_key;
-use crate::{Result, Store};
-use rusqlite::{Connection, ToSql};
+use super::{neighbor_hash, word_key};
+use crate::{document_tokens::word_parts, ocr::OcrSpan, Result, Sentence, Store};
+use rusqlite::{params, Connection, Statement, ToSql};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use unicode_normalization::char::is_combining_mark;
@@ -49,6 +49,136 @@ pub struct SpellingSuggestion {
     previous_observations: u32,
     next_observations: u32,
     high_confidence: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SpacingSuggestion {
+    span: OcrSpan,
+    source: String,
+    replacement: String,
+}
+
+pub(super) fn spacing_suggestions(
+    db: &Connection,
+    sentence: &Sentence,
+    selected: &[usize],
+) -> Result<Vec<SpacingSuggestion>> {
+    let Some(&last_selected) = selected.last() else {
+        return Ok(Vec::new());
+    };
+    let mut attested = db
+        .prepare("SELECT EXISTS(SELECT 1 FROM forms WHERE term=?1)")
+        .map_err(|error| error.to_string())?;
+    let mut neighbors = db
+        .prepare("SELECT EXISTS(SELECT 1 FROM neighbors WHERE term=?1 AND side=1 AND neighbor=?2)")
+        .map_err(|error| error.to_string())?;
+    let mut previous: Option<(usize, usize, &str)> = None;
+    let mut suggestions = Vec::new();
+    let is_selected = |offset| selected.binary_search(&offset).is_ok();
+    for (byte, offset, word) in word_parts(&sentence.text) {
+        if let Some((left_byte, left_offset, left)) = previous {
+            if (is_selected(left_offset) || is_selected(offset))
+                && word_letters(left)
+                && word_letters(word)
+                && left_byte + left.len() < byte
+                && sentence.text[left_byte + left.len()..byte]
+                    .chars()
+                    .all(char::is_whitespace)
+                && left.len() + word.len() <= 96
+            {
+                let replacement = format!("{left}{word}");
+                if replacement.graphemes(true).nth(3).is_some()
+                    && attested_form(&mut attested, &replacement)?
+                    && (!attested_form(&mut attested, left)?
+                        || !attested_form(&mut attested, word)?)
+                {
+                    suggestions.push(spacing_hint(
+                        sentence,
+                        left_byte,
+                        left_offset,
+                        byte + word.len(),
+                        replacement,
+                    ));
+                }
+            }
+        }
+        if offset > last_selected {
+            break;
+        }
+        if is_selected(offset)
+            && word_letters(word)
+            && word.len() <= 96
+            && !attested_form(&mut attested, word)?
+        {
+            if let Some(replacement) = unique_split(&mut neighbors, word)? {
+                suggestions.push(spacing_hint(
+                    sentence,
+                    byte,
+                    offset,
+                    byte + word.len(),
+                    replacement,
+                ));
+            }
+        }
+        previous = Some((byte, offset, word));
+    }
+    suggestions.sort_unstable_by_key(|suggestion| suggestion.span.start_utf8);
+    Ok(suggestions)
+}
+
+fn attested_form(query: &mut Statement<'_>, form: &str) -> Result<bool> {
+    query
+        .query_row([word_key(form)], |row| row.get(0))
+        .map_err(|error| error.to_string())
+}
+
+fn unique_split(query: &mut Statement<'_>, word: &str) -> Result<Option<String>> {
+    let mut result = None;
+    for (byte, _) in word.grapheme_indices(true).skip(2) {
+        let (left, right) = word.split_at(byte);
+        if right.graphemes(true).nth(1).is_none() {
+            break;
+        }
+        let observed = query
+            .query_row(
+                params![word_key(left), neighbor_hash(&word_key(right))],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if observed {
+            if result.is_some() {
+                return Ok(None);
+            }
+            result = Some(format!("{left} {right}"));
+        }
+    }
+    Ok(result)
+}
+
+fn word_letters(word: &str) -> bool {
+    word.chars()
+        .all(|letter| letter.is_alphabetic() || is_combining_mark(letter))
+}
+
+fn spacing_hint(
+    sentence: &Sentence,
+    start_byte: usize,
+    start_utf16: usize,
+    end_byte: usize,
+    replacement: String,
+) -> SpacingSuggestion {
+    let source = &sentence.text[start_byte..end_byte];
+    SpacingSuggestion {
+        span: OcrSpan {
+            start_utf8: sentence.start_utf8 + start_byte,
+            end_utf8: sentence.start_utf8 + end_byte,
+            start_utf16: sentence.start_utf16 + start_utf16,
+            end_utf16: sentence.start_utf16 + start_utf16 + source.encode_utf16().count(),
+        },
+        source: source.to_owned(),
+        replacement,
+    }
 }
 
 pub(super) fn suggest_spelling(
