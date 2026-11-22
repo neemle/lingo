@@ -155,19 +155,46 @@ fn write(connection: &Connection, progress: &PracticeProgress) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn clear_question_for_card(connection: &Connection, card_id: &str) -> Result<()> {
+pub(crate) fn adjust_after_card_change(
+    connection: &Connection,
+    card_id: &str,
+    removed: bool,
+) -> Result<()> {
     let body: Option<String> = connection
         .query_row(
-            "SELECT body FROM practice WHERE id=1 AND json_extract(body, '$.question.cardId')=?1",
-            [card_id],
+            "SELECT body FROM practice WHERE id=1 AND
+             (json_extract(body, '$.question.cardId')=?1 OR (?2 AND json_type(body, '$.collection')='object'))",
+            rusqlite::params![card_id, removed],
             |row| row.get(0),
         )
         .optional()
         .map_err(|error| error.to_string())?;
-    if let Some(body) = body {
-        let mut progress: PracticeProgress =
-            serde_json::from_str(&body).map_err(|error| error.to_string())?;
+    let Some(body) = body else {
+        return Ok(());
+    };
+    let mut progress: PracticeProgress =
+        serde_json::from_str(&body).map_err(|error| error.to_string())?;
+    let question_removed = progress
+        .question
+        .as_ref()
+        .is_some_and(|question| question.card_id == card_id);
+    if question_removed {
         progress.question = None;
+    }
+    let mut collection_removed = false;
+    if let Some(collection) = progress.collection.as_ref().filter(|_| removed) {
+        if dictionary_transfer::find_collection(
+            connection,
+            &collection.document_id,
+            collection.source_hash.as_deref(),
+        )?
+        .is_none()
+        {
+            progress.collection = None;
+            collection_removed = true;
+        }
+    }
+    if question_removed || collection_removed {
         progress.advance()?;
         write(connection, &progress)?;
     }

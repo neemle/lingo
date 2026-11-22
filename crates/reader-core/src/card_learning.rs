@@ -100,6 +100,24 @@ impl Vocabulary {
 }
 
 impl Store {
+    pub fn delete_vocabulary_card(&mut self, id: &str) -> Result<bool> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let removed = tx
+            .execute("DELETE FROM vocabulary WHERE id=?1", [id])
+            .map_err(|error| error.to_string())?;
+        if removed == 0 {
+            return Ok(false);
+        }
+        tx.execute("DELETE FROM review_events WHERE entry_id=?1", [id])
+            .map_err(|error| error.to_string())?;
+        crate::practice::adjust_after_card_change(&tx, id, true)?;
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(true)
+    }
+
     pub fn set_vocabulary_variants(
         &mut self,
         id: &str,
@@ -165,7 +183,7 @@ impl Store {
         )
         .map_err(|error| error.to_string())?;
         if word_key.is_some() {
-            crate::practice::clear_question_for_card(&tx, id)?;
+            crate::practice::adjust_after_card_change(&tx, id, false)?;
         }
         tx.commit().map_err(|error| error.to_string())?;
         Ok(card)
@@ -213,6 +231,100 @@ mod tests {
     use super::*;
     use crate::practice::{PracticeCollection, PracticeProgress, SavedQuestion};
     use crate::ReviewState;
+
+    #[test]
+    fn deleting_cards_cleans_history_and_only_affected_practice() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("reader.db");
+        let mut store = Store::open(&path).unwrap();
+        let document = store.import("fixture.txt", b"Le livre", "fr").unwrap();
+        let entry = |word: &str, source: &str| Vocabulary {
+            id: String::new(),
+            word: word.into(),
+            translation: "книга".into(),
+            language: "fr".into(),
+            target_language: "uk".into(),
+            context: String::new(),
+            document_id: source.into(),
+            forward: ReviewState::default(),
+            reverse: ReviewState::default(),
+            analysis: None,
+            expression: None,
+            sense: None,
+            accepted_translations: Vec::new(),
+        };
+        let active = store.save_word(entry("livre", "legacy-source")).unwrap();
+        let other = store.save_word(entry("ouvrage", &document.id)).unwrap();
+        crate::dictionary_transfer::link_card_document(&store.connection, &other.id, &document.id)
+            .unwrap();
+        for card in [&active, &other] {
+            store.review(&card.id, "reverse", 2).unwrap();
+        }
+        store.connection.execute(
+            "INSERT INTO dictionary_review_origins(origin,event_id) SELECT 'fixture',id FROM review_events WHERE entry_id=?1",
+            [&other.id],
+        ).unwrap();
+        let progress = store
+            .set_practice(PracticeProgress {
+                revision: 0,
+                direction: "reverse".into(),
+                mode: 1,
+                question: Some(SavedQuestion {
+                    card_id: active.id.clone(),
+                    prompt: active.translation.clone(),
+                    answers: vec![active.word.clone()],
+                    options: Vec::new(),
+                    revealed: true,
+                    given_answer: Some(active.word.clone()),
+                    elapsed_ms: Some(500),
+                }),
+                collection: Some(PracticeCollection {
+                    document_id: "legacy-source".into(),
+                    source_hash: None,
+                }),
+            })
+            .unwrap();
+
+        assert!(store.delete_vocabulary_card(&other.id).unwrap());
+        assert!(store
+            .vocabulary_review_history(&other.id)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            store.vocabulary_review_history(&active.id).unwrap().len(),
+            1
+        );
+        for sql in [
+            "SELECT count(*) FROM dictionary_review_origins",
+            "SELECT count(*) FROM dictionary_card_sources",
+        ] {
+            assert_eq!(
+                store
+                    .connection
+                    .query_row(sql, [], |row| row.get::<_, u32>(0))
+                    .unwrap(),
+                0
+            );
+        }
+        let unchanged = store.practice().unwrap();
+        assert_eq!(unchanged.revision, progress.revision);
+        assert_eq!(unchanged.question.unwrap().card_id, active.id);
+
+        assert!(store.delete_vocabulary_card(&active.id).unwrap());
+        assert!(!store.delete_vocabulary_card(&active.id).unwrap());
+        assert!(store
+            .vocabulary_review_history(&active.id)
+            .unwrap()
+            .is_empty());
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        let reset = store.practice().unwrap();
+        assert_eq!(reset.revision, progress.revision + 1);
+        assert_eq!(reset.direction, progress.direction);
+        assert_eq!(reset.mode, progress.mode);
+        assert!(reset.question.is_none() && reset.collection.is_none());
+        assert!(store.snapshot().unwrap().vocabulary.is_empty());
+    }
 
     #[test]
     fn correcting_translation_keeps_card_and_replays_old_archive_without_reverting() {

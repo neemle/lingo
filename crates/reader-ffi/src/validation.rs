@@ -116,6 +116,14 @@ fn validate(command: &Command) -> Result<()> {
                 "Word explanation fields exceed their wire bounds",
             ))
         }
+        Command::DeleteVocabularyCard { id }
+            if id.is_empty() || id.len() > 256 || id.contains('\0') =>
+        {
+            Err(Error::new(
+                "invalid_argument",
+                "Vocabulary card ID must be nonempty and bounded",
+            ))
+        }
         Command::Review {
             direction, grade, ..
         } if !["forward", "reverse"].contains(&direction.as_str()) || *grade > 3 => Err(

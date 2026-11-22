@@ -229,6 +229,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             target,
         } => cached_translation(store.cached_installed_translation(&id, &sentence_id, &target)),
         Command::SaveWord { entry } => value(store.save_word(entry)),
+        Command::DeleteVocabularyCard { id } => value(store.delete_vocabulary_card(&id)),
         Command::SetVocabularyVariants {
             id,
             translation,

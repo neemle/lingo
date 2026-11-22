@@ -267,6 +267,9 @@ pub enum Command {
     SaveWord {
         entry: Vocabulary,
     },
+    DeleteVocabularyCard {
+        id: String,
+    },
     SetVocabularyVariants {
         id: String,
         translation: Option<String>,

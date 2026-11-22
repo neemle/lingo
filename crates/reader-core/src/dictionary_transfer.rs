@@ -112,14 +112,23 @@ pub(crate) fn resolve_collection(
     document_id: &str,
     source_hash: Option<&str>,
 ) -> Result<(String, Option<String>)> {
+    find_collection(db, document_id, source_hash)?
+        .ok_or_else(|| "Джерело добірки для практики не знайдено.".into())
+}
+
+pub(crate) fn find_collection(
+    db: &Connection,
+    document_id: &str,
+    source_hash: Option<&str>,
+) -> Result<Option<(String, Option<String>)>> {
     let metadata = source_metadata(db, document_id)?;
     let local_hash = metadata.as_ref().and_then(|(_, hash)| hash.as_deref());
     let Some(hash) = source_hash.or(local_hash) else {
         // Legacy collections can come from card context alone, without source metadata.
         if metadata.is_none() && collection_cards(db, Some(document_id), None)?.is_empty() {
-            return Err("Джерело добірки для практики не знайдено.".into());
+            return Ok(None);
         }
-        return Ok((document_id.to_owned(), None));
+        return Ok(Some((document_id.to_owned(), None)));
     };
     let resolved = db
         .query_row(
@@ -133,9 +142,8 @@ pub(crate) fn resolve_collection(
             |row| row.get(0),
         )
         .optional()
-        .map_err(error)?
-        .ok_or("Джерело добірки для практики не знайдено.")?;
-    Ok((resolved, Some(hash.to_owned())))
+        .map_err(error)?;
+    Ok(resolved.map(|id| (id, Some(hash.to_owned()))))
 }
 
 impl Store {
