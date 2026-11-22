@@ -859,7 +859,8 @@ impl<'a> MarianProvider<'a> {
     }
 
     fn recovery_paths(&self, model: &Package) -> [PathBuf; 2] {
-        [self.previous_path(model), self.removed_path(model)]
+        // The second retained slot holds the latest replacement when .previous already exists.
+        [self.removed_path(model), self.previous_path(model)]
     }
 
     fn validation_result(&self, model: &Package) -> Option<TranslationPackageValidationResult> {

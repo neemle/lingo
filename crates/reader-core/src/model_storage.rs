@@ -79,6 +79,11 @@ pub(crate) fn restore_verified_package(candidate: &Path, active: &Path) -> Resul
     if !had_active {
         return fs::rename(candidate, active).map_err(model_error);
     }
+    #[cfg(target_vendor = "apple")]
+    if swap_package_directories(candidate, active).map_err(model_error)? {
+        return Ok(());
+    }
+
     let root = active.parent().ok_or("Некоректне сховище моделі.")?;
     let holding = tempfile::Builder::new()
         .prefix(".model-recovery-")
@@ -108,6 +113,32 @@ pub(crate) fn restore_verified_package(candidate: &Path, active: &Path) -> Resul
     })?;
     let _ = fs::remove_dir(&holding);
     Ok(())
+}
+
+#[cfg(target_vendor = "apple")]
+fn swap_package_directories(candidate: &Path, active: &Path) -> io::Result<bool> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+
+    let candidate = CString::new(candidate.as_os_str().as_bytes())?;
+    let active = CString::new(active.as_os_str().as_bytes())?;
+    // Both C strings remain alive and the caller holds the package's exclusive lock.
+    let swapped = unsafe {
+        libc::renameatx_np(
+            libc::AT_FDCWD,
+            candidate.as_ptr(),
+            libc::AT_FDCWD,
+            active.as_ptr(),
+            libc::RENAME_SWAP,
+        )
+    };
+    if swapped == 0 {
+        return Ok(true);
+    }
+    let error = io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(libc::ENOTSUP | libc::EOPNOTSUPP) => Ok(false),
+        _ => Err(error),
+    }
 }
 
 pub(crate) fn remove_package_directory(path: &Path) -> Result<bool> {
