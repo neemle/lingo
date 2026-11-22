@@ -485,6 +485,8 @@ public partial class ReadingPage
 
     private void ClearDetachedPassageRows()
     {
+        SuppressTranslationViewportSync();
+        detachedPreviewRows.Clear();
         DetachedPassageBefore.Children.Clear();
         DetachedPassageAfter.Children.Clear();
         DetachedPassageBefore.IsVisible = DetachedPassageAfter.IsVisible = false;
@@ -511,6 +513,7 @@ public partial class ReadingPage
             var pane = row.Position < active.Position ? DetachedPassageBefore : DetachedPassageAfter;
             pane.Children.Add(label);
             pane.IsVisible = true;
+            detachedPreviewRows.Add(new(row.Position, label));
         }
         if (DetachedTranslationPane.IsVisible) FollowDetachedTranslation();
     }
@@ -533,6 +536,7 @@ public partial class ReadingPage
             var top = viewport.ScrollY;
             if (DetachedTranslationPane.Y >= top && DetachedTranslationPane.Y + DetachedTranslationPane.Height <= top + viewport.Height)
                 return;
+            SuppressTranslationViewportSync();
             try { await viewport.ScrollToAsync(DetachedTranslationPane, ScrollToPosition.MakeVisible, animated: false); }
             catch (Exception error) when (error is InvalidOperationException or OperationCanceledException) { }
         })) detachedTranslationScrollPending = false;

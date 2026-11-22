@@ -19,11 +19,17 @@ public partial class ReadingPage
     private TranslationKey? translationScrollKey;
     private bool translationScrollPending;
     private bool translationScrollQueued;
+    private readonly List<PreviewRow> paragraphPreviewRows = [];
+    private readonly List<PreviewRow> detachedPreviewRows = [];
+    private int translationViewportRequest;
+    private long translationScrollSuppressedUntil;
     private bool sourceViewportSyncQueued;
     private long lastSourceViewportMovement;
     private bool selectingPreviewRow;
     private bool restoringTranslationCache;
     private CachedWindowRequest? lastCacheRestore;
+
+    private sealed record PreviewRow(int Position, VisualElement View);
 
     private sealed record TranslationKey(string Document, string Sentence, string Source, string Target, string Text);
     private sealed record TranslationScope(string Document, string Source, string Target);
@@ -73,6 +79,45 @@ public partial class ReadingPage
         !WordOverlay.IsVisible && !utteranceActive && !AppState.Session.Busy &&
         (DetachedPdfReader.IsVisible ? !loadingDetachedSentence && !speakingDetachedSentence : !PdfPageNotice.IsVisible);
 
+    private void SuppressTranslationViewportSync()
+    {
+        translationViewportRequest++;
+        translationScrollSuppressedUntil = Environment.TickCount64 + 280;
+    }
+
+    private async void TranslationViewportScrolled(object? sender, ScrolledEventArgs args)
+    {
+        var detached = ReferenceEquals(sender, DetachedTranslationViewport);
+        var viewport = detached ? DetachedTranslationViewport : TranslationViewport;
+        bool Current() => CanSyncSourceViewport() && !selectingPreviewRow && !translating &&
+            !translatingDetachedSentence && detached == DetachedPdfReader.IsVisible &&
+            Environment.TickCount64 >= translationScrollSuppressedUntil && viewport.IsVisible;
+        if (!Current()) return;
+
+        var request = ++translationViewportRequest;
+        await Task.Delay(220);
+        if (request != translationViewportRequest || !Current()) return;
+        var top = viewport.ScrollY;
+        var bottom = top + viewport.Height;
+        var active = detached ? DetachedTranslationPane : ActiveTranslationCard;
+        if (!active.IsVisible || active.Height <= 0 || (active.Y < bottom && active.Y + active.Height > top)) return;
+        var rows = detached ? detachedPreviewRows : paragraphPreviewRows;
+        var visible = rows.Where(row => row.View is { Height: > 0, Parent: VisualElement parent } &&
+            parent.Y + row.View.Y < bottom && parent.Y + row.View.Y + row.View.Height > top);
+        var row = active.Y >= bottom ? visible.LastOrDefault() : visible.FirstOrDefault();
+        if (row is null) return;
+
+        selectingPreviewRow = true;
+        try
+        {
+            if (detached && detachedAddress is { } address && detachedSentence?.Position != row.Position)
+                await LoadDetachedSentenceAsync(address, row.Position);
+            else if (!detached && AppState.Session.Document?.Position != row.Position)
+                await AppState.Session.SelectSentenceAsync(row.Position);
+        }
+        finally { selectingPreviewRow = false; }
+    }
+
     private void TrackTranslationScroll(TranslationKey? key)
     {
         if (translationScrollKey != key)
@@ -112,10 +157,17 @@ public partial class ReadingPage
             var bottom = top + TranslationViewport.Height;
             if (!ActiveTranslationCard.IsVisible)
             {
-                if (top > 0) await TranslationViewport.ScrollToAsync(0, 0, animated: false);
+                if (top > 0)
+                {
+                    SuppressTranslationViewportSync();
+                    await TranslationViewport.ScrollToAsync(0, 0, animated: false);
+                }
             }
             else if (ActiveTranslationCard.Y < top || ActiveTranslationCard.Y + ActiveTranslationCard.Height > bottom)
+            {
+                SuppressTranslationViewportSync();
                 await TranslationViewport.ScrollToAsync(ActiveTranslationCard, ScrollToPosition.MakeVisible, animated: false);
+            }
         }
         catch (Exception error) when (error is InvalidOperationException or OperationCanceledException) { }
     }
@@ -491,6 +543,8 @@ public partial class ReadingPage
 
     private void UpdateParagraphPreview(Document? document, TranslationWindow? window, AlignedUnit? active)
     {
+        SuppressTranslationViewportSync();
+        paragraphPreviewRows.Clear();
         ParagraphBefore.Children.Clear();
         ParagraphAfter.Children.Clear();
         ParagraphBefore.IsVisible = ParagraphAfter.IsVisible = false;
@@ -522,6 +576,7 @@ public partial class ReadingPage
         var column = position < document.Position ? ParagraphBefore : ParagraphAfter;
         column.Children.Add(label);
         column.IsVisible = true;
+        paragraphPreviewRows.Add(new(position, label));
 
         async void SelectRow(object? sender, EventArgs args)
         {

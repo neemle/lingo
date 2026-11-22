@@ -173,7 +173,7 @@
         Style="{StaticResource PlayerButton}" Clicked="AutoTranslateClicked" />
       </Grid>
       <ScrollView Grid.Row="1" x:Name="TranslationViewport" SizeChanged="TranslationViewportReady"
-       Loaded="TranslationViewportReady">
+       Loaded="TranslationViewportReady" Scrolled="TranslationViewportScrolled">
        <VerticalStackLayout Spacing="10" Padding="16,12">
         <Label x:Name="TranslationNotice" Style="{StaticResource ReaderMeta}" />
         <VerticalStackLayout x:Name="ParagraphBefore" Spacing="8" IsVisible="False" />
@@ -252,7 +252,8 @@
        </Grid>
        <Grid Grid.Column="1" x:Name="DetachedTargetPane" RowDefinitions="Auto,*" BackgroundColor="{StaticResource Panel}">
         <Label Text="ПЕРЕКЛАД" Style="{StaticResource ReaderColumnCaption}" Margin="14,9" />
-        <ScrollView Grid.Row="1" x:Name="DetachedTranslationViewport" SizeChanged="DetachedTranslationViewportReady">
+        <ScrollView Grid.Row="1" x:Name="DetachedTranslationViewport" SizeChanged="DetachedTranslationViewportReady"
+         Scrolled="TranslationViewportScrolled">
          <VerticalStackLayout Padding="14,8" Spacing="8">
           <Label x:Name="DetachedReadiness" IsVisible="False" Style="{StaticResource ReaderMeta}" LineBreakMode="WordWrap" />
           <VerticalStackLayout x:Name="DetachedPassageBefore" Spacing="7" IsVisible="False" />
