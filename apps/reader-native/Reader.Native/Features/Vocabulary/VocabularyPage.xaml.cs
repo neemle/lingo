@@ -351,6 +351,7 @@ public partial class VocabularyPage : ContentPage
     {
         if (transferring || loadingCollection) return;
         var documentId = ActiveCollection.DocumentId;
+        var share = sender is Button { CommandParameter: "share" };
         transferring = true;
         UpdateControls();
         ArchiveStatus.IsVisible = false;
@@ -363,9 +364,10 @@ public partial class VocabularyPage : ContentPage
                 return;
             }
             var fileName = documentId is null ? "chytai-dictionary.json" : "chytai-collection.json";
+            if (share) archive = archive with { Practice = null };
             var bytes = await Task.Run(() => NativeFiles.Encode(archive));
             if (await NativeFiles.ExportBytesAsync(this, fileName, bytes,
-                share: sender is Button { CommandParameter: "share" }) is { } status)
+                share: share) is { } status)
                 ShowArchiveStatus(status);
         }
         catch (Exception error) { ShowArchiveStatus(error.Message); }
@@ -396,17 +398,20 @@ public partial class VocabularyPage : ContentPage
                 ShowArchiveStatus("Архів не містить карток.");
                 return;
             }
-            if (!await DisplayAlertAsync("Імпорт словника",
-                $"Карток в архіві: {archive.Entries.Length}. Повторення буде об'єднано з вашою історією.",
-                "Імпортувати", "Скасувати"))
+            var details = $"Карток в архіві: {archive.Entries.Length}. Повторення буде об'єднано з вашою історією.";
+            if (archive.Practice?.Question is not null)
+                details += "\nНезавершене запитання відновиться, якщо у вас ще немає збереженої практики.";
+            if (!await DisplayAlertAsync("Імпорт словника", details, "Імпортувати", "Скасувати"))
                 return;
 
             var session = AppState.Session;
-            await session.ImportDictionaryAsync(archive);
-            if (!string.IsNullOrEmpty(session.Error))
+            var imported = await session.ImportDictionaryAsync(archive);
+            if (imported is null || !string.IsNullOrEmpty(session.Error))
                 throw new InvalidOperationException(session.Error);
             await RefreshCollectionsAsync(appearance);
-            ShowArchiveStatus("Словник імпортовано.");
+            ShowArchiveStatus(imported.RestoredPractice
+                ? "Словник імпортовано. Незавершене запитання доступне в розділі «Практика»."
+                : "Словник імпортовано.");
         }
         catch (Exception error) { ShowArchiveStatus(error.Message); }
         finally

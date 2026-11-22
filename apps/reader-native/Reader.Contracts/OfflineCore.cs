@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Reader.Contracts;
 
 public sealed record DocumentBlock(string Kind, int StartUtf8, int EndUtf8,
@@ -16,10 +18,11 @@ public sealed record WordMeaning(string Id, string Lemma, string PartOfSpeech, s
     string SourceLicense, string SourceRevision, string Confidence, int ContextMatches);
 
 public sealed record DictionaryArchive(int Version, Vocabulary[] Entries, DictionaryReview[] Reviews,
-    DictionarySource[] Sources);
+    DictionarySource[] Sources,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] PracticeProgress? Practice = null);
 public sealed record DictionaryReview(string Id, string EntryId, string Direction, byte Grade, long ReviewedAt,
     string? Answer = null, long? ElapsedMs = null);
 public sealed record DictionarySource(string DocumentId, string? Title, string? SourceHash, string[] EntryIds);
-public sealed record DictionaryImport(int AddedCards, int ExistingCards, int AddedReviews);
+public sealed record DictionaryImport(int AddedCards, int ExistingCards, int AddedReviews, bool RestoredPractice = false);
 
 public sealed record SpeechAudio(int SampleRate, int Samples, int[] WavBytes);

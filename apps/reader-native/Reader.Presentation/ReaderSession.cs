@@ -225,11 +225,16 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         Task.Run(() => client.DictionaryCollection(documentId));
     public Task<DictionaryArchive> ExportDictionaryAsync(string? documentId = null) =>
         Task.Run(() => client.ExportDictionary(documentId));
-    public Task ImportDictionaryAsync(DictionaryArchive archive) => RunAsync(() =>
+    public async Task<DictionaryImport?> ImportDictionaryAsync(DictionaryArchive archive)
     {
-        client.ImportDictionary(archive);
-        return Read();
-    });
+        DictionaryImport? imported = null;
+        await RunAsync(() =>
+        {
+            imported = client.ImportDictionary(archive);
+            return Read();
+        });
+        return imported;
+    }
     public Task<string> PrepareUkrainianSpeechAsync(string text) => Task.Run(() => client.PrepareUkrainianSpeech(text));
     public Task<SpeechAudio> SynthesizeSpeechAsync(string id, string sentenceId, uint speaker, float rate, string engine) =>
         Task.Run(() => client.SynthesizeSpeech(id, sentenceId, speaker, rate, engine));
