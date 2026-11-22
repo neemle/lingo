@@ -42,6 +42,22 @@ dotnet run --project $readerProject -f net10.0-windows10.0.19041.0 `
 The Windows head copies the matching Rust DLL beside the application. Rust remains the only database writer.
 The app stores its database in its local application-data directory. Export a backup before changing devices.
 
+To build an installable x64 MSIX with Windows OCR, use the Rust build above and a code-signing
+certificate in the current user's Personal store with the subject `CN=Lingo Reader`.
+
+```powershell
+$readerProject = "apps/reader-native/Reader.Native/Reader.Native.csproj"
+dotnet publish $readerProject -f net10.0-windows10.0.19041.0 -c Release `
+  -p:LingoMsix=true -p:RuntimeIdentifierOverride=win-x64 `
+  "-p:PackageCertificateThumbprint=$thumbprint"
+Add-AppxPackage -Path $msixPath
+```
+
+Set `$thumbprint` to the signing certificate's thumbprint and `$msixPath` to the MSIX generated
+under `bin/Release`. The package includes the x64 Rust DLL, .NET and Windows App SDK runtimes.
+The destination must trust the signing certificate. For a local test certificate, follow the
+[Microsoft MAUI signing instructions](https://learn.microsoft.com/en-us/dotnet/maui/windows/deployment/publish-cli).
+
 ## Checks and current limits
 
 ```sh
@@ -77,8 +93,8 @@ and runs OCR only on pages without extractable text, up to 40 pages. The origina
 the reader can open the source page for the active sentence. Ordinary PDF import still reads only
 the embedded text layer.
 
-Mac Catalyst uses Apple Vision. Windows OCR uses the installed system recognition language and requires
-MSIX package identity. The unpackaged Windows build can read and preview photos restored from a backup.
+Mac Catalyst uses Apple Vision. The installed Windows MSIX uses the system recognition language for OCR.
+The unpackaged Windows build can read and preview photos restored from a backup.
 
 ## Offline translation packages
 

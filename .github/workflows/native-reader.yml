@@ -61,9 +61,50 @@ jobs:
           targets: x86_64-pc-windows-msvc
       - run: dotnet workload install maui-windows
       - run: cargo build -p reader-ffi --release --locked --target x86_64-pc-windows-msvc
-      - run: >-
-          dotnet build apps/reader-native/Reader.Native/Reader.Native.csproj
-          -f net10.0-windows10.0.19041.0 -c Release -p:RuntimeIdentifier=win-x64 --nologo
+      - name: Build and install a signed x64 MSIX
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $project = 'apps/reader-native/Reader.Native/Reader.Native.csproj'
+          [xml]$source = Get-Content -Raw 'apps/reader-native/Reader.Native/Platforms/Windows/Package.appxmanifest'
+          $output = Join-Path $env:RUNNER_TEMP 'lingo-msix'
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject $source.Package.Identity.Publisher `
+            -CertStoreLocation 'Cert:\CurrentUser\My' -NotAfter (Get-Date).AddDays(1)
+          $publicCert = Join-Path $env:RUNNER_TEMP 'lingo-ci.cer'
+          Export-Certificate -Cert $cert -FilePath $publicCert | Out-Null
+          Import-Certificate -FilePath $publicCert -CertStoreLocation 'Cert:\LocalMachine\TrustedPeople' | Out-Null
+
+          dotnet publish $project -f net10.0-windows10.0.19041.0 -c Release `
+            -p:LingoMsix=true -p:RuntimeIdentifierOverride=win-x64 `
+            "-p:PackageCertificateThumbprint=$($cert.Thumbprint)" "-p:AppxPackageDir=$output" --nologo
+          if ($LASTEXITCODE -ne 0) { throw "MSIX publish failed ($LASTEXITCODE)" }
+
+          $packages = @(Get-ChildItem $output -Recurse -File -Filter *.msix |
+            Where-Object { $_.DirectoryName -notmatch '\\Dependencies(\\|$)' })
+          if ($packages.Count -ne 1) { throw "Expected one app MSIX, found $($packages.Count)" }
+          $msix = $packages[0]
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead($msix.FullName)
+          try {
+            foreach ($name in 'AppxManifest.xml', 'AppxSignature.p7x', 'Reader.Native.exe', 'reader_ffi.dll', 'coreclr.dll', 'Microsoft.UI.Xaml.dll') {
+              if (-not $zip.GetEntry($name)) { throw "Missing $name in $($msix.Name)" }
+            }
+          } finally { $zip.Dispose() }
+
+          $dependencyFolder = Join-Path $msix.DirectoryName 'Dependencies\x64'
+          $install = @{ Path = $msix.FullName }
+          if (Test-Path $dependencyFolder) {
+            $dependencies = @(Get-ChildItem $dependencyFolder -File |
+              Where-Object { $_.Extension -in '.appx', '.msix' } |
+              ForEach-Object FullName)
+            if ($dependencies.Count -gt 0) { $install.DependencyPath = $dependencies }
+          }
+          Add-AppxPackage @install
+          $installed = Get-AppxPackage -Name $source.Package.Identity.Name
+          if (-not $installed -or $installed.Publisher -ne $source.Package.Identity.Publisher) {
+            throw 'Installed MSIX identity did not match the manifest'
+          }
+          Write-Host "Installed $($installed.PackageFullName)"
   cleanup:
     needs: [headless, catalyst, windows]
     if: ${{ always() && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
