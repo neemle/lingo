@@ -252,11 +252,12 @@ fn validate(command: &Command) -> Result<()> {
             Err(Error::new("invalid_argument", "Invalid PDF annotation address"))
         }
         Command::TranslateDetachedPdfSentence { id, sentence_id, target, .. }
+        | Command::TranslateWithModel { id, sentence_id, target, .. }
         | Command::DetachedPdfPassage { id, sentence_id, target, .. }
         | Command::DetachedPdfTranslation { id, sentence_id, target, .. }
             if !valid_token_address(id, sentence_id) || target.len() > 8 =>
         {
-            Err(Error::new("invalid_argument", "Invalid PDF sentence translation address"))
+            Err(Error::new("invalid_argument", "Invalid sentence translation address"))
         }
         Command::CorrectDetachedPdfOcr { revision, .. } | Command::FocusDetachedPdfOcrWord { revision, .. }
             if revision.len() != 64 || !revision.bytes().all(|ch| ch.is_ascii_hexdigit()) =>

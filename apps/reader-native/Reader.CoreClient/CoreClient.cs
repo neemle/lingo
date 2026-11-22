@@ -460,6 +460,8 @@ public sealed class CoreClient : IDisposable
         CallIndependent<MachineTranslation?>(new { version = 1, operation = "translate_sentence", id, sentenceId, target });
     public ModelPassageTranslation TranslateWithModel(string id, int? page, string sentenceId, string target, bool regenerate) =>
         CallIndependent<ModelPassageTranslation>(new { version = 1, operation = "translate_with_model", id, page, sentenceId, target, regenerate });
+    public ModelPassageTranslation? CachedModelTranslation(string id, int? page, string sentenceId, string target) =>
+        CallIndependent<ModelPassageTranslation?>(new { version = 1, operation = "translate_with_model", id, page, sentenceId, target, cachedOnly = true });
     public MachineTranslation? TranslateDictionaryGloss(string id, string source, string gloss, string target = "uk") =>
         CallIndependent<MachineTranslation?>(new { version = 1, operation = "translate_dictionary_gloss", id, source, gloss, target });
     public MachineTranslation? TranslateSelection(string id, string target, string revisionId, int startUtf16, string text,

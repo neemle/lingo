@@ -57,6 +57,19 @@ impl Store {
         target: &str,
         regenerate: bool,
     ) -> Result<TranslatePassageJob> {
+        let mode = if regenerate { HintCacheMode::Refresh } else { HintCacheMode::PreferCached };
+        self.passage_translation_job(id, page, sentence_id, target, mode)
+    }
+
+    pub fn cached_passage_translation(
+        &self, id: &str, page: Option<u16>, sentence_id: &str, target: &str,
+    ) -> Result<Option<PassageTranslation>> {
+        self.passage_translation_job(id, page, sentence_id, target, HintCacheMode::ReadOnly)?.cached()
+    }
+
+    fn passage_translation_job(
+        &self, id: &str, page: Option<u16>, sentence_id: &str, target: &str, mode: HintCacheMode,
+    ) -> Result<TranslatePassageJob> {
         let (language, text) = if let Some(page) = page {
             let cached = self
                 .detached_pdf_sentences(id, page)?
@@ -101,11 +114,7 @@ impl Store {
                     "qwen-passage-translation-v5",
                     SYSTEM,
                     example,
-                    if regenerate {
-                        HintCacheMode::Refresh
-                    } else {
-                        HintCacheMode::PreferCached
-                    },
+                    mode,
                 )
             })
             .collect::<Result<Vec<_>>>()?;
@@ -113,7 +122,7 @@ impl Store {
             source: language,
             source_text: text,
             target: target.to_owned(),
-            regenerate,
+            regenerate: matches!(mode, HintCacheMode::Refresh),
             chunks,
         })
     }
@@ -189,32 +198,27 @@ fn chunks(text: &str) -> Result<Vec<&str>> {
 }
 
 impl TranslatePassageJob {
+    fn cached(&self) -> Result<Option<PassageTranslation>> {
+        if self.regenerate {
+            return Ok(None);
+        }
+        let chunks = self.chunks.iter().map(|item| match item {
+            HintWork::Cached(value) => Ok(value.clone()),
+            HintWork::Generate { cache, .. } => cache.load(),
+        }).collect::<Result<Vec<_>>>()?;
+        Ok(chunks.into_iter().collect::<Option<Vec<_>>>()
+            .map(|chunks| combine(chunks, &self.source_text, true)))
+    }
+
     pub fn run(self) -> Result<PassageTranslation> {
-        let cached = || -> Result<Option<PassageTranslation>> {
-            if self.regenerate {
-                return Ok(None);
-            }
-            let chunks = self
-                .chunks
-                .iter()
-                .map(|item| match item {
-                    HintWork::Cached(value) => Ok(value.clone()),
-                    HintWork::Generate { cache, .. } => cache.load(),
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(chunks
-                .into_iter()
-                .collect::<Option<Vec<_>>>()
-                .map(|chunks| combine(chunks, &self.source_text, true)))
-        };
         let Some(model) = self.chunks.iter().find_map(|item| match item {
             HintWork::Generate { model, .. } => Some(model),
             HintWork::Cached(_) => None,
         }) else {
-            return cached()?.ok_or_else(|| "Збережений переклад не знайдено.".into());
+            return self.cached()?.ok_or_else(|| "Збережений переклад не знайдено.".into());
         };
 
-        model.run_optional_with_cache(cached, |directory, should_yield| {
+        model.run_optional_with_cache(|| self.cached(), |directory, should_yield| {
             let opening = Instant::now() + Duration::from_secs(25);
             with_prompt_context(
                 directory,
@@ -339,4 +343,37 @@ fn language_name(language: &str) -> Result<&'static str> {
         "sv" => "Swedish",
         _ => return Err("Непідтримувана мова перекладу.".into()),
     })
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cached_passage_reopens_without_a_model_and_matches_the_whole_paragraph() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("reader.db");
+        let mut store = Store::open(&path).unwrap();
+        let document = store.import("Texte.txt", b"La porte est ouverte. Le marin entre.", "fr").unwrap();
+        let first = &document.sentences[0].id;
+        let second = &document.sentences[1].id;
+        assert!(store.cached_passage_translation(&document.id, None, first, "uk").unwrap().is_none());
+
+        let work = store.prepare_passage_translation(&document.id, None, first, "uk", true).unwrap();
+        assert_eq!(work.chunks.len(), 1);
+        let HintWork::Generate { cache, .. } = &work.chunks[0] else {
+            panic!("Expected a refreshable passage cache entry");
+        };
+        let saved = "Двері відчинені. Моряк заходить.";
+        cache.save(&TranslationChunk { text: saved.into() }).unwrap();
+
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        let cached = reopened.cached_passage_translation(&document.id, None, second, "uk").unwrap().unwrap();
+        assert!(cached.cached);
+        assert_eq!(cached.text, saved);
+        assert_eq!(cached.source_text, document.text);
+        assert!(reopened.cached_passage_translation(&document.id, None, second, "de").unwrap().is_none());
+    }
 }

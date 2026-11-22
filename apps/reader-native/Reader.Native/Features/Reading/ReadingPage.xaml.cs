@@ -99,6 +99,7 @@ public partial class ReadingPage : ContentPage
     protected override void OnDisappearing()
     {
         readingPageActive = false;
+        RestoreCachedModelTranslation(null);
         dictionaryFocus = null;
         StopReaderPdf();
         StopAnalysisPrefetch();

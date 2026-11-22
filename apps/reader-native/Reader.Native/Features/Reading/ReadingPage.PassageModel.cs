@@ -11,6 +11,8 @@ public partial class ReadingPage
     private (ModelPassage Address, ModelPassageTranslation Translation)? modelPassageResult;
     private ModelPassage? inspectingModelSource;
     private ModelPassage? attemptedModelPassage;
+    private ModelPassage? requestedCachedPassage;
+    private int cachedPassageRequest;
     private (ModelPassage Address, string Text)? modelPassageError;
 
     private ModelPassage? CurrentModelPassage()
@@ -30,7 +32,8 @@ public partial class ReadingPage
     {
         if (runningPassage is not null || CurrentModelPassage() is not { } address) return;
         var session = AppState.Session;
-        var regenerate = attemptedModelPassage == address;
+        var regenerate = CurrentModelTranslation(address) is not null || attemptedModelPassage == address;
+        cachedPassageRequest++;
         attemptedModelPassage = address;
         modelPassageError = null;
         runningPassage = address;
@@ -38,7 +41,7 @@ public partial class ReadingPage
         try
         {
             var result = await session.TranslateWithModelAsync(address.Document, address.Page, address.Sentence, address.Target, regenerate);
-            modelPassageResult = (address, result);
+            if (CurrentModelPassage() == address) modelPassageResult = (address, result);
         }
         catch (Exception error)
         {
@@ -56,13 +59,14 @@ public partial class ReadingPage
         var address = CurrentModelPassage();
         var detached = address?.Page is not null;
         var enabled = address is not null && runningPassage is null && !AppState.Session.Busy;
+        RestoreCachedModelTranslation(address);
         TranslateWithModel.IsEnabled = enabled && !detached;
         DetachedTranslateWithModel.IsEnabled = enabled && detached;
-        TranslateWithModel.Text = DetachedTranslateWithModel.Text = address is not null && attemptedModelPassage == address
-            ? "Перегенерувати" : "Перекласти моделлю";
+        var translation = CurrentModelTranslation(address);
+        TranslateWithModel.Text = DetachedTranslateWithModel.Text = address is not null &&
+            (translation is not null || attemptedModelPassage == address) ? "Перегенерувати" : "Перекласти моделлю";
 
         var running = address is not null && runningPassage == address;
-        var translation = CurrentModelTranslation(address);
         var result = translation is null ? null :
             $"{(translation.Cached ? "Збережений переклад Qwen" : "Переклад Qwen 2B")}{Environment.NewLine}{translation.Text}";
         if (modelPassageError is { } failure && failure.Address == address)
@@ -88,6 +92,32 @@ public partial class ReadingPage
             if (detached) DetachedModelSourceText.Text = source;
             else ModelSourceText.Text = source;
         }
+    }
+
+    private void RestoreCachedModelTranslation(ModelPassage? address)
+    {
+        if (requestedCachedPassage == address) return;
+        requestedCachedPassage = address;
+        var request = ++cachedPassageRequest;
+        if (address is not null && CurrentModelTranslation(address) is null)
+            _ = ReadCachedModelTranslationAsync(address, request);
+    }
+
+    private async Task ReadCachedModelTranslationAsync(ModelPassage address, int request)
+    {
+        await Task.Delay(140);
+        bool Current() => readingPageActive && request == cachedPassageRequest &&
+            CurrentModelPassage() == address && runningPassage != address;
+        if (!Current()) return;
+        try
+        {
+            var translation = await AppState.Session.CachedModelTranslationAsync(
+                address.Document, address.Page, address.Sentence, address.Target);
+            if (translation is null || !Current()) return;
+            modelPassageResult = (address, translation);
+            UpdateModelTranslation();
+        }
+        catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
     }
 
     private ModelPassageTranslation? CurrentModelTranslation(ModelPassage? address) =>

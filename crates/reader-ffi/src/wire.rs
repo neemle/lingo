@@ -397,6 +397,8 @@ pub enum Command {
         target: String,
         #[serde(default)]
         regenerate: bool,
+        #[serde(default, rename = "cachedOnly")]
+        cached_only: bool,
     },
     ReviewSentence {
         model: String,
