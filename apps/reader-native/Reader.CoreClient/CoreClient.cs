@@ -58,6 +58,8 @@ public sealed class CoreClient : IDisposable
 
     public void Position(string id, int position) =>
         Call<JsonElement>(new { version = 1, operation = "position", id, position });
+    public void SetDocumentLanguage(string id, string language) =>
+        Call<JsonElement>(new { version = 1, operation = "set_document_language", id, language });
     public SpeechResume? SpeechResume(string id) =>
         Call<SpeechResume?>(new { version = 1, operation = "speech_resume", id });
     public void SetSpeechResume(string id, string sentenceId, string textHash, int? offsetUtf16) =>

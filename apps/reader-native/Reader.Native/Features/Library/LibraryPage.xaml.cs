@@ -1,5 +1,6 @@
 using Reader.Contracts;
 using Reader.Native.Services;
+using Reader.Presentation;
 
 namespace Reader.Native.Features.Library;
 
@@ -8,6 +9,7 @@ public partial class LibraryPage : ContentPage
     private static readonly HashSet<string> ImageExtensions =
         new([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"], StringComparer.OrdinalIgnoreCase);
     private bool importing;
+    private bool changingLanguage;
 
     public LibraryPage() => InitializeComponent();
 
@@ -32,7 +34,7 @@ public partial class LibraryPage : ContentPage
 
     private async Task ImportAsync(bool scanPdf)
     {
-        if (importing || AppState.Session.Busy) return;
+        if (importing || changingLanguage || AppState.Session.Busy) return;
         importing = true;
         try
         {
@@ -41,8 +43,9 @@ public partial class LibraryPage : ContentPage
             var extension = Path.GetExtension(file.FileName);
             if (scanPdf && !extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Виберіть файл PDF для розпізнавання.");
+            var language = await ChooseLanguageAsync("Мова оригіналу");
+            if (language is null) return;
             var bytes = await NativeFiles.ReadBoundedAsync(file, Reader.CoreClient.CoreClient.MaxImportBytes);
-            var language = (string?)Language.SelectedItem ?? "en";
             if (scanPdf)
             {
                 ImportStatus.Text = "Відкриваємо PDF…";
@@ -79,9 +82,31 @@ public partial class LibraryPage : ContentPage
         }
     }
 
+    private async Task<string?> ChooseLanguageAsync(string title)
+    {
+        var selected = await DisplayActionSheetAsync(title, "Скасувати", null,
+            DocumentLanguages.All.Select(language => language.Name).ToArray());
+        return DocumentLanguages.All.FirstOrDefault(language => language.Name == selected).Code;
+    }
+
+    private async void ChangeLanguageClicked(object? sender, EventArgs args)
+    {
+        var session = AppState.Session;
+        if (importing || changingLanguage || session.Busy || sender is not Button { CommandParameter: Document document })
+            return;
+        changingLanguage = true;
+        try
+        {
+            var language = await ChooseLanguageAsync($"Мова джерела · {document.Title}");
+            if (language is not null && language != document.Language)
+                await session.SetDocumentLanguageAsync(document.Id, language);
+        }
+        finally { changingLanguage = false; }
+    }
+
     private async void DocumentSelected(object? sender, SelectionChangedEventArgs args)
     {
-        if (importing || args.CurrentSelection.FirstOrDefault() is not Document document) return;
+        if (importing || changingLanguage || args.CurrentSelection.FirstOrDefault() is not Document document) return;
         ((CollectionView)sender!).SelectedItem = null;
         await AppState.OpenAsync(document.Id);
     }

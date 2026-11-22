@@ -99,6 +99,12 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
 
     public Task MoveAsync(int delta) => SelectSentenceAsync((Document?.Position ?? 0) + delta);
 
+    public Task SetDocumentLanguageAsync(string id, string language) => RunAsync(() =>
+    {
+        client.SetDocumentLanguage(id, language);
+        return Read();
+    });
+
     public SpeechResume? GetSpeechResume(string id) => client.SpeechResume(id);
 
     public void SetSpeechResume(string id, string sentenceId, string textHash, int? offsetUtf16) =>

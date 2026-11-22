@@ -606,6 +606,20 @@ impl Store {
         })
     }
 
+    pub fn set_document_language(&mut self, id: &str, language: &str) -> Result<()> {
+        valid_language(language)?;
+        self.edit_document(id, |document, _| {
+            if document.language == language {
+                return Ok(false);
+            }
+            if document.reviewed_translations.contains_key(language) {
+                return Err("Для нової мови джерела вже збережено переклади. Збережіть їх окремо і видаліть із документа перед зміною мови.".into());
+            }
+            document.language = language.to_owned();
+            Ok(true)
+        })
+    }
+
     pub fn position(&mut self, id: &str, position: usize) -> Result<()> {
         self.edit_document(id, |document, _| {
             if position >= document.sentences.len() {
@@ -1189,6 +1203,34 @@ mod tests {
         assert_eq!(restored.export().unwrap().reviews.len(), 1);
         restored.restore(db.export().unwrap()).unwrap();
         assert_eq!(restored.export().unwrap().reviews.len(), 1);
+    }
+
+    #[test]
+    fn correcting_document_language_keeps_progress_and_checks_reviewed_targets() {
+        let mut db = Store::open(Path::new(":memory:")).unwrap();
+        let bytes = "Перше речення. Друге речення.".as_bytes();
+        let doc = db.import("hello.txt", bytes, "en").unwrap();
+        let sentence = &doc.sentences[1];
+        db.position(&doc.id, 1).unwrap();
+        db.set_bookmark(&doc.id, &sentence.id, true).unwrap();
+        db.set_reviewed_translation(&doc.id, &sentence.id, "fr", "Deuxième phrase.")
+            .unwrap();
+        db.set_document_language(&doc.id, "uk").unwrap();
+        assert!(db.set_document_language(&doc.id, "fr").is_err());
+        assert!(db.set_document_language(&doc.id, "zz").is_err());
+        let saved = &db.snapshot().unwrap().documents[0];
+        assert_eq!(saved.language, "uk");
+        assert_eq!(saved.position, 1);
+        assert_eq!(saved.sentences[1].id, sentence.id);
+        assert_eq!(
+            saved.bookmarks.as_slice(),
+            std::slice::from_ref(&sentence.id)
+        );
+        assert_eq!(
+            saved.reviewed_translations["fr"][&sentence.id],
+            "Deuxième phrase."
+        );
+        assert_eq!(db.original(&doc.id).unwrap().bytes, bytes);
     }
     #[test]
     fn selected_lemma_preserves_learning_across_forms_and_backup() {

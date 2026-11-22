@@ -53,6 +53,10 @@ pub enum Command {
         index: usize,
         correction: Option<String>,
     },
+    SetDocumentLanguage {
+        id: String,
+        language: String,
+    },
     Position {
         id: String,
         position: usize,

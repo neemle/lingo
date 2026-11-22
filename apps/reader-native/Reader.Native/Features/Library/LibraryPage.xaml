@@ -22,11 +22,6 @@
   </VerticalStackLayout>
   <HorizontalStackLayout Grid.Row="1" Spacing="12">
    <Button Text="Додати документ" Clicked="ImportClicked" IsEnabled="{Binding CanInteract}" />
-   <Picker x:Name="Language" Title="Мова тексту" WidthRequest="140" SelectedIndex="0">
-    <Picker.Items><x:String>en</x:String><x:String>fr</x:String><x:String>de</x:String><x:String>es</x:String>
-     <x:String>uk</x:String><x:String>it</x:String><x:String>pt</x:String><x:String>pl</x:String>
-     <x:String>nl</x:String><x:String>cs</x:String><x:String>ro</x:String><x:String>sv</x:String></Picker.Items>
-   </Picker>
    <ActivityIndicator IsRunning="{Binding Busy}" IsVisible="{Binding Busy}" />
    <Button Text="Розпізнати PDF" Clicked="ScanPdfClicked" IsEnabled="{Binding CanInteract}" />
   </HorizontalStackLayout>
@@ -46,7 +41,8 @@
     <Border Padding="20" Margin="0,0,0,12" Stroke="#DEDCCF" BackgroundColor="#FFFDFA" StrokeShape="RoundRectangle 14">
      <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" RowSpacing="8">
       <Label Text="{Binding Title}" FontSize="21" FontAttributes="Bold" />
-      <Label Grid.Column="1" Text="{Binding Language}" TextColor="#63725C" />
+      <Button Grid.Column="1" Text="{Binding Language, StringFormat='Мова: {0}'}"
+       SemanticProperties.Description="Змінити мову джерела" Clicked="ChangeLanguageClicked" CommandParameter="{Binding .}" />
       <Label Grid.Row="1" Text="{Binding Format}" TextColor="#63725C" />
       <Label Grid.Row="1" Grid.Column="1" Text="Читати →" TextColor="#A65F43" />
      </Grid>

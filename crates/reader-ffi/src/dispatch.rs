@@ -54,6 +54,9 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             correction,
         } => value(store.correct_ocr_line(&id, index, correction)),
         Command::Position { id, position } => value(store.position(&id, position)),
+        Command::SetDocumentLanguage { id, language } => {
+            value(store.set_document_language(&id, &language))
+        }
         Command::SpeechResume { id } => value(store.speech_resume(&id)),
         Command::SetSpeechResume {
             id,

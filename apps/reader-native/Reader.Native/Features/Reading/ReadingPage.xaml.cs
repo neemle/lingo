@@ -8,18 +8,12 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage : ContentPage
 {
-    private static readonly (string Code, string Name)[] TranslationLanguages =
-    [
-        ("uk", "Українська"), ("en", "Англійська"), ("fr", "Французька"), ("de", "Німецька"),
-        ("es", "Іспанська"), ("it", "Італійська"), ("pt", "Португальська"), ("pl", "Польська"),
-        ("nl", "Нідерландська"), ("cs", "Чеська"), ("ro", "Румунська"), ("sv", "Шведська"),
-    ];
     private (string Code, string Name)[] availableTargets = [];
     private string? lastSourceLanguage;
     private bool updatingTargets;
     private bool stacked;
     private bool translating;
-    private (string Document, string Sentence, string Target, string Text)? machineKey;
+    private (string Document, string Sentence, string Source, string Target, string Text)? machineKey;
     private Reader.Contracts.MachineTranslation? machineTranslation;
     private string? machineStatus;
     private string? TargetCode
@@ -129,10 +123,11 @@ public partial class ReadingPage : ContentPage
             updatingTargets = true;
             try
             {
-                availableTargets = TranslationLanguages.Where(language => language.Code != source).ToArray();
+                availableTargets = DocumentLanguages.All.Where(language => language.Code != source).ToArray();
                 TargetLanguage.ItemsSource = availableTargets.Select(language => language.Name).ToArray();
                 var previousIndex = Array.FindIndex(availableTargets, language => language.Code == previous);
-                TargetLanguage.SelectedIndex = Math.Max(0, previousIndex);
+                var defaultIndex = Array.FindIndex(availableTargets, language => language.Code == (source == "uk" ? "fr" : "uk"));
+                TargetLanguage.SelectedIndex = previousIndex >= 0 ? previousIndex : defaultIndex;
             }
             finally { updatingTargets = false; }
         }
@@ -154,11 +149,11 @@ public partial class ReadingPage : ContentPage
         TargetLanguage.IsEnabled = active && !session.Busy;
     }
 
-    private (string Document, string Sentence, string Target, string Text)? ActiveTranslationKey()
+    private (string Document, string Sentence, string Source, string Target, string Text)? ActiveTranslationKey()
     {
         var session = AppState.Session;
         return session.Document is { } document && session.Sentence is { } sentence && TargetCode is { } target
-            ? (document.Id, sentence.Id, target, sentence.Text)
+            ? (document.Id, sentence.Id, document.Language, target, sentence.Text)
             : null;
     }
 
