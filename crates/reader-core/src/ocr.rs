@@ -244,6 +244,7 @@ pub(crate) fn refresh_line_provenance(
             .take_while(|(a, b)| a == b)
             .map(|(c, _)| c.len_utf8())
             .sum();
+        let corrected_words = (raw != reading).then(|| corrected_word_ranges(raw, reading)).flatten();
         let mut raw_byte = 0;
         let mut raw_utf16 = 0;
         let mut reading_byte = 0;
@@ -261,7 +262,13 @@ pub(crate) fn refresh_line_provenance(
                 let length_utf16 = word.text.encode_utf16().count();
                 raw_utf16 = start_utf16 + length_utf16;
                 let span = span?;
-                let reading_start = if end < prefix
+                let corrected = corrected_words.as_ref().and_then(|ranges| {
+                    let index = ranges.binary_search_by_key(&start, |(raw, _)| raw.start).ok()?;
+                    (ranges[index].0.end == end).then(|| ranges[index].1.clone())
+                });
+                let reading_range = if let Some(corrected) = corrected {
+                    corrected
+                } else if end < prefix
                     || (end == prefix
                         && raw[end..].chars().next().is_none_or(char::is_whitespace)
                         && reading[end..]
@@ -269,7 +276,7 @@ pub(crate) fn refresh_line_provenance(
                             .next()
                             .is_none_or(char::is_whitespace))
                 {
-                    start
+                    start..end
                 } else if start > raw.len() - suffix
                     || (start == raw.len() - suffix
                         && raw[..start]
@@ -281,18 +288,19 @@ pub(crate) fn refresh_line_provenance(
                             .next_back()
                             .is_none_or(char::is_whitespace))
                 {
-                    reading.len() - (raw.len() - start)
+                    reading.len() - (raw.len() - start)..reading.len() - (raw.len() - end)
                 } else {
                     return None;
                 };
-                let reading_end = reading_start + word.text.len();
+                let reading_start = reading_range.start;
+                let reading_end = reading_range.end;
                 let start_utf16 = reading_utf16
                     + reading
                         .get(reading_byte..reading_start)?
                         .encode_utf16()
                         .count();
                 reading_byte = reading_end;
-                reading_utf16 = start_utf16 + length_utf16;
+                reading_utf16 = start_utf16 + reading[reading_range].encode_utf16().count();
                 Some(OcrSpan {
                     start_utf8: span.start_utf8 + reading_start,
                     end_utf8: span.start_utf8 + reading_end,
@@ -302,6 +310,42 @@ pub(crate) fn refresh_line_provenance(
             })();
         }
     }
+}
+
+fn corrected_word_ranges(raw: &str, reading: &str) -> Option<Vec<(std::ops::Range<usize>, std::ops::Range<usize>)>> {
+    use crate::document_tokens::word_parts;
+    let mut original = word_parts(raw);
+    let mut corrected = word_parts(reading);
+    let mut ranges = Vec::new();
+    let (mut raw_end, mut reading_end) = (0, 0);
+    loop {
+        match (original.next(), corrected.next()) {
+            (Some((start, _, word)), Some((reading_start, _, replacement))) => {
+                if raw[raw_end..start] != reading[reading_end..reading_start]
+                    || word != replacement && (!word.chars().all(char::is_alphabetic)
+                        || !replacement.chars().all(char::is_alphabetic)
+                        || !differs_by_one_glyph(word, replacement))
+                {
+                    return None;
+                }
+                raw_end = start + word.len();
+                reading_end = reading_start + replacement.len();
+                ranges.push((start..raw_end, reading_start..reading_end));
+            }
+            (None, None) => return (raw[raw_end..] == reading[reading_end..]).then_some(ranges),
+            _ => return None,
+        }
+    }
+}
+
+pub(crate) fn differs_by_one_glyph(left: &str, right: &str) -> bool {
+    let shared: usize = left.chars().zip(right.chars()).take_while(|(a, b)| a == b)
+        .map(|(ch, _)| ch.len_utf8()).sum();
+    let (left, right) = (&left[shared..], &right[shared..]);
+    let left_tail = left.chars().next().map(|ch| &left[ch.len_utf8()..]);
+    let right_tail = right.chars().next().map(|ch| &right[ch.len_utf8()..]);
+    left_tail == Some(right) || right_tail == Some(left) ||
+        left_tail.is_some_and(|tail| Some(tail) == right_tail)
 }
 
 /// Match only sentences at the same page-relative source offset with identical text.

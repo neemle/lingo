@@ -741,7 +741,7 @@ pub(crate) fn reconcile_ocr_with_layer(reference: &str, lines: &mut [ocr::OcrLin
             let Some(candidate) = matches.next() else { continue; };
             if candidate != word && candidate.chars().all(char::is_alphabetic)
                 && candidate.starts_with(char::is_uppercase) == word.starts_with(char::is_uppercase)
-                && matches.all(|other| other == candidate) && differs_by_one_glyph(word, candidate)
+                && matches.all(|other| other == candidate) && ocr::differs_by_one_glyph(word, candidate)
             {
                 corrected.replace_range(start..start + word.len(), candidate);
             }
@@ -752,16 +752,6 @@ pub(crate) fn reconcile_ocr_with_layer(reference: &str, lines: &mut [ocr::OcrLin
         }
     }
     changed
-}
-
-fn differs_by_one_glyph(left: &str, right: &str) -> bool {
-    let shared: usize = left.chars().zip(right.chars()).take_while(|(a, b)| a == b)
-        .map(|(ch, _)| ch.len_utf8()).sum();
-    let (left, right) = (&left[shared..], &right[shared..]);
-    let left_tail = left.chars().next().map(|ch| &left[ch.len_utf8()..]);
-    let right_tail = right.chars().next().map(|ch| &right[ch.len_utf8()..]);
-    left_tail == Some(right) || right_tail == Some(left) ||
-        left_tail.is_some_and(|tail| Some(tail) == right_tail)
 }
 
 fn update_focused_page(db: &Connection, document: &mut Document, page: u16, pages: Vec<String>) -> Result<()> {

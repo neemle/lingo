@@ -378,14 +378,20 @@ internal sealed class OriginalPage : ContentPage
 
         var length = span.EndUtf16 - span.StartUtf16;
         if (detachedOcr is not null)
-            return showDetachedWord is not null && length == word.Text.Length
-                ? new TextSelection(span.StartUtf16, length, word.Text) : null;
+        {
+            var line = current[index];
+            if (showDetachedWord is null || line.SourceSpan is not { } lineSpan) return null;
+            var reading = (line.Correction ?? line.Text).Trim();
+            var start = span.StartUtf16 - lineSpan.StartUtf16;
+            return start >= 0 && start <= reading.Length - length
+                ? new TextSelection(span.StartUtf16, length, reading.Substring(start, length)) : null;
+        }
 
         if (span.EndUtf16 > document.Text.Length) return null;
         if (wordRanges is null || wordRanges.Text != document.Text) wordRanges = new SourceRanges(document.Text);
         var selected = wordRanges.Selection(span.StartUtf16, length);
         return selected is not null && selected.StartUtf16 == span.StartUtf16 &&
-            selected.LengthUtf16 == length && selected.Text == word.Text
+            selected.LengthUtf16 == length
             ? selected : null;
     }
 

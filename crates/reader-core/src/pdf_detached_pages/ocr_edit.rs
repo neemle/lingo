@@ -43,7 +43,8 @@ impl Store {
                 .find_map(|candidate| {
                     candidate
                         .source_span
-                        .filter(|span| candidate.text == word && span.start_utf16 == start_utf16)
+                        .filter(|span| span.start_utf16 == start_utf16 &&
+                            text.get(span.start_utf8..span.end_utf8) == Some(word))
                 })
                 .ok_or("Слово більше не відповідає тексту сторінки PDF.")?;
             let sentences = super::page_layout(tx, id, page)?.segment(&text, "");
