@@ -170,16 +170,12 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             context,
         } => value(store.lookup_word(&language, &word, context.as_ref())),
         Command::SuggestOcr { language, text } => value(store.suggest_ocr(&language, &text)),
-        Command::InstallTranslationPackage { path } => {
-            value(store.install_translation_package(std::path::Path::new(&path)))
-        }
-        Command::VerifyTranslationPackage { .. } => Err(Error::new(
+        Command::InstallTranslationPackage { .. }
+        | Command::RemoveTranslationPackage { .. }
+        | Command::VerifyTranslationPackage { .. } => Err(Error::new(
             "internal_error",
-            "Translation verification must run outside the store lock",
+            "Translation package maintenance must run outside the store lock",
         )),
-        Command::RemoveTranslationPackage { source, target } => {
-            value(store.remove_translation_package(&source, &target))
-        }
         Command::CheckTranslationDownloadSpace {
             source,
             target,

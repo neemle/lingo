@@ -117,6 +117,113 @@ impl TranslationPackageVerification {
     }
 }
 
+/// Owns the model root so package maintenance can run independently of the store connection.
+pub struct TranslationPackageFiles {
+    directory: PathBuf,
+}
+
+impl TranslationPackageFiles {
+    pub fn remove(&self, source: &str, target: &str) -> Result<bool> {
+        let package = catalog::PACKAGES
+            .iter()
+            .find(|package| package.source == source && package.target == target)
+            .ok_or("Для цієї мовної пари немає пакета.")?;
+        let provider = MarianProvider::interactive(&self.directory);
+        if !self.directory.is_dir() {
+            return Ok(false);
+        }
+        let _lock = provider.lock(package, true)?;
+        let active = provider.path(package);
+        let removed = provider.removed_path(package);
+        let mut cleared_previous = remove_package_directory(&removed)?;
+        cleared_previous |= remove_package_directory(&provider.previous_path(package))?;
+        if !package_directory(&active)? {
+            return Ok(cleared_previous);
+        }
+        match fs::rename(&active, &removed) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(cleared_previous),
+            Err(error) => return Err(model_error(error)),
+        }
+        remove_package_directory(&removed)
+            .map_err(|error| format!("Пакет відключено. Не вдалося прибрати всі файли. {error}"))?;
+        Ok(true)
+    }
+
+    pub fn install(&self, archive_path: &Path) -> Result<String> {
+        let file = File::open(archive_path).map_err(model_error)?;
+        if file.metadata().map_err(model_error)?.len() > MAX_ARCHIVE_BYTES {
+            return Err("Архів мовного пакета завеликий".into());
+        }
+        let mut archive = zip::ZipArchive::new(file).map_err(model_error)?;
+        if archive.len() != ASSETS.len() {
+            return Err("Архів має містити п’ять файлів мовного пакета".into());
+        }
+        let mut sizes = [0; ASSETS.len()];
+        for (index, asset) in ASSETS.iter().enumerate() {
+            let entry = archive.by_name(asset).map_err(model_error)?;
+            sizes[index] = entry.size();
+        }
+        let (_, config_hash) = copy_and_hash(
+            archive.by_name("config.json").map_err(model_error)?,
+            io::sink(),
+            asset_limit("config.json"),
+        )?;
+        let mut candidates: Vec<_> = catalog::PACKAGES
+            .iter()
+            .filter(|model| model.sizes == sizes && model.hashes[0] == config_hash)
+            .collect();
+        if candidates.is_empty() {
+            return Err("Версію мовного пакета не підтримано".into());
+        }
+        let provider = MarianProvider::interactive(&self.directory);
+        fs::create_dir_all(&self.directory).map_err(model_error)?;
+        // Only one install per model root can reserve space and stage an archive at a time.
+        // Package mutations still linearize independently at the package lock.
+        let _staging_lock = lock_package(&self.directory.join(".install.lock"), true)?;
+        ensure_capacity([(
+            &self.directory,
+            sizes.iter().sum::<u64>() + PACKAGE_OVERHEAD,
+        )])?;
+        let stage = tempfile::tempdir_in(&self.directory).map_err(model_error)?;
+        for (index, asset) in ASSETS.iter().enumerate() {
+            let input = archive.by_name(asset).map_err(model_error)?;
+            let mut output = File::create(stage.path().join(asset)).map_err(model_error)?;
+            let (size, digest) = copy_and_hash(input, &mut output, asset_limit(asset))?;
+            candidates.retain(|model| model.sizes[index] == size && model.hashes[index] == digest);
+            if candidates.is_empty() {
+                return Err(format!("Файл мовного пакета пошкоджений: {asset}"));
+            }
+            output.sync_all().map_err(model_error)?;
+        }
+        let package = candidates[0];
+        let _lock = provider.lock(package, true)?;
+        let active = provider.path(package);
+        let previous = provider.previous_path(package);
+        if !package_directory(&active)?
+            || verify_files(&active, package, &ASSETS, &|| Ok(())).is_err()
+        {
+            activate_verified_package(
+                stage.path(),
+                &active,
+                &previous,
+                &provider.removed_path(package),
+            )?;
+        }
+        remove_package_directory(&previous).map_err(|error| {
+            format!("Пакет готовий. Не вдалося прибрати попередні файли. {error}")
+        })?;
+        remove_package_directory(&provider.removed_path(package)).map_err(|error| {
+            format!("Пакет готовий. Не вдалося прибрати попередні файли. {error}")
+        })?;
+        Ok(candidates
+            .iter()
+            .map(|entry| format!("{} → {}", entry.source, entry.target))
+            .collect::<Vec<_>>()
+            .join(", "))
+    }
+}
+
 /// Owned settings for reading a document and updating its translation cache off the main store.
 pub struct TranslationWorker {
     database: PathBuf,
@@ -269,101 +376,18 @@ impl Store {
         })
     }
 
+    pub fn translation_package_files(&self) -> TranslationPackageFiles {
+        TranslationPackageFiles {
+            directory: self.model_directory.clone(),
+        }
+    }
+
     pub fn remove_translation_package(&self, source: &str, target: &str) -> Result<bool> {
-        let package = catalog::PACKAGES
-            .iter()
-            .find(|package| package.source == source && package.target == target)
-            .ok_or("Для цієї мовної пари немає пакета.")?;
-        let provider = MarianProvider::interactive(&self.model_directory);
-        if !self.model_directory.is_dir() {
-            return Ok(false);
-        }
-        let _lock = provider.lock(package, true)?;
-        let active = provider.path(package);
-        let removed = provider.removed_path(package);
-        let mut cleared_previous = remove_package_directory(&removed)?;
-        cleared_previous |= remove_package_directory(&provider.previous_path(package))?;
-        if !package_directory(&active)? {
-            return Ok(cleared_previous);
-        }
-        match fs::rename(&active, &removed) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(cleared_previous),
-            Err(error) => return Err(model_error(error)),
-        }
-        remove_package_directory(&removed)
-            .map_err(|error| format!("Пакет відключено. Не вдалося прибрати всі файли. {error}"))?;
-        Ok(true)
+        self.translation_package_files().remove(source, target)
     }
 
     pub fn install_translation_package(&self, archive_path: &Path) -> Result<String> {
-        let file = File::open(archive_path).map_err(model_error)?;
-        if file.metadata().map_err(model_error)?.len() > MAX_ARCHIVE_BYTES {
-            return Err("Архів мовного пакета завеликий".into());
-        }
-        let mut archive = zip::ZipArchive::new(file).map_err(model_error)?;
-        if archive.len() != ASSETS.len() {
-            return Err("Архів має містити п’ять файлів мовного пакета".into());
-        }
-        let mut sizes = [0; ASSETS.len()];
-        for (index, asset) in ASSETS.iter().enumerate() {
-            let entry = archive.by_name(asset).map_err(model_error)?;
-            sizes[index] = entry.size();
-        }
-        let (_, config_hash) = copy_and_hash(
-            archive.by_name("config.json").map_err(model_error)?,
-            io::sink(),
-            asset_limit("config.json"),
-        )?;
-        let mut candidates: Vec<_> = catalog::PACKAGES
-            .iter()
-            .filter(|model| model.sizes == sizes && model.hashes[0] == config_hash)
-            .collect();
-        if candidates.is_empty() {
-            return Err("Версію мовного пакета не підтримано".into());
-        }
-        let provider = MarianProvider::interactive(&self.model_directory);
-        fs::create_dir_all(&self.model_directory).map_err(model_error)?;
-        ensure_capacity([(
-            &self.model_directory,
-            sizes.iter().sum::<u64>() + PACKAGE_OVERHEAD,
-        )])?;
-        let stage = tempfile::tempdir_in(&self.model_directory).map_err(model_error)?;
-        for (index, asset) in ASSETS.iter().enumerate() {
-            let input = archive.by_name(asset).map_err(model_error)?;
-            let mut output = File::create(stage.path().join(asset)).map_err(model_error)?;
-            let (size, digest) = copy_and_hash(input, &mut output, asset_limit(asset))?;
-            candidates.retain(|model| model.sizes[index] == size && model.hashes[index] == digest);
-            if candidates.is_empty() {
-                return Err(format!("Файл мовного пакета пошкоджений: {asset}"));
-            }
-            output.sync_all().map_err(model_error)?;
-        }
-        let package = candidates[0];
-        let _lock = provider.lock(package, true)?;
-        let active = provider.path(package);
-        let previous = provider.previous_path(package);
-        if !package_directory(&active)?
-            || verify_files(&active, package, &ASSETS, &|| Ok(())).is_err()
-        {
-            activate_verified_package(
-                stage.path(),
-                &active,
-                &previous,
-                &provider.removed_path(package),
-            )?;
-        }
-        remove_package_directory(&previous).map_err(|error| {
-            format!("Пакет готовий. Не вдалося прибрати попередні файли. {error}")
-        })?;
-        remove_package_directory(&provider.removed_path(package)).map_err(|error| {
-            format!("Пакет готовий. Не вдалося прибрати попередні файли. {error}")
-        })?;
-        Ok(candidates
-            .iter()
-            .map(|entry| format!("{} → {}", entry.source, entry.target))
-            .collect::<Vec<_>>()
-            .join(", "))
+        self.translation_package_files().install(archive_path)
     }
 
     pub fn translate_installed_sentence(

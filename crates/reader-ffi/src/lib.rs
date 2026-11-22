@@ -115,6 +115,14 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
+        Command::InstallTranslationPackage { path } => {
+            let files = registry::lock()?.store(handle)?.translation_package_files();
+            return encode_job(files.install(std::path::Path::new(path)));
+        }
+        Command::RemoveTranslationPackage { source, target } => {
+            let files = registry::lock()?.store(handle)?.translation_package_files();
+            return encode_job(files.remove(source, target));
+        }
         Command::VerifyTranslationPackage { source, target } => {
             let job = registry::lock()?
                 .store(handle)?
