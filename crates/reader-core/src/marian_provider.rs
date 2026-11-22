@@ -31,6 +31,8 @@ use crate::{
 mod decoder;
 #[path = "marian_rerank.rs"]
 mod rerank;
+#[path = "marian_time.rs"]
+mod time;
 
 mod catalog {
     include!("marian_catalog.rs");
@@ -498,6 +500,7 @@ impl TranslationProvider for MarianProvider<'_> {
             .ok_or("Некоректна довжина входу мовної моделі")?;
 
         let mut results = Vec::with_capacity(segments.len());
+        let mut clock_retry_budget = 2;
         for segment in segments {
             let source_pieces = input
                 .encode(normalized_input(package.source, segment).as_ref())
@@ -552,6 +555,29 @@ impl TranslationProvider for MarianProvider<'_> {
                     .next()
                     .ok_or("Модель не завершила переклад речення")?;
                 let mut translated = decode_text(&best)?;
+                let mut reference = |text: &str, width| -> Result<String> {
+                    let pieces = input
+                        .encode(normalized_input(package.source, text).as_ref())
+                        .map_err(model_error)?;
+                    if pieces.len() > capacity {
+                        return Err("Речення завелике для перевірки контексту".into());
+                    }
+                    let mut ids: Vec<_> = prefix
+                        .into_iter()
+                        .chain(
+                            pieces
+                                .iter()
+                                .map(|piece| vocabulary.get(piece).copied().unwrap_or(unknown)),
+                        )
+                        .collect();
+                    ids.push(config.eos_token_id);
+                    model.reset_kv_cache();
+                    let tensor = Tensor::new(ids.as_slice(), &Device::Cpu)
+                        .and_then(|value| value.unsqueeze(0))
+                        .map_err(model_error)?;
+                    let encoded = model.encoder().forward(&tensor, 0).map_err(model_error)?;
+                    decode_text(&decoder::decode(&model, &encoded, &config, width, limit)?)
+                };
                 let units: Vec<_> = segment
                     .unicode_sentences()
                     .map(str::trim)
@@ -570,29 +596,6 @@ impl TranslationProvider for MarianProvider<'_> {
                             alternatives.push(text);
                         }
                     }
-                    let mut reference = |text: &str, width| -> Result<String> {
-                        let pieces = input
-                            .encode(normalized_input(package.source, text).as_ref())
-                            .map_err(model_error)?;
-                        if pieces.len() > capacity {
-                            return Err("Речення завелике для перевірки контексту".into());
-                        }
-                        let mut ids: Vec<_> = prefix
-                            .into_iter()
-                            .chain(
-                                pieces
-                                    .iter()
-                                    .map(|piece| vocabulary.get(piece).copied().unwrap_or(unknown)),
-                            )
-                            .collect();
-                        ids.push(config.eos_token_id);
-                        model.reset_kv_cache();
-                        let tensor = Tensor::new(ids.as_slice(), &Device::Cpu)
-                            .and_then(|value| value.unsqueeze(0))
-                            .map_err(model_error)?;
-                        let encoded = model.encoder().forward(&tensor, 0).map_err(model_error)?;
-                        decode_text(&decoder::decode(&model, &encoded, &config, width, limit)?)
-                    };
                     let references = units
                         .iter()
                         .map(|text| {
@@ -609,6 +612,24 @@ impl TranslationProvider for MarianProvider<'_> {
                     if let Ok(references) = references {
                         let chosen = rerank::choose(&alternatives, &references);
                         translated = alternatives.swap_remove(chosen);
+                    }
+                }
+                // Retry only the observed clock-as-year artifact, using the same loaded model.
+                // The baseline remains authoritative unless the retry proves the source clock.
+                if package.source == "en"
+                    && package.target == "uk"
+                    && start == 0
+                    && end == source_pieces.len()
+                    && segment.len() <= 768
+                    && clock_retry_budget > 0
+                {
+                    if let Some(retry) = time::retry_input(segment, &translated) {
+                        clock_retry_budget -= 1;
+                        if let Ok(candidate) = reference(&retry.input, settings.beam_size) {
+                            if retry.accepts(&candidate) {
+                                translated = candidate;
+                            }
+                        }
                     }
                 }
                 translated_parts.push(translated);
