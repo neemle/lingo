@@ -53,6 +53,14 @@ fn validate(command: &Command) -> Result<()> {
             "invalid_argument",
             "Language sample is too long",
         )),
+        Command::FindTranslationPage {
+            id, target, query, ..
+        } if id.is_empty() || id.len() > 128 || target.len() > 32 || query.len() > 1024 => {
+            Err(Error::new(
+                "invalid_argument",
+                "Translation search fields exceed their wire bounds",
+            ))
+        }
         Command::SemanticVocabulary { query, .. } if query.len() > 960 => Err(Error::new(
             "invalid_argument",
             "Semantic vocabulary query exceeds its wire bound",

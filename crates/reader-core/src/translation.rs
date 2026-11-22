@@ -4,6 +4,7 @@ use crate::{valid_language, Result, Store};
 use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use unicode_normalization::UnicodeNormalization;
 
 const MAX_BATCH_BYTES: usize = 64 * 1024;
 const CACHE_ROWS: i64 = 128;
@@ -250,13 +251,65 @@ pub(crate) fn cached_translation(
     selected: usize,
     target: &str,
 ) -> Result<CachedTranslation> {
+    let routes = CacheRoutes::resolve(installed, catalog, &document.language, target)?;
+    cached_translation_with_routes(
+        store,
+        &routes,
+        document,
+        selected,
+        target,
+        CacheScope::Window,
+    )
+}
+
+struct CacheRoutes {
+    preferred: Option<Route>,
+    candidates: Vec<Route>,
+}
+
+impl CacheRoutes {
+    fn resolve(
+        installed: &[ModelEdge],
+        catalog: &[ModelEdge],
+        source: &str,
+        target: &str,
+    ) -> Result<Self> {
+        let preferred = resolve_route(installed, source, target)?;
+        let candidates = preferred
+            .iter()
+            .cloned()
+            .chain(
+                catalog_routes(catalog, source, target)
+                    .filter(|route| Some(route) != preferred.as_ref()),
+            )
+            .collect();
+        Ok(Self {
+            preferred,
+            candidates,
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CacheScope {
+    Window,
+    Active,
+}
+
+fn cached_translation_with_routes(
+    store: &Store,
+    routes: &CacheRoutes,
+    document: &crate::Document,
+    selected: usize,
+    target: &str,
+    scope: CacheScope,
+) -> Result<CachedTranslation> {
     let ParagraphPlan {
         result: mut paragraph,
         pending,
     } = paragraph_plan(document, selected, target)?;
-    let source = &document.language;
-    let preferred = resolve_route(installed, source, target)?;
-    paragraph.pivot_language = preferred
+    paragraph.pivot_language = routes
+        .preferred
         .as_ref()
         .and_then(Route::pivot_language)
         .map(str::to_owned);
@@ -267,18 +320,19 @@ pub(crate) fn cached_translation(
         .iter()
         .any(|unit| unit.reviewed && unit.sentence_ids.contains(active_id));
     let standalone = (!active_reviewed).then(|| input_for_sentence(document, selected));
-    let routes = preferred.iter().cloned().chain(
-        catalog_routes(catalog, source, target).filter(|route| Some(route) != preferred.as_ref()),
-    );
     let mut best = None;
-    for route in routes {
+    for route in &routes.candidates {
         let mut units = Vec::new();
         let mut active_hit = false;
         for (index, text) in &pending {
+            let active = paragraph.units[*index].sentence_ids.contains(active_id);
+            if matches!(scope, CacheScope::Active) && !active {
+                continue;
+            }
             if let Some(mut segments) =
-                store.cached_segments(&unit_cache_key(&route, text)?, 1, target)?
+                store.cached_segments(&unit_cache_key(route, text)?, 1, target)?
             {
-                active_hit |= paragraph.units[*index].sentence_ids.contains(active_id);
+                active_hit |= active;
                 units.push((*index, segments.remove(0)));
             }
         }
@@ -290,7 +344,7 @@ pub(crate) fn cached_translation(
                 .filter(|(text, _)| text.len() <= MAX_BATCH_BYTES)
             {
                 if let Some(segments) =
-                    store.cached_segments(&unit_cache_key(&route, text)?, 1, target)?
+                    store.cached_segments(&unit_cache_key(route, text)?, 1, target)?
                 {
                     sentence = Some(AlignedTranslation {
                         route: route.clone(),
@@ -323,6 +377,102 @@ pub(crate) fn cached_translation(
         paragraph,
         sentence,
     })
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationSearchPage {
+    pub matches: Vec<TranslationSearchMatch>,
+    pub next_start: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TranslationSearchMatch {
+    pub position: usize,
+    pub text: String,
+}
+
+pub(crate) fn search_cached_translation(
+    store: &Store,
+    installed: &[ModelEdge],
+    catalog: &[ModelEdge],
+    document: &crate::Document,
+    target: &str,
+    query: &str,
+    start: usize,
+) -> Result<TranslationSearchPage> {
+    const SCAN_LIMIT: usize = 128;
+    const MATCH_LIMIT: usize = 30;
+
+    let routes = CacheRoutes::resolve(installed, catalog, &document.language, target)?;
+    let query = normalize_translation_search(query.trim());
+    let mut page = TranslationSearchPage {
+        matches: Vec::new(),
+        next_start: None,
+    };
+    let len = document.sentences.len();
+    if query.is_empty() || start >= len {
+        return Ok(page);
+    }
+
+    let end = len.min(start.saturating_add(SCAN_LIMIT));
+    let mut previous_unit = None;
+    // The preceding position lets us suppress a repeated contextual unit at a page boundary.
+    let scan_start = start.saturating_sub(1);
+    for position in scan_start..end {
+        let active_id = &document.sentences[position].id;
+        let cached = cached_translation_with_routes(
+            store,
+            &routes,
+            document,
+            position,
+            target,
+            CacheScope::Active,
+        )?;
+        let active_unit = cached
+            .paragraph
+            .units
+            .into_iter()
+            .find(|unit| unit.sentence_ids.contains(active_id));
+        let contextual =
+            active_unit.and_then(|unit| unit.translation.map(|text| (unit.sentence_ids, text)));
+        let repeated = contextual.is_some() && contextual == previous_unit;
+        let active = contextual
+            .as_ref()
+            .map(|(_, text)| text.as_str())
+            .or_else(|| {
+                cached
+                    .sentence
+                    .as_ref()?
+                    .segments
+                    .first()
+                    .map(String::as_str)
+            });
+        if let Some(text) = active.filter(|text| {
+            position >= start && !repeated && normalize_translation_search(text).contains(&query)
+        }) {
+            page.matches.push(TranslationSearchMatch {
+                position,
+                text: text.to_owned(),
+            });
+            if page.matches.len() == MATCH_LIMIT {
+                page.next_start = (position + 1 < len).then_some(position + 1);
+                return Ok(page);
+            }
+        }
+        previous_unit = contextual;
+    }
+    page.next_start = (end < len).then_some(end);
+    Ok(page)
+}
+
+fn normalize_translation_search(text: &str) -> String {
+    text.nfc()
+        .flat_map(|character| match character {
+            '’' | 'ʼ' => '\''.to_lowercase(),
+            character => character.to_lowercase(),
+        })
+        .collect()
 }
 
 fn catalog_routes<'a>(
@@ -688,6 +838,69 @@ mod tests {
             .iter()
             .all(|unit| unit.translation.is_none()));
         assert!(stale.sentence.is_none());
+    }
+
+    #[test]
+    fn translation_search_uses_cached_routes_and_reviewed_text_in_position_order() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut document = store
+            .import(
+                "search.txt",
+                b"First sentence. Second sentence. Third sentence. Fourth sentence.",
+                "en",
+            )
+            .unwrap();
+        let edge = ModelEdge {
+            source: "en".into(),
+            target: "fr".into(),
+            revision: "test-v1".into(),
+            quality: None,
+        };
+        let route = Route::Direct(edge.clone());
+        let group = "First sentence. Second sentence. Third sentence.";
+        let standalone = &document.sentences[3].text;
+        store
+            .save_cached_segments([
+                (
+                    unit_cache_key(&route, group).unwrap(),
+                    &["L’e\u{301}te\u{301} arrive.".into()][..],
+                ),
+                (
+                    unit_cache_key(&route, standalone).unwrap(),
+                    &["L’été finit.".into()][..],
+                ),
+            ])
+            .unwrap();
+        let search = |document: &crate::Document, target, query, start| {
+            search_cached_translation(
+                &store,
+                &[],
+                std::slice::from_ref(&edge),
+                document,
+                target,
+                query,
+                start,
+            )
+            .unwrap()
+            .matches
+            .into_iter()
+            .map(|hit| hit.position)
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(search(&document, "fr", "L'ÉTÉ", 0), [0, 3]);
+        assert_eq!(search(&document, "fr", "L'ÉTÉ", 1), [3]);
+        assert!(search(&document, "uk", "L'ÉTÉ", 0).is_empty());
+
+        document
+            .reviewed_translations
+            .entry("fr".into())
+            .or_default()
+            .insert(
+                document.sentences[3].id.clone(),
+                "Corrections confirmées.".into(),
+            );
+        assert_eq!(search(&document, "fr", "CONFIRMÉES", 0), [3]);
+        assert_eq!(search(&document, "fr", "L'ÉTÉ", 0), [0]);
     }
 
     #[test]

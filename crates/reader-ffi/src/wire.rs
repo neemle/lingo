@@ -230,6 +230,12 @@ pub enum Command {
         #[serde(default)]
         background: bool,
     },
+    FindTranslationPage {
+        id: String,
+        target: String,
+        query: String,
+        start: usize,
+    },
     CachedTranslation {
         id: String,
         #[serde(rename = "sentenceId")]

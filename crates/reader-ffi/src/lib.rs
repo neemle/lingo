@@ -80,6 +80,19 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 };
             }
         }
+        Command::FindTranslationPage {
+            id,
+            target,
+            query,
+            start,
+        } => {
+            let worker = registry::lock()?
+                .store(handle)?
+                .prepare_translation_worker();
+            if let Some(worker) = worker {
+                return encode_job(worker.find_translation_page(id, target, query, *start));
+            }
+        }
         Command::CachedTranslation {
             id,
             sentence_id,

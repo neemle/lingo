@@ -21,9 +21,10 @@ use crate::{
     resources::RESOURCES,
     space::{ensure_capacity, PACKAGE_OVERHEAD},
     translation::{
-        cached_translation, input_for_sentence, route_readiness, translate_paragraph,
-        AlignedTranslation, CachedTranslation, ModelEdge, ParagraphTranslation,
-        TranslationProvider, TranslationReadiness, TranslationRequest, TranslationSettings,
+        cached_translation, input_for_sentence, route_readiness, search_cached_translation,
+        translate_paragraph, AlignedTranslation, CachedTranslation, ModelEdge,
+        ParagraphTranslation, TranslationProvider, TranslationReadiness, TranslationRequest,
+        TranslationSearchPage, TranslationSettings,
     },
     Result, Store,
 };
@@ -345,6 +346,16 @@ impl TranslationWorker {
         self.open(OpenFlags::SQLITE_OPEN_READ_ONLY)?
             .cached_installed_translation(document_id, sentence_id, target)
     }
+    pub fn find_translation_page(
+        self,
+        document_id: &str,
+        target: &str,
+        query: &str,
+        start: usize,
+    ) -> Result<TranslationSearchPage> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_ONLY)?
+            .find_translation_page(document_id, target, query, start)
+    }
 }
 
 impl Store {
@@ -535,11 +546,34 @@ impl Store {
         cached_translation(self, &installed, &catalog, &document, selected, target)
     }
 
+    pub fn find_translation_page(
+        &self,
+        document_id: &str,
+        target: &str,
+        query: &str,
+        start: usize,
+    ) -> Result<TranslationSearchPage> {
+        let document = self.translation_document(document_id)?;
+        let installed = MarianProvider::interactive(&self.model_directory).installed_models()?;
+        let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
+        search_cached_translation(self, &installed, &catalog, &document, target, query, start)
+    }
+
     fn translation_selection(
         &self,
         document_id: &str,
         sentence_id: &str,
     ) -> Result<(crate::Document, usize)> {
+        let document = self.translation_document(document_id)?;
+        let selected = document
+            .sentences
+            .iter()
+            .position(|sentence| sentence.id == sentence_id)
+            .ok_or("Речення для перекладу не знайдено")?;
+        Ok((document, selected))
+    }
+
+    fn translation_document(&self, document_id: &str) -> Result<crate::Document> {
         let body: String = self
             .connection
             .query_row(
@@ -548,14 +582,7 @@ impl Store {
                 |row| row.get(0),
             )
             .map_err(|error| error.to_string())?;
-        let document: crate::Document =
-            serde_json::from_str(&body).map_err(|error| error.to_string())?;
-        let selected = document
-            .sentences
-            .iter()
-            .position(|sentence| sentence.id == sentence_id)
-            .ok_or("Речення для перекладу не знайдено")?;
-        Ok((document, selected))
+        serde_json::from_str(&body).map_err(|error| error.to_string())
     }
 
     pub fn translation_readiness(

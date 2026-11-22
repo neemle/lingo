@@ -211,6 +211,12 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             sentence_id,
             target,
         } => sentence_translation(store.translate_installed_sentence(&id, &sentence_id, &target)),
+        Command::FindTranslationPage {
+            id,
+            target,
+            query,
+            start,
+        } => value(store.find_translation_page(&id, &target, &query, start)),
         Command::CachedTranslation {
             id,
             sentence_id,
