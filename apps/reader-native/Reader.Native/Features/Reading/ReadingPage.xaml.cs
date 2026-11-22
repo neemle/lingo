@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using System.Diagnostics;
+using Reader.Contracts;
 using Reader.Native.Services;
 using Reader.Presentation;
 
@@ -34,6 +36,9 @@ public partial class ReadingPage : ContentPage
     private int speechRequest;
     private bool speechPaused;
     private bool utteranceActive;
+    private (string DocumentId, SpeechResume Resume)? pendingSpeechResume;
+    private long lastSpeechSave;
+    private int? resumeSpeechOffset;
     private bool loadingSpeechPreferences;
     private bool speechPreferencesReady;
     private const string RatePreference = "reader.speech.rate";
@@ -49,6 +54,7 @@ public partial class ReadingPage : ContentPage
         AppState.Session.PropertyChanged += SessionChanged;
         UpdateHighlight();
         UpdateTranslation();
+        RefreshSpeechResume();
         loadingSpeechPreferences = true;
         try
         {
@@ -78,6 +84,11 @@ public partial class ReadingPage : ContentPage
             UpdateHighlight();
             UpdateTranslation();
             RefreshVoices();
+            if (!utteranceActive)
+            {
+                SaveSpeechResume();
+                RefreshSpeechResume();
+            }
         }
         if (args.PropertyName == nameof(ReaderSession.Error) && AppState.Session.Error.Length > 0)
             SemanticScreenReader.Default.Announce(AppState.Session.Error);
@@ -333,10 +344,54 @@ public partial class ReadingPage : ContentPage
         Preferences.Set(ContinuousPreference, ContinueSpeech.IsChecked);
     }
 
-    private async void SpeakClicked(object? sender, EventArgs args)
+    private void RefreshSpeechResume()
+    {
+        resumeSpeechOffset = null;
+        ResumeSpeech.IsVisible = false;
+        var session = AppState.Session;
+        if (session.Busy || session.Document is not { } document || session.Sentence is not { } sentence) return;
+
+        try
+        {
+            resumeSpeechOffset = SpeechProgress.ResumeOffset(sentence, session.GetSpeechResume(document.Id));
+            ResumeSpeech.IsVisible = resumeSpeechOffset.HasValue;
+        }
+        catch (Exception error) { SpeechStatus.Text = $"Не вдалося прочитати позицію озвучення. {error.Message}"; }
+    }
+
+    private void SaveSpeechResume()
+    {
+        var session = AppState.Session;
+        if (pendingSpeechResume is not { } pending || session.Busy) return;
+        if (session.Document?.Id != pending.DocumentId || session.Sentence is not { } sentence ||
+            sentence.Id != pending.Resume.SentenceId || SpeechProgress.TextHash(sentence) != pending.Resume.TextHash)
+        {
+            pendingSpeechResume = null;
+            return;
+        }
+        try
+        {
+            var resume = pending.Resume;
+            session.SetSpeechResume(pending.DocumentId, resume.SentenceId, resume.TextHash, resume.OffsetUtf16);
+            pendingSpeechResume = null;
+            lastSpeechSave = Stopwatch.GetTimestamp();
+        }
+        catch (Exception error) { SpeechStatus.Text = $"Не вдалося зберегти позицію озвучення. {error.Message}"; }
+    }
+
+    private async void SpeakClicked(object? sender, EventArgs args) => await SpeakAsync(0);
+
+    private async void ResumeSpeechClicked(object? sender, EventArgs args)
+    {
+        RefreshSpeechResume();
+        if (resumeSpeechOffset is int offset) await SpeakAsync(offset);
+    }
+
+    private async Task SpeakAsync(int offset)
     {
         var session = AppState.Session;
         if (session.Busy || session.Document is not { } initial || session.Sentence is null) return;
+        SaveSpeechResume();
         var request = ++speechRequest;
         var receivedCue = false;
         var status = LocalSpeech.CompletedStatus;
@@ -347,23 +402,44 @@ public partial class ReadingPage : ContentPage
         while (request == speechRequest && session.Document is { } doc && doc.Id == initial.Id &&
             session.Sentence is { } sentence)
         {
+            var startAt = offset;
+            offset = 0;
+            var textHash = SpeechProgress.TextHash(sentence);
+            lastSpeechSave = 0;
             SourceText.SpokenWord = null;
             speechPaused = false;
             utteranceActive = true;
+            ResumeSpeech.IsVisible = false;
             PauseSpeech.Text = "Пауза";
             PauseSpeech.IsEnabled = true;
             SpeechStatus.Text = "Озвучення поточного речення…";
-            status = await speech.SpeakAsync(sentence.Text, doc.Language, (start, length) => Dispatcher.Dispatch(() =>
+            status = await speech.SpeakAsync(sentence.Text[startAt..], doc.Language, (start, length) => Dispatcher.Dispatch(() =>
             {
                 if (request == speechRequest && utteranceActive && !speechPaused &&
                     session.Document?.Id == doc.Id && session.Sentence?.Id == sentence.Id &&
-                    session.Sentence?.Text == sentence.Text && HighlightSpokenWord(sentence, start, length))
+                    session.Sentence?.Text == sentence.Text &&
+                    HighlightSpokenWord(sentence, startAt + start, length) is int spokenOffset)
+                {
                     receivedCue = true;
+                    pendingSpeechResume = (doc.Id, new(sentence.Id, textHash, spokenOffset));
+                    if (lastSpeechSave == 0 || Stopwatch.GetElapsedTime(lastSpeechSave) >= TimeSpan.FromSeconds(2))
+                        SaveSpeechResume();
+                }
             }));
             if (request != speechRequest) return;
             utteranceActive = false;
             SourceText.SpokenWord = null;
             PauseSpeech.IsEnabled = false;
+            if (status == LocalSpeech.CompletedStatus)
+            {
+                pendingSpeechResume = null;
+                try { session.SetSpeechResume(doc.Id, sentence.Id, textHash, null); }
+                catch (Exception error)
+                {
+                    status = $"Не вдалося очистити позицію озвучення. {error.Message}";
+                }
+            }
+            else SaveSpeechResume();
             if (status != LocalSpeech.CompletedStatus || !ContinueSpeech.IsChecked ||
                 doc.Position + 1 >= doc.Sentences.Length || session.Busy)
                 break;
@@ -384,17 +460,18 @@ public partial class ReadingPage : ContentPage
         if (status is not null)
             SpeechStatus.Text = status == LocalSpeech.CompletedStatus && !receivedCue
                 ? $"{status} Межі слів від голосу не отримано." : status;
+        RefreshSpeechResume();
     }
 
-    private bool HighlightSpokenWord(Reader.Contracts.Sentence sentence, int start, int length)
+    private int? HighlightSpokenWord(Sentence sentence, int start, int length)
     {
         var span = SourceRanges.Selection(sentence.Text, start, length);
-        if (span is null) return false;
+        if (span is null) return null;
         var absolute = sentence.StartUtf16 + span.StartUtf16;
         if (absolute < 0 || absolute > SourceText.Text.Length - span.LengthUtf16 ||
-            !SourceText.Text.AsSpan(absolute, span.LengthUtf16).SequenceEqual(span.Text)) return false;
+            !SourceText.Text.AsSpan(absolute, span.LengthUtf16).SequenceEqual(span.Text)) return null;
         SourceText.SpokenWord = span with { StartUtf16 = absolute };
-        return true;
+        return span.StartUtf16;
     }
 
     private void PauseClicked(object? sender, EventArgs args)
@@ -403,6 +480,7 @@ public partial class ReadingPage : ContentPage
         speechPaused = !speechPaused;
         PauseSpeech.Text = speechPaused ? "Продовжити" : "Пауза";
         SpeechStatus.Text = speechPaused ? "Озвучення призупинено." : "Озвучення поточного речення…";
+        if (speechPaused) SaveSpeechResume();
     }
 
     private void StopClicked(object? sender, EventArgs args) => StopSpeech();
@@ -417,5 +495,7 @@ public partial class ReadingPage : ContentPage
         PauseSpeech.IsEnabled = false;
         PauseSpeech.Text = "Пауза";
         SpeechStatus.Text = "Озвучення зупинено.";
+        SaveSpeechResume();
+        RefreshSpeechResume();
     }
 }

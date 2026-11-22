@@ -58,6 +58,10 @@ public sealed class CoreClient : IDisposable
 
     public void Position(string id, int position) =>
         Call<JsonElement>(new { version = 1, operation = "position", id, position });
+    public SpeechResume? SpeechResume(string id) =>
+        Call<SpeechResume?>(new { version = 1, operation = "speech_resume", id });
+    public void SetSpeechResume(string id, string sentenceId, string textHash, int? offsetUtf16) =>
+        Call<JsonElement>(new { version = 1, operation = "set_speech_resume", id, sentenceId, textHash, offsetUtf16 });
     public void SetBookmark(string id, string sentenceId, bool saved) =>
         Call<JsonElement>(new { version = 1, operation = "set_bookmark", id, sentenceId, saved });
     public void SetReviewedTranslation(string id, string sentenceId, string target, string text) =>

@@ -35,6 +35,8 @@ pub struct Document {
     pub text: String,
     pub sentences: Vec<Sentence>,
     pub position: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speech_resume: Option<SpeechResume>,
     #[serde(default)]
     pub bookmarks: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -48,6 +50,31 @@ pub struct Document {
     pub created_at: i64,
     pub source_hash: String,
     pub format: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeechResume {
+    pub sentence_id: String,
+    pub text_hash: String,
+    pub offset_utf16: usize,
+}
+
+impl SpeechResume {
+    fn matches(&self, sentence: &Sentence) -> bool {
+        if self.sentence_id != sentence.id
+            || self.text_hash != format!("{:x}", Sha256::digest(sentence.text.as_bytes()))
+        {
+            return false;
+        }
+        let mut offset = 0;
+        for grapheme in sentence.text.graphemes(true) {
+            if offset >= self.offset_utf16 {
+                return offset == self.offset_utf16;
+            }
+            offset += grapheme.encode_utf16().count();
+        }
+        false
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -244,6 +271,8 @@ impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         let connection = Connection::open(path).map_err(|e| e.to_string())?;
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, body TEXT NOT NULL, source_hash TEXT UNIQUE NOT NULL); CREATE TABLE IF NOT EXISTS originals (document_id TEXT PRIMARY KEY REFERENCES documents(id), name TEXT NOT NULL, bytes BLOB NOT NULL); CREATE TABLE IF NOT EXISTS vocabulary (id TEXT PRIMARY KEY, word_key TEXT UNIQUE NOT NULL, body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS review_events (id INTEGER PRIMARY KEY, entry_id TEXT NOT NULL, direction TEXT NOT NULL, grade INTEGER NOT NULL, reviewed_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS translation_cache (key TEXT PRIMARY KEY, body TEXT NOT NULL); PRAGMA user_version=1;").map_err(|e| e.to_string())?;
+        connection.execute("CREATE TABLE IF NOT EXISTS speech_resume (document_id TEXT PRIMARY KEY REFERENCES documents(id), body TEXT NOT NULL)", [])
+            .map_err(|e| e.to_string())?;
         Ok(Self {
             connection,
             model_directory: path.with_file_name("translation-models"),
@@ -263,11 +292,33 @@ impl Store {
             })
             .collect()
         }
+        let mut documents = self
+            .connection
+            .prepare("SELECT d.body, s.body FROM documents d LEFT JOIN speech_resume s ON s.document_id=d.id ORDER BY d.rowid DESC")
+            .map_err(|e| e.to_string())?;
+        let documents = documents
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })
+            .map_err(|e| e.to_string())?
+            .map(|row| {
+                let (body, resume) = row.map_err(|e| e.to_string())?;
+                let mut document: Document =
+                    serde_json::from_str(&body).map_err(|e| e.to_string())?;
+                document.speech_resume = resume
+                    .as_deref()
+                    .and_then(|body| serde_json::from_str::<SpeechResume>(body).ok())
+                    .filter(|resume| {
+                        document
+                            .sentences
+                            .iter()
+                            .any(|sentence| resume.matches(sentence))
+                    });
+                Ok(document)
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(Snapshot {
-            documents: rows(
-                &self.connection,
-                "SELECT body FROM documents ORDER BY rowid DESC",
-            )?,
+            documents,
             vocabulary: rows(
                 &self.connection,
                 "SELECT body FROM vocabulary ORDER BY rowid DESC",
@@ -352,8 +403,9 @@ impl Store {
                     return Err("Некоректні параметри імпорту PDF".into());
                 };
                 let mut updated = existing.clone();
-                self.edit_document(&existing.id, |document| {
+                self.edit_document(&existing.id, |document, tx| {
                     ocr::update_transcript(document, text)?;
+                    Self::discard_changed_speech_resume(tx, document)?;
                     document.ocr_lines = Some(lines);
                     document.ocr_pdf_pages = Some(pages);
                     document.pdf_page_starts = Some(offsets);
@@ -384,6 +436,7 @@ impl Store {
             language: language.into(),
             text,
             position: 0,
+            speech_resume: None,
             bookmarks: Vec::new(),
             reviewed_translations: BTreeMap::new(),
             ocr_lines,
@@ -418,7 +471,7 @@ impl Store {
     fn edit_document(
         &mut self,
         id: &str,
-        edit: impl FnOnce(&mut Document) -> Result<bool>,
+        edit: impl FnOnce(&mut Document, &Connection) -> Result<bool>,
     ) -> Result<()> {
         let tx = self
             .connection
@@ -428,7 +481,7 @@ impl Store {
             .query_row("SELECT body FROM documents WHERE id=?", [id], |r| r.get(0))
             .map_err(|e| e.to_string())?;
         let mut document: Document = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-        if edit(&mut document)? {
+        if edit(&mut document, &tx)? {
             let body = serde_json::to_string(&document).map_err(|e| e.to_string())?;
             tx.execute("UPDATE documents SET body=? WHERE id=?", params![body, id])
                 .map_err(|e| e.to_string())?;
@@ -443,7 +496,7 @@ impl Store {
         correction: Option<String>,
     ) -> Result<()> {
         let original = self.original(id)?;
-        self.edit_document(id, |document| {
+        self.edit_document(id, |document, tx| {
             let lines = document
                 .ocr_lines
                 .as_mut()
@@ -475,12 +528,13 @@ impl Store {
             };
             ocr::update_transcript(document, text)?;
             document.pdf_page_starts = offsets;
+            Self::discard_changed_speech_resume(tx, document)?;
             Ok(true)
         })
     }
 
     pub fn position(&mut self, id: &str, position: usize) -> Result<()> {
-        self.edit_document(id, |document| {
+        self.edit_document(id, |document, _| {
             if position >= document.sentences.len() {
                 return Err("Некоректна позиція".into());
             }
@@ -490,8 +544,76 @@ impl Store {
         })
     }
 
+    fn read_speech_resume(connection: &Connection, id: &str) -> Result<Option<SpeechResume>> {
+        use rusqlite::OptionalExtension;
+        let body: Option<String> = connection
+            .query_row(
+                "SELECT body FROM speech_resume WHERE document_id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        body.as_deref()
+            .map(|body| serde_json::from_str(body).map_err(|e| e.to_string()))
+            .transpose()
+    }
+
+    fn discard_changed_speech_resume(connection: &Connection, document: &Document) -> Result<()> {
+        if Self::read_speech_resume(connection, &document.id)?.is_some_and(|resume| {
+            !document
+                .sentences
+                .iter()
+                .any(|sentence| resume.matches(sentence))
+        }) {
+            connection
+                .execute(
+                    "DELETE FROM speech_resume WHERE document_id=?1",
+                    [&document.id],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    pub fn speech_resume(&self, id: &str) -> Result<Option<SpeechResume>> {
+        Self::read_speech_resume(&self.connection, id)
+    }
+
+    pub fn set_speech_resume(
+        &mut self,
+        id: &str,
+        sentence_id: &str,
+        text_hash: &str,
+        offset_utf16: Option<usize>,
+    ) -> Result<()> {
+        if let Some(offset_utf16) = offset_utf16 {
+            let resume = SpeechResume {
+                sentence_id: sentence_id.into(),
+                text_hash: text_hash.into(),
+                offset_utf16,
+            };
+            Self::write_speech_resume(&self.connection, id, &resume)
+        } else {
+            self.connection.execute(
+                "DELETE FROM speech_resume WHERE document_id=?1 AND json_extract(body, '$.sentenceId')=?2 AND json_extract(body, '$.textHash')=?3",
+                params![id, sentence_id, text_hash],
+            ).map_err(|e| e.to_string())?;
+            Ok(())
+        }
+    }
+
+    fn write_speech_resume(connection: &Connection, id: &str, resume: &SpeechResume) -> Result<()> {
+        let body = serde_json::to_string(resume).map_err(|e| e.to_string())?;
+        connection.execute(
+            "INSERT INTO speech_resume VALUES (?1,?2) ON CONFLICT(document_id) DO UPDATE SET body=excluded.body WHERE body!=excluded.body",
+            params![id, body],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     pub fn set_bookmark(&mut self, id: &str, sentence_id: &str, saved: bool) -> Result<()> {
-        self.edit_document(id, |document| {
+        self.edit_document(id, |document, _| {
             if !document
                 .sentences
                 .iter()
@@ -521,7 +643,7 @@ impl Store {
         valid_language(target)?;
         let text = text.trim();
         validate_translation(text)?;
-        self.edit_document(id, |document| {
+        self.edit_document(id, |document, _| {
             if target == document.language {
                 return Err("Мова перекладу має відрізнятися від мови джерела".into());
             }
@@ -725,6 +847,9 @@ impl Store {
             d.pdf_page_starts = pdf_page_starts;
             d.sentences = segment(&d.text, &d.id);
             d.position = d.position.min(d.sentences.len().saturating_sub(1));
+            d.speech_resume = d
+                .speech_resume
+                .filter(|resume| d.sentences.iter().any(|sentence| resume.matches(sentence)));
             if !d.bookmarks.is_empty() || !d.reviewed_translations.is_empty() {
                 let known: std::collections::HashSet<_> = d
                     .sentences
@@ -760,6 +885,8 @@ impl Store {
         }
         let tx = self.connection.transaction().map_err(|e| e.to_string())?;
         for (d, o) in validated {
+            let mut d = d;
+            let speech_resume = d.speech_resume.take();
             let inserted = tx
                 .execute(
                     "INSERT OR IGNORE INTO documents VALUES (?1,?2,?3)",
@@ -767,6 +894,9 @@ impl Store {
                 )
                 .map_err(|e| e.to_string())?;
             if inserted > 0 {
+                if let Some(resume) = speech_resume {
+                    Self::write_speech_resume(&tx, &d.id, &resume)?;
+                }
                 tx.execute(
                     "INSERT INTO originals VALUES (?1,?2,?3)",
                     params![d.id, o.name, o.bytes],
@@ -920,6 +1050,93 @@ mod tests {
         assert_eq!(restored.export().unwrap().reviews.len(), 1);
         restored.restore(db.export().unwrap()).unwrap();
         assert_eq!(restored.export().unwrap().reviews.len(), 1);
+    }
+    #[test]
+    fn speech_checkpoint_restarts_and_survives_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("speech.db");
+        let mut db = Store::open(&path).unwrap();
+        let text = "😀 Cafe\u{301} continue.";
+        let doc = db.import("speech.txt", text.as_bytes(), "en").unwrap();
+        let sentence = &doc.sentences[0];
+        let hash = format!("{:x}", Sha256::digest(sentence.text.as_bytes()));
+        let offset = "😀 Cafe\u{301} ".encode_utf16().count();
+        db.set_speech_resume(&doc.id, &sentence.id, &hash, Some(offset))
+            .unwrap();
+        // A completion for another sentence must leave the current checkpoint intact.
+        db.set_speech_resume(&doc.id, "other", &hash, None).unwrap();
+        drop(db);
+
+        let db = Store::open(&path).unwrap();
+        assert_eq!(
+            db.speech_resume(&doc.id).unwrap().unwrap().offset_utf16,
+            offset
+        );
+        let mut restored = Store::open(&dir.path().join("restored-speech.db")).unwrap();
+        let backup = db.export().unwrap();
+        let archive = serde_json::to_vec(&backup).unwrap();
+        restored
+            .restore(serde_json::from_slice(&archive).unwrap())
+            .unwrap();
+        assert_eq!(
+            restored
+                .speech_resume(&doc.id)
+                .unwrap()
+                .unwrap()
+                .offset_utf16,
+            offset
+        );
+        restored
+            .set_speech_resume(&doc.id, &sentence.id, &hash, None)
+            .unwrap();
+        assert!(restored.speech_resume(&doc.id).unwrap().is_none());
+
+        for invalid in [1, offset - 2, sentence.end_utf16] {
+            // Reject progress that splits a surrogate or combining sequence, or points past speech.
+            let mut corrupt = backup.clone();
+            corrupt.snapshot.documents[0]
+                .speech_resume
+                .as_mut()
+                .unwrap()
+                .offset_utf16 = invalid;
+            let mut clean = Store::open(Path::new(":memory:")).unwrap();
+            clean.restore(corrupt).unwrap();
+            assert!(clean.speech_resume(&doc.id).unwrap().is_none());
+        }
+    }
+    #[test]
+    fn changing_recognized_sentence_discards_its_speech_checkpoint() {
+        let mut db = Store::open(Path::new(":memory:")).unwrap();
+        let doc = db
+            .import_image(
+                "photo.png",
+                b"\x89PNG\r\n\x1a\n",
+                "en",
+                vec![ocr::OcrLine {
+                    page: 0,
+                    text: "This is the original sentence.".into(),
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.9,
+                    height: 0.2,
+                    confidence: None,
+                    correction: None,
+                }],
+            )
+            .unwrap();
+        let sentence = &doc.sentences[0];
+        let hash = format!("{:x}", Sha256::digest(sentence.text.as_bytes()));
+        db.set_speech_resume(&doc.id, &sentence.id, &hash, Some(5))
+            .unwrap();
+        db.correct_ocr_line(&doc.id, 0, Some("This is the corrected sentence.".into()))
+            .unwrap();
+        assert_eq!(
+            db.snapshot().unwrap().documents[0].sentences[0].id,
+            sentence.id
+        );
+        assert!(db.speech_resume(&doc.id).unwrap().is_none());
+        db.correct_ocr_line(&doc.id, 0, None).unwrap();
+        assert!(db.speech_resume(&doc.id).unwrap().is_none());
     }
     #[test]
     fn rejects_corruption_and_unsupported_inputs() {

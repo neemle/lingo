@@ -57,6 +57,18 @@ pub enum Command {
         id: String,
         position: usize,
     },
+    SpeechResume {
+        id: String,
+    },
+    SetSpeechResume {
+        id: String,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        #[serde(rename = "textHash")]
+        text_hash: String,
+        #[serde(rename = "offsetUtf16")]
+        offset_utf16: Option<usize>,
+    },
     SetBookmark {
         id: String,
         #[serde(rename = "sentenceId")]

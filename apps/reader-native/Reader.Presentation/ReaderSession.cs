@@ -99,6 +99,11 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
 
     public Task MoveAsync(int delta) => SelectSentenceAsync((Document?.Position ?? 0) + delta);
 
+    public SpeechResume? GetSpeechResume(string id) => client.SpeechResume(id);
+
+    public void SetSpeechResume(string id, string sentenceId, string textHash, int? offsetUtf16) =>
+        client.SetSpeechResume(id, sentenceId, textHash, offsetUtf16);
+
     public Task SelectSentenceAsync(int position) => RunAsync(() =>
     {
         if (Document is not { } doc || position < 0 || position >= doc.Sentences.Length) return Read();

@@ -57,6 +57,8 @@ remain separate gates. The explicit text/voice probe is available in Settings.
 
 Speech uses installed system voices, supports pause/resume, and can advance through sentences while saving progress.
 The reader remembers the voice per source language, speed, and continuous reading setting.
+If the voice supplies word boundaries, **Продовжити зі збереженого слова** resumes at the last saved word
+after reopening. The checkpoint is included in backups and discarded if the sentence text changes.
 Individual words are highlighted only when the voice provides matching boundary events. Automatic OCR suggestions,
 additional offline translation pairs,
 mobile releases, signed installers and the 4 GiB hardware target remain unverified or unimplemented.

@@ -54,6 +54,13 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             correction,
         } => value(store.correct_ocr_line(&id, index, correction)),
         Command::Position { id, position } => value(store.position(&id, position)),
+        Command::SpeechResume { id } => value(store.speech_resume(&id)),
+        Command::SetSpeechResume {
+            id,
+            sentence_id,
+            text_hash,
+            offset_utf16,
+        } => value(store.set_speech_resume(&id, &sentence_id, &text_hash, offset_utf16)),
         Command::SetBookmark {
             id,
             sentence_id,
