@@ -108,6 +108,9 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::AnalyzeLinguistics { id, sentence_id, revision_id, scope } => {
             value(store.cached_linguistic_analysis(&id, &sentence_id, &revision_id, scope))
         }
+        Command::PrefetchLinguistics { id, sentence_id, revision_id, step } => {
+            value(store.prefetch_linguistics(&id, &sentence_id, &revision_id, step))
+        }
         Command::PdfOcrNeededPages { id, center } => value(store.pdf_ocr_needed_pages(&id, center)),
         Command::ClaimPdfOcrPage { id } => value(store.claim_pdf_ocr_page(&id)),
         Command::RetryPdfOcrPage { id, page, token, canceled } => {

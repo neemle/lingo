@@ -77,6 +77,13 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             }
             Command::AnalyzeLinguistics { id, sentence_id, revision_id, scope }
         }
+        Command::PrefetchLinguistics { id, sentence_id, revision_id, step } => {
+            let worker = registry::lock()?.store(handle)?.prepare_store_worker();
+            if let Some(worker) = worker {
+                return encode_job(worker.prefetch_linguistics(&id, &sentence_id, &revision_id, step));
+            }
+            Command::PrefetchLinguistics { id, sentence_id, revision_id, step }
+        }
         Command::ModelTransfer { package, action } => {
             let transfer = registry::lock()?.store(handle)?
                 .prepare_model_transfer(package).map_err(gateway::domain)?;

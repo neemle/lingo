@@ -208,6 +208,12 @@ public sealed class CoreClient : IDisposable
     public LinguisticAnalysis AnalyzeSentence(string id, string sentenceId, string revisionId, int start) =>
         AnalyzeLinguistics(id, sentenceId, revisionId, new { kind = "sentence", start });
 
+    public void PrefetchLinguistics(string id, string sentenceId, string revisionId, int step) =>
+        CallIndependent<JsonElement>(new
+        {
+            version = 1, operation = "prefetch_linguistics", id, sentenceId, revisionId, step,
+        });
+
     public LinguisticAnalysis AnalyzeExpression(string id, string sentenceId, string revisionId, int[] memberStartsUtf16) =>
         AnalyzeLinguistics(id, sentenceId, revisionId, new { kind = "expression", memberStartsUtf16 });
 

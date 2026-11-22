@@ -6,6 +6,70 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage
 {
+    private sealed record AnalysisAnchor(string DocumentId, string Revision, string SentenceId, string Language);
+    private static readonly SemaphoreSlim AnalysisPrefetchGate = new(1, 1);
+    private AnalysisAnchor? analysisPrefetchAnchor;
+    private CancellationTokenSource? analysisPrefetchRun;
+
+    private void SyncAnalysisPrefetch()
+    {
+        var session = AppState.Session;
+        if (!readingPageActive || PdfPageNotice.IsVisible ||
+            session.Document is not { CurrentRevisionId: { } revision } document ||
+            session.Sentence is not { } sentence)
+        {
+            StopAnalysisPrefetch();
+            return;
+        }
+        if (session.Busy) return;
+
+        var anchor = new AnalysisAnchor(document.Id, revision, sentence.Id, document.Language);
+        if (analysisPrefetchAnchor == anchor) return;
+        StopAnalysisPrefetch();
+        analysisPrefetchAnchor = anchor;
+        var run = new CancellationTokenSource();
+        analysisPrefetchRun = run;
+        _ = PrefetchAnalysisAsync(session, anchor, run);
+    }
+
+    private async Task PrefetchAnalysisAsync(ReaderSession session, AnalysisAnchor anchor, CancellationTokenSource run)
+    {
+        var cancellation = run.Token;
+        try
+        {
+            await Task.Delay(500, cancellation);
+            await AnalysisPrefetchGate.WaitAsync(cancellation);
+            try
+            {
+                foreach (var step in new[] { 0, 1, -1 })
+                {
+                    while (session.Busy || utteranceActive || translating)
+                        await Task.Delay(250, cancellation);
+                    cancellation.ThrowIfCancellationRequested();
+                    if (analysisPrefetchAnchor != anchor) return;
+                    await session.PrefetchLinguisticsAsync(
+                        anchor.DocumentId, anchor.SentenceId, anchor.Revision, step, cancellation);
+                }
+            }
+            finally { AnalysisPrefetchGate.Release(); }
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) {}
+        catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
+        finally
+        {
+            if (analysisPrefetchRun == run) analysisPrefetchRun = null;
+            run.Dispose();
+        }
+    }
+
+    private void StopAnalysisPrefetch()
+    {
+        var run = analysisPrefetchRun;
+        analysisPrefetchRun = null;
+        analysisPrefetchAnchor = null;
+        run?.Cancel();
+    }
+
     private ExpressionMatch[] selectedExpressions = [];
 
     private void ShowExpressionOptions(WordLookup? lookup, TextSelection selected)
@@ -73,6 +137,7 @@ public partial class ReadingPage
     private async Task ShowAnalysisPageAsync(string title, string text, Func<int, Task<LinguisticAnalysis>> load)
     {
         if (!readingPageActive) return;
+        StopAnalysisPrefetch();
         try { await Navigation.PushModalAsync(new AnalysisPage(title, text, load)); }
         catch (Exception error) { await DisplayAlertAsync(title, error.Message, "Гаразд"); }
     }

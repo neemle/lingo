@@ -69,6 +69,7 @@ public partial class ReadingPage : ContentPage
         BindingContext = AppState.Session;
         AppState.Session.PropertyChanged += SessionChanged;
         SyncReaderPdf();
+        SyncAnalysisPrefetch();
         BeginReadingHistory();
         UpdateHighlight();
         _ = RestoreReadingWordAsync();
@@ -90,6 +91,7 @@ public partial class ReadingPage : ContentPage
     {
         readingPageActive = false;
         StopReaderPdf();
+        StopAnalysisPrefetch();
         CancelScheduledTranslation();
         EndReadingHistory(keepVisit: showingMeanings);
         StopSpeech();
@@ -112,6 +114,7 @@ public partial class ReadingPage : ContentPage
         if (args.PropertyName == nameof(ReaderSession.Snapshot))
         {
             SyncReaderPdf();
+            SyncAnalysisPrefetch();
             SyncReadingHistory();
             UpdateHighlight();
             _ = RestoreReadingWordAsync();

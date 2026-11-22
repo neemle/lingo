@@ -156,6 +156,7 @@ fn validate(command: &Command) -> Result<()> {
         | Command::SetReadingCursor { id, sentence_id, revision_id, .. }
         | Command::ScheduleTranslationWindow { id, sentence_id, revision_id, .. }
         | Command::AnalyzeLinguistics { id, sentence_id, revision_id, .. }
+        | Command::PrefetchLinguistics { id, sentence_id, revision_id, .. }
             if !valid_token_address(id, sentence_id)
                 || revision_id.len() != 64
                 || !revision_id.bytes().all(|byte| byte.is_ascii_hexdigit()) =>

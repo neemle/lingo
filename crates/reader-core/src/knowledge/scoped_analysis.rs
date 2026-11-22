@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 
 const SENTENCE_PAGE_SIZE: usize = 24;
 const MAX_READINGS: usize = 8;
+const MAX_PREFETCH_SENTENCE_BYTES: usize = 4096;
 // Bump when generated annotations or their serialized representation changes.
 const ANNOTATION_VERSION: u32 = 1;
 
@@ -108,24 +109,73 @@ impl Store {
     ) -> Result<Value> {
         let document = self.token_document(document_id)?;
         let sentence = analysis_sentence(&document, sentence_id, expected_revision)?;
-        let language = document.language.as_str();
+        let language = &document.language;
+        let index = self.open_knowledge_index(language)?;
+        let lexical = lexicon::index_identity(&self.knowledge_directory, language);
+        self.cached_scope(
+            &document, sentence, expected_revision, &scope, versioned_index(&index)?, lexical,
+        )
+    }
+
+    /// Warm one sentence in the current reading window. A changed cursor or
+    /// revision makes queued work obsolete.
+    pub fn prefetch_linguistics(
+        &self, document_id: &str, anchor_id: &str, expected_revision: &str, step: i8,
+    ) -> Result<()> {
+        if !(-1..=1).contains(&step) {
+            return Err("Фоновий аналіз доступний лише для сусідніх речень.".into());
+        }
+        let document = self.token_document(document_id)?;
+        if document.current_revision_id.as_deref() != Some(expected_revision)
+            || document.sentences.get(document.position).map(|item| item.id.as_str()) != Some(anchor_id)
+        {
+            return Ok(());
+        }
+        let Some(position) = document.position.checked_add_signed(isize::from(step)) else {
+            return Ok(());
+        };
+        let Some(sentence) = document.sentences.get(position)
+            .filter(|sentence| sentence.text.len() <= MAX_PREFETCH_SENTENCE_BYTES)
+        else {
+            return Ok(());
+        };
+        let language = &document.language;
         let index = self.open_knowledge_index(language)?;
         let lookup_index = versioned_index(&index)?;
-        let grammar = lookup_index.map(|(pack, _, version)| (pack.sha256, version));
         let lexical = lexicon::index_identity(&self.knowledge_directory, language);
+        if lookup_index.is_some() || lexical.is_some() {
+            self.cached_scope(
+                &document, sentence, expected_revision, &AnalysisScope::Sentence { start: 0 },
+                lookup_index, lexical,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn cached_scope(
+        &self,
+        document: &Document,
+        sentence: &Sentence,
+        revision: &str,
+        scope: &AnalysisScope,
+        lookup_index: Option<(&Pack, &Connection, u32)>,
+        lexical: Option<(&str, u32)>,
+    ) -> Result<Value> {
+        let language = document.language.as_str();
+        let grammar = lookup_index.map(|(pack, _, version)| (pack.sha256, version));
         let address = serde_json::to_vec(&(
-            ANNOTATION_VERSION, expected_revision, sentence_id, language, grammar, lexical, &scope,
+            ANNOTATION_VERSION, revision, &sentence.id, language, grammar, lexical, scope,
         ))
         .map_err(|error| error.to_string())?;
         let key = Sha256::digest(address);
-        if let Some(annotation) = annotation_cache::read(&self.connection, document_id, key.as_ref()) {
+        if let Some(annotation) = annotation_cache::read(&self.connection, &document.id, key.as_ref()) {
             return Ok(annotation);
         }
         let analysis =
-            self.analyze_scope(&document, sentence, expected_revision, &scope, lookup_index)?;
+            self.analyze_scope(document, sentence, revision, scope, lookup_index)?;
         let annotation = serde_json::to_value(analysis).map_err(|error| error.to_string())?;
         if lexicon::index_identity(&self.knowledge_directory, language) == lexical {
-            annotation_cache::write(&self.connection, document_id, key.as_ref(), &annotation);
+            annotation_cache::write(&self.connection, &document.id, key.as_ref(), &annotation);
         }
         Ok(annotation)
     }

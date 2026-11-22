@@ -150,6 +150,7 @@ public partial class ReadingPage
         if (next < 0 || next >= window.PageCount) return;
 
         movingPdfPage = true;
+        StopAnalysisPrefetch();
         CancelReaderPdfOcr();
         StopSpeech();
         CancelScheduledTranslation();
@@ -195,8 +196,9 @@ public partial class ReadingPage
     private void ShowPdfPageNotice(string? message)
     {
         var show = message is not null;
+        var stateChanged = PdfPageNotice.IsVisible != show;
         PdfPageMessage.Text = message;
-        if (show && !PdfPageNotice.IsVisible)
+        if (show && stateChanged)
         {
             StopSpeech();
             CancelScheduledTranslation();
@@ -207,6 +209,7 @@ public partial class ReadingPage
         PdfPageNotice.IsVisible = show;
         ReadingColumns.IsVisible = ReaderControls.IsVisible = !show;
         SourceHint.IsVisible = !show && SourcePane.IsVisible;
+        if (stateChanged) SyncAnalysisPrefetch();
     }
 
     private void UpdatePdfPageButtons()

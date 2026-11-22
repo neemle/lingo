@@ -132,6 +132,14 @@ pub enum Command {
         revision_id: String,
         scope: reader_core::knowledge::AnalysisScope,
     },
+    PrefetchLinguistics {
+        id: String,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        #[serde(rename = "revisionId")]
+        revision_id: String,
+        step: i8,
+    },
     PdfOcrNeededPages {
         id: String,
         center: u16,

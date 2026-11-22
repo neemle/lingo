@@ -425,6 +425,13 @@ impl StoreWorker {
             .cached_linguistic_analysis(id, sentence_id, revision, scope)
     }
 
+    pub fn prefetch_linguistics(
+        self, id: &str, anchor_id: &str, revision: &str, step: i8,
+    ) -> Result<()> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?
+            .prefetch_linguistics(id, anchor_id, revision, step)
+    }
+
     pub fn translate_sentence(
         self,
         document_id: &str,
