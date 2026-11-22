@@ -102,6 +102,9 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             value(store.select_detached_pdf_sentence(&id, page, position, sentence_id.as_deref())),
         Command::FindDetachedPdfText { id, query, start, limit, target } =>
             value(store.find_detached_pdf_text(&id, &query, start, limit, target.as_deref())),
+        Command::DetachedPdfOcr { id, page } => value(store.detached_pdf_ocr(&id, page)),
+        Command::CorrectDetachedPdfOcr { id, page, revision, index, correction } =>
+            value(store.correct_detached_pdf_ocr(&id, page, &revision, index, correction)),
         Command::DetachedPdfAnnotations { id, page } => value(store.detached_pdf_annotations(&id, page)),
         Command::UpdateDetachedPdfAnnotation { id, page, sentence_id, change } =>
             value(store.update_detached_pdf_annotation(&id, page, &sentence_id, change)),

@@ -93,7 +93,7 @@ fn needed_pages(
         }
         let pending = match pdf_detached_pages::source_language(db, &document.id, page)? {
             Some(language) => language.as_deref().is_some_and(|value| value != document.language.as_str())
-                && !pdf_detached_pages::has_annotations(db, &document.id, page)?,
+                && !pdf_detached_pages::has_local_edits(db, &document.id, page)?,
             None => should_refresh(document, page)
                 || (completed.binary_search(&page).is_err() && !has_ocr_lines(document, page)),
         };
@@ -249,7 +249,7 @@ impl Store {
                     result.text = text;
                     result.state = PdfReadPageState::Detached;
                     result.refresh_pending = language.is_some_and(|language| language != document.language.as_str())
-                        && !pdf_detached_pages::has_annotations(&self.connection, id, result.page)?;
+                        && !pdf_detached_pages::has_local_edits(&self.connection, id, result.page)?;
                 }
             }
             pages.push(result);
@@ -420,7 +420,7 @@ impl Store {
             if let Some(previous_language) = pdf_detached_pages::source_language(tx, id, page)? {
                 if token.is_some() && previous_language.as_deref()
                     .is_some_and(|previous| previous != document.language.as_str())
-                    && !pdf_detached_pages::has_annotations(tx, id, page)?
+                    && !pdf_detached_pages::has_local_edits(tx, id, page)?
                 {
                     if let Some(text) = text_layer {
                         pdf_detached_pages::write_text_layer(tx, id, page, text.trim())?;

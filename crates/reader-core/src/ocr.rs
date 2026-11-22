@@ -176,7 +176,12 @@ pub(crate) fn refresh_provenance(document: &mut crate::Document) {
     let Some(lines) = document.ocr_lines.as_mut() else {
         return;
     };
-    let canonical = &document.text;
+    refresh_line_provenance(&document.text, lines, document.pdf_page_starts.as_deref());
+}
+
+pub(crate) fn refresh_line_provenance(
+    canonical: &str, lines: &mut [OcrLine], page_starts: Option<&[Option<usize>]>,
+) {
     let mut byte = 0;
     let mut utf16 = 0;
     let mut previous_page = None;
@@ -184,7 +189,7 @@ pub(crate) fn refresh_provenance(document: &mut crate::Document) {
     for line in lines {
         let new_page = previous_page != Some(line.page);
         let had_previous_page = previous_page.replace(line.page).is_some();
-        if let Some(starts) = document.pdf_page_starts.as_ref().filter(|_| new_page) {
+        if let Some(starts) = page_starts.filter(|_| new_page) {
             let page_start = starts.get(usize::from(line.page)).copied().flatten();
             let skip = page_start
                 .and_then(|start| start.checked_sub(utf16))

@@ -221,6 +221,11 @@ fn validate(command: &Command) -> Result<()> {
         {
             Err(Error::new("invalid_argument", "Invalid PDF sentence translation address"))
         }
+        Command::CorrectDetachedPdfOcr { revision, .. }
+            if revision.len() != 64 || !revision.bytes().all(|ch| ch.is_ascii_hexdigit()) =>
+        {
+            Err(Error::new("invalid_argument", "Invalid PDF OCR revision"))
+        }
         Command::DeleteDocument { id }
         | Command::ReadingCursor { id }
         | Command::PendingTranslationWindow { id }
@@ -233,6 +238,8 @@ fn validate(command: &Command) -> Result<()> {
         | Command::DetachedPdfSentence { id, .. }
         | Command::FindDetachedPdfText { id, .. }
         | Command::SaveDetachedPdfWord { id, .. }
+        | Command::DetachedPdfOcr { id, .. }
+        | Command::CorrectDetachedPdfOcr { id, .. }
         | Command::DetachedPdfAnnotations { id, .. }
         | Command::AnalyzeDetachedPdf { id, .. }
         | Command::PdfOcrNeededPages { id, .. }

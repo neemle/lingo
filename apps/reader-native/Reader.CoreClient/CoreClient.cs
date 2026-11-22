@@ -135,6 +135,12 @@ public sealed class CoreClient : IDisposable
     public DetachedPdfFindPage FindDetachedPdfText(string id, string query, DetachedPdfFindCursor start, int limit, string? target = null) =>
         CallIndependent<DetachedPdfFindPage>(new { version = 1, operation = "find_detached_pdf_text", id, query, start, limit, target });
 
+    public DetachedPdfOcrPage? DetachedPdfOcr(string id, int page) =>
+        Call<DetachedPdfOcrPage?>(new { version = 1, operation = "detached_pdf_ocr", id, page });
+
+    public DetachedPdfOcrPage CorrectDetachedPdfOcr(string id, int page, string revision, int index, string? correction) =>
+        Call<DetachedPdfOcrPage>(new { version = 1, operation = "correct_detached_pdf_ocr", id, page, revision, index, correction });
+
     public DetachedPdfAnnotationItem[] DetachedPdfAnnotations(string id, int page) =>
         Call<DetachedPdfAnnotationItem[]>(new { version = 1, operation = "detached_pdf_annotations", id, page });
 

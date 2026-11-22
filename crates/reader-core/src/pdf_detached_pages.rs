@@ -6,9 +6,11 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 mod annotations;
 mod find;
+mod ocr_edit;
+pub use ocr_edit::DetachedPdfOcrPage;
 pub use find::{DetachedPdfFindCursor, DetachedPdfFindPage};
 pub use annotations::{DetachedPdfAnnotationChange, DetachedPdfAnnotationItem};
-pub(crate) use annotations::{has_annotations, has_reviewed_target};
+pub(crate) use annotations::has_reviewed_target;
 
 pub(crate) fn initialize(db: &Connection) -> Result<()> {
     db.execute_batch(
@@ -110,6 +112,17 @@ impl Store {
         let sentences = crate::segment(&text, &sentence_prefix(id, page, &revision));
         Ok((!sentences.is_empty()).then_some(CachedSentences { language, saved, sentences, revision }))
     }
+}
+
+pub(crate) fn has_local_edits(db: &Connection, id: &str, page: u16) -> Result<bool> {
+    if annotations::has_annotations(db, id, page)? {
+        return Ok(true);
+    }
+    db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pdf_detached_pages, json_each(lines)
+         WHERE document_id=?1 AND page=?2 AND json_type(value, '$.correction')='text')",
+        params![id, page], |row| row.get(0),
+    ).map_err(database_error)
 }
 
 /// A present row with no language contains a native text layer.
@@ -218,8 +231,7 @@ impl ArchivedPage {
         }
         match (&self.language, &self.lines) {
             (None, None) => Ok(()),
-            (Some(language), Some(lines))
-                if lines.iter().all(|line| line.page == self.page && line.correction.is_none()) =>
+            (Some(language), Some(lines)) if lines.iter().all(|line| line.page == self.page) =>
             {
                 crate::valid_language(language)?;
                 if ocr::recognized_lines(lines, page_count)? != self.text {

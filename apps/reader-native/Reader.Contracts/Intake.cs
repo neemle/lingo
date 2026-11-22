@@ -19,6 +19,8 @@ public sealed record DetachedPdfSentence(Sentence Sentence, int Position, int To
     public Dictionary<string, string> ReviewedTranslations { get; init; } = [];
 }
 
+public sealed record DetachedPdfOcrPage(string Revision, OcrLine[] Lines);
+
 public sealed record DetachedPdfAnnotationItem(int Position, string Text, bool Bookmarked, string? Note);
 
 public sealed record DetachedPdfFindCursor(int Page, int Position);

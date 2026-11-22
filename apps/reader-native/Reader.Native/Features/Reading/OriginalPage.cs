@@ -22,6 +22,7 @@ internal sealed class OriginalPage : ContentPage
     private CancellationTokenSource? pageOcr;
     private bool visible;
     private OcrLine[] lines;
+    private DetachedPdfOcrPage? detachedOcr;
     private readonly ReaderSession session;
     private readonly string documentId;
     private readonly Picker linePicker = new() { Title = "Розпізнані рядки" };
@@ -88,7 +89,16 @@ internal sealed class OriginalPage : ContentPage
         }
         SemanticProperties.SetDescription(linePicker, "Рядок для виправлення");
         SemanticProperties.SetDescription(reset, "Відновити початковий результат OCR для рядка");
-        linePicker.SelectedIndexChanged += (_, _) => UpdateEditButtons();
+        linePicker.SelectedIndexChanged += (_, _) =>
+        {
+            var index = LineIndex();
+            if (detachedOcr is not null && index >= 0 && lines[index].SourceSpan is { } span)
+            {
+                focus = (span.StartUtf16, span.EndUtf16);
+                UpdateOverlay();
+            }
+            UpdateEditButtons();
+        };
         edit.Clicked += async (_, _) => await CorrectAsync(LineAction.Edit);
         suggest.Clicked += async (_, _) => await CorrectAsync(LineAction.Suggest);
         reset.Clicked += async (_, _) => await CorrectAsync(LineAction.Reset);
@@ -115,7 +125,7 @@ internal sealed class OriginalPage : ContentPage
         };
         var surface = new Grid { Children = { image, overlay } };
         var tap = new TapGestureRecognizer();
-        tap.Tapped += (_, args) => SelectWordAt(surface, args);
+        tap.Tapped += (_, args) => SelectOcrAt(surface, args);
         surface.GestureRecognizers.Add(tap);
         Grid.SetRow(surface, 1);
         content.Children.Add(controls);
@@ -172,17 +182,17 @@ internal sealed class OriginalPage : ContentPage
         try
         {
             var preview = await loadPage(index);
-            if (index != pageIndex && activeWord is not null)
+            var cached = recognizeWindow is null ? null : await session.DetachedPdfOcrAsync(documentId, index);
+            if (index != pageIndex || detachedOcr is not null || cached is not null)
             {
                 activeWord = null;
-                focus = SentenceRange();
+                focus = cached is null ? SentenceRange() : null;
             }
             pageIndex = index;
             image.Source = ImageSource.FromStream(() => new MemoryStream(preview.Bytes, writable: false));
             previewWidth = preview.Width;
             previewHeight = preview.Height;
-            UpdateOverlay();
-            RebuildLineChoices();
+            ApplyOcrLines(cached);
             status.Text = pageCount == 1 ? "" : $"{pageIndex + 1} / {pageCount}";
             QueuePageOcr(index);
         }
@@ -212,16 +222,15 @@ internal sealed class OriginalPage : ContentPage
                 if (!visible || run.IsCancellationRequested || session.Busy) return;
                 await session.RefreshAsync();
                 if (!visible || run.IsCancellationRequested || pageIndex != index ||
-                    session.Document is not { } current || current.Id != documentId)
+                    session.Document?.Id != documentId)
                     return;
-                lines = current.OcrLines ?? [];
+                var cached = await session.DetachedPdfOcrAsync(documentId, index);
+                if (!visible || run.IsCancellationRequested || pageIndex != index || editing ||
+                    session.Document?.Id != documentId)
+                    return;
                 activeWord = null;
-                focus = SentenceRange();
-                toggle.IsVisible = editor.IsVisible = editStatus.IsVisible = lines.Length > 0;
-                wordCard.IsVisible = lines.Any(line => line.Words is { Length: > 0 });
-                UpdateOverlay();
-                RebuildLineChoices();
-                UpdateEditButtons();
+                focus = cached is null ? SentenceRange() : null;
+                ApplyOcrLines(cached);
             });
         }
         catch (OperationCanceledException) when (run.IsCancellationRequested) {}
@@ -234,6 +243,21 @@ internal sealed class OriginalPage : ContentPage
             if (pageOcr == run) pageOcr = null;
             run.Dispose();
         }
+    }
+
+    private void ApplyOcrLines(DetachedPdfOcrPage? cached)
+    {
+        var enteringDetachedOcr = detachedOcr is null && cached is not null;
+        detachedOcr = cached;
+        lines = cached?.Lines ?? session.Document?.OcrLines ?? [];
+        toggle.IsVisible = editor.IsVisible = editStatus.IsVisible = lines.Any(line => line.Page == pageIndex);
+        wordCard.IsVisible = cached is null &&
+            lines.Any(line => line.Page == pageIndex && line.Words is { Length: > 0 });
+        if (enteringDetachedOcr) overlay.IsVisible = true;
+        if (!toggle.IsVisible) overlay.IsVisible = false;
+        toggle.Text = OverlayLabel();
+        RebuildLineChoices();
+        UpdateOverlay();
     }
 
     private string OverlayLabel() => overlay.IsVisible ? "Приховати області тексту" : "Показати області тексту";
@@ -254,7 +278,7 @@ internal sealed class OriginalPage : ContentPage
             fittedWidth, fittedHeight);
     }
 
-    private void SelectWordAt(View surface, TappedEventArgs args)
+    private void SelectOcrAt(View surface, TappedEventArgs args)
     {
         if (loading || editing || leavingOriginal || session.Busy || args.GetPosition(surface) is not { } point) return;
         var fitted = AspectFit(new RectF(0, 0, (float)surface.Width, (float)surface.Height), previewWidth, previewHeight);
@@ -266,7 +290,16 @@ internal sealed class OriginalPage : ContentPage
         for (var choice = 0; choice < currentLineIndices.Length; choice++)
         {
             var index = currentLineIndices[choice];
-            foreach (var word in lines[index].Words ?? [])
+            var line = lines[index];
+            if (detachedOcr is not null)
+            {
+                if (x < line.X || x >= line.X + line.Width || y < line.Y || y >= line.Y + line.Height) continue;
+                overlay.IsVisible = true;
+                toggle.Text = OverlayLabel();
+                linePicker.SelectedIndex = choice;
+                return;
+            }
+            foreach (var word in line.Words ?? [])
             {
                 if (x < word.X || x >= word.X + word.Width || y < word.Y || y >= word.Y + word.Height ||
                     CurrentWord(index, word) is not { } selected) continue;
@@ -284,7 +317,8 @@ internal sealed class OriginalPage : ContentPage
 
     private TextSelection? CurrentWord(int index, OcrWord word)
     {
-        if (session.Document is not { OcrLines: { } current } document || document.Id != documentId ||
+        if (detachedOcr is not null || session.Document is not { OcrLines: { } current } document ||
+            document.Id != documentId ||
             index < 0 || index >= current.Length || current[index].Page != pageIndex ||
             current[index].Words?.Contains(word) != true || word.SourceSpan is not { } span ||
             span.StartUtf16 < 0 || span.EndUtf16 <= span.StartUtf16 || span.EndUtf16 > document.Text.Length)
@@ -431,6 +465,7 @@ internal sealed class OriginalPage : ContentPage
         if (index < 0 || loading || editing || leavingOriginal || session.Busy || session.Document is not { } document ||
             document.Id != documentId) return;
         var line = lines[index];
+        var cached = detachedOcr;
         editing = true;
         UpdateEditButtons();
         try
@@ -453,22 +488,27 @@ internal sealed class OriginalPage : ContentPage
                 text = await PickSuggestionAsync(document.Language, line.Correction ?? line.Text);
                 if (text is null) return;
             }
-            if (session.Document?.Id != documentId || session.Document.OcrLines is not { } current ||
-                index >= current.Length || current[index].Page != line.Page || current[index].Text != line.Text ||
-                current[index].Correction != line.Correction) return;
-            await session.CorrectOcrLineAsync(documentId, index, text);
-            if (session.Error.Length != 0)
+            if (session.Document?.Id != documentId) return;
+            if (cached is not null)
             {
-                editStatus.Text = session.Error;
-                return;
+                var updated = await session.CorrectDetachedPdfOcrAsync(documentId, line.Page, cached.Revision, index, text);
+                activeWord = null;
+                ApplyOcrLines(updated);
             }
-            if (session.Document?.OcrLines is { } updated)
+            else
             {
-                lines = updated;
+                if (session.Document?.OcrLines is not { } current || index >= current.Length ||
+                    current[index].Page != line.Page || current[index].Text != line.Text ||
+                    current[index].Correction != line.Correction) return;
+                await session.CorrectOcrLineAsync(documentId, index, text);
+                if (session.Error.Length != 0)
+                {
+                    editStatus.Text = session.Error;
+                    return;
+                }
                 activeWord = null;
                 focus = SentenceRange();
-                UpdateOverlay();
-                RebuildLineChoices();
+                ApplyOcrLines(null);
             }
             editStatus.Text = action == LineAction.Reset ? "Початковий текст відновлено." : "Виправлення збережено.";
         }

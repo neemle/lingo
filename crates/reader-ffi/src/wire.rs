@@ -125,6 +125,14 @@ pub enum Command {
         start: reader_core::DetachedPdfFindCursor,
         limit: usize,
     },
+    DetachedPdfOcr { id: String, page: u16 },
+    CorrectDetachedPdfOcr {
+        id: String,
+        page: u16,
+        revision: String,
+        index: usize,
+        correction: Option<String>,
+    },
     DetachedPdfAnnotations { id: String, page: u16 },
     UpdateDetachedPdfAnnotation {
         id: String,
