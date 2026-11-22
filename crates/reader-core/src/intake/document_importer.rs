@@ -41,4 +41,3 @@ fn choose_language(
         None => detect().map(str::to_owned).ok_or_else(|| "Оберіть мову вхідного матеріалу.".into()),
     }
 }
-

@@ -192,4 +192,3 @@ fn safe_name(name: &str, limit: usize) -> Result<&str> {
         .filter(|name| name.len() <= limit && !name.trim().is_empty() && !name.chars().any(char::is_control))
         .ok_or_else(|| "Некоректна назва вхідного матеріалу.".into())
 }
-
