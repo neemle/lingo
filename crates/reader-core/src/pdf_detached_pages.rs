@@ -9,7 +9,7 @@ mod find;
 mod ocr_edit;
 mod speech_resume;
 mod translation;
-mod word_break;
+pub(crate) mod word_break;
 pub use translation::DetachedPdfTranslation;
 pub use ocr_edit::DetachedPdfOcrPage;
 pub use find::{DetachedPdfFindCursor, DetachedPdfFindPage};

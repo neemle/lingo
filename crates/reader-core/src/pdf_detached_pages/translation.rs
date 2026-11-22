@@ -98,8 +98,9 @@ impl Store {
             reviewed_translations.insert(target.to_owned(), values);
         }
 
-        let (mut previous, mut next) =
-            word_break::neighboring_fragments(self, id, page, target, &sentences)?;
+        let (mut previous, mut next) = word_break::neighboring_fragments(
+            self, id, page, Some(target), sentences.first(), sentences.last(),
+        )?;
         if let Some(items) = reviewed_translations.get(target) {
             if sentences
                 .first()

@@ -2,6 +2,8 @@ use crate::{
     document_tokens::word_parts,
     knowledge::{annotation_cache, resolve_text_selection, select_words, AnalysisScope},
     optional_models::OptionalModelJob,
+    pdf_detached_pages::word_break,
+    translation::word_hyphen,
     Document, Result, Sentence, Store,
 };
 use llama_cpp_2::{
@@ -318,8 +320,25 @@ impl Store {
             ),
             None => (exact_sentence()?, None),
         };
-        let example = review_example(&language, sentence, scope)?;
-        let example = serde_json::to_string(&example).map_err(|error| error.to_string())?;
+        let (previous, next) = if let Some(page) = page {
+            word_break::neighboring_fragments(
+                self,
+                document,
+                page,
+                None,
+                sentences.first().filter(|first| first.id == sentence.id),
+                sentences.last().filter(|last| last.id == sentence.id),
+            )?
+        } else {
+            (None, None)
+        };
+        let example = review_example(
+            &language,
+            &sentence.text,
+            scope,
+            previous.as_deref(),
+            next.as_deref(),
+        )?;
         self.prepare_hint_work(
             model,
             document,
@@ -633,49 +652,89 @@ impl ExplainWordJob {
     }
 }
 
-fn review_example<'a>(
-    language: &'a str,
-    sentence: &'a Sentence,
+fn review_example(
+    language: &str,
+    original: &str,
     scope: Option<AnalysisScope>,
+    previous: Option<&str>,
+    next: Option<&str>,
+) -> Result<String> {
+    let prefix = previous.and_then(word_hyphen).unwrap_or_default();
+    let (center, suffix) = next
+        .and_then(|suffix| word_hyphen(original).map(|center| (center, suffix)))
+        .unwrap_or((original, ""));
+    let joined = (!prefix.is_empty() || !suffix.is_empty())
+        .then(|| format!("{prefix}{center}{suffix}"))
+        .filter(|joined| scope.is_some() || joined.chars().take(321).count() <= 320);
+    let (sentence, prefix_bytes) = joined.as_deref().map_or((original, 0), |text| (text, prefix.len()));
+
+    let example = extract_review_example(language, original, sentence, scope, prefix_bytes)?;
+    serde_json::to_string(&example).map_err(|error| error.to_string())
+}
+
+fn extract_review_example<'a>(
+    language: &'a str,
+    original: &'a str,
+    sentence: &'a str,
+    scope: Option<AnalysisScope>,
+    prefix_bytes: usize,
 ) -> Result<SentenceExample<'a>> {
     if let Some(scope) = scope {
-        let (words, _) = select_words(&sentence.text, &scope)?;
+        let (mut words, _) = select_words(original, &scope)?;
+        if original != sentence {
+            // A selected fragment can now start inside the reconstructed token.
+            let mut joined_words = word_parts(sentence).peekable();
+            for word in &mut words {
+                let position = prefix_bytes + word.0;
+                while joined_words
+                    .peek()
+                    .is_some_and(|&(byte, _, text)| byte + text.len() <= position)
+                {
+                    joined_words.next();
+                }
+                *word = joined_words
+                    .peek()
+                    .copied()
+                    .filter(|(byte, _, _)| *byte <= position)
+                    .ok_or("Не вдалося зіставити вибране слово з текстом сусідньої сторінки.")?;
+            }
+        }
         let first = words.first().ok_or("Виділіть слово або вираз.")?.0;
         let &(last, _, last_word) = words.last().ok_or("Виділіть слово або вираз.")?;
         let end = last + last_word.len();
-        if sentence.text[first..end].chars().take(129).count() > 128 {
+        if sentence[first..end].chars().take(129).count() > 128 {
             return Err("Фрагмент для локальної перевірки має вміщуватися в 128 символів.".into());
         }
 
-        let left = sentence.text[..first]
+        let left = sentence[..first]
             .char_indices()
             .rev()
             .nth(95)
             .map_or(0, |(index, _)| index);
-        let right = sentence.text[end..]
+        let right = sentence[end..]
             .char_indices()
             .nth(96)
-            .map_or(sentence.text.len(), |(index, _)| end + index);
+            .map_or(sentence.len(), |(index, _)| end + index);
         let focus = words
             .into_iter()
             .map(|(byte, _, text)| FocusTerm {
-                offset: sentence.text[left..byte].chars().count(),
+                offset: sentence[left..byte].chars().count(),
                 text,
             })
             .collect();
         return Ok(SentenceExample {
             language,
-            sentence: &sentence.text[left..right],
+            sentence: &sentence[left..right],
             focus,
         });
     }
 
-    if sentence.text.chars().take(321).count() > 320 {
+    if sentence.chars().take(321).count() > 320 {
         return Err("Локальна модель перевіряє речення до 320 символів.".into());
     }
     Ok(SentenceExample {
         language,
-        sentence: &sentence.text,
+        sentence,
         focus: Vec::new(),
     })
 }

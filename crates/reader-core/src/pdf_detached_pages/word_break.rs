@@ -11,14 +11,15 @@ enum Neighbor {
     Next,
 }
 
-pub(super) fn neighboring_fragments(
+pub(crate) fn neighboring_fragments(
     store: &Store,
     id: &str,
     page: u16,
-    target: &str,
-    sentences: &[Sentence],
+    target: Option<&str>,
+    first: Option<&Sentence>,
+    last: Option<&Sentence>,
 ) -> Result<(Option<String>, Option<String>)> {
-    let previous = match (page.checked_sub(1), sentences.first()) {
+    let previous = match (page.checked_sub(1), first) {
         (Some(page), Some(first)) if first.text.starts_with(char::is_lowercase) => excerpt(
             store,
             id,
@@ -29,7 +30,7 @@ pub(super) fn neighboring_fragments(
         )?,
         _ => None,
     };
-    let next = match (page.checked_add(1), sentences.last()) {
+    let next = match (page.checked_add(1), last) {
         (Some(page), Some(last)) if crate::translation::word_hyphen(&last.text).is_some() => {
             excerpt(store, id, page, target, Neighbor::Next, last.text.len())?
         }
@@ -42,7 +43,7 @@ fn excerpt(
     store: &Store,
     id: &str,
     page: u16,
-    target: &str,
+    target: Option<&str>,
     side: Neighbor,
     center_bytes: usize,
 ) -> Result<Option<String>> {
@@ -54,9 +55,11 @@ fn excerpt(
         let Some((start, part)) = edge(&text, side, budget) else {
             return Ok(None);
         };
-        let start_utf16 = text[..start].encode_utf16().count();
-        if annotations::reviewed(&store.connection, id, page, start_utf16)?.contains_key(target) {
-            return Ok(None);
+        if let Some(target) = target {
+            let start_utf16 = text[..start].encode_utf16().count();
+            if annotations::reviewed(&store.connection, id, page, start_utf16)?.contains_key(target) {
+                return Ok(None);
+            }
         }
         return Ok(Some(part.to_owned()));
     }
@@ -92,21 +95,14 @@ fn excerpt(
     else {
         return Ok(None);
     };
-    let absolute = start_byte + relative;
-    let index = document
-        .sentences
-        .partition_point(|sentence| sentence.end_utf8 <= absolute);
-    if document
-        .reviewed_translations
-        .get(target)
-        .is_some_and(|items| {
-            document
-                .sentences
-                .get(index)
-                .is_some_and(|sentence| items.contains_key(&sentence.id))
-        })
-    {
-        return Ok(None);
+    if let Some(items) = target.and_then(|target| document.reviewed_translations.get(target)) {
+        let absolute = start_byte + relative;
+        let index = document
+            .sentences
+            .partition_point(|sentence| sentence.end_utf8 <= absolute);
+        if document.sentences.get(index).is_some_and(|sentence| items.contains_key(&sentence.id)) {
+            return Ok(None);
+        }
     }
     Ok(Some(part.to_owned()))
 }
