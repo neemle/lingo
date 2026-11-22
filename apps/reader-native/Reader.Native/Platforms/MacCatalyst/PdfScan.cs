@@ -2,6 +2,8 @@ using CoreGraphics;
 using Foundation;
 using PdfKit;
 using Reader.Contracts;
+using System.Text;
+using Client = Reader.CoreClient.CoreClient;
 
 namespace Reader.Native.Services;
 
@@ -13,6 +15,42 @@ internal static class PdfScan
         using var data = NSData.FromArray(bytes);
         using var document = Open(data);
         return checked((int)document.PageCount);
+    });
+
+    internal static Task<int> PageCountAsync(string path) => Task.Run(() =>
+    {
+        using var pool = new NSAutoreleasePool();
+        using var document = Open(path);
+        return checked((int)document.PageCount);
+    });
+
+    internal static Task<string[]> ExtractTextAsync(string path, CancellationToken cancellation = default) => Task.Run(() =>
+    {
+        using var pool = new NSAutoreleasePool();
+        using var document = Open(path);
+        var count = checked((int)document.PageCount);
+        PdfRecognition.CheckPageCount(count);
+        var pages = new string[count];
+        long totalBytes = 0;
+        for (var index = 0; index < count; index++)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            using var pagePool = new NSAutoreleasePool();
+            using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
+            var text = page.Text?.Trim() ?? "";
+            totalBytes += Encoding.UTF8.GetByteCount(text);
+            if (totalBytes > Client.MaxImportBytes)
+                throw new InvalidDataException("Текстовий шар PDF перевищує 20 МіБ.");
+            pages[index] = text;
+        }
+        return pages;
+    }, cancellation);
+
+    internal static Task<PhotoPreview> PreviewAsync(string path, int page) => Task.Run(() =>
+    {
+        using var pool = new NSAutoreleasePool();
+        using var document = Open(path);
+        return Render(document, page, 1800);
     });
 
     internal static Task<PhotoPreview> PreviewAsync(byte[] bytes, int page) => Task.Run(() =>
@@ -30,23 +68,45 @@ internal static class PdfScan
             using var pool = new NSAutoreleasePool();
             using var data = NSData.FromArray(bytes);
             using var document = Open(data);
-            var count = checked((int)document.PageCount);
-            PdfRecognition.CheckPageCount(count);
-            if (count != expectedPages) throw new InvalidDataException("Кількість сторінок PDF змінилася.");
-            foreach (var page in pendingPages)
-            {
-                cancellation.ThrowIfCancellationRequested();
-                using var pagePool = new NSAutoreleasePool();
-                var rendered = Render(document, page, 2600);
-                cancellation.ThrowIfCancellationRequested();
-                var recognized = PhotoOcr.RecognizePdfPage(rendered, language, cancellation);
-                pageCompleted(page, recognized.Select(line => line with { Page = page }).ToArray());
-            }
-        });
+            Recognize(document, language, expectedPages, pendingPages, pageCompleted, cancellation);
+        }, cancellation);
 
-    private static PdfDocument Open(NSData data)
+    internal static Task RecognizeAsync(string path, string language, int expectedPages, int[] pendingPages,
+        Action<int, OcrLine[]> pageCompleted, CancellationToken cancellation) =>
+        Task.Run(() =>
+        {
+            using var pool = new NSAutoreleasePool();
+            using var document = Open(path);
+            Recognize(document, language, expectedPages, pendingPages, pageCompleted, cancellation);
+        }, cancellation);
+
+    private static void Recognize(PdfDocument document, string language, int expectedPages, int[] pendingPages,
+        Action<int, OcrLine[]> pageCompleted, CancellationToken cancellation)
     {
-        var document = new PdfDocument(data);
+        var count = checked((int)document.PageCount);
+        PdfRecognition.CheckPageCount(count);
+        if (count != expectedPages) throw new InvalidDataException("Кількість сторінок PDF змінилася.");
+        foreach (var page in pendingPages)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            using var pagePool = new NSAutoreleasePool();
+            var rendered = Render(document, page, 2600);
+            cancellation.ThrowIfCancellationRequested();
+            var recognized = PhotoOcr.RecognizePdfPage(rendered, language, cancellation);
+            pageCompleted(page, recognized.Select(line => line with { Page = page }).ToArray());
+        }
+    }
+
+    private static PdfDocument Open(NSData data) => Checked(new PdfDocument(data));
+
+    private static PdfDocument Open(string path)
+    {
+        using var url = NSUrl.FromFilename(path);
+        return Checked(new PdfDocument(url));
+    }
+
+    private static PdfDocument Checked(PdfDocument document)
+    {
         if (!document.IsLocked && document.PageCount > 0) return document;
         document.Dispose();
         throw new InvalidDataException("PDF пошкоджено або захищено паролем.");

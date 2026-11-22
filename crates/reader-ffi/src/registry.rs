@@ -54,6 +54,18 @@ impl Registry {
             .ok_or_else(|| Error::new("invalid_handle", "Store handle is missing or closed"))
     }
 
+    pub fn import_pdf_file(
+        &mut self,
+        handle: u64,
+        prepared: reader_core::file_originals::PreparedPdfImport,
+    ) -> Result<reader_core::Document> {
+        self.stores
+            .get_mut(&handle)
+            .ok_or_else(|| Error::new("invalid_handle", "Store handle is missing or closed"))?
+            .import_pdf_file(prepared)
+            .map_err(gateway::domain)
+    }
+
     pub fn close(&mut self, handle: u64) -> bool {
         self.stores.remove(&handle).is_some()
     }

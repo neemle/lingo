@@ -304,10 +304,16 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         try
         {
             if (AppState.Session.Document is not { } doc) { Status.Text = "Спочатку відкрийте документ."; return; }
+            var share = sender is Button { CommandParameter: "share" };
+            if (await AppState.Session.OriginalFileAsync(doc.Id) is { } originalFile)
+            {
+                Status.Text = await NativeFiles.ExportAsync(this, originalFile.Name, share,
+                    path => Task.Run(() => File.Copy(originalFile.Path, path))) ?? "";
+                return;
+            }
             var original = await AppState.Session.OriginalAsync(doc.Id);
             var bytes = original.Bytes.Select(value => checked((byte)value)).ToArray();
-            Status.Text = await NativeFiles.ExportBytesAsync(this, original.Name, bytes,
-                share: sender is Button { CommandParameter: "share" }) ?? "";
+            Status.Text = await NativeFiles.ExportBytesAsync(this, original.Name, bytes, share) ?? "";
         }
         catch (Exception error) { await DisplayAlertAsync("Оригінал", error.Message, "Гаразд"); }
     }

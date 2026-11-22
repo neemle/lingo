@@ -59,6 +59,10 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             Some(url) => store.import_article(&name, &bytes, &language, &url),
             None => store.import(&name, &bytes, &language),
         }),
+        Command::ImportPdfFile { .. } => Err(Error::new(
+            "invalid_state",
+            "PDF import requires staging outside the bridge lock",
+        )),
         Command::ImportImage {
             name,
             bytes,
@@ -250,6 +254,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::SetPractice { progress } => value(store.set_practice(progress)),
         Command::GradePractice { revision, grade } => value(store.grade_practice(revision, grade)),
         Command::Original { id } => value(store.original(&id)),
+        Command::OriginalFile { id } => value(store.original_file(&id)),
         Command::Export => value(store.export()),
         Command::ExportBackupFile { path } => {
             value(store.export_backup_file(std::path::Path::new(&path)))

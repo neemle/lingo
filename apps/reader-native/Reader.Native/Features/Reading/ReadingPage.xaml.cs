@@ -495,15 +495,32 @@ public partial class ReadingPage : ContentPage
         if (!session.CanViewOriginal || session.Document is not { } document) return;
         try
         {
-            var original = await session.OriginalAsync(document.Id);
-            if (session.Document?.Id != document.Id) return;
-            var bytes = original.Bytes.Select(value => checked((byte)value)).ToArray();
             var isPdf = document.Format == "pdf";
-            var total = isPdf ? await PdfScan.PageCountAsync(bytes) : 1;
-            var initial = Math.Clamp(session.OriginalPageIndex(), 0, total - 1);
+            string name;
+            int total;
+            Func<int, Task<PhotoPreview>> preview;
+#if MACCATALYST
+            var originalFile = isPdf ? await session.OriginalFileAsync(document.Id) : null;
+            if (originalFile is not null)
+            {
+                if (session.Document?.Id != document.Id) return;
+                name = originalFile.Name;
+                total = await PdfScan.PageCountAsync(originalFile.Path);
+                preview = page => PdfScan.PreviewAsync(originalFile.Path, page);
+            }
+            else
+#endif
+            {
+                var original = await session.OriginalAsync(document.Id);
+                if (session.Document?.Id != document.Id) return;
+                var bytes = original.Bytes.Select(value => checked((byte)value)).ToArray();
+                name = original.Name;
+                total = isPdf ? await PdfScan.PageCountAsync(bytes) : 1;
+                preview = page => isPdf ? PdfScan.PreviewAsync(bytes, page) : PhotoOcr.PreviewAsync(bytes);
+            }
             if (session.Document is not { } current || current.Id != document.Id || !readingPageActive) return;
-            await Navigation.PushAsync(new OriginalPage(original.Name, total, initial, isPdf,
-                page => isPdf ? PdfScan.PreviewAsync(bytes, page) : PhotoOcr.PreviewAsync(bytes),
+            var initial = Math.Clamp(session.OriginalPageIndex(), 0, total - 1);
+            await Navigation.PushAsync(new OriginalPage(name, total, initial, isPdf, preview,
                 document.Id, session, current.OcrLines ?? [], selection, selected =>
                 {
                     if (!readingPageActive || session.Busy || session.Document is not { } active || active.Id != document.Id ||

@@ -53,6 +53,41 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         unsafe { std::slice::from_raw_parts(input, len as usize) }
     };
     let command = validation::decode(bytes)?;
+    if let Command::ImportPdfFile {
+        path,
+        name,
+        language,
+        page_texts,
+        lines,
+    } = command
+    {
+        let root = registry::lock()?
+            .store(handle)?
+            .pdf_original_root()
+            .to_owned();
+        let prepared = reader_core::file_originals::prepare_pdf_import(
+            &root,
+            &name,
+            std::path::Path::new(&path),
+            &language,
+            page_texts,
+            lines,
+        )
+        .map_err(gateway::domain)?;
+        let document = {
+            let mut state = registry::lock()?;
+            catch_unwind(AssertUnwindSafe(|| state.import_pdf_file(handle, prepared)))
+                .unwrap_or_else(|_| {
+                    state.close(handle);
+                    Err(Error::new(
+                        "internal_error",
+                        "Rust operation panicked; reopen the store",
+                    ))
+                })?
+        };
+        return encode_job(Ok(document));
+    }
+
     match &command {
         Command::TranslateParagraph {
             id,

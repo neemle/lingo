@@ -33,6 +33,53 @@ internal sealed record PdfOcrCheckpoint(string Id, string Hash, string Name, str
         }
     }
 
+#if MACCATALYST
+    internal static PdfOcrCheckpoint Create(string name, string source, string language, int pages, int[] missingPages)
+    {
+        var hash = HashFile(source);
+        var input = new LegacyJob(hash, Path.GetFileName(name), language, pages, missingPages.Distinct().Order().ToArray());
+        if (!input.IsValid()) throw new InvalidDataException("Параметри розпізнавання PDF некоректні.");
+        lock (Staging)
+        {
+            AdoptLegacy();
+            Directory.CreateDirectory(input.Folder);
+            var original = Path.Combine(input.Folder, "original.pdf");
+            if (!File.Exists(original) || HashFile(original) != hash)
+            {
+                var temporary = original + ".tmp";
+                try
+                {
+                    File.Copy(source, temporary, overwrite: true);
+                    using (var copied = File.Open(temporary, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                        copied.Flush(flushToDisk: true);
+                    if (HashFile(temporary) != hash)
+                        throw new InvalidDataException("Локальна копія PDF змінилася під час збереження.");
+                    File.Move(temporary, original, overwrite: true);
+                }
+                finally { File.Delete(temporary); }
+            }
+            return CreateJob(input, EngineVersion, revive: true);
+        }
+    }
+
+    internal bool UsesFile => new FileInfo(Path.Combine(Folder, "original.pdf")).Length > Client.MaxImportBytes;
+
+    internal string ReadOriginalPath()
+    {
+        var original = Path.Combine(Folder, "original.pdf");
+        if (HashFile(original) != Hash) throw new InvalidDataException("Збережена копія PDF пошкоджена.");
+        return original;
+    }
+
+    private static string HashFile(string path)
+    {
+        using var source = File.OpenRead(path);
+        if (source.Length is <= 0 or > Client.MaxPdfBytes)
+            throw new InvalidDataException("Розмір PDF виходить за межі дозволеного.");
+        return Convert.ToHexStringLower(SHA256.HashData(source));
+    }
+#endif
+
     internal static PdfOcrCheckpoint[] List()
     {
         lock (Staging)

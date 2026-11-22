@@ -100,15 +100,24 @@ public partial class LibraryPage
     private async Task<string?> ImportInboxItemAsync(ShareInboxItem item, bool chooseLanguage = false)
     {
         if (!ShareInbox.Contains(item)) return null;
-        var bytes = await ShareInbox.ReadAsync(item);
-        var id = item.Kind switch
+        string? id;
+#if MACCATALYST
+        if (item.Kind == "file" && item.Bytes > Reader.CoreClient.CoreClient.MaxImportBytes
+            && Path.GetExtension(item.Name).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+            id = await ImportLargePdfAsync(item, chooseLanguage);
+        else
+#endif
         {
-            "file" => await ImportFileAsync(item, bytes, chooseLanguage),
-            "text" => await ImportPastedTextCoreAsync(Encoding.UTF8.GetString(bytes)),
-            "url" => await ImportArticleCoreAsync(WebArticles.Address(Encoding.UTF8.GetString(bytes))
-                ?? throw new InvalidDataException("Збережене вебпосилання недійсне.")),
-            _ => throw new InvalidDataException("Вхідний матеріал пошкоджено."),
-        };
+            var bytes = await ShareInbox.ReadAsync(item);
+            id = item.Kind switch
+            {
+                "file" => await ImportFileAsync(item, bytes, chooseLanguage),
+                "text" => await ImportPastedTextCoreAsync(Encoding.UTF8.GetString(bytes)),
+                "url" => await ImportArticleCoreAsync(WebArticles.Address(Encoding.UTF8.GetString(bytes))
+                    ?? throw new InvalidDataException("Збережене вебпосилання недійсне.")),
+                _ => throw new InvalidDataException("Вхідний матеріал пошкоджено."),
+            };
+        }
         if (id is not null) await RemoveShareItemAsync(item);
         return id;
     }

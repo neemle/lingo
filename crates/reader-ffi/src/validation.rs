@@ -65,6 +65,27 @@ fn validate(command: &Command) -> Result<()> {
                 "Optional model archive fields must be nonempty and bounded",
             ))
         }
+        Command::ImportPdfFile {
+            path,
+            name,
+            page_texts,
+            lines,
+            ..
+        } if path.is_empty()
+            || path.len() > 4096
+            || path.contains('\0')
+            || name.is_empty()
+            || name.len() > 4096
+            || page_texts.is_empty()
+            || page_texts.len() > usize::from(u16::MAX)
+            || page_texts.iter().map(String::len).sum::<usize>() > reader_core::MAX_IMPORT
+            || lines.len() > 8192 =>
+        {
+            Err(Error::new(
+                "invalid_argument",
+                "PDF import path or transcript exceeds its wire bound",
+            ))
+        }
         Command::Import { bytes, name, .. }
         | Command::DetectDocumentLanguage { bytes, name }
         | Command::ImportImage { bytes, name, .. }

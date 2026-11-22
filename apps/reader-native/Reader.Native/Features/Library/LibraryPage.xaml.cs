@@ -213,21 +213,13 @@ public partial class LibraryPage : ContentPage
         if (item.ScanPdf && !isPdf) throw new InvalidDataException("Виберіть файл PDF для розпізнавання.");
         var session = AppState.Session;
         await session.WaitUntilIdleAsync();
-        var savedLanguage = item.SourceLanguage;
-        if (!DocumentLanguages.All.Any(language => language.Code == savedLanguage)) savedLanguage = null;
-        var language = chooseLanguage ? null : savedLanguage;
-        if (language is null)
+        var language = await ResolveImportLanguageAsync(item, chooseLanguage, () => extension switch
         {
-            var suggestion = savedLanguage is not null ? null : extension switch
-            {
-                ".txt" => await session.DetectLanguageAsync(Encoding.UTF8.GetString(bytes.AsSpan(0, Math.Min(bytes.Length, 32_000)))),
-                ".docx" or ".pdf" when !item.ScanPdf => await session.DetectDocumentLanguageAsync(item.Name, bytes),
-                _ => null,
-            };
-            language = await ChooseLanguageAsync($"Мова оригіналу · {item.Name}", suggestion);
-            if (language is null) return null;
-        }
-        if (item.SourceLanguage != language) await Task.Run(() => ShareInbox.SaveSourceLanguage(item, language));
+            ".txt" => session.DetectLanguageAsync(Encoding.UTF8.GetString(bytes.AsSpan(0, Math.Min(bytes.Length, 32_000)))),
+            ".docx" or ".pdf" when !item.ScanPdf => session.DetectDocumentLanguageAsync(item.Name, bytes),
+            _ => Task.FromResult<string?>(null),
+        });
+        if (language is null) return null;
 
         if (isPdf)
         {
@@ -260,6 +252,19 @@ public partial class LibraryPage : ContentPage
         }
         if (session.Error.Length != 0) throw new InvalidDataException(session.Error);
         return session.Document?.Id;
+    }
+
+    private async Task<string?> ResolveImportLanguageAsync(ShareInboxItem item, bool chooseLanguage,
+        Func<Task<string?>> detectLanguage)
+    {
+        var saved = DocumentLanguages.All.Any(language => language.Code == item.SourceLanguage)
+            ? item.SourceLanguage : null;
+        if (!chooseLanguage && saved is not null) return saved;
+        var suggestion = saved is null ? await detectLanguage() : null;
+        var selected = await ChooseLanguageAsync($"Мова оригіналу · {item.Name}", suggestion);
+        if (selected is not null && item.SourceLanguage != selected)
+            await Task.Run(() => ShareInbox.SaveSourceLanguage(item, selected));
+        return selected;
     }
 
     private async Task<string?> ChooseLanguageAsync(string title, string? suggested = null)

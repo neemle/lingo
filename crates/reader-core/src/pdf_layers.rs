@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::{
-    ocr::{recognized_text, OcrLine},
+    ocr::{recognized_lines, OcrLine},
     Result, MAX_IMPORT,
 };
 
@@ -26,9 +26,27 @@ pub fn merge(
     expected: u16,
     lines: &[OcrLine],
 ) -> Result<(String, Vec<Option<usize>>)> {
-    let mut pages = text_pages(name, bytes, expected)?;
+    merge_page_text(text_pages(name, bytes, expected)?, lines)
+}
+
+pub(crate) fn merge_page_text(
+    mut pages: Vec<String>,
+    lines: &[OcrLine],
+) -> Result<(String, Vec<Option<usize>>)> {
+    let page_count = u16::try_from(pages.len()).map_err(|_| "PDF містить забагато сторінок")?;
+    if page_count == 0 {
+        return Err("У PDF немає сторінок".into());
+    }
     if !lines.is_empty() {
-        recognized_text(name, bytes, lines, Some(expected))?;
+        recognized_lines(lines, page_count)?;
+    }
+    for page in &mut pages {
+        if page.contains('\0') {
+            return Err("Текст PDF містить некоректний символ".into());
+        }
+        page.truncate(page.trim_end().len());
+        let prefix = page.len() - page.trim_start().len();
+        page.drain(..prefix);
     }
 
     let mut prior = None;

@@ -93,6 +93,13 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
             return (client.Snapshot(), id);
         });
 
+    public Task ImportPdfFileAsync(string name, string path, string language, string[] pageTexts, OcrLine[] lines) =>
+        RunAsync(() =>
+        {
+            var id = client.ImportPdfFile(name, path, language, pageTexts, lines).Id;
+            return (client.Snapshot(), id);
+        });
+
     public Task ImportScannedPdfAsync(string name, byte[] bytes, string language, OcrLine[] lines, int pages) =>
         RunAsync(() =>
         {
@@ -320,6 +327,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     }
 
     public Task<Original> OriginalAsync(string id) => Task.Run(() => client.Original(id));
+    public Task<OriginalFile?> OriginalFileAsync(string id) => Task.Run(() => client.OriginalFile(id));
     public Task RestoreAsync(Backup backup) => RunAsync(() =>
     {
         client.Restore(backup);

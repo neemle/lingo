@@ -16,6 +16,7 @@ pub mod dictionary_transfer;
 pub mod document_layout;
 pub mod document_revisions;
 pub mod e5;
+pub mod file_originals;
 pub mod knowledge;
 pub mod language_detection;
 mod marian_deadline;
@@ -404,6 +405,7 @@ pub struct Store {
     model_directory: std::path::PathBuf,
     optional_model_directory: std::path::PathBuf,
     knowledge_directory: std::path::PathBuf,
+    file_original_directory: std::path::PathBuf,
 }
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
@@ -425,11 +427,15 @@ impl Store {
         reading_history::initialize(&connection)?;
         ocr_jobs::initialize(&connection)?;
         document_revisions::initialize(&mut connection)?;
+        file_originals::initialize(&connection)?;
+        let file_original_directory = file_originals::directory(path);
+        file_originals::cleanup_orphans(&mut connection, &file_original_directory);
         Ok(Self {
             connection,
             model_directory: path.with_file_name("translation-models"),
             optional_model_directory: path.with_file_name("optional-models"),
             knowledge_directory: path.with_file_name("languages"),
+            file_original_directory,
         })
     }
     pub fn snapshot(&self) -> Result<Snapshot> {
@@ -785,7 +791,12 @@ impl Store {
         index: usize,
         correction: Option<String>,
     ) -> Result<()> {
-        let original = self.original(id)?;
+        let native_pages = self.native_pdf_page_text(id)?;
+        let original = if native_pages.is_none() {
+            Some(self.original(id)?)
+        } else {
+            None
+        };
         self.edit_document(id, |document, tx| {
             let lines = document
                 .ocr_lines
@@ -799,20 +810,25 @@ impl Store {
                 return Ok(false);
             }
             line.correction = correction;
-            let parsed = if let (Some(pages), Some(_)) =
-                (document.ocr_pdf_pages, &document.pdf_page_starts)
-            {
-                let (text, starts) =
-                    pdf_layers::merge(&original.name, &original.bytes, pages, lines)?;
+            let parsed = if let Some(pages) = native_pages {
+                let (text, starts) = pdf_layers::merge_page_text(pages, lines)?;
                 document_layout::from_transcript(text, Some(starts))
             } else {
-                let text = ocr::recognized_text(
-                    &original.name,
-                    &original.bytes,
-                    lines,
-                    document.ocr_pdf_pages,
-                )?;
-                document_layout::from_ocr(text, lines, document.ocr_pdf_pages)
+                let original = original.ok_or("Оригінал документа відсутній")?;
+                if let (Some(pages), Some(_)) = (document.ocr_pdf_pages, &document.pdf_page_starts)
+                {
+                    let (text, starts) =
+                        pdf_layers::merge(&original.name, &original.bytes, pages, lines)?;
+                    document_layout::from_transcript(text, Some(starts))
+                } else {
+                    let text = ocr::recognized_text(
+                        &original.name,
+                        &original.bytes,
+                        lines,
+                        document.ocr_pdf_pages,
+                    )?;
+                    document_layout::from_ocr(text, lines, document.ocr_pdf_pages)
+                }
             };
             let text_changed = document.text != parsed.text;
             ocr::update_transcript(document, parsed.text)?;
@@ -860,6 +876,13 @@ impl Store {
             return Ok(false);
         }
 
+        let file_backed: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM file_originals WHERE document_id=?1)",
+                [id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
         dictionary_transfer::retain_removed_document_source(&tx, id)?;
         // Originals and speech checkpoints in existing libraries use non-cascading foreign keys.
         tx.execute("DELETE FROM originals WHERE document_id=?1", [id])
@@ -875,6 +898,9 @@ impl Store {
             .map_err(|error| error.to_string())?;
         practice::adjust_after_library_change(&tx, None, true)?;
         tx.commit().map_err(|error| error.to_string())?;
+        if file_backed {
+            file_originals::remove(&self.file_original_directory, id);
+        }
         Ok(true)
     }
 
@@ -1278,7 +1304,22 @@ impl Store {
             .map_err(|e| e.to_string())?;
         Ok(())
     }
+    /// Legacy byte-backed originals. Use `original_file` to resolve file-backed PDFs.
     pub fn original(&self, id: &str) -> Result<Original> {
+        let file_backed: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM file_originals WHERE document_id=?1)",
+                [id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if file_backed {
+            return Err(
+                "Великий оригінал PDF зберігається окремим файлом. Експортуйте цей PDF окремо."
+                    .into(),
+            );
+        }
         self.connection
             .query_row(
                 "SELECT name,bytes FROM originals WHERE document_id=?",

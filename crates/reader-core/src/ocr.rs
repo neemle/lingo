@@ -108,6 +108,10 @@ pub fn recognized_text(
         return Err("Формат зображення не підтримується або файл пошкоджений".into());
     }
 
+    recognized_lines(lines, pdf_pages.unwrap_or(1))
+}
+
+pub(crate) fn recognized_lines(lines: &[OcrLine], pages: u16) -> Result<String> {
     if lines.is_empty() || lines.len() > 8192 {
         return Err("На зображенні немає доступного тексту або забагато рядків".into());
     }
@@ -118,7 +122,7 @@ pub fn recognized_text(
         let value = line.reading_text();
         word_count += line.words.len();
         if line.page < previous_page
-            || line.page >= pdf_pages.unwrap_or(1)
+            || line.page >= pages
             || !valid_text(line.text.trim())
             || !valid_text(value)
             || !valid_box(line.x, line.y, line.width, line.height)

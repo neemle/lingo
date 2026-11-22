@@ -74,7 +74,43 @@ public partial class LibraryPage
         active.Cancel();
     }
 
-    private async Task<string?> RunPdfOcrAsync(PdfOcrCheckpoint job, byte[]? source = null)
+#if MACCATALYST
+    private async Task<string?> ImportLargePdfAsync(ShareInboxItem item, bool chooseLanguage)
+    {
+        var session = AppState.Session;
+        await session.WaitUntilIdleAsync();
+        var source = ShareInbox.PayloadPath(item);
+        ImportStatus.Text = "Читаємо текстовий шар PDF…";
+        var pageTexts = await PdfScan.ExtractTextAsync(source);
+        var language = await ResolveImportLanguageAsync(item, chooseLanguage, () =>
+        {
+            if (item.ScanPdf) return Task.FromResult<string?>(null);
+            var excerpt = string.Join('\n', pageTexts.Where(text => !string.IsNullOrWhiteSpace(text)).Take(4)
+                .Select(text => text[..Math.Min(text.Length, 2000)]));
+            return session.DetectLanguageAsync(excerpt);
+        });
+        if (language is null) return null;
+
+        var missing = Enumerable.Range(0, pageTexts.Length)
+            .Where(page => string.IsNullOrWhiteSpace(pageTexts[page])).ToArray();
+        if (missing.Length > 0)
+        {
+            ImportStatus.Text = "Готуємо локальну копію для розпізнавання…";
+            var checkpoint = await Task.Run(() => PdfOcrCheckpoint.Create(item.Name, source, language, pageTexts.Length, missing));
+            await RemoveShareItemAsync(item);
+            ImportStatus.Text = "";
+            return await RunPdfOcrAsync(checkpoint, pageTexts: pageTexts);
+        }
+
+        await session.WaitUntilIdleAsync();
+        ImportStatus.Text = "Зберігаємо оригінал PDF…";
+        await session.ImportPdfFileAsync(item.Name, source, language, pageTexts, []);
+        if (session.Error.Length != 0) throw new InvalidDataException(session.Error);
+        return session.Document?.Id;
+    }
+#endif
+
+    private async Task<string?> RunPdfOcrAsync(PdfOcrCheckpoint job, byte[]? source = null, string[]? pageTexts = null)
     {
         using var active = new CancellationTokenSource();
         var cancellation = active.Token;
@@ -102,9 +138,14 @@ public partial class LibraryPage
                 if (pdfCancellation == active && PausePdf.IsEnabled)
                     SetPdfStatus($"{job.Name} · збережено сторінок OCR {saved}/{job.MissingPages.Length}");
             });
-            var (bytes, lines) = await Task.Run(async () =>
+            var completed = await Task.Run(async () =>
             {
+#if MACCATALYST
+                var file = source is null && job.UsesFile ? job.ReadOriginalPath() : null;
+                var bytes = file is null ? source ?? job.ReadOriginal() : null;
+#else
                 var bytes = source ?? job.ReadOriginal();
+#endif
                 var saved = new SortedDictionary<int, OcrLine[]>();
                 var pending = new List<int>();
                 var lineCount = 0;
@@ -119,15 +160,28 @@ public partial class LibraryPage
                 report.Report(saved.Count);
                 if (pending.Count > 0)
                 {
-                    await PdfScan.RecognizeAsync(bytes, job.Language, job.Pages, pending.ToArray(), (page, lines) =>
-                    {
-                        Include(page, lines);
-                        job.SavePage(page, lines);
-                        report.Report(saved.Count);
-                    }, cancellation);
+                    var pendingPages = pending.ToArray();
+#if MACCATALYST
+                    if (file is not null)
+                        await PdfScan.RecognizeAsync(file, job.Language, job.Pages, pendingPages, SavePage, cancellation);
+                    else
+#endif
+                        await PdfScan.RecognizeAsync(bytes!, job.Language, job.Pages, pendingPages, SavePage, cancellation);
                 }
                 cancellation.ThrowIfCancellationRequested();
-                return (bytes, saved.Values.SelectMany(lines => lines).ToArray());
+                var recognizedLines = saved.Values.SelectMany(lines => lines).ToArray();
+#if MACCATALYST
+                return (Bytes: bytes, Lines: recognizedLines, Path: file);
+#else
+                return (Bytes: bytes, Lines: recognizedLines);
+#endif
+
+                void SavePage(int page, OcrLine[] lines)
+                {
+                    Include(page, lines);
+                    job.SavePage(page, lines);
+                    report.Report(saved.Count);
+                }
 
                 void Include(int page, OcrLine[] lines)
                 {
@@ -143,7 +197,17 @@ public partial class LibraryPage
             cancellation.ThrowIfCancellationRequested();
             PausePdf.IsVisible = PausePdf.IsEnabled = false;
             SetPdfStatus($"{job.Name} · зберігаємо документ…");
-            await session.ImportMixedPdfAsync(job.Name, bytes, job.Language, lines, job.Pages);
+#if MACCATALYST
+            if (completed.Path is { } path)
+            {
+                pageTexts ??= await PdfScan.ExtractTextAsync(path, cancellation);
+                if (pageTexts.Length != job.Pages)
+                    throw new InvalidDataException("Кількість сторінок PDF змінилася.");
+                await session.ImportPdfFileAsync(job.Name, path, job.Language, pageTexts, completed.Lines);
+            }
+            else
+#endif
+                await session.ImportMixedPdfAsync(job.Name, completed.Bytes!, job.Language, completed.Lines, job.Pages);
             if (session.Error.Length > 0) throw new InvalidDataException(session.Error);
             if (session.Document is not { } document || document.SourceHash != job.Hash)
                 throw new InvalidDataException("Імпорт PDF не підтверджено.");

@@ -45,7 +45,7 @@
    <Border Padding="12,9" Stroke="#D6D9CA" StrokeThickness="1" StrokeDashArray="5,4"
     StrokeShape="RoundRectangle 8" BackgroundColor="#F0F3E9">
     <Border.GestureRecognizers><DropGestureRecognizer Drop="FilesDropped" /></Border.GestureRecognizers>
-    <Label Text="Перетягніть файл, фотографію, текст або посилання сюди · до 20 МБ на файл"
+    <Label Text="Перетягніть файл, фотографію, текст або посилання сюди"
      TextColor="{StaticResource Sage}" FontSize="13" />
    </Border>
    <Label Text="{Binding Error}" TextColor="{StaticResource Accent}" SemanticProperties.Description="Помилка операції" />

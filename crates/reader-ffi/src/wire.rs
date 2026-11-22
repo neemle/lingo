@@ -39,6 +39,14 @@ pub enum Command {
         #[serde(rename = "sourceUrl")]
         source_url: Option<String>,
     },
+    ImportPdfFile {
+        name: String,
+        path: String,
+        language: String,
+        #[serde(rename = "pageTexts")]
+        page_texts: Vec<String>,
+        lines: Vec<reader_core::ocr::OcrLine>,
+    },
     ImportImage {
         name: String,
         bytes: Vec<u8>,
@@ -296,6 +304,9 @@ pub enum Command {
         grade: u8,
     },
     Original {
+        id: String,
+    },
+    OriginalFile {
         id: String,
     },
     Export,

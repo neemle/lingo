@@ -11,6 +11,7 @@ public sealed class CoreClient : IDisposable
     private readonly StoreHandle handle;
     private bool disposed;
     public const int MaxImportBytes = 20 * 1024 * 1024;
+    public const long MaxPdfBytes = 4L * 1024 * 1024 * 1024;
     public const int MaxBackupFileBytes = 1024 * 1024 * 1024;
 
     public CoreClient(string databasePath)
@@ -42,6 +43,11 @@ public sealed class CoreClient : IDisposable
     public BackupResource[] RestoreBackupFile(string path) =>
         Call<BackupResource[]>(new { version = 1, operation = "restore_backup_file", path });
     public Original Original(string id) => Call<Original>(new { version = 1, operation = "original", id });
+    public OriginalFile? OriginalFile(string id) =>
+        Call<OriginalFile?>(new { version = 1, operation = "original_file", id });
+
+    public Document ImportPdfFile(string name, string path, string language, string[] pageTexts, OcrLine[] lines) =>
+        CallIndependent<Document>(new { version = 1, operation = "import_pdf_file", name, path, language, pageTexts, lines });
     public Document Import(string name, ReadOnlySpan<byte> bytes, string language, string? sourceUrl = null)
     {
         if (bytes.Length is 0 or > MaxImportBytes)

@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Client = Reader.CoreClient.CoreClient;
 
 namespace Reader.Native.Services;
 
@@ -21,8 +22,8 @@ internal static class ShareInbox
     internal static async Task<ShareInboxItem> StageAsync(string kind, string name, Stream source, bool scanPdf = false)
     {
         var id = Guid.NewGuid();
-        var maximum = Limit(kind);
         name = SafeName(name);
+        var maximum = Limit(kind, name);
         await Staging.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -32,6 +33,8 @@ internal static class ShareInbox
             Directory.CreateDirectory(temporary);
             try
             {
+                if (source.CanSeek && source.Length - source.Position > maximum)
+                    throw new InvalidDataException($"Максимальний розмір файлу — {maximum / (1024 * 1024d):G} МіБ.");
                 long length;
                 await using (var target = new FileStream(Path.Combine(temporary, "payload"),
                     FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.Asynchronous))
@@ -56,10 +59,21 @@ internal static class ShareInbox
 
     internal static async Task<byte[]> ReadAsync(ShareInboxItem item)
     {
-        await using var source = File.OpenRead(Path.Combine(Folder(item.Id), "payload"));
-        var bytes = await NativeFiles.ReadBoundedAsync(source, Limit(item.Kind)).ConfigureAwait(false);
+        await using var source = File.OpenRead(PayloadPath(item));
+        var maximum = (int)Math.Min(Limit(item.Kind, item.Name), Client.MaxImportBytes);
+        var bytes = await NativeFiles.ReadBoundedAsync(source, maximum).ConfigureAwait(false);
         if (bytes.LongLength != item.Bytes) throw new InvalidDataException("Локальна копія пошкоджена.");
         return bytes;
+    }
+
+    internal static string PayloadPath(ShareInboxItem item)
+    {
+        var path = Path.Combine(Folder(item.Id), "payload");
+        var file = new FileInfo(path);
+        if (!file.Exists || file.Attributes.HasFlag(FileAttributes.ReparsePoint) ||
+            file.Length != item.Bytes || file.Length <= 0 || file.Length > Limit(item.Kind, item.Name))
+            throw new InvalidDataException("Локальна копія пошкоджена.");
+        return path;
     }
 
     internal static bool Contains(ShareInboxItem item) => Directory.Exists(Folder(item.Id));
@@ -119,16 +133,19 @@ internal static class ShareInbox
             using var bytes = new MemoryStream();
             NativeFiles.CopyBoundedAsync(source, bytes, MaxMetadataBytes).GetAwaiter().GetResult();
             var item = NativeFiles.Decode<ShareInboxItem>(bytes.ToArray());
-            if (item.Id == id && item.Bytes > 0 && item.Bytes <= Limit(item.Kind) && !string.IsNullOrEmpty(item.Name))
+            if (item.Id == id && item.Bytes > 0 && !string.IsNullOrEmpty(item.Name) && item.Bytes <= Limit(item.Kind, item.Name))
                 return item;
         }
         catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException) { }
         return new ShareInboxItem(id, "damaged", "Пошкоджений вхідний матеріал", Directory.GetCreationTimeUtc(folder), 0);
     }
 
-    private static int Limit(string kind) => kind switch
+    private static long Limit(string kind, string name) => kind switch
     {
-        "file" or "text" => CoreClient.CoreClient.MaxImportBytes,
+#if MACCATALYST
+        "file" when Path.GetExtension(name).Equals(".pdf", StringComparison.OrdinalIgnoreCase) => Client.MaxPdfBytes,
+#endif
+        "file" or "text" => Client.MaxImportBytes,
         "url" => 16 * 1024,
         _ => throw new InvalidDataException("Невідомий тип вхідного матеріалу."),
     };

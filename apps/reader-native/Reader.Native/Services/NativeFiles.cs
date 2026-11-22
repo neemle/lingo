@@ -21,7 +21,7 @@ public static class NativeFiles
         return copy.ToArray();
     }
 
-    internal static async Task CopyBoundedAsync(Stream stream, Stream target, int maximum,
+    internal static async Task CopyBoundedAsync(Stream stream, Stream target, long maximum,
         CancellationToken cancellation = default, IProgress<long>? progress = null)
     {
         var buffer = new byte[64 * 1024];
