@@ -752,6 +752,7 @@ impl TranslationProvider for MarianProvider<'_> {
 
         let mut results = Vec::with_capacity(segments.len());
         let mut clock_retry_budget = 2;
+        let mut ukrainian_retry_budget = 2;
         for segment in segments {
             checkpoint()?;
             let source_pieces = input
@@ -851,13 +852,14 @@ impl TranslationProvider for MarianProvider<'_> {
                     .filter(|text| !text.is_empty())
                     .take(4)
                     .collect();
+                let mut alternatives = Vec::new();
                 if start == 0
                     && end == source_pieces.len()
                     && segment.len() <= 768
                     && (2..=3).contains(&units.len())
                     && decoded.len() > 0
                 {
-                    let mut alternatives = vec![translated.clone()];
+                    alternatives.push(translated.clone());
                     for text in decoded
                         .by_ref()
                         .filter_map(|tokens| decode_text(&tokens).ok())
@@ -881,7 +883,7 @@ impl TranslationProvider for MarianProvider<'_> {
                         .collect::<Result<Vec<_>>>();
                     if let Ok(references) = references {
                         let chosen = rerank::choose(&alternatives, &references);
-                        translated = alternatives.swap_remove(chosen);
+                        translated.clone_from(&alternatives[chosen]);
                     }
                 }
                 // Retry only the observed clock-as-year artifact, using the same loaded model.
@@ -912,6 +914,7 @@ impl TranslationProvider for MarianProvider<'_> {
                     if let Some(deadline) = crate::marian_deadline::find(segment) {
                         if !deadline.accepts(&translated) {
                             let alternative = decoded
+                                .by_ref()
                                 .filter_map(|tokens| decode_text(&tokens).ok())
                                 .find(|text| deadline.preserves_clause(&translated, text));
                             if let Some(text) =
@@ -921,6 +924,51 @@ impl TranslationProvider for MarianProvider<'_> {
                             }
                         }
                     }
+                }
+                if package.target == "uk" && crate::marian_target_uk::clearly_russian(&translated) {
+                    let candidate = alternatives
+                        .into_iter()
+                        .chain(decoded.filter_map(|tokens| decode_text(&tokens).ok()))
+                        .find(|text| crate::marian_target_uk::clearly_ukrainian(text));
+                    translated = match candidate {
+                        Some(text) => text,
+                        None if ukrainian_retry_budget > 0
+                            && start == 0
+                            && end == source_pieces.len()
+                            && segment.len() <= 768
+                            && units.len() == 1 =>
+                        {
+                            ukrainian_retry_budget -= 1;
+                            let sentence = segment.trim_end();
+                            let retry = match sentence.chars().last() {
+                                Some(mark @ ('.' | '!' | '?')) => {
+                                    let source =
+                                        sentence[..sentence.len() - mark.len_utf8()].trim_end();
+                                    reference(source, settings.beam_size)
+                                        .ok()
+                                        .filter(|text| {
+                                            crate::marian_target_uk::clearly_ukrainian(text)
+                                        })
+                                        .map(|text| {
+                                            format!(
+                                                "{}{mark}",
+                                                text.trim_end_matches(['.', '!', '?'])
+                                            )
+                                        })
+                                }
+                                _ => reference(segment, 1).ok().filter(|text| {
+                                    crate::marian_target_uk::clearly_ukrainian(text)
+                                }),
+                            };
+                            retry
+                                .ok_or("Модель повернула російський текст замість українського.")?
+                        }
+                        None => {
+                            return Err(
+                                "Модель повернула російський текст замість українського.".into()
+                            )
+                        }
+                    };
                 }
                 // Reranking/retry tolerate inference errors. A yield must not cache their fallback.
                 checkpoint()?;

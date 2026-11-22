@@ -20,6 +20,7 @@ pub mod knowledge;
 pub mod language_detection;
 mod marian_deadline;
 mod marian_provider;
+mod marian_target_uk;
 mod model_storage;
 pub mod ocr;
 pub mod ocr_jobs;

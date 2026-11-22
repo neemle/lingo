@@ -275,7 +275,9 @@ pub(crate) fn cached_translation(
         let mut units = Vec::new();
         let mut active_hit = false;
         for (index, text) in &pending {
-            if let Some(mut segments) = store.cached_segments(&unit_cache_key(&route, text)?, 1)? {
+            if let Some(mut segments) =
+                store.cached_segments(&unit_cache_key(&route, text)?, 1, target)?
+            {
                 active_hit |= paragraph.units[*index].sentence_ids.contains(active_id);
                 units.push((*index, segments.remove(0)));
             }
@@ -287,7 +289,9 @@ pub(crate) fn cached_translation(
                 .as_ref()
                 .filter(|(text, _)| text.len() <= MAX_BATCH_BYTES)
             {
-                if let Some(segments) = store.cached_segments(&unit_cache_key(&route, text)?, 1)? {
+                if let Some(segments) =
+                    store.cached_segments(&unit_cache_key(&route, text)?, 1, target)?
+                {
                     sentence = Some(AlignedTranslation {
                         route: route.clone(),
                         segments,
@@ -774,7 +778,7 @@ impl Store {
             return Ok(None);
         };
         let key = cache_key(&route, segments, context, settings)?;
-        if let Some(segments) = self.cached_segments(&key, segments.len())? {
+        if let Some(segments) = self.cached_segments(&key, segments.len(), target)? {
             return Ok(Some(AlignedTranslation {
                 route,
                 segments,
@@ -821,7 +825,7 @@ impl Store {
         let mut output = vec![String::new(); input.len()];
         for (index, text) in input.iter().enumerate() {
             let key = unit_cache_key(&route, text)?;
-            if let Some(mut value) = self.cached_segments(&key, 1)? {
+            if let Some(mut value) = self.cached_segments(&key, 1, target)? {
                 output[index] = value.remove(0);
             } else {
                 uncached.push((index, key, text.clone()));
@@ -853,7 +857,12 @@ impl Store {
         }))
     }
 
-    fn cached_segments(&self, key: &str, count: usize) -> Result<Option<Vec<String>>> {
+    fn cached_segments(
+        &self,
+        key: &str,
+        count: usize,
+        target: &str,
+    ) -> Result<Option<Vec<String>>> {
         let cached: Option<String> = self
             .connection
             .query_row(
@@ -866,7 +875,14 @@ impl Store {
         Ok(cached
             .as_deref()
             .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
-            .filter(|segments| segments.len() == count && valid_segments(segments)))
+            .filter(|segments| {
+                segments.len() == count
+                    && valid_segments(segments)
+                    && (target != "uk"
+                        || !segments
+                            .iter()
+                            .any(|text| crate::marian_target_uk::clearly_russian(text)))
+            }))
     }
 
     fn save_cached_segments<'a>(
