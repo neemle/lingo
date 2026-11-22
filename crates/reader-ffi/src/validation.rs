@@ -130,6 +130,13 @@ fn validate(command: &Command) -> Result<()> {
             "invalid_argument",
             "Semantic vocabulary query exceeds its wire bound",
         )),
+        Command::SynthesizeSpeech { id, sentence_id, engine, .. }
+        | Command::PrefetchSpeech { id, sentence_id, engine, .. }
+            if !valid_token_address(id, sentence_id)
+                || engine.as_ref().is_some_and(|engine| engine.len() > 32) =>
+        {
+            Err(Error::new("invalid_argument", "Invalid speech address"))
+        }
         Command::SentenceTokens { id, sentence_id, limit, .. }
             if !valid_token_address(id, sentence_id)
                 || limit.is_some_and(|limit| !(1..=reader_core::document_tokens::MAX_TOKEN_PAGE_SIZE).contains(&limit)) =>

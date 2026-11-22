@@ -1,7 +1,10 @@
 use crate::optional_models::OptionalModelJob;
-use crate::{onnx_runtime, Document, Result, Store};
+use crate::{
+    onnx_runtime, resources::InferencePriority,
+    speech::{RenderedSpeech, SpeechAdapter, SpeechSource},
+    Result, Store,
+};
 use ort::{session::Session, value::Tensor};
-use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -42,6 +45,14 @@ impl Store {
         speaker: u32,
         rate: f32,
     ) -> Result<SpeechJob> {
+        let (_, source) = self.speech_source(document_id, sentence_id, false)?
+            .ok_or("Речення для озвучення не знайдено")?;
+        self.prepare_piper_source(source, speaker, rate)
+    }
+
+    pub(crate) fn prepare_piper_source(
+        &self, source: SpeechSource, speaker: u32, rate: f32,
+    ) -> Result<SpeechJob> {
         if !SPEAKERS.iter().any(|voice| voice.1 == speaker) {
             return Err("Невідомий голос українського мовного пакета".into());
         }
@@ -49,26 +60,10 @@ impl Store {
             return Err("Швидкість озвучення має бути від 0,5 до 2".into());
         }
 
-        let body: String = self
-            .connection
-            .query_row(
-                "SELECT body FROM documents WHERE id = ?1",
-                [document_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(speech_error)?
-            .ok_or("Документ для озвучення не знайдено")?;
-        let document: Document = serde_json::from_str(&body).map_err(speech_error)?;
-        if document.language != "uk" {
+        if source.language != "uk" {
             return Err("Цей голос підтримує українську мову".into());
         }
-        let sentence = document
-            .sentences
-            .iter()
-            .find(|sentence| sentence.id == sentence_id)
-            .ok_or("Речення для озвучення не знайдено")?;
-        let text = document.speech_text(sentence).to_owned();
+        let text = source.text;
         if text.len() > MAX_INPUT_BYTES {
             return Err("Речення завелике для локального озвучення".into());
         }
@@ -83,6 +78,10 @@ impl Store {
 
 impl SpeechJob {
     pub fn run(self) -> Result<SpeechAudio> {
+        self.render(InferencePriority::Foreground).map(|result| result.audio)
+    }
+
+    fn render(self, priority: InferencePriority) -> Result<RenderedSpeech> {
         let spoken = ukrainian_stress(&self.text);
         let cache = cache::SpeechCacheKey::new(
             MODEL,
@@ -93,8 +92,9 @@ impl SpeechJob {
             &spoken,
             SAMPLE_RATE,
         );
-        self.model.run_cached_interactive(
-            |directory| cache.read(directory),
+        self.model.run_cached(
+            priority,
+            |directory| cache.read(directory).map(|audio| RenderedSpeech { audio, cached: true }),
             |directory, should_yield| {
                 let audio = synthesize_at(
                     directory,
@@ -104,10 +104,16 @@ impl SpeechJob {
                     MAX_SAMPLES,
                     should_yield,
                 )?;
-                cache.write(directory, &audio);
-                Ok(audio)
+                let cached = cache.write(directory, &audio);
+                Ok(RenderedSpeech { audio, cached })
             },
         )
+    }
+}
+
+impl SpeechAdapter for SpeechJob {
+    fn render(self: Box<Self>, priority: InferencePriority) -> Result<RenderedSpeech> {
+        SpeechJob::render(*self, priority)
     }
 }
 

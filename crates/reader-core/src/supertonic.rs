@@ -6,10 +6,13 @@
 
 use crate::optional_models::OptionalModelJob;
 use crate::tts::{cache::SpeechCacheKey, to_wav, ukrainian_stress, SpeechAudio, STRESS_MARK};
-use crate::{onnx_runtime, Document, Result, Store};
+use crate::{
+    onnx_runtime, resources::InferencePriority,
+    speech::{RenderedSpeech, SpeechAdapter, SpeechSource},
+    Result, Store,
+};
 use ort::session::Session;
 use ort::value::Tensor;
-use rusqlite::OptionalExtension;
 use serde::{de::DeserializeOwned, Deserialize};
 use sha2::{Digest, Sha256};
 use std::{fs::File, io::BufReader, path::Path};
@@ -45,38 +48,30 @@ impl Store {
         speaker: u32,
         rate: f32,
     ) -> Result<MultilingualSpeechJob> {
+        let (_, source) = self.speech_source(document_id, sentence_id, false)?
+            .ok_or("Речення для озвучення не знайдено")?;
+        self.prepare_supertonic_source(source, speaker, rate)
+    }
+
+    pub(crate) fn prepare_supertonic_source(
+        &self, source: SpeechSource, speaker: u32, rate: f32,
+    ) -> Result<MultilingualSpeechJob> {
         let voice = *VOICES
             .get(speaker as usize)
             .ok_or("Невідомий голос Supertonic")?;
         if !(0.5..=2.0).contains(&rate) {
             return Err("Швидкість озвучення має бути від 0,5 до 2".into());
         }
-        let body: String = self
-            .connection
-            .query_row(
-                "SELECT body FROM documents WHERE id = ?1",
-                [document_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(supertonic_error)?
-            .ok_or("Документ для озвучення не знайдено")?;
-        let document: Document = serde_json::from_str(&body).map_err(supertonic_error)?;
-        if !CORE_LANGUAGES.contains(&document.language.as_str()) {
+        if !CORE_LANGUAGES.contains(&source.language.as_str()) {
             return Err("Цей голосовий пакет не підтримує мову документа".into());
         }
-        let sentence = document
-            .sentences
-            .iter()
-            .find(|sentence| sentence.id == sentence_id)
-            .ok_or("Речення для озвучення не знайдено")?;
-        let text = document.speech_text(sentence).to_owned();
+        let text = source.text;
         if text.len() > MAX_BYTES {
             return Err("Речення завелике для локального озвучення".into());
         }
         Ok(MultilingualSpeechJob {
             model: self.prepare_optional_model(MODEL)?,
-            language: document.language,
+            language: source.language,
             text,
             voice,
             rate,
@@ -86,6 +81,10 @@ impl Store {
 
 impl MultilingualSpeechJob {
     pub fn run(self) -> Result<SpeechAudio> {
+        self.render(InferencePriority::Foreground).map(|result| result.audio)
+    }
+
+    fn render(self, priority: InferencePriority) -> Result<RenderedSpeech> {
         let spoken = if self.language == "uk" {
             ukrainian_stress(&self.text)
         } else {
@@ -100,8 +99,9 @@ impl MultilingualSpeechJob {
             &spoken,
             SAMPLE_RATE,
         );
-        self.model.run_cached_interactive(
-            |directory| cache.read(directory),
+        self.model.run_cached(
+            priority,
+            |directory| cache.read(directory).map(|audio| RenderedSpeech { audio, cached: true }),
             |directory, should_yield| {
                 let mut engine = Engine::load(directory, self.voice)?;
                 let chunks = text_chunks(&spoken, &engine.indexer)?;
@@ -128,10 +128,16 @@ impl MultilingualSpeechJob {
                     waveform.extend(audio);
                 }
                 let audio = to_wav(&waveform, SAMPLE_RATE)?;
-                cache.write(directory, &audio);
-                Ok(audio)
+                let cached = cache.write(directory, &audio);
+                Ok(RenderedSpeech { audio, cached })
             },
         )
+    }
+}
+
+impl SpeechAdapter for MultilingualSpeechJob {
+    fn render(self: Box<Self>, priority: InferencePriority) -> Result<RenderedSpeech> {
+        MultilingualSpeechJob::render(*self, priority)
     }
 }
 

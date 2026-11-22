@@ -339,6 +339,14 @@ pub enum Command {
         speaker: u32,
         rate: f32,
     },
+    PrefetchSpeech {
+        id: String,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        engine: Option<String>,
+        speaker: u32,
+        rate: f32,
+    },
     TranslateParagraph {
         id: String,
         #[serde(rename = "sentenceId")]

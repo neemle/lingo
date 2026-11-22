@@ -267,23 +267,31 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             engine,
             speaker,
             rate,
-        } => match engine.as_deref().unwrap_or("piper-uk") {
-            "piper-uk" => {
+        }
+        | Command::PrefetchSpeech {
+            id,
+            sentence_id,
+            engine,
+            speaker,
+            rate,
+        } => {
+            let engine = reader_core::speech::ModelSpeechEngine::from_id(
+                engine.as_deref().unwrap_or("piper-uk"),
+            )
+            .ok_or_else(|| Error::new("invalid_argument", "Невідомий рушій озвучення."))?;
+            if matches!(&command, Command::PrefetchSpeech { .. }) {
                 let job = registry::lock()?
                     .store(handle)?
-                    .prepare_speech(id, sentence_id, *speaker, *rate)
+                    .prepare_speech_prefetch(id, sentence_id, engine, *speaker, *rate)
                     .map_err(gateway::domain)?;
-                return encode_job(job.run());
+                return encode_job(job.map(|job| job.prefetch()).transpose());
             }
-            "supertonic-3" => {
-                let job = registry::lock()?
-                    .store(handle)?
-                    .prepare_multilingual_speech(id, sentence_id, *speaker, *rate)
-                    .map_err(gateway::domain)?;
-                return encode_job(job.run());
-            }
-            _ => return Err(Error::new("invalid_argument", "Невідомий рушій озвучення.")),
-        },
+            let job = registry::lock()?
+                .store(handle)?
+                .prepare_model_speech(id, sentence_id, engine, *speaker, *rate)
+                .map_err(gateway::domain)?;
+            return encode_job(job.run());
+        }
         _ => {}
     }
     let mut state = registry::lock()?;

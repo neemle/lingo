@@ -10,6 +10,12 @@ const READER_RESERVE_MIB: u64 = 1024;
 
 pub(crate) static RESOURCES: ResourceGovernor = ResourceGovernor::new();
 
+#[derive(Clone, Copy)]
+pub(crate) enum InferencePriority {
+    Foreground,
+    Background,
+}
+
 pub(crate) struct ResourceGovernor {
     work: Mutex<()>,
     interactive_waiting: AtomicUsize,

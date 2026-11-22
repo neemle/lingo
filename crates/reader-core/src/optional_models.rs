@@ -1,9 +1,9 @@
 use crate::{
     model_storage::{
-        activate_verified_package, copy_and_hash, lock_package, model_error, package_directory,
+        activate_verified_package, copy_and_hash_checked, lock_package, model_error, package_directory,
         remove_package_directory, restore_verified_package,
     },
-    resources::{MemoryReadiness, ModelBudget, RESOURCES},
+    resources::{InferencePriority, MemoryReadiness, ModelBudget, RESOURCES},
     space::{ensure_capacity, PACKAGE_OVERHEAD},
     Result, Store,
 };
@@ -249,12 +249,21 @@ fn local_size(path: &Path) -> Option<u64> {
 }
 
 fn verify_asset(path: &Path, asset: &Asset, output: impl Write) -> Result<()> {
+    verify_asset_checked(path, asset, output, &|| Ok(()))
+}
+
+fn verify_asset_checked(
+    path: &Path,
+    asset: &Asset,
+    output: impl Write,
+    checkpoint: &impl Fn() -> Result<()>,
+) -> Result<()> {
     let corrupted = || format!("Файл моделі пошкоджений або відсутній: {}", asset.name);
     if local_size(path) != Some(asset.bytes) {
         return Err(corrupted());
     }
     let input = File::open(path).map_err(model_error)?;
-    let (bytes, digest) = copy_and_hash(input, output, asset.bytes)?;
+    let (bytes, digest) = copy_and_hash_checked(input, output, asset.bytes, checkpoint)?;
     if bytes != asset.bytes || digest != asset.sha256 {
         return Err(corrupted());
     }
@@ -282,19 +291,31 @@ impl OptionalModelJob {
         self.run_checked(inference, &|| permit.should_yield())
     }
 
-    pub(crate) fn run_cached_interactive<T>(
+    pub(crate) fn run_cached<T>(
         self,
+        priority: InferencePriority,
         cached: impl Fn(&Path) -> Option<T>,
         inference: impl FnOnce(&Path, &dyn Fn() -> bool) -> Result<T>,
     ) -> Result<T> {
         if let Some(audio) = self.read_installed_cache(&cached)? {
             return Ok(audio);
         }
-        let _permit = RESOURCES.interactive();
-        if let Some(audio) = self.read_installed_cache(cached)? {
-            return Ok(audio);
+        match priority {
+            InferencePriority::Foreground => {
+                let _permit = RESOURCES.interactive();
+                if let Some(audio) = self.read_installed_cache(cached)? {
+                    return Ok(audio);
+                }
+                self.run_checked(inference, &|| false)
+            }
+            InferencePriority::Background => {
+                let permit = RESOURCES.optional()?;
+                if let Some(audio) = self.read_installed_cache(cached)? {
+                    return Ok(audio);
+                }
+                self.run_checked(inference, &|| permit.should_yield())
+            }
         }
-        self.run_checked(inference, &|| false)
     }
 
     fn read_installed_cache<T>(
@@ -330,15 +351,16 @@ impl OptionalModelJob {
         }
         let _gate = lock_package(&self.paths.lock, false)?;
         let installed = self.paths.installed();
-        for asset in self.model.assets {
+        let checkpoint = || {
             if requested_yield() {
-                return Err("Аналіз відкладено, щоб виконати переклад.".into());
+                return Err("Фонову обробку відкладено для активного запиту.".into());
             }
-            verify_asset(&installed.join(asset.name), asset, io::sink())?;
+            Ok(())
+        };
+        for asset in self.model.assets {
+            verify_asset_checked(&installed.join(asset.name), asset, io::sink(), &checkpoint)?;
         }
-        if requested_yield() {
-            return Err("Аналіз відкладено, щоб виконати переклад.".into());
-        }
+        checkpoint()?;
         inference(installed, requested_yield)
     }
 }

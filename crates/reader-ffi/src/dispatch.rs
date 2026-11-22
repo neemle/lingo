@@ -175,7 +175,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::ExplainWord { .. }
         | Command::SemanticVocabulary { .. }
         | Command::InstallLexicalPackage { .. }
-        | Command::SynthesizeSpeech { .. } => Err(Error::new(
+        | Command::SynthesizeSpeech { .. }
+        | Command::PrefetchSpeech { .. } => Err(Error::new(
             "internal_error",
             "Optional inference requires unlocked dispatch",
         )),

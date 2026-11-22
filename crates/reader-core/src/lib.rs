@@ -42,6 +42,7 @@ mod review_schedule;
 pub use review_schedule::FsrsMemory;
 mod resources;
 mod space;
+pub mod speech;
 pub mod supertonic;
 pub mod translation;
 pub mod translation_queue;

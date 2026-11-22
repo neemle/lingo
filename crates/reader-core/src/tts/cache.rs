@@ -57,9 +57,9 @@ impl SpeechCacheKey {
         self.read_file(&directory.join(&self.name))
     }
 
-    pub(crate) fn write(&self, package: &Path, audio: &SpeechAudio) {
+    pub(crate) fn write(&self, package: &Path, audio: &SpeechAudio) -> bool {
         // Failure to cache generated audio must not interrupt playback.
-        let _ = self.persist(package, audio);
+        self.persist(package, audio).is_some()
     }
 
     fn persist(&self, package: &Path, audio: &SpeechAudio) -> Option<()> {
