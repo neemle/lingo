@@ -247,6 +247,14 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             sentence_id,
             target,
         } => sentence_translation(store.translate_installed_sentence(&id, &sentence_id, &target)),
+        Command::ScheduleTranslationWindow { id, sentence_id, revision_id, target } => {
+            value(store.schedule_translation_window(&id, &sentence_id, &revision_id, &target))
+        }
+        Command::PendingTranslationWindow { id } => value(store.pending_translation_window(&id)),
+        Command::CancelTranslationWindow { id } => value(store.cancel_translation_window(&id)),
+        Command::RunTranslationWindow { .. } => Err(gateway::domain(
+            "Фоновий переклад потребує файлової бібліотеки.".into(),
+        )),
         Command::FindTranslationPage {
             id,
             target,

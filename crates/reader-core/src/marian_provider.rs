@@ -385,6 +385,10 @@ impl TranslationWorker {
             .translate_paragraph_with_priority(document_id, sentence_id, target, background)
     }
 
+    pub fn run_translation_window(self, document_id: &str) -> Result<Option<ParagraphTranslation>> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?.run_translation_window(document_id)
+    }
+
     pub fn cached_translation(
         self,
         document_id: &str,
@@ -570,6 +574,16 @@ impl Store {
         background: bool,
     ) -> Result<ParagraphTranslation> {
         let (document, selected) = self.translation_selection(document_id, sentence_id)?;
+        self.translate_document_paragraph(&document, selected, target, background)
+    }
+
+    pub(crate) fn translate_document_paragraph(
+        &mut self,
+        document: &crate::Document,
+        selected: usize,
+        target: &str,
+        background: bool,
+    ) -> Result<ParagraphTranslation> {
         let directory = self.model_directory.clone();
         translate_paragraph(
             self,
@@ -577,7 +591,7 @@ impl Store {
                 directory: &directory,
                 background,
             },
-            &document,
+            document,
             selected,
             target,
         )

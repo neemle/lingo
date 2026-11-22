@@ -43,6 +43,7 @@ mod resources;
 mod space;
 pub mod supertonic;
 pub mod translation;
+pub mod translation_queue;
 pub mod tts;
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -443,6 +444,7 @@ impl Store {
         pdf_page_ocr::initialize(&connection)?;
         pdf_reading_position::initialize(&connection)?;
         reader_preferences::initialize(&connection)?;
+        translation_queue::initialize(&connection)?;
         let file_original_directory = file_originals::directory(path);
         file_originals::cleanup_orphans(&mut connection, &file_original_directory);
         Ok(Self {

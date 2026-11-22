@@ -319,6 +319,23 @@ pub enum Command {
         #[serde(default)]
         background: bool,
     },
+    ScheduleTranslationWindow {
+        id: String,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        #[serde(rename = "revisionId")]
+        revision_id: String,
+        target: String,
+    },
+    PendingTranslationWindow {
+        id: String,
+    },
+    RunTranslationWindow {
+        id: String,
+    },
+    CancelTranslationWindow {
+        id: String,
+    },
     FindTranslationPage {
         id: String,
         target: String,

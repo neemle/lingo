@@ -115,6 +115,12 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 };
             }
         }
+        Command::RunTranslationWindow { id } => {
+            let worker = registry::lock()?.store(handle)?.prepare_translation_worker();
+            if let Some(worker) = worker {
+                return encode_job(worker.run_translation_window(id));
+            }
+        }
         Command::FindTranslationPage {
             id,
             target,
