@@ -255,8 +255,15 @@ mod tests {
         };
         let active = store.save_word(entry("livre", "legacy-source")).unwrap();
         let other = store.save_word(entry("ouvrage", &document.id)).unwrap();
-        crate::dictionary_transfer::link_card_document(&store.connection, &other.id, &document.id)
+        let linked: bool = store
+            .connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM dictionary_card_sources WHERE card_id=?1 AND document_id=?2)",
+                rusqlite::params![other.id, document.id],
+                |row| row.get(0),
+            )
             .unwrap();
+        assert!(linked);
         for card in [&active, &other] {
             store.review(&card.id, "reverse", 2).unwrap();
         }
