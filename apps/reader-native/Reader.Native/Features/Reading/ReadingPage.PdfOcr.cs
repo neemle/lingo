@@ -1,5 +1,5 @@
-#if MACCATALYST
 using Reader.Contracts;
+#if MACCATALYST
 using Reader.Native.Services;
 using Reader.Presentation;
 #endif
@@ -208,8 +208,29 @@ public partial class ReadingPage
         }
     }
 
-    private async Task ContinueDetachedOnFollowingPageAsync(DetachedAddress address)
+    private async Task<int?> PdfNarrationBoundaryAsync(string documentId, Sentence completed, CancellationToken token)
     {
+        var session = AppState.Session;
+        if (session.Document is not { Format: "pdf", PdfPageStarts.Length: > 0 }) return null;
+
+        await pdfWindowRead.WaitAsync(token);
+        if (!readingPageActive || session.Document is not { } document || document.Id != documentId ||
+            session.Sentence?.Id != completed.Id || pdfWindow is not { } window ||
+            window.Center + 1 >= window.PageCount)
+            return null;
+
+        var page = window.Pages.FirstOrDefault(candidate => candidate.Page == window.Center);
+        if (page?.Span is not { } span || completed.StartUtf16 >= span.EndUtf16 ||
+            completed.EndUtf16 <= span.StartUtf16)
+            return null;
+
+        var next = document.Sentences.ElementAtOrDefault(document.Position + 1);
+        return next is null || next.StartUtf16 >= span.EndUtf16 ? window.Center : null;
+    }
+
+    private async Task ContinuePdfNarrationAsync(string documentId, int completedPage, string? completedSentenceId = null)
+    {
+        if (pdfWindow?.Center != completedPage) return;
         using var narration = new CancellationTokenSource();
         CancelDetachedSpeechTravel();
         detachedSpeechTravel = narration;
@@ -218,11 +239,15 @@ public partial class ReadingPage
         try
         {
             while (readingPageActive && ContinueSpeech.IsChecked &&
-                session.Document?.Id == address.Document &&
+                session.Document?.Id == documentId &&
                 pdfWindow is { } window && window.Center + 1 < window.PageCount)
             {
-                token.ThrowIfCancellationRequested();
                 var nextPage = window.Center + 1;
+                await session.WaitUntilIdleAsync().WaitAsync(token);
+                await pdfWindowRead.WaitAsync(token);
+                token.ThrowIfCancellationRequested();
+                if (pdfWindow?.Center != window.Center || session.Document?.Id != documentId ||
+                    !readingPageActive || !ContinueSpeech.IsChecked) return;
                 await OpenPdfPageAsync(nextPage, narration);
                 token.ThrowIfCancellationRequested();
                 if (pdfWindow is not { } opened || opened.Center != nextPage) return;
@@ -235,12 +260,12 @@ public partial class ReadingPage
                     await pdfWindowRead.WaitAsync(token);
                     page = pdfWindow?.Pages.FirstOrDefault(candidate => candidate.Page == nextPage);
                 }
-                if (!readingPageActive || session.Document?.Id != address.Document || !ContinueSpeech.IsChecked)
+                if (!readingPageActive || session.Document?.Id != documentId || !ContinueSpeech.IsChecked)
                     return;
                 if (page is { State: "empty", RefreshPending: false }) continue;
 
                 if (page is { State: "detached" } &&
-                    detachedAddress is { } target && target.Document == address.Document && target.Page == nextPage)
+                    detachedAddress is { } target && target.Document == documentId && target.Page == nextPage)
                 {
                     await detachedInitialSentence.WaitAsync(token);
                     if (detachedSentence is { Position: > 0 } && detachedAddress == target)
@@ -255,21 +280,29 @@ public partial class ReadingPage
                 }
                 else if (page?.Span is { } span)
                 {
-                    if (session.Sentence is not { } selected ||
-                        selected.StartUtf16 >= span.EndUtf16 || selected.EndUtf16 <= span.StartUtf16)
+                    if (!OverlapsPdfPage(session.Sentence, span))
                     {
-                        if (!await session.OpenPdfReadingPageAsync(address.Document, revisionId: null, page: nextPage))
+                        if (!await session.OpenPdfReadingPageAsync(documentId, revisionId: null, page: nextPage))
                             return;
                         await pdfWindowRead.WaitAsync(token);
                     }
                     token.ThrowIfCancellationRequested();
-                    if (readingPageActive && ContinueSpeech.IsChecked && session.Document?.Id == address.Document &&
-                        session.Sentence is { } sentence && sentence.StartUtf16 < span.EndUtf16 &&
-                        sentence.EndUtf16 > span.StartUtf16)
+                    if (!readingPageActive || !ContinueSpeech.IsChecked || session.Document is not { } document ||
+                        document.Id != documentId || !OverlapsPdfPage(session.Sentence, span))
+                        return;
+
+                    if (completedSentenceId is not null && session.Sentence?.Id == completedSentenceId)
                     {
-                        detachedSpeechTravel = null;
-                        await SpeakAsync();
+                        var nextPosition = document.Position + 1;
+                        var next = document.Sentences.ElementAtOrDefault(nextPosition);
+                        if (!OverlapsPdfPage(next, span)) continue;
+                        await session.SelectSentenceAsync(nextPosition);
+                        token.ThrowIfCancellationRequested();
+                        if (session.Error.Length > 0) throw new InvalidOperationException(session.Error);
+                        if (session.Document?.Id != documentId || session.Sentence?.Id != next?.Id) return;
                     }
+                    detachedSpeechTravel = null;
+                    await SpeakAsync();
                 }
                 return;
             }
@@ -285,6 +318,9 @@ public partial class ReadingPage
             if (ReferenceEquals(detachedSpeechTravel, narration)) detachedSpeechTravel = null;
         }
     }
+
+    private static bool OverlapsPdfPage(Sentence? sentence, OcrSpan span) =>
+        sentence is not null && sentence.StartUtf16 < span.EndUtf16 && sentence.EndUtf16 > span.StartUtf16;
 
     private void UpdatePdfPageDisplay()
     {
@@ -405,7 +441,11 @@ public partial class ReadingPage
         run?.Cancel();
     }
 #else
-    private static Task ContinueDetachedOnFollowingPageAsync(DetachedAddress address) => Task.CompletedTask;
+    private static Task<int?> PdfNarrationBoundaryAsync(string documentId, Sentence completed, CancellationToken token) =>
+        Task.FromResult<int?>(null);
+
+    private static Task ContinuePdfNarrationAsync(string documentId, int completedPage, string? completedSentenceId = null) =>
+        Task.CompletedTask;
 #endif
 
     private void RetryPdfOcrClicked(object? sender, EventArgs args)

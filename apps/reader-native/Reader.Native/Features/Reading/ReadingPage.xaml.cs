@@ -625,17 +625,20 @@ public partial class ReadingPage : ContentPage
     private async void PreviousClicked(object? sender, EventArgs args)
     {
         if (PdfPageNotice.IsVisible) return;
+        CancelDetachedSpeechTravel();
         StopSpeech(); await AppState.Session.MoveAsync(-1);
     }
     private async void NextClicked(object? sender, EventArgs args)
     {
         if (PdfPageNotice.IsVisible) return;
+        CancelDetachedSpeechTravel();
         StopSpeech(); await AppState.Session.MoveAsync(1);
     }
     private async void SentenceChanged(object? sender, EventArgs args)
     {
         if (SentencePicker.SelectedIndex < 0 || AppState.Session.Busy ||
             SentencePicker.SelectedIndex == AppState.Session.Document?.Position) return;
+        CancelDetachedSpeechTravel();
         StopSpeech(); await AppState.Session.SelectSentenceAsync(SentencePicker.SelectedIndex);
     }
 
@@ -643,6 +646,7 @@ public partial class ReadingPage : ContentPage
     {
         if (!speechPreferencesReady || loadingSpeechPreferences || Rate.SelectedIndex < 0) return;
         SaveReaderPreference(ReaderPreferenceChange.SpeechPlayback(SpeechRatePercent, ContinueSpeech.IsChecked));
+        if (!ContinueSpeech.IsChecked) CancelDetachedSpeechTravel();
         if (!utteranceActive) RefreshSpeechResume();
         if (detachedAddress is not null) UpdateDetachedControls();
     }
@@ -728,6 +732,7 @@ public partial class ReadingPage : ContentPage
 
     private async Task SpeakAsync(SpeechResume? resume = null)
     {
+        CancelDetachedSpeechTravel();
         var session = AppState.Session;
         if (PdfPageNotice.IsVisible || session.Busy || session.Document is not { } initial || session.Sentence is not { } sentence) return;
         var source = SpeechSourceFor(initial, sentence);
@@ -762,6 +767,7 @@ public partial class ReadingPage : ContentPage
         var receivedCue = false;
         var systemUsesSpeechOverride = false;
         string? status = LocalSpeech.CompletedStatus;
+        (int Page, string CompletedSentenceId)? pdfContinuation = null;
 
         while (request == speechRequest && session.Document is { } doc && doc.Id == documentId &&
             session.Sentence is { } sentence)
@@ -828,13 +834,31 @@ public partial class ReadingPage : ContentPage
                 }
             }
             else SaveSpeechResume();
-            if (status != LocalSpeech.CompletedStatus || !ContinueSpeech.IsChecked ||
-                doc.Position + 1 >= doc.Sentences.Length || session.Busy)
-                break;
+            if (status != LocalSpeech.CompletedStatus || !ContinueSpeech.IsChecked) break;
 
-            await session.SelectSentenceAsync(doc.Position + 1);
+            int? boundary;
+            try
+            {
+                // A completed system fallback can outlive the cancelled model job.
+                var boundaryToken = token.IsCancellationRequested && !modelVoice ? CancellationToken.None : token;
+                boundary = await PdfNarrationBoundaryAsync(documentId, sentence, boundaryToken);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
             if (request != speechRequest) return;
-            if (session.Error.Length > 0 || session.Document?.Position != doc.Position + 1)
+            if (!ContinueSpeech.IsChecked) break;
+            if (boundary is int page)
+            {
+                pdfContinuation = (page, sentence.Id);
+                break;
+            }
+
+            if (session.Busy || session.Document is not { } current || current.Id != documentId ||
+                session.Sentence?.Id != sentence.Id || current.Position + 1 >= current.Sentences.Length)
+                break;
+            var next = current.Position + 1;
+            await session.SelectSentenceAsync(next);
+            if (request != speechRequest) return;
+            if (session.Error.Length > 0 || session.Document?.Position != next)
             {
                 status = session.Error.Length > 0 ? session.Error : "Не вдалося перейти до наступного речення.";
                 break;
@@ -856,6 +880,8 @@ public partial class ReadingPage : ContentPage
             }
         }
         RefreshSpeechResume();
+        if (pdfContinuation is { } continuation && readingPageActive)
+            _ = ContinuePdfNarrationAsync(documentId, continuation.Page, continuation.CompletedSentenceId);
     }
 
     private Task<string?> PlaySystemSentenceAsync(ReaderSession session, Document document, Sentence sentence,
@@ -907,6 +933,8 @@ public partial class ReadingPage : ContentPage
 
     private void StopClicked(object? sender, EventArgs args)
     {
+        CancelDetachedSpeechTravel();
+        if (speakingDetachedSentence) ClearDetachedSpeech();
         RecordReadingActivity();
         StopSpeech();
     }

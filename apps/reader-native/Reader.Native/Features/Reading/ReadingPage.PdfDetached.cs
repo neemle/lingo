@@ -408,7 +408,7 @@ public partial class ReadingPage
         }
 
         if (advancePage && readingPageActive && detachedAddress == address)
-            await ContinueDetachedOnFollowingPageAsync(address);
+            await ContinuePdfNarrationAsync(address.Document, address.Page);
     }
 
     private async Task<bool> PlayDetachedSentenceAsync(DetachedAddress address, DetachedPdfSentence current,
@@ -566,6 +566,7 @@ public partial class ReadingPage
         DetachedPrevious.IsEnabled = available && detachedSentence is { Position: > 0 };
         DetachedNext.IsEnabled = available && detachedSentence is { } current && current.Position + 1 < current.Total;
         DetachedSpeak.IsEnabled = available;
+        DetachedStopSpeech.IsVisible = speakingDetachedSentence;
         DetachedResumeSpeech.IsVisible = available && !speakingDetachedSentence && CanResumeDetachedSpeech();
         DetachedAnalyze.IsEnabled = available;
         DetachedBookmark.IsEnabled = DetachedNote.IsEnabled = DetachedAnnotations.IsEnabled =
