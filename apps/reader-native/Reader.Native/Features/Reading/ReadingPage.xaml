@@ -62,7 +62,7 @@
   </MenuBarItem>
  </ContentPage.MenuBarItems>
  <Grid Padding="30,22,30,16" RowDefinitions="Auto,Auto,*,Auto,Auto" RowSpacing="13">
-  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+  <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="16">
    <VerticalStackLayout Spacing="7">
     <HorizontalStackLayout Spacing="8">
      <Border x:Name="SourceLanguageBadge" Padding="6,3" Stroke="#DCE1D3" BackgroundColor="#E9ECE2"
@@ -78,6 +78,16 @@
    <Button Grid.Column="1" Text="Оригінал" Style="{StaticResource OutlineButton}" VerticalOptions="Center"
     IsVisible="{Binding CanViewOriginal}" Clicked="ViewOriginalClicked"
     SemanticProperties.Description="Переглянути оригінал документа" />
+   <Grid Grid.Row="1" Grid.ColumnSpan="2" x:Name="PdfPageControls" IsVisible="False" Margin="0,8,0,0"
+    ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+    <Button x:Name="PreviousPdfPage" Text="‹" Style="{StaticResource PlayerButton}" Clicked="PreviousPdfPageClicked"
+     IsEnabled="False" SemanticProperties.Description="Попередня сторінка PDF" />
+    <Label Grid.Column="1" x:Name="PdfPageStatus" Style="{StaticResource ReaderMeta}" HorizontalTextAlignment="Center" />
+    <Button Grid.Column="2" x:Name="NextPdfPage" Text="›" Style="{StaticResource PlayerButton}" Clicked="NextPdfPageClicked"
+     IsEnabled="False" SemanticProperties.Description="Наступна сторінка PDF" />
+    <Button Grid.Column="3" x:Name="RetryPdfOcr" Text="Повторити OCR" Style="{StaticResource PlayerButton}"
+     Clicked="RetryPdfOcrClicked" IsVisible="False" />
+   </Grid>
   </Grid>
 
   <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
@@ -159,6 +169,10 @@
       </FlexLayout>
      </Grid>
     </Grid>
+    <VerticalStackLayout Grid.Row="2" x:Name="PdfPageNotice" IsVisible="False" Spacing="10"
+     Padding="18" HorizontalOptions="Center" VerticalOptions="Center">
+     <Label x:Name="PdfPageMessage" Style="{StaticResource ReaderMeta}" HorizontalTextAlignment="Center" />
+    </VerticalStackLayout>
     <Grid Grid.Row="3" x:Name="SourceHint" BackgroundColor="#FAFBF6" Padding="15,7">
      <Label Text="Виділіть слово в оригіналі, щоб переглянути значення чи додати його до словника."
       Style="{StaticResource ReaderMeta}" />
@@ -206,7 +220,7 @@
 
   <Grid Grid.Row="4" RowDefinitions="Auto,Auto" RowSpacing="4">
    <Label Text="{Binding Error}" TextColor="{StaticResource Accent}" />
-   <Border Grid.Row="1" AutomationId="ReadingControls" BackgroundColor="{StaticResource Panel}"
+   <Border Grid.Row="1" x:Name="ReaderControls" AutomationId="ReadingControls" BackgroundColor="{StaticResource Panel}"
     Stroke="{StaticResource BorderTone}" StrokeShape="RoundRectangle 11">
     <Border.Shadow><Shadow Brush="#62644E" Opacity="0.09" Radius="10" Offset="0,4" /></Border.Shadow>
     <Grid RowDefinitions="Auto,46,Auto,Auto,Auto,3" RowSpacing="3">

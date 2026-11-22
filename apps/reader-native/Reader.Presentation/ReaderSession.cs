@@ -182,7 +182,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
 
     public Task SetPdfReadingPageAsync(string id, int page) => Task.Run(() => client.SetPdfReadingPage(id, page));
 
-    public async Task<bool> OpenPdfReadingPageAsync(string id, string revisionId, int page)
+    public async Task<bool> OpenPdfReadingPageAsync(string id, string? revisionId, int page)
     {
         var hasText = false;
         await RunAsync(() =>
@@ -192,6 +192,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         });
         return hasText && Error.Length == 0;
     }
+
+    public Task<PdfReadWindow> PdfReadWindowAsync(string id, int center) =>
+        Task.Run(() => client.PdfReadWindow(id, center));
 
     public Task<PdfOcrRequest?> ClaimPdfOcrPageAsync(string id) => Task.Run(() => client.ClaimPdfOcrPage(id));
 

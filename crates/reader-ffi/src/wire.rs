@@ -100,7 +100,7 @@ pub enum Command {
     OpenPdfReadingPage {
         id: String,
         #[serde(rename = "revisionId")]
-        revision_id: String,
+        revision_id: Option<String>,
         page: u16,
     },
     PdfReadWindow {

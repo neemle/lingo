@@ -153,7 +153,7 @@ public partial class ReadingPage
 
     private AutoTranslationRequest? NextTranslationRequest()
     {
-        if (restoringTranslationCache) return null;
+        if (restoringTranslationCache || PdfPageNotice.IsVisible) return null;
         if (PendingAutoTranslation() is { } foreground && foreground != lastAutoTranslation) return new(foreground);
         if (!readingPageActive || !autoTranslate || !TranslationVisible || translating || utteranceActive || prefetching ||
             readiness is not { Ready: true } route || ActiveTranslationKey() is not { } active || active == lastPrefetchOrigin ||

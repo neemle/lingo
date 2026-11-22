@@ -92,7 +92,10 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::PdfReadingPage { id } => value(store.pdf_reading_page(&id)),
         Command::SetPdfReadingPage { id, page } => value(store.set_pdf_reading_page(&id, page)),
         Command::OpenPdfReadingPage { id, revision_id, page } => {
-            value(store.open_pdf_reading_page(&id, &revision_id, page))
+            match revision_id {
+                Some(revision) => value(store.open_pdf_reading_page(&id, &revision, page)),
+                None => value(store.focus_pdf_reading_page(&id, None, page)),
+            }
         }
         Command::PdfReadWindow { id, center } => value(store.pdf_read_window(&id, center)),
         Command::SentenceTokens { id, sentence_id, start, limit } => value(store.sentence_tokens(

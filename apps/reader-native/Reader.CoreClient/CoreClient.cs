@@ -123,8 +123,11 @@ public sealed class CoreClient : IDisposable
     public void SetPdfReadingPage(string id, int page) =>
         Call<JsonElement>(new { version = 1, operation = "set_pdf_reading_page", id, page });
 
-    public int? OpenPdfReadingPage(string id, string revisionId, int page) =>
+    public int? OpenPdfReadingPage(string id, string? revisionId, int page) =>
         Call<int?>(new { version = 1, operation = "open_pdf_reading_page", id, revisionId, page });
+
+    public PdfReadWindow PdfReadWindow(string id, int center) =>
+        Call<PdfReadWindow>(new { version = 1, operation = "pdf_read_window", id, center });
 
     public PdfOcrRequest? ClaimPdfOcrPage(string id) =>
         Call<PdfOcrRequest?>(new { version = 1, operation = "claim_pdf_ocr_page", id });

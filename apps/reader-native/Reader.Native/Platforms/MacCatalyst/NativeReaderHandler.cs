@@ -38,6 +38,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
     {
         base.ConnectHandler(platformView);
         platformView.SelectionChanged += Selected;
+        VirtualView.OffsetRevealRequested += RevealOffset;
         tap = new UITapGestureRecognizer(Tapped) { CancelsTouchesInView = false };
         tap.ShouldRecognizeSimultaneously = (_, _) => true;
         platformView.AddGestureRecognizer(tap);
@@ -46,12 +47,20 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
     protected override void DisconnectHandler(UITextView platformView)
     {
         platformView.SelectionChanged -= Selected;
+        VirtualView.OffsetRevealRequested -= RevealOffset;
         if (tap is not null) { platformView.RemoveGestureRecognizer(tap); tap.Dispose(); }
         tap = null;
         renderedText = null;
         renderedBlocks = [];
         highlightedSentence = spokenWord = null;
         base.DisconnectHandler(platformView);
+    }
+
+    private void RevealOffset(object? sender, int offset)
+    {
+        if (renderedText is not { } text || offset < 0 || offset >= text.Length) return;
+        var length = char.IsSurrogatePair(text, offset) ? 2 : 1;
+        PlatformView.ScrollRangeToVisible(new NSRange(offset, length));
     }
 
     private void Selected(object? sender, EventArgs args)

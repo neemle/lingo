@@ -43,6 +43,10 @@ public sealed class NativeReaderView : View
     }
     public event EventHandler<TextSelection>? SourceSelected;
 
+    internal event EventHandler<int>? OffsetRevealRequested;
+
+    internal void RevealOffset(int offset) => OffsetRevealRequested?.Invoke(this, offset);
+
     internal TextSelection? HighlightedSpan() => GetSourceRanges().Selection(HighlightStart, HighlightLength);
 
     public void SelectSource(int start, int length)

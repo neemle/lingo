@@ -35,30 +35,22 @@ impl Store {
 
     /// Enter the text of a physical page while retaining that page as the OCR focus.
     pub fn open_pdf_reading_page(&mut self, id: &str, revision: &str, page: u16) -> Result<Option<usize>> {
+        self.focus_pdf_reading_page(id, Some(revision), page)
+    }
+
+    /// Opening a physical page does not require a text revision when the caller
+    /// has no text selection to validate.
+    pub fn focus_pdf_reading_page(
+        &mut self, id: &str, revision: Option<&str>, page: u16,
+    ) -> Result<Option<usize>> {
         let mut opened = None;
         self.edit_document(id, |document, tx| {
-            if document.current_revision_id.as_deref() != Some(revision) {
+            if revision.is_some_and(|revision| document.current_revision_id.as_deref() != Some(revision)) {
                 return Err("Текст PDF змінився. Відкрийте сторінку знову.".into());
             }
             set_page(tx, document, page, true)?;
-            let Some((start, end)) = page_bounds(document, page) else { return Ok(false); };
-            let overlaps = |sentence: &crate::Sentence| sentence.start_utf16 < end && sentence.end_utf16 > start;
-            opened = if document.sentences.get(document.position).is_some_and(overlaps) {
-                Some(document.position)
-            } else {
-                document.sentences.iter().position(overlaps)
-            };
-            let Some(position) = opened else { return Ok(false); };
-            let retain_word = document.position == position && document.reading_token_utf16
-                .is_some_and(|offset| {
-                    let absolute = document.sentences[position].start_utf16 + offset;
-                    start <= absolute && absolute < end
-                });
-            let changed = document.position != position || (!retain_word && document.reading_token_utf16.is_some());
-            document.position = position;
-            if !retain_word {
-                document.reading_token_utf16 = None;
-            }
+            let (position, changed) = focus_page_text(document, page);
+            opened = position;
             Ok(changed)
         })?;
         Ok(opened)
@@ -83,6 +75,29 @@ pub(crate) fn focus_for_offset(db: &Connection, document: &Document, offset: usi
         set_page(db, document, page, false)?;
     }
     Ok(())
+}
+
+/// Move the sentence cursor into the page while retaining an overlapping selection.
+pub(crate) fn focus_page_text(document: &mut Document, page: u16) -> (Option<usize>, bool) {
+    let Some((start, end)) = page_bounds(document, page) else { return (None, false); };
+    let overlaps = |sentence: &crate::Sentence| sentence.start_utf16 < end && sentence.end_utf16 > start;
+    let position = if document.sentences.get(document.position).is_some_and(overlaps) {
+        Some(document.position)
+    } else {
+        document.sentences.iter().position(overlaps)
+    };
+    let Some(position) = position else { return (None, false); };
+    let retain_word = document.position == position && document.reading_token_utf16
+        .is_some_and(|offset| {
+            let absolute = document.sentences[position].start_utf16 + offset;
+            start <= absolute && absolute < end
+        });
+    let changed = document.position != position || (!retain_word && document.reading_token_utf16.is_some());
+    document.position = position;
+    if !retain_word {
+        document.reading_token_utf16 = None;
+    }
+    (Some(position), changed)
 }
 
 fn page_bounds(document: &Document, page: u16) -> Option<(usize, usize)> {

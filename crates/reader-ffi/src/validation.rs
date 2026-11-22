@@ -162,7 +162,7 @@ fn validate(command: &Command) -> Result<()> {
         {
             Err(Error::new("invalid_argument", "Invalid sentence token address"))
         }
-        Command::OpenPdfReadingPage { id, revision_id, .. }
+        Command::OpenPdfReadingPage { id, revision_id: Some(revision_id), .. }
         | Command::AnchorReadingSelection { id, revision_id, .. }
             if !valid_token_address(id, revision_id)
                 || revision_id.len() != 64
@@ -201,6 +201,7 @@ fn validate(command: &Command) -> Result<()> {
         | Command::CancelTranslationWindow { id }
         | Command::PdfReadingPage { id }
         | Command::SetPdfReadingPage { id, .. }
+        | Command::OpenPdfReadingPage { id, .. }
         | Command::PdfReadWindow { id, .. }
         | Command::PdfOcrNeededPages { id, .. }
         | Command::ClaimPdfOcrPage { id }

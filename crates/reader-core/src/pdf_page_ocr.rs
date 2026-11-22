@@ -342,6 +342,14 @@ impl Store {
             let insertion = existing.partition_point(|line| line.page < page);
             existing.splice(insertion..insertion, lines);
             reflow_pdf_document(tx, document, pages)?;
+            let focused: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pdf_reading_positions WHERE document_id=?1 AND page=?2)",
+                params![id, page],
+                |row| row.get(0),
+            ).map_err(database_error)?;
+            if focused {
+                crate::pdf_reading_position::focus_page_text(document, page);
+            }
             updated = Some(document.clone());
             Ok(true)
         })?;

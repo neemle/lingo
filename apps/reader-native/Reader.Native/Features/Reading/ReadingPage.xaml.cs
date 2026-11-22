@@ -68,6 +68,7 @@ public partial class ReadingPage : ContentPage
         UpdateAutoTranslateButton();
         BindingContext = AppState.Session;
         AppState.Session.PropertyChanged += SessionChanged;
+        SyncReaderPdf();
         BeginReadingHistory();
         UpdateHighlight();
         _ = RestoreReadingWordAsync();
@@ -83,17 +84,12 @@ public partial class ReadingPage : ContentPage
         speechPreferencesReady = true;
         RefreshSpeechResume();
         RefreshVoices(force: true);
-#if MACCATALYST
-        QueueReaderPdfOcr();
-#endif
     }
 
     protected override void OnDisappearing()
     {
         readingPageActive = false;
-#if MACCATALYST
-        StopReaderPdfOcr();
-#endif
+        StopReaderPdf();
         CancelScheduledTranslation();
         EndReadingHistory(keepVisit: showingMeanings);
         StopSpeech();
@@ -115,6 +111,7 @@ public partial class ReadingPage : ContentPage
         // Notifications describe a completed session state. Update once per state change.
         if (args.PropertyName == nameof(ReaderSession.Snapshot))
         {
+            SyncReaderPdf();
             SyncReadingHistory();
             UpdateHighlight();
             _ = RestoreReadingWordAsync();
@@ -168,7 +165,8 @@ public partial class ReadingPage : ContentPage
         var stacked = split && (readingLayout == ReaderLayout.Stacked
             || readingLayout == ReaderLayout.Automatic && narrowReader);
         var columns = split && !stacked;
-        SourcePane.IsVisible = SourceHint.IsVisible = sourceVisible;
+        SourcePane.IsVisible = sourceVisible;
+        SourceHint.IsVisible = sourceVisible && !PdfPageNotice.IsVisible;
         TranslationPane.IsVisible = TranslationVisible;
         ReadingColumns.ColumnDefinitions[1].Width = columns ? GridLength.Star : 0;
         ReadingColumns.RowDefinitions[1].Height = stacked ? GridLength.Star : 0;
@@ -395,9 +393,6 @@ public partial class ReadingPage : ContentPage
                 {
                     canonicalWord = (doc.Id, cursor);
                     UpdateHighlight();
-#if MACCATALYST
-                    QueueReaderPdfOcr();
-#endif
                 }
             }
             else if (index >= 0 && index != doc.Position)
@@ -548,8 +543,8 @@ public partial class ReadingPage : ContentPage
                 {
                     recognizeWindow = (page, token, onCached) =>
                         PdfPageOcr.RecognizeWindowAsync(session, document, originalFile.Path, page, token, onCached);
-                    if (selection is null) savedPage = await session.PdfReadingPageAsync(document.Id);
                 }
+                if (selection is null) savedPage = await session.PdfReadingPageAsync(document.Id);
             }
             else
 #endif
@@ -580,25 +575,16 @@ public partial class ReadingPage : ContentPage
     private async void PreviousClicked(object? sender, EventArgs args)
     {
         StopSpeech(); await AppState.Session.MoveAsync(-1);
-#if MACCATALYST
-        QueueReaderPdfOcr();
-#endif
     }
     private async void NextClicked(object? sender, EventArgs args)
     {
         StopSpeech(); await AppState.Session.MoveAsync(1);
-#if MACCATALYST
-        QueueReaderPdfOcr();
-#endif
     }
     private async void SentenceChanged(object? sender, EventArgs args)
     {
         if (SentencePicker.SelectedIndex < 0 || AppState.Session.Busy ||
             SentencePicker.SelectedIndex == AppState.Session.Document?.Position) return;
         StopSpeech(); await AppState.Session.SelectSentenceAsync(SentencePicker.SelectedIndex);
-#if MACCATALYST
-        QueueReaderPdfOcr();
-#endif
     }
 
     private void SpeechPreferencesChanged(object? sender, EventArgs args)
@@ -690,7 +676,7 @@ public partial class ReadingPage : ContentPage
     private async Task SpeakAsync(SpeechResume? resume = null)
     {
         var session = AppState.Session;
-        if (session.Busy || session.Document is not { } initial || session.Sentence is not { } sentence) return;
+        if (PdfPageNotice.IsVisible || session.Busy || session.Document is not { } initial || session.Sentence is not { } sentence) return;
         var source = SpeechSourceFor(initial, sentence);
         CheckpointSpeechPosition();
         var request = ++speechRequest;
