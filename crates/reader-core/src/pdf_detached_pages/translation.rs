@@ -33,6 +33,14 @@ pub(super) struct PageProjection {
     physical: Range<usize>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfPageTranslationRow {
+    start_utf16: usize,
+    end_utf16: usize,
+    text: Option<String>,
+}
+
 impl PageProjection {
     pub(super) fn physical_sentences(&self) -> &[Sentence] {
         &self.document.sentences[self.physical.clone()]
@@ -53,6 +61,55 @@ impl PageProjection {
 }
 
 impl Store {
+    pub fn pdf_page_translation(
+        &mut self, id: &str, page: u16, target: &str, cached_only: bool,
+    ) -> Result<Vec<PdfPageTranslationRow>> {
+        let (document, physical, offsets, boundaries) = if let Some(cached) = self.detached_pdf_sentences(id, page)? {
+            let spans = cached.sentences.iter().map(|s| (s.start_utf16, s.end_utf16)).collect::<Vec<_>>();
+            let projection = self.project_pdf_translation_page(id, page, target, cached.text, cached.sentences, cached.language)?;
+            (projection.document, projection.physical, spans, PageBoundaries::Projected)
+        } else {
+            let document = self.translation_document(id)?;
+            let Some((start, end)) = crate::pdf_reading_position::page_bounds(&document, page) else { return Ok(Vec::new()); };
+            let first = document.sentences.partition_point(|s| s.end_utf16 <= start);
+            let last = document.sentences.partition_point(|s| s.start_utf16 < end);
+            let spans = document.sentences[first..last].iter()
+                .map(|s| (s.start_utf16.max(start), s.end_utf16.min(end))).collect();
+            (document, first..last, spans, PageBoundaries::Canonical)
+        };
+        if document.language == target { return Ok(Vec::new()); }
+        let routes = self.translation_cache_routes(&document.language, target)?;
+        let indices: std::collections::HashMap<_, _> = document.sentences[physical.clone()].iter()
+            .enumerate().map(|(i, sentence)| (sentence.id.as_str(), i)).collect();
+        let mut covered = vec![false; offsets.len()];
+        let mut rows = BTreeMap::<usize, PdfPageTranslationRow>::new();
+        for position in physical.clone() {
+            if covered[position - physical.start] { continue; }
+            let sentence = &document.sentences[position];
+            if document_layout::sentence_in_footnote(&document.blocks, sentence) { continue; }
+            let (paragraph, standalone) = if cached_only {
+                let cached = routes.cached_window(self, &document, position, target, boundaries)?;
+                (cached.paragraph, cached.sentence)
+            } else {
+                (self.translate_document_paragraph(&document, position, target, false, boundaries)?, None)
+            };
+            for unit in paragraph.units {
+                let mut local = unit.sentence_ids.iter().filter_map(|id| indices.get(id.as_str()).copied());
+                let Some(first) = local.next() else { continue; };
+                let last = local.last().unwrap_or(first);
+                let text = unit.translation.or_else(|| standalone.as_ref()
+                    .filter(|_| first == last && first == position - physical.start)
+                    .and_then(|result| result.segments.first().cloned()));
+                if !cached_only || text.is_some() { covered[first..=last].fill(true); }
+                let row = rows.entry(first).or_insert(PdfPageTranslationRow {
+                    start_utf16: offsets[first].0, end_utf16: offsets[last].1, text: None,
+                });
+                if row.text.is_none() && text.is_some() { row.text = text; }
+            }
+        }
+        Ok(rows.into_values().collect())
+    }
+
     pub fn detached_pdf_translation(
         &mut self,
         id: &str,

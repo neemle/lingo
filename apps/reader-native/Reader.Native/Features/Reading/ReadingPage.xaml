@@ -167,10 +167,14 @@
      </Grid>
 
      <Grid Grid.Column="1" x:Name="TranslationPane" RowDefinitions="Auto,*,Auto" BackgroundColor="{StaticResource Panel}">
-      <Grid Padding="16,10" ColumnDefinitions="*,Auto" BackgroundColor="#F8F9F3">
+      <Grid Padding="16,10" ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="6" BackgroundColor="#F8F9F3">
        <Label Text="ПЕРЕКЛАД" Style="{StaticResource ReaderColumnCaption}" VerticalOptions="Center" />
        <Button Grid.Column="1" x:Name="AutoTranslate" Text="Автопереклад"
         Style="{StaticResource PlayerButton}" Clicked="AutoTranslateClicked" />
+       <Button Grid.Column="2" x:Name="PdfTranslationMode" Text="Верстка" IsVisible="False"
+        Style="{StaticResource PlayerButton}" Clicked="TogglePdfTranslationLayout" />
+       <Button Grid.Column="3" x:Name="TranslatePdfPage" Text="Перекласти сторінку" IsVisible="False"
+        Style="{StaticResource PlayerButton}" Clicked="TranslatePdfPageClicked" />
       </Grid>
       <ScrollView Grid.Row="1" x:Name="TranslationViewport" SizeChanged="TranslationViewportReady"
        Loaded="TranslationViewportReady" Scrolled="TranslationViewportScrolled">
@@ -205,6 +209,13 @@
          <Label x:Name="ModelSourceText" FontFamily="Georgia" FontSize="16" LineBreakMode="WordWrap" />
         </Border>
        </VerticalStackLayout>
+      </ScrollView>
+      <ScrollView Grid.Row="1" x:Name="PdfTranslationViewport" IsVisible="False"
+       SizeChanged="PdfTranslationViewportChanged" Scrolled="PdfTranslationViewportScrolled">
+       <Grid x:Name="PdfTranslationPaper" HorizontalOptions="Center" VerticalOptions="Start">
+        <Image x:Name="PdfTranslationBackground" Aspect="AspectFit" InputTransparent="True" />
+        <GraphicsView x:Name="PdfTranslationSurface" />
+       </Grid>
       </ScrollView>
       <FlexLayout Grid.Row="2" Padding="10,2,10,8" Wrap="Wrap" JustifyContent="Start">
        <Button x:Name="EditTranslation" Text="Додати свій переклад" Margin="0,3,5,0"
@@ -251,7 +262,13 @@
         </ScrollView>
        </Grid>
        <Grid Grid.Column="1" x:Name="DetachedTargetPane" RowDefinitions="Auto,*" BackgroundColor="{StaticResource Panel}">
-        <Label Text="ПЕРЕКЛАД" Style="{StaticResource ReaderColumnCaption}" Margin="14,9" />
+        <Grid Padding="14,5" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
+         <Label Text="ПЕРЕКЛАД" Style="{StaticResource ReaderColumnCaption}" VerticalOptions="Center" />
+         <Button Grid.Column="1" x:Name="DetachedPdfTranslationMode" Text="Верстка" IsVisible="False"
+          Style="{StaticResource PlayerButton}" Clicked="TogglePdfTranslationLayout" />
+         <Button Grid.Column="2" x:Name="DetachedTranslatePdfPage" Text="Перекласти сторінку" IsVisible="False"
+          Style="{StaticResource PlayerButton}" Clicked="TranslatePdfPageClicked" />
+        </Grid>
         <ScrollView Grid.Row="1" x:Name="DetachedTranslationViewport" SizeChanged="DetachedTranslationViewportReady"
          Scrolled="TranslationViewportScrolled">
          <VerticalStackLayout Padding="14,8" Spacing="8">
@@ -284,6 +301,13 @@
            <Label x:Name="DetachedModelSourceText" FontFamily="Georgia" FontSize="16" LineBreakMode="WordWrap" />
           </Border>
          </VerticalStackLayout>
+        </ScrollView>
+        <ScrollView Grid.Row="1" x:Name="DetachedPdfTranslationViewport" IsVisible="False"
+         SizeChanged="PdfTranslationViewportChanged" Scrolled="PdfTranslationViewportScrolled">
+         <Grid x:Name="DetachedPdfTranslationPaper" HorizontalOptions="Center" VerticalOptions="Start">
+          <Image x:Name="DetachedPdfTranslationBackground" Aspect="AspectFit" InputTransparent="True" />
+          <GraphicsView x:Name="DetachedPdfTranslationSurface" />
+         </Grid>
         </ScrollView>
        </Grid>
       </Grid>

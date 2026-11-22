@@ -288,6 +288,7 @@ public partial class ReadingPage : ContentPage
         var targetLabel = TargetCode is { } chosenTarget ? DocumentLanguages.Name(chosenTarget) : "Мова перекладу";
         TargetLanguage.Text = targetLabel;
         SemanticProperties.SetDescription(TargetLanguage, $"Мова перекладу · {targetLabel}");
+        RefreshPdfTranslationLayout();
 
         var wordTranslationLabel = TargetCode is { } cardTarget
             ? $"Ваш переклад · {DocumentLanguages.Name(cardTarget)}" : "Виберіть мову перекладу";
@@ -341,7 +342,11 @@ public partial class ReadingPage : ContentPage
         UpdateModelTranslation();
         UpdateSourceLocation(document, session.Sentence);
         UpdateParagraphPreview(document, window, unit);
-        if (hasNewActiveTranslation) RequestTranslationScroll();
+        if (hasNewActiveTranslation)
+        {
+            RequestTranslationScroll();
+            RefreshCachedPdfPageLayout();
+        }
         TrackTranslationScroll(key);
         _ = RestoreCachedTranslationAsync();
         ScheduleAutoTranslation();

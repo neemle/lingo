@@ -88,6 +88,7 @@ public partial class ReadingPage
         HighlightTranslation(ModelTranslationText, ModelTranslationTextHighlighted, canonicalGloss);
         HighlightTranslation(DetachedTranslation, DetachedTranslationHighlighted, detachedGloss);
         HighlightTranslation(DetachedModelTranslationText, DetachedModelTranslationTextHighlighted, detachedGloss);
+        DrawPdfTranslationLayout();
     }
 
     private static void HighlightTranslation(Label original, Label highlighted, string? gloss)

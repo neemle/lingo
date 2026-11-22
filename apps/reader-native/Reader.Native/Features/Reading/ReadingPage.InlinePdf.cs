@@ -46,6 +46,7 @@ public partial class ReadingPage
         lastInlinePdfFollow = null;
         InlinePdfImage.Source = DetachedInlinePdfImage.Source = PendingInlinePdfImage.Source = null;
         InlinePdfToggle.Text = "Сторінка PDF";
+        RefreshPdfTranslationLayout();
     }
 
     private async Task ShowInlinePdfAsync()
@@ -164,6 +165,7 @@ public partial class ReadingPage
         var scale = inlinePdfFitWidth ? widthScale : Math.Min(widthScale, viewport.Height / preview.Height);
         surface.WidthRequest = Math.Floor(preview.Width * scale);
         surface.HeightRequest = Math.Floor(preview.Height * scale);
+        ResizePdfTranslationLayout();
     }
 
     private void FollowInlinePdf(PdfReadingHighlight drawing, string document, int page, int start, int end)
@@ -223,6 +225,7 @@ public partial class ReadingPage
 
     private void UpdateInlinePdfHighlight()
     {
+        RefreshPdfTranslationLayout();
         if (!inlinePdf || inlinePdfAddress is not { } address || inlinePdfPreview is not { } preview ||
             AppState.Session.Document is not { } document || document.Id != address.Document) return;
 
@@ -256,6 +259,10 @@ public partial class ReadingPage
         }
 
         overlay.IsVisible = lines.Length > 0;
+        pdfLayoutGeometry = lines;
+        pdfLayoutOffset = offset;
+        pdfLayoutSentence = sentence;
+        DrawPdfTranslationLayout();
         if (!overlay.IsVisible)
         {
             overlay.Drawable = null;

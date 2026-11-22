@@ -480,9 +480,11 @@ public partial class ReadingPage
 
     private void ShowDetachedTranslation(string value)
     {
+        var changed = DetachedTranslation.Text != value;
         DetachedTranslation.Text = value;
         DetachedTranslationPane.IsVisible = value.Length != 0;
         if (DetachedTranslationPane.IsVisible) FollowDetachedTranslation();
+        if (changed && CurrentDetachedTranslation() is not null) RefreshCachedPdfPageLayout();
     }
 
     private void ClearDetachedPassageRows()

@@ -589,6 +589,13 @@ pub enum Command {
         #[serde(default)]
         background: bool,
     },
+    PdfPageTranslation {
+        id: String,
+        page: u16,
+        target: String,
+        #[serde(default, rename = "cachedOnly")]
+        cached_only: bool,
+    },
     ScheduleTranslationWindow {
         id: String,
         #[serde(rename = "sentenceId")]

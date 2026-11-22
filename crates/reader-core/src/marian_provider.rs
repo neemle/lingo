@@ -489,6 +489,13 @@ impl StoreWorker {
         self.open(flags)?.detached_pdf_passage(id, page, sentence_id, target, cached_only, background)
     }
 
+    pub fn pdf_page_translation(
+        self, id: &str, page: u16, target: &str, cached_only: bool,
+    ) -> Result<Vec<crate::pdf_detached_pages::PdfPageTranslationRow>> {
+        let flags = if cached_only { OpenFlags::SQLITE_OPEN_READ_ONLY } else { OpenFlags::SQLITE_OPEN_READ_WRITE };
+        self.open(flags)?.pdf_page_translation(id, page, target, cached_only)
+    }
+
     pub fn translate_detached_pdf_sentence(
         self, id: &str, page: u16, sentence_id: &str, target: &str,
     ) -> Result<Option<AlignedTranslation>> {
@@ -782,7 +789,7 @@ impl Store {
         Ok((document, selected))
     }
 
-    fn translation_document(&self, document_id: &str) -> Result<crate::Document> {
+    pub(crate) fn translation_document(&self, document_id: &str) -> Result<crate::Document> {
         let body: String = self
             .connection
             .query_row(

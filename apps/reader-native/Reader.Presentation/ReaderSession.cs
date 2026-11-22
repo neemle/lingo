@@ -269,6 +269,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<PdfOcrRequest?> ClaimPdfOcrPageAsync(string id, int? center = null) =>
         Task.Run(() => client.ClaimPdfOcrPage(id, center));
 
+    public Task<PdfPageTranslationRow[]> PdfPageTranslationAsync(string id, int page, string target, bool cachedOnly) =>
+        Task.Run(() => client.PdfPageTranslation(id, page, target, cachedOnly));
+
     public Task ReplacePdfTextLayerAsync(string id, int page, string revisionId, string language, OcrLine[] lines) =>
         Task.Run(() => client.ReplacePdfTextLayer(id, page, revisionId, language, lines));
 

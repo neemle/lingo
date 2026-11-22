@@ -208,6 +208,9 @@ public sealed class CoreClient : IDisposable
     public PdfOcrRequest? ClaimPdfOcrPage(string id, int? center = null) =>
         Call<PdfOcrRequest?>(new { version = 1, operation = "claim_pdf_ocr_page", id, center });
 
+    public PdfPageTranslationRow[] PdfPageTranslation(string id, int page, string target, bool cachedOnly) =>
+        Call<PdfPageTranslationRow[]>(new { version = 1, operation = "pdf_page_translation", id, page, target, cachedOnly });
+
     public void CachePdfOcrPage(string id, PdfOcrRequest claim, OcrLine[] lines, string? textLayer = null) =>
         Call<JsonElement>(new
         {
