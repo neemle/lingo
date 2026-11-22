@@ -1294,158 +1294,42 @@ impl Store {
             .map_err(|e| e.to_string())
     }
     pub fn restore(&mut self, backup: Backup) -> Result<()> {
-        let originals = backup_files::checked_originals(
-            backup.version,
-            &backup.snapshot.documents,
-            &backup.originals,
-        )?;
-        let mut revisions =
-            std::collections::HashMap::<String, Vec<document_revisions::DocumentRevision>>::new();
-        for revision in backup.document_revisions {
-            revisions
-                .entry(revision.document_id.clone())
-                .or_default()
-                .push(revision);
-        }
-        // Validate and reparse originals rather than trusting imported derived offsets.
-        let mut validated = Vec::new();
-        for doc in &backup.snapshot.documents {
-            valid_language(&doc.language)?;
-            let original = originals[doc.id.as_str()];
-            let parsed = match (
-                &doc.ocr_lines,
-                doc.ocr_pdf_pages,
-                doc.pdf_page_starts.is_some(),
-            ) {
-                (Some(lines), Some(pages), true) => {
-                    let (text, offsets) =
-                        pdf_layers::merge(&original.name, &original.bytes, pages, lines)?;
-                    document_layout::from_transcript(text, Some(offsets))
-                }
-                (Some(lines), pages, false) => document_layout::from_ocr(
-                    ocr::recognized_text(&original.name, &original.bytes, lines, pages)?,
-                    lines,
-                    pages,
-                ),
-                (None, None, _) => document_layout::parse(&original.name, &original.bytes)?,
-                _ => return Err("В архіві PDF немає потрібних даних сторінок".into()),
-            };
-            let mut d = doc.clone();
-            let mut history = revisions
-                .remove(&d.id)
-                .map(|history| document_revisions::validate_chain(&d, history))
-                .transpose()?
-                .unwrap_or_default();
-            let text_changed = if let Some(current) = history
-                .last()
-                .filter(|current| !current.matches_text(&parsed.text))
-            {
-                if !current.matches_text(&d.text) {
-                    return Err("Архів не містить підтвердженого тексту поточної ревізії".into());
-                }
-                d.sentences = segment(&d.text, &d.id);
-                ocr::update_transcript(&mut d, parsed.text)?;
-                true
-            } else {
-                d.text = parsed.text;
-                d.sentences = segment(&d.text, &d.id);
-                false
-            };
-            d.blocks = parsed.blocks;
-            d.pdf_page_starts = parsed.pdf_page_starts;
-            ocr::refresh_provenance(&mut d);
-            if history.is_empty() || text_changed {
-                let parser = document_revisions::parser_version(&d);
-                let created_at = if history.is_empty() {
-                    d.current_revision_id = None;
-                    d.created_at
-                } else {
-                    now()
-                };
-                history.push(document_revisions::DocumentRevision::capture(
-                    &mut d, parser, created_at,
-                ));
-            }
-            d.position = d.position.min(d.sentences.len().saturating_sub(1));
-            d.speech_resume = d
-                .speech_resume
-                .take()
-                .filter(|resume| d.matches_speech_resume(resume));
-            if !d.bookmarks.is_empty()
-                || !d.reviewed_translations.is_empty()
-                || !d.notes.is_empty()
-                || !d.speech_text_overrides.is_empty()
-            {
-                let known: std::collections::HashSet<_> = d
-                    .sentences
-                    .iter()
-                    .map(|sentence| sentence.id.as_str())
-                    .collect();
-                if d.bookmarks.iter().any(|id| !known.contains(id.as_str())) {
-                    return Err("В архіві є закладка для невідомого речення".into());
-                }
-                d.bookmarks.sort_unstable();
-                d.bookmarks.dedup();
-                for (sentence_id, note) in &d.notes {
-                    if !known.contains(sentence_id.as_str()) || note.trim().is_empty() {
-                        return Err(
-                            "В архіві є нотатка для невідомого речення або порожня нотатка".into(),
-                        );
-                    }
-                    validate_sentence_note(note)?;
-                }
-                for (sentence_id, text) in &d.speech_text_overrides {
-                    if !known.contains(sentence_id.as_str()) || text.trim().is_empty() {
-                        return Err("Некоректний текст озвучення в архіві".into());
-                    }
-                    validate_speech_text(text)?;
-                }
-                for (target, segments) in &d.reviewed_translations {
-                    valid_language(target)?;
-                    if target == &d.language {
-                        return Err("Некоректна мова перекладу в архіві".into());
-                    }
-                    for (sentence_id, text) in segments {
-                        if !known.contains(sentence_id.as_str()) || text.trim().is_empty() {
-                            return Err("Некоректний переклад речення в архіві".into());
-                        }
-                        validate_translation(text)?;
-                    }
-                }
-            }
-            validated.push((d, original, history));
-        }
-        if !revisions.is_empty() {
-            return Err("В архіві є ревізії без документа".into());
-        }
+        let validated = backup_files::prepare_documents(&backup)?.collect::<Result<Vec<_>>>()?;
         let tx = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        for (d, o, history) in validated {
-            let mut d = d;
+        for backup_files::PreparedDocument {
+            document: mut d,
+            original,
+            history,
+        } in validated
+        {
             let speech_resume = d.speech_resume.take();
             if backup_files::merge_existing_document(&tx, &d, speech_resume.clone())? {
                 continue;
             }
             let inserted = tx
                 .execute(
-                    "INSERT OR IGNORE INTO documents VALUES (?1,?2,?3)",
+                    "INSERT INTO documents VALUES (?1,?2,?3) ON CONFLICT(id) DO NOTHING",
                     params![d.id, serde_json::to_string(&d).unwrap(), d.source_hash],
                 )
                 .map_err(|e| e.to_string())?;
-            if inserted > 0 {
-                if let Some(resume) = speech_resume {
-                    Self::write_speech_resume(&tx, &d.id, &resume)?;
-                }
-                tx.execute(
-                    "INSERT INTO originals VALUES (?1,?2,?3)",
-                    params![d.id, o.name, o.bytes],
-                )
-                .map_err(|e| e.to_string())?;
-                for revision in history {
-                    revision.insert(&tx)?;
-                }
+            if inserted == 0 {
+                return Err(
+                    "Ідентифікатор документа з копії вже належить іншому документу.".into(),
+                );
+            }
+            if let Some(resume) = speech_resume {
+                Self::write_speech_resume(&tx, &d.id, &resume)?;
+            }
+            tx.execute(
+                "INSERT INTO originals VALUES (?1,?2,?3)",
+                params![d.id, original.name, original.bytes],
+            )
+            .map_err(|e| e.to_string())?;
+            for revision in history {
+                revision.insert(&tx)?;
             }
         }
         let review_cards = dictionary_transfer::restore_backup_dictionary(

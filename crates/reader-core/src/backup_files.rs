@@ -1,7 +1,9 @@
 use crate::{
     backup_limits::{LimitedReader, LimitedWriter},
-    dictionary_transfer, document_revisions, practice, reading_history, Backup, BackupResource,
-    Document, Original, Result, Snapshot, SpeechResume, Store,
+    dictionary_transfer, document_layout, document_revisions, now, ocr, pdf_layers, practice,
+    reading_history, segment, valid_language, validate_sentence_note, validate_speech_text,
+    validate_translation, Backup, BackupResource, Document, Original, Result, Snapshot,
+    SpeechResume, Store,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{
@@ -263,15 +265,13 @@ pub struct BackupInspection {
     pub has_practice: bool,
 }
 
-/// Read archive counts and verify every original without changing a library.
+/// Read archive counts and validate its documents without changing a library.
 pub fn inspect_backup_file(path: &Path) -> Result<BackupInspection> {
     let backup = read_backup_file(path)?;
     validate_resources(&backup.resources)?;
-    checked_originals(
-        backup.version,
-        &backup.snapshot.documents,
-        &backup.originals,
-    )?;
+    for document in prepare_documents(&backup)? {
+        document?;
+    }
     Ok(BackupInspection {
         documents: backup.snapshot.documents.len(),
         vocabulary: backup.snapshot.vocabulary.len(),
@@ -284,7 +284,7 @@ pub fn inspect_backup_file(path: &Path) -> Result<BackupInspection> {
     })
 }
 
-pub(crate) fn checked_originals<'a>(
+fn checked_originals<'a>(
     version: u32,
     documents: &[Document],
     originals: &'a [Original],
@@ -304,9 +304,13 @@ pub(crate) fn checked_originals<'a>(
     }
 
     let mut seen = HashSet::new();
+    let mut source_hashes = HashSet::new();
     for document in documents {
         if !seen.insert(document.id.as_str()) {
             return Err("В архіві є кілька документів з однаковим ідентифікатором".into());
+        }
+        if !source_hashes.insert(document.source_hash.as_str()) {
+            return Err("В архіві є кілька документів з однаковим оригіналом".into());
         }
         let original = indexed
             .get(document.id.as_str())
@@ -319,6 +323,147 @@ pub(crate) fn checked_originals<'a>(
         return Err("В архіві є оригінал без документа".into());
     }
     Ok(indexed)
+}
+
+pub(crate) struct PreparedDocument<'a> {
+    pub document: Document,
+    pub original: &'a Original,
+    pub history: Vec<document_revisions::DocumentRevision>,
+}
+
+/// Reparse originals and validate their revision and annotation references.
+pub(crate) fn prepare_documents(
+    backup: &Backup,
+) -> Result<impl Iterator<Item = Result<PreparedDocument<'_>>>> {
+    let documents = &backup.snapshot.documents;
+    let originals = checked_originals(backup.version, documents, &backup.originals)?;
+    let mut revisions: HashMap<&str, Vec<_>> = HashMap::new();
+    for revision in &backup.document_revisions {
+        if !originals.contains_key(revision.document_id.as_str()) {
+            return Err("В архіві є ревізії без документа".into());
+        }
+        revisions
+            .entry(revision.document_id.as_str())
+            .or_default()
+            .push(revision.clone());
+    }
+    Ok(documents.iter().map(move |document| {
+        prepare_document(
+            document,
+            originals[document.id.as_str()],
+            revisions.remove(document.id.as_str()),
+        )
+    }))
+}
+
+fn prepare_document<'a>(
+    doc: &Document,
+    original: &'a Original,
+    history: Option<Vec<document_revisions::DocumentRevision>>,
+) -> Result<PreparedDocument<'a>> {
+    valid_language(&doc.language)?;
+    let parsed = match (
+        &doc.ocr_lines,
+        doc.ocr_pdf_pages,
+        doc.pdf_page_starts.is_some(),
+    ) {
+        (Some(lines), Some(pages), true) => {
+            let (text, offsets) = pdf_layers::merge(&original.name, &original.bytes, pages, lines)?;
+            document_layout::from_transcript(text, Some(offsets))
+        }
+        (Some(lines), pages, false) => document_layout::from_ocr(
+            ocr::recognized_text(&original.name, &original.bytes, lines, pages)?,
+            lines,
+            pages,
+        ),
+        (None, None, _) => document_layout::parse(&original.name, &original.bytes)?,
+        _ => return Err("В архіві PDF немає потрібних даних сторінок".into()),
+    };
+    let mut d = doc.clone();
+    let mut history = match history {
+        Some(history) => document_revisions::validate_chain(&d, history)?,
+        None => Vec::new(),
+    };
+    let text_changed = if let Some(current) = history
+        .last()
+        .filter(|current| !current.matches_text(&parsed.text))
+    {
+        if !current.matches_text(&d.text) {
+            return Err("Архів не містить підтвердженого тексту поточної ревізії".into());
+        }
+        d.sentences = segment(&d.text, &d.id);
+        ocr::update_transcript(&mut d, parsed.text)?;
+        true
+    } else {
+        d.text = parsed.text;
+        d.sentences = segment(&d.text, &d.id);
+        false
+    };
+    d.blocks = parsed.blocks;
+    d.pdf_page_starts = parsed.pdf_page_starts;
+    ocr::refresh_provenance(&mut d);
+    if history.is_empty() || text_changed {
+        let parser = document_revisions::parser_version(&d);
+        let created_at = if history.is_empty() {
+            d.current_revision_id = None;
+            d.created_at
+        } else {
+            now()
+        };
+        history.push(document_revisions::DocumentRevision::capture(
+            &mut d, parser, created_at,
+        ));
+    }
+    d.position = d.position.min(d.sentences.len().saturating_sub(1));
+    d.speech_resume = d
+        .speech_resume
+        .take()
+        .filter(|resume| d.matches_speech_resume(resume));
+    if !d.bookmarks.is_empty()
+        || !d.reviewed_translations.is_empty()
+        || !d.notes.is_empty()
+        || !d.speech_text_overrides.is_empty()
+    {
+        let known: HashSet<_> = d
+            .sentences
+            .iter()
+            .map(|sentence| sentence.id.as_str())
+            .collect();
+        if d.bookmarks.iter().any(|id| !known.contains(id.as_str())) {
+            return Err("В архіві є закладка для невідомого речення".into());
+        }
+        d.bookmarks.sort_unstable();
+        d.bookmarks.dedup();
+        for (sentence_id, note) in &d.notes {
+            if !known.contains(sentence_id.as_str()) || note.trim().is_empty() {
+                return Err("В архіві є нотатка для невідомого речення або порожня нотатка".into());
+            }
+            validate_sentence_note(note)?;
+        }
+        for (sentence_id, text) in &d.speech_text_overrides {
+            if !known.contains(sentence_id.as_str()) || text.trim().is_empty() {
+                return Err("Некоректний текст озвучення в архіві".into());
+            }
+            validate_speech_text(text)?;
+        }
+        for (target, segments) in &d.reviewed_translations {
+            valid_language(target)?;
+            if target == &d.language {
+                return Err("Некоректна мова перекладу в архіві".into());
+            }
+            for (sentence_id, text) in segments {
+                if !known.contains(sentence_id.as_str()) || text.trim().is_empty() {
+                    return Err("Некоректний переклад речення в архіві".into());
+                }
+                validate_translation(text)?;
+            }
+        }
+    }
+    Ok(PreparedDocument {
+        document: d,
+        original,
+        history,
+    })
 }
 
 fn read_backup_file(path: &Path) -> Result<Backup> {
@@ -366,6 +511,25 @@ mod tests {
             .contains("кілька оригіналів"));
 
         backup.originals.pop();
+        backup.snapshot.documents[0]
+            .bookmarks
+            .push("missing-sentence".into());
+        fs::write(&archive_path, serde_json::to_vec(&backup).unwrap()).unwrap();
+        assert!(inspect_backup_file(&archive_path)
+            .unwrap_err()
+            .contains("закладка для невідомого речення"));
+
+        backup.snapshot.documents[0].bookmarks.clear();
+        backup.document_revisions[0].document_id = "missing-document".into();
+        fs::write(&archive_path, serde_json::to_vec(&backup).unwrap()).unwrap();
+        assert!(inspect_backup_file(&archive_path)
+            .unwrap_err()
+            .contains("ревізії без документа"));
+
+        backup.document_revisions.clear();
+        fs::write(&archive_path, serde_json::to_vec(&backup).unwrap()).unwrap();
+        assert_eq!(inspect_backup_file(&archive_path).unwrap().documents, 1);
+
         backup.originals[0].bytes[0] ^= 1;
         fs::write(&archive_path, serde_json::to_vec(&backup).unwrap()).unwrap();
         assert!(inspect_backup_file(&archive_path)
@@ -375,5 +539,43 @@ mod tests {
         let mut destination = Store::open(&root.path().join("destination.db")).unwrap();
         assert!(destination.restore_backup_file(&archive_path).is_err());
         assert!(destination.snapshot().unwrap().documents.is_empty());
+    }
+
+    #[test]
+    fn restore_rolls_back_when_a_document_id_belongs_to_different_content() {
+        let root = tempfile::tempdir().unwrap();
+        let mut destination = Store::open(&root.path().join("destination.db")).unwrap();
+        let local = destination
+            .import("local.txt", b"Local original.", "en")
+            .unwrap();
+        let mut source = Store::open(&root.path().join("source.db")).unwrap();
+        let collision = source
+            .import("collision.txt", b"Different original.", "en")
+            .unwrap();
+        let other = source
+            .import("other.txt", b"Should roll back.", "en")
+            .unwrap();
+
+        let mut backup = source.export().unwrap();
+        // Model a legacy archive with a copied ID and otherwise consistent source hashes.
+        backup.document_revisions.clear();
+        assert_eq!(backup.snapshot.documents[0].id, other.id);
+        backup.snapshot.documents[1].id.clone_from(&local.id);
+        let original = backup
+            .originals
+            .iter_mut()
+            .find(|original| original.document_id == collision.id)
+            .unwrap();
+        original.document_id.clone_from(&local.id);
+
+        let error = destination.restore(backup).unwrap_err();
+        assert!(error.contains("вже належить іншому документу"));
+        let documents = destination.snapshot().unwrap().documents;
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0].id, local.id);
+        assert_eq!(
+            destination.original(&local.id).unwrap().bytes,
+            b"Local original."
+        );
     }
 }
