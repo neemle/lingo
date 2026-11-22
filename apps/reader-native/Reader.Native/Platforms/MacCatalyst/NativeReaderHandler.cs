@@ -98,7 +98,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
                     handler.PlatformView.AttributedText = text;
                     handler.renderedText = source;
                 }
-                else if (source.Length > 0)
+                else if (source.Length > 0 && font is not null)
                     handler.PlatformView.TextStorage.AddAttribute(UIStringAttributeKey.Font, font,
                         new NSRange(0, source.Length));
                 handler.renderedFontSize = view.ReadingFontSize;
