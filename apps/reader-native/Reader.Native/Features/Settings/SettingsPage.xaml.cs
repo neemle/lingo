@@ -108,6 +108,8 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         DownloadTranslation.IsEnabled = !busy && downloadChoices.Length > 0;
         RemoveTranslation.IsVisible = removablePackages.Length > 0;
         RemoveTranslation.IsEnabled = !busy && RemoveTranslation.IsVisible;
+        RepairTranslation.IsVisible = RemoveTranslation.IsVisible;
+        RepairTranslation.IsEnabled = !busy && RepairTranslation.IsVisible;
     }
 
     private async void ExportClicked(object? sender, EventArgs args)
@@ -152,8 +154,35 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
     private async void DownloadTranslationClicked(object? sender, EventArgs args)
     {
         var index = ModelChoice.SelectedIndex;
-        if (changingTranslationFiles || activeDownload is not null || index < 0 || index >= downloadChoices.Length) return;
-        var package = downloadChoices[index];
+        if (index >= 0 && index < downloadChoices.Length) await DownloadPackageAsync(downloadChoices[index]);
+    }
+
+    private async void RepairTranslationClicked(object? sender, EventArgs args)
+    {
+        if (changingTranslationFiles || activeDownload is not null || removablePackages.Length == 0) return;
+        changingTranslationFiles = true;
+        UpdateTranslationControls();
+        TranslationPackageStatus? selected = null;
+        try
+        {
+            var choices = removablePackages.ToDictionary(package =>
+                $"{DocumentLanguages.Name(package.Source)} → {DocumentLanguages.Name(package.Target)} " +
+                $"({package.Assets.Sum(asset => asset.Bytes) / 1_000_000d:F0} МБ)");
+            var choice = await DisplayActionSheetAsync("Завантажити пакет повторно", "Скасувати", null, choices.Keys.ToArray());
+            if (choice is not null) choices.TryGetValue(choice, out selected);
+        }
+        catch (Exception error) { ModelStatus.Text = error.Message; }
+        finally
+        {
+            changingTranslationFiles = false;
+            UpdateTranslationControls();
+        }
+        if (selected is not null) await DownloadPackageAsync(selected);
+    }
+
+    private async Task DownloadPackageAsync(TranslationPackageStatus package)
+    {
+        if (changingTranslationFiles || activeDownload is not null) return;
         using var cancellation = new CancellationTokenSource();
         activeDownload = cancellation;
 
@@ -187,7 +216,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
-            ModelStatus.Text = "Завантаження зупинено. Натисніть «Завантажити пакет», щоб продовжити.";
+            ModelStatus.Text = "Завантаження зупинено. Виберіть цей пакет ще раз, щоб продовжити.";
         }
         catch (Exception error) { ModelStatus.Text = error.Message; }
         finally

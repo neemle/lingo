@@ -27,6 +27,7 @@
   <ProgressBar x:Name="DownloadProgress" IsVisible="False" />
   <Label x:Name="ModelStatus" />
   <Button x:Name="InstallTranslation" Text="Встановити мовний пакет із ZIP" Clicked="InstallTranslationClicked" />
+  <Button x:Name="RepairTranslation" Text="Завантажити пакет повторно" IsVisible="False" Clicked="RepairTranslationClicked" />
   <Button x:Name="RemoveTranslation" Text="Видалити пакет перекладу" IsVisible="False" Clicked="RemoveTranslationClicked" />
   <Label Text="Граматичний аналіз" FontSize="22" FontAttributes="Bold" />
   <Label x:Name="KnowledgePackages" />

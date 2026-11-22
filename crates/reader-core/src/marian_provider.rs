@@ -128,7 +128,8 @@ impl Store {
                 target: package.target,
                 files_present: provider.files_present(package),
                 has_local_files: provider.path(package).symlink_metadata().is_ok()
-                    || provider.removed_path(package).symlink_metadata().is_ok(),
+                    || provider.removed_path(package).symlink_metadata().is_ok()
+                    || provider.previous_path(package).symlink_metadata().is_ok(),
                 revision: package.revision,
                 assets: ASSETS
                     .into_iter()
@@ -152,14 +153,16 @@ impl Store {
         let provider = MarianProvider {
             directory: &self.model_directory,
         };
+        if !self.model_directory.is_dir() {
+            return Ok(false);
+        }
+        let _lock = provider.lock(package, true)?;
         let active = provider.path(package);
         let removed = provider.removed_path(package);
-        let cleared_previous = remove_package_directory(&removed)?;
-        match active.symlink_metadata() {
-            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
-            Ok(_) => return Err("Некоректний каталог мовного пакета.".into()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(cleared_previous),
-            Err(error) => return Err(model_error(error)),
+        let mut cleared_previous = remove_package_directory(&removed)?;
+        cleared_previous |= remove_package_directory(&provider.previous_path(package))?;
+        if !package_directory(&active)? {
+            return Ok(cleared_previous);
         }
         match fs::rename(&active, &removed) {
             Ok(()) => {}
@@ -192,10 +195,9 @@ impl Store {
             .iter()
             .find(|model| model.hashes[0] == config_hash)
             .ok_or("Версію мовного пакета не підтримано")?;
-        let destination = MarianProvider {
+        let provider = MarianProvider {
             directory: &self.model_directory,
-        }
-        .path(package);
+        };
         fs::create_dir_all(&self.model_directory).map_err(model_error)?;
         ensure_capacity([(
             &self.model_directory,
@@ -204,17 +206,30 @@ impl Store {
         let stage = tempfile::tempdir_in(&self.model_directory).map_err(model_error)?;
         for (asset, expected) in ASSETS.iter().zip(package.hashes) {
             let input = archive.by_name(asset).map_err(model_error)?;
-            let output = File::create(stage.path().join(asset)).map_err(model_error)?;
-            let (_, digest) = copy_and_hash(input, output, asset_limit(asset))?;
+            let mut output = File::create(stage.path().join(asset)).map_err(model_error)?;
+            let (_, digest) = copy_and_hash(input, &mut output, asset_limit(asset))?;
             if digest != expected {
                 return Err(format!("Файл мовного пакета пошкоджений: {asset}"));
             }
+            output.sync_all().map_err(model_error)?;
         }
-        if destination.exists() {
-            verify_files(&destination, package, &ASSETS)?;
-        } else {
-            fs::rename(stage.path(), &destination).map_err(model_error)?;
+        let _lock = provider.lock(package, true)?;
+        let active = provider.path(package);
+        let previous = provider.previous_path(package);
+        if !package_directory(&active)? || verify_files(&active, package, &ASSETS).is_err() {
+            activate_verified_package(
+                stage.path(),
+                &active,
+                &previous,
+                &provider.removed_path(package),
+            )?;
         }
+        remove_package_directory(&previous).map_err(|error| {
+            format!("Пакет готовий. Не вдалося прибрати попередні файли. {error}")
+        })?;
+        remove_package_directory(&provider.removed_path(package)).map_err(|error| {
+            format!("Пакет готовий. Не вдалося прибрати попередні файли. {error}")
+        })?;
         Ok(format!("{} → {}", package.source, package.target))
     }
 
@@ -290,7 +305,7 @@ impl Store {
 
 impl MarianProvider<'_> {
     fn files_present(&self, model: &Package) -> bool {
-        let path = self.path(model);
+        let path = self.read_path(model);
         ASSETS.iter().zip(model.sizes).all(|(asset, expected)| {
             fs::metadata(path.join(asset))
                 .is_ok_and(|metadata| metadata.is_file() && metadata.len() == expected)
@@ -306,14 +321,80 @@ impl MarianProvider<'_> {
         self.directory
             .join(format!(".removed-{}-{}", model.source, model.target))
     }
+
+    fn previous_path(&self, model: &Package) -> PathBuf {
+        self.directory
+            .join(format!(".previous-{}-{}", model.source, model.target))
+    }
+
+    fn read_path(&self, model: &Package) -> PathBuf {
+        let active = self.path(model);
+        if active.exists() {
+            active
+        } else {
+            self.previous_path(model)
+        }
+    }
+
+    fn lock(&self, model: &Package, exclusive: bool) -> Result<File> {
+        let path = self
+            .directory
+            .join(format!(".{}-{}.lock", model.source, model.target));
+        let lock = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .map_err(model_error)?;
+        if exclusive {
+            lock.lock()
+        } else {
+            lock.lock_shared()
+        }
+        .map_err(model_error)?;
+        Ok(lock)
+    }
+}
+
+fn package_directory(path: &Path) -> Result<bool> {
+    match path.symlink_metadata() {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(true),
+        Ok(_) => Err("Некоректний каталог мовного пакета.".into()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(model_error(error)),
+    }
+}
+
+fn activate_verified_package(
+    stage: &Path,
+    active: &Path,
+    previous: &Path,
+    discarded: &Path,
+) -> Result<()> {
+    let had_active = package_directory(active)?;
+    let mut rollback = previous;
+    if had_active {
+        if package_directory(previous)? {
+            remove_package_directory(discarded)?;
+            rollback = discarded;
+        }
+        fs::rename(active, rollback).map_err(model_error)?;
+    }
+    if let Err(error) = fs::rename(stage, active) {
+        if had_active {
+            fs::rename(rollback, active).map_err(|restore_error| {
+                format!("Не вдалося встановити пакет. Попередні файли збережено. {error}. {restore_error}")
+            })?;
+        }
+        return Err(model_error(error));
+    }
+    Ok(())
 }
 
 fn remove_package_directory(path: &Path) -> Result<bool> {
-    match path.symlink_metadata() {
-        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
-        Ok(_) => return Err("Некоректний каталог мовного пакета.".into()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(model_error(error)),
+    if !package_directory(path)? {
+        return Ok(false);
     }
     match fs::remove_dir_all(path) {
         Ok(()) => Ok(true),
@@ -349,7 +430,8 @@ impl TranslationProvider for MarianProvider<'_> {
                     && package.target == edge.target
             })
             .ok_or("Невідомий мовний пакет")?;
-        let directory = self.path(package);
+        let _lock = self.lock(package, false)?;
+        let directory = self.read_path(package);
         verify_files(&directory, package, &ASSETS[..4])?;
         let config: Config =
             serde_json::from_slice(&fs::read(directory.join("config.json")).map_err(model_error)?)
@@ -504,6 +586,41 @@ fn model_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_activation_restores_active_files_and_keeps_prior_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let active = root.path().join("active");
+        let previous = root.path().join("previous");
+        let discarded = root.path().join("discarded");
+        let stage = root.path().join("stage");
+        fs::create_dir(&active).unwrap();
+        fs::write(active.join("model"), "active").unwrap();
+        assert!(activate_verified_package(&stage, &active, &previous, &discarded).is_err());
+        assert_eq!(fs::read_to_string(active.join("model")).unwrap(), "active");
+        assert!(!previous.exists());
+
+        fs::create_dir(&previous).unwrap();
+        fs::write(previous.join("model"), "previous").unwrap();
+        assert!(activate_verified_package(&stage, &active, &previous, &discarded).is_err());
+        assert_eq!(fs::read_to_string(active.join("model")).unwrap(), "active");
+        assert_eq!(
+            fs::read_to_string(previous.join("model")).unwrap(),
+            "previous"
+        );
+
+        fs::create_dir(&stage).unwrap();
+        fs::write(stage.join("model"), "verified").unwrap();
+        activate_verified_package(&stage, &active, &previous, &discarded).unwrap();
+        assert_eq!(
+            fs::read_to_string(active.join("model")).unwrap(),
+            "verified"
+        );
+        assert_eq!(
+            fs::read_to_string(discarded.join("model")).unwrap(),
+            "active"
+        );
+    }
 
     #[test]
     fn package_removal_is_idempotent_and_clears_prior_interrupted_removal() {
