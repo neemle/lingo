@@ -11,8 +11,19 @@ public partial class ReadingPage : ContentPage
     private (string Code, string Name)[] availableTargets = [];
     private string? lastSourceLanguage;
     private bool updatingTargets;
-    private bool stacked;
-    private bool translationVisible = true;
+    private bool narrowReader;
+    private ReaderLayout readingLayout;
+    private bool TranslationVisible => readingLayout != ReaderLayout.Source;
+    private const string LayoutPreference = "reader.layout";
+    private enum ReaderLayout { Automatic, Columns, Stacked, Source, Translation }
+    private static readonly (ReaderLayout Mode, string Label, string Compact)[] Layouts =
+    [
+        (ReaderLayout.Automatic, "Автоматично", "Авто"),
+        (ReaderLayout.Columns, "Поруч", "Поруч"),
+        (ReaderLayout.Stacked, "Один під одним", "Вертикально"),
+        (ReaderLayout.Source, "Лише оригінал", "Оригінал"),
+        (ReaderLayout.Translation, "Лише переклад", "Переклад"),
+    ];
     private bool translating;
     private TranslationKey? statusKey;
     private string? machineStatus;
@@ -50,6 +61,9 @@ public partial class ReadingPage : ContentPage
     protected override void OnAppearing()
     {
         base.OnAppearing();
+        var storedLayout = (ReaderLayout)Preferences.Get(LayoutPreference, (int)ReaderLayout.Automatic);
+        readingLayout = Enum.IsDefined(storedLayout) ? storedLayout : ReaderLayout.Automatic;
+        ArrangeReadingColumns();
         readingPageActive = true;
         autoTranslate = Preferences.Get(AutoTranslatePreference, false);
         lastAutoTranslation = null;
@@ -132,30 +146,47 @@ public partial class ReadingPage : ContentPage
     protected override void OnSizeAllocated(double width, double height)
     {
         base.OnSizeAllocated(width, height);
-        if (ReadingColumns is null || TranslationPane is null || width <= 0 || stacked == (width < 720)) return;
-        stacked = width < 720;
+        if (ReadingColumns is null || SourcePane is null || TranslationPane is null ||
+            ReaderLayoutButton is null || SourceHint is null || width <= 0 || narrowReader == (width < 720)) return;
+        narrowReader = width < 720;
         ArrangeReadingColumns();
     }
 
     private void ArrangeReadingColumns()
     {
-        TranslationPane.IsVisible = translationVisible;
-        ReadingColumns.ColumnDefinitions[1].Width = stacked || !translationVisible
-            ? 0 : new GridLength(1, GridUnitType.Star);
-        ReadingColumns.RowDefinitions[1].Height = stacked && translationVisible
-            ? new GridLength(1, GridUnitType.Star) : 0;
-        ReadingColumns.ColumnSpacing = !stacked && translationVisible ? 1 : 0;
-        ReadingColumns.RowSpacing = stacked && translationVisible ? 1 : 0;
-        Grid.SetColumn(TranslationPane, stacked ? 0 : 1);
+        var sourceVisible = readingLayout != ReaderLayout.Translation;
+        var split = sourceVisible && TranslationVisible;
+        var stacked = split && (readingLayout == ReaderLayout.Stacked
+            || readingLayout == ReaderLayout.Automatic && narrowReader);
+        var columns = split && !stacked;
+        SourcePane.IsVisible = SourceHint.IsVisible = sourceVisible;
+        TranslationPane.IsVisible = TranslationVisible;
+        ReadingColumns.ColumnDefinitions[1].Width = columns ? GridLength.Star : 0;
+        ReadingColumns.RowDefinitions[1].Height = stacked ? GridLength.Star : 0;
+        ReadingColumns.ColumnSpacing = columns ? 1 : 0;
+        ReadingColumns.RowSpacing = stacked ? 1 : 0;
+        Grid.SetColumn(TranslationPane, columns ? 1 : 0);
         Grid.SetRow(TranslationPane, stacked ? 1 : 0);
+        var layout = Layouts.First(item => item.Mode == readingLayout);
+        ReaderLayoutButton.Text = layout.Compact;
+        SemanticProperties.SetDescription(ReaderLayoutButton, $"Розкладка читання · {layout.Label}. Змінити розкладку");
     }
 
-    private void ToggleTranslationClicked(object? sender, EventArgs args)
+    private async void ReaderLayoutClicked(object? sender, EventArgs args)
     {
-        translationVisible = !translationVisible;
-        ToggleTranslation.Text = translationVisible ? "Переклад ✓" : "Переклад";
-        ArrangeReadingColumns();
-        ScheduleAutoTranslation();
+        ReaderLayoutButton.IsEnabled = false;
+        try
+        {
+            var choice = await DisplayActionSheetAsync("Розкладка читання", "Скасувати", null,
+                Layouts.Select(layout => layout.Label).ToArray());
+            var index = Array.FindIndex(Layouts, layout => layout.Label == choice);
+            if (index < 0 || readingLayout == Layouts[index].Mode) return;
+            readingLayout = Layouts[index].Mode;
+            Preferences.Set(LayoutPreference, (int)readingLayout);
+            ArrangeReadingColumns();
+            ScheduleAutoTranslation();
+        }
+        finally { ReaderLayoutButton.IsEnabled = true; }
     }
 
     private void DecreaseReaderFont(object? sender, EventArgs args) => ChangeReadingSize(-1);

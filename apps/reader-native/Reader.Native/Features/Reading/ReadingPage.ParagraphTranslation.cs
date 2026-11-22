@@ -35,7 +35,7 @@ public partial class ReadingPage
     }
 
     private TranslationKey? PendingAutoTranslation() =>
-        readingPageActive && autoTranslate && translationVisible && TranslateOffline.IsEnabled
+        readingPageActive && autoTranslate && TranslationVisible && TranslateOffline.IsEnabled
             ? ActiveTranslationKey() : null;
 
     private void CancelScheduledTranslation()

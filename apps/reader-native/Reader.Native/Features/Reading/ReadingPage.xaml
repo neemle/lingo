@@ -92,13 +92,13 @@
       SemanticProperties.Description="Зменшити шрифт читання" />
      <Button Grid.Column="3" Text="A+" Style="{StaticResource PlayerButton}" Clicked="IncreaseReaderFont"
       SemanticProperties.Description="Збільшити шрифт читання" />
-     <Button Grid.Column="4" x:Name="ToggleTranslation" Text="Переклад ✓" Style="{StaticResource PlayerButton}"
-      Clicked="ToggleTranslationClicked" SemanticProperties.Description="Показати або сховати переклад" />
+     <Button Grid.Column="4" x:Name="ReaderLayoutButton" Text="Авто" Style="{StaticResource PlayerButton}"
+      Clicked="ReaderLayoutClicked" SemanticProperties.Description="Змінити розкладку читання" />
     </Grid>
     <BoxView Grid.Row="1" Color="{StaticResource BorderTone}" HeightRequest="1" />
     <Grid Grid.Row="2" x:Name="ReadingColumns" ColumnDefinitions="*,*" RowDefinitions="*,0" ColumnSpacing="1"
      BackgroundColor="{StaticResource BorderTone}">
-     <Grid RowDefinitions="Auto,*" BackgroundColor="{StaticResource Panel}">
+     <Grid x:Name="SourcePane" RowDefinitions="Auto,*" BackgroundColor="{StaticResource Panel}">
       <Grid Padding="16,10" ColumnDefinitions="*,Auto" ColumnSpacing="8" BackgroundColor="#F8F9F3">
        <Label Text="ОРИГІНАЛ" Style="{StaticResource ReaderColumnCaption}" />
        <Label Grid.Column="1" x:Name="SourceLocation" Style="{StaticResource ReaderMeta}" IsVisible="False" />
@@ -144,7 +144,7 @@
       </FlexLayout>
      </Grid>
     </Grid>
-    <Grid Grid.Row="3" BackgroundColor="#FAFBF6" Padding="15,7">
+    <Grid Grid.Row="3" x:Name="SourceHint" BackgroundColor="#FAFBF6" Padding="15,7">
      <Label Text="Виділіть слово в оригіналі, щоб переглянути значення чи додати його до словника."
       Style="{StaticResource ReaderMeta}" />
     </Grid>

@@ -47,7 +47,7 @@ public partial class ReadingPage
 
     private async void ShareTranslationPairClicked(object? sender, EventArgs args)
     {
-        if (sharingReaderText || !translationVisible || DisplayedTranslationPair() is not { } pair) return;
+        if (sharingReaderText || !TranslationVisible || DisplayedTranslationPair() is not { } pair) return;
         var sourceLabel = DocumentLanguages.Name(pair.SourceLanguage);
         var targetLabel = DocumentLanguages.Name(pair.TargetLanguage);
         var text = $"{sourceLabel}{Environment.NewLine}{pair.Source}{Environment.NewLine}{Environment.NewLine}" +

@@ -52,6 +52,8 @@ public partial class ProbePage : ContentPage
         speech.PreferredVoice = voice.Id;
         var request = ++speechRequest;
         ProbeText.SpokenWord = null;
+        ProbeText.HighlightStart = 0;
+        ProbeText.HighlightLength = SpokenSample.Length;
         var boundaries = new List<string>();
         SpeechResult.Text = $"Озвучує {voice.Name}…";
         var status = await speech.SpeakAsync(SpokenSample, "en", (start, length) => Dispatcher.Dispatch(() =>

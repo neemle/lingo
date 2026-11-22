@@ -9,6 +9,7 @@ namespace Reader.Native.Controls;
 public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, RichEditBox>
 {
     private bool updating;
+    private Reader.Presentation.TextSelection? highlightedSentence;
     private Reader.Presentation.TextSelection? spokenWord;
     private Reader.Presentation.WindowsTextMap textMap = new("");
     private string sourceText = "";
@@ -67,23 +68,35 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, RichEdit
         handler.updating = true;
         try
         {
-            if (handler.sourceText != view.Text)
+            var newDocument = handler.sourceText != view.Text;
+            if (newDocument)
             {
                 handler.sourceText = view.Text;
                 handler.textMap = new Reader.Presentation.WindowsTextMap(view.Text);
                 handler.PlatformView.Document.SetText(TextSetOptions.None, handler.textMap.Text);
                 MapFont(handler, view);
+                handler.PlatformView.Document.GetRange(0, handler.textMap.Text.Length)
+                    .CharacterFormat.BackgroundColor = WinColor.FromArgb(255, 253, 253, 249);
+                handler.highlightedSentence = null;
+                handler.spokenWord = null;
             }
-            handler.PlatformView.Document.GetRange(0, handler.textMap.Text.Length)
-                .CharacterFormat.BackgroundColor = WinColor.FromArgb(255, 253, 253, 249);
             var selected = Reader.Presentation.SourceRanges.Selection(view.Text,
                 view.HighlightStart, view.HighlightLength);
-            if (selected is not null) handler.PlatformView.Document.GetRange(
-                handler.textMap.NativeOffset(selected.StartUtf16),
-                handler.textMap.NativeOffset(selected.StartUtf16 + selected.LengthUtf16))
-                    .CharacterFormat.BackgroundColor =
-                    WinColor.FromArgb(255, 245, 240, 229);
-            handler.spokenWord = null;
+            if (newDocument || selected != handler.highlightedSentence)
+            {
+                if (handler.highlightedSentence is { } previous)
+                    PaintWord(handler, previous, WinColor.FromArgb(255, 253, 253, 249));
+                handler.highlightedSentence = selected;
+                handler.spokenWord = null;
+                if (selected is not null)
+                {
+                    var range = handler.PlatformView.Document.GetRange(
+                        handler.textMap.NativeOffset(selected.StartUtf16),
+                        handler.textMap.NativeOffset(selected.StartUtf16 + selected.LengthUtf16));
+                    range.CharacterFormat.BackgroundColor = WinColor.FromArgb(255, 245, 240, 229);
+                    range.ScrollIntoView(PointOptions.Start | PointOptions.NoHorizontalScroll);
+                }
+            }
             MapSpokenWord(handler, view);
         }
         finally { handler.updating = false; }
