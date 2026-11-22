@@ -24,6 +24,6 @@ public static class AppState
             .Where(value => value.Length != 0).Distinct().Take(3);
         Preferences.Set("recentDocuments", string.Join(";", recent));
         (Shell.Current as AppShell)?.RefreshRecent();
-        await Shell.Current.GoToAsync("//reading");
+        await Shell.Current.GoToAsync(AppShell.ReadingRoute);
     }
 }

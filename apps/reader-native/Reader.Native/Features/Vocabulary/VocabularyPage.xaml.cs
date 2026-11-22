@@ -196,7 +196,7 @@ public partial class VocabularyPage : ContentPage
 
     private async void PracticeClicked(object? sender, EventArgs args)
     {
-        try { await Shell.Current.GoToAsync("//practice"); }
+        try { await Shell.Current.GoToAsync(AppShell.PracticeRoute); }
         catch (Exception error) { ShowArchiveStatus(error.Message); }
     }
 
@@ -221,7 +221,7 @@ public partial class VocabularyPage : ContentPage
                 if (await DisplayAlertAsync("Семантичний пошук",
                     "Встановіть Multilingual E5 Small у налаштуваннях.",
                     "Налаштування", "Закрити") && revision == queryRevision)
-                    await Shell.Current.GoToAsync("//settings");
+                    await Shell.Current.GoToAsync(AppShell.SettingsRoute);
                 return;
             }
             var matches = await session.SemanticVocabularyAsync(query, documentId);

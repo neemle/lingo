@@ -55,9 +55,21 @@
   </VerticalStackLayout>
  </Shell.FlyoutFooter>
 
- <ShellContent Title="Бібліотека" Route="library" Icon="nav_grid.png" ContentTemplate="{DataTemplate library:LibraryPage}" />
- <ShellContent Title="Читання" Route="reading" Icon="nav_book.png" ContentTemplate="{DataTemplate reading:ReadingPage}" />
- <ShellContent Title="Мій словник" Route="vocabulary" Icon="nav_cards.png" ContentTemplate="{DataTemplate words:VocabularyPage}" />
- <ShellContent Title="Практика" Route="practice" Icon="nav_spark.png" ContentTemplate="{DataTemplate practice:PracticePage}" />
- <ShellContent Title="Мови та ресурси" Route="settings" Icon="nav_settings.png" ContentTemplate="{DataTemplate settings:SettingsPage}" />
+ <FlyoutItem Route="workspace" FlyoutDisplayOptions="AsMultipleItems" Shell.TabBarIsVisible="False">
+  <Tab Title="Бібліотека" Route="librarySection" Icon="nav_grid.png">
+   <ShellContent Title="Бібліотека" Route="library" ContentTemplate="{DataTemplate library:LibraryPage}" />
+  </Tab>
+  <Tab Title="Читання" Route="readingSection" Icon="nav_book.png">
+   <ShellContent Title="Читання" Route="reading" ContentTemplate="{DataTemplate reading:ReadingPage}" />
+  </Tab>
+  <Tab Title="Мій словник" Route="vocabularySection" Icon="nav_cards.png">
+   <ShellContent Title="Мій словник" Route="vocabulary" ContentTemplate="{DataTemplate words:VocabularyPage}" />
+  </Tab>
+  <Tab Title="Практика" Route="practiceSection" Icon="nav_spark.png">
+   <ShellContent Title="Практика" Route="practice" ContentTemplate="{DataTemplate practice:PracticePage}" />
+  </Tab>
+  <Tab Title="Мови та ресурси" Route="settingsSection" Icon="nav_settings.png">
+   <ShellContent Title="Мови та ресурси" Route="settings" ContentTemplate="{DataTemplate settings:SettingsPage}" />
+  </Tab>
+ </FlyoutItem>
 </Shell>

@@ -302,7 +302,7 @@ public partial class ReadingPage : ContentPage
         if (readiness is not { Missing.Length: > 0 } state) return;
         try
         {
-            await Shell.Current.GoToAsync("//settings",
+            await Shell.Current.GoToAsync(AppShell.SettingsRoute,
                 new ShellNavigationQueryParameters { ["translationPackages"] = state.Missing });
         }
         catch (Exception error) { TranslationNotice.Text = error.Message; }

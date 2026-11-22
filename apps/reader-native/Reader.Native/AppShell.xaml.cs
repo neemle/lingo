@@ -7,6 +7,10 @@ namespace Reader.Native;
 
 public partial class AppShell : Shell
 {
+    internal const string LibraryRoute = "//workspace/librarySection/library";
+    internal const string ReadingRoute = "//workspace/readingSection/reading";
+    internal const string PracticeRoute = "//workspace/practiceSection/practice";
+    internal const string SettingsRoute = "//workspace/settingsSection/settings";
     private static readonly string[] Sections = ["library", "reading", "vocabulary", "practice", "settings"];
     private readonly string previousRoute = RestoreRoute();
     private ReaderSession? trackedSession;
@@ -30,7 +34,7 @@ public partial class AppShell : Shell
             trackedSession = AppState.Session;
             var id = Preferences.Get("lastDocument", "");
             if (id.Length > 0) await trackedSession.SelectAsync(id);
-            if (!stopped && !DesktopImport.HasPending && previousRoute != "//library")
+            if (!stopped && !DesktopImport.HasPending && previousRoute != LibraryRoute)
                 await GoToAsync(previousRoute);
         }
         catch (Exception error)
@@ -77,7 +81,7 @@ public partial class AppShell : Shell
                 try
                 {
                     if (!listening) return;
-                    if (CurrentPage is not LibraryPage) await GoToAsync("//library");
+                    if (CurrentPage is not LibraryPage) await GoToAsync(LibraryRoute);
                     if (CurrentPage is not LibraryPage library || !DesktopImport.TryTake(out var item) || item is null)
                         return;
                     await library.ImportExternalAsync(item);
@@ -91,9 +95,12 @@ public partial class AppShell : Shell
 
     private static string RestoreRoute()
     {
-        var last = Preferences.Get("lastRoute", "//library");
-        var route = last.Split('/').LastOrDefault(Sections.Contains);
-        return $"//{route ?? "library"}";
+        var last = Preferences.Get("lastRoute", LibraryRoute);
+        var queryStart = last.IndexOf('?');
+        var path = queryStart >= 0 ? last[..queryStart] : last;
+        var query = queryStart >= 0 ? last[queryStart..] : "";
+        var route = path.Split('/').LastOrDefault(Sections.Contains) ?? "library";
+        return $"//workspace/{route}Section/{route}{query}";
     }
 
     private void SessionChanged(object? sender, PropertyChangedEventArgs args)

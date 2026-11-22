@@ -31,7 +31,7 @@ public partial class ReadingPage
                 if (await DisplayAlertAsync("Локальне пояснення",
                     "Для пояснень встановіть одну з моделей Qwen у налаштуваннях.",
                     "Налаштування", "Закрити"))
-                    await Shell.Current.GoToAsync("//settings");
+                    await Shell.Current.GoToAsync(AppShell.SettingsRoute);
                 return;
             }
 

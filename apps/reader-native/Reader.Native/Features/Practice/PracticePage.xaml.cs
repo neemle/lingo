@@ -181,7 +181,7 @@ public partial class PracticePage : ContentPage
     }
 
     private async void ReturnToReadingClicked(object? sender, EventArgs args) =>
-        await Shell.Current.GoToAsync(AppState.Session.Document is null ? "//library" : "//reading");
+        await Shell.Current.GoToAsync(AppState.Session.Document is null ? AppShell.LibraryRoute : AppShell.ReadingRoute);
 
     private void ChangePracticeSettings(string? direction)
     {
