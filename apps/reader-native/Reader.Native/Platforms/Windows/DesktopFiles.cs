@@ -5,34 +5,46 @@ namespace Reader.Native.Services;
 
 internal static class DesktopFiles
 {
-    internal static bool QueueFile(StorageFile file) => DesktopImport.Enqueue(new DesktopFile(file.Name, async () =>
+    internal static Task QueueFileAsync(StorageFile file) => DesktopFile.Supports(file.Name)
+        ? DesktopImport.ReceiveAsync(file.Name, () => StageFileAsync(file))
+        : Task.CompletedTask;
+
+    private static async Task<ShareInboxItem> StageFileAsync(StorageFile file)
     {
         using var source = await file.OpenReadAsync();
         await using var stream = source.AsStreamForRead();
-        return await NativeFiles.ReadBoundedAsync(stream, Reader.CoreClient.CoreClient.MaxImportBytes);
-    }));
-
-    internal static async Task<int> QueueDropAsync(DropEventArgs args)
-    {
-        var data = args.PlatformArgs?.DragEventArgs.DataView;
-        if (data is null || !data.Contains(StandardDataFormats.StorageItems)) return 0;
-        return (await data.GetStorageItemsAsync()).OfType<StorageFile>().Count(QueueFile);
+        return await ShareInbox.StageAsync("file", file.Name, stream);
     }
 
-    internal static async Task<Uri?> GetDropAddressAsync(DropEventArgs args)
+    internal static async Task<bool> QueueDropAsync(DropEventArgs args)
     {
-        var data = args.PlatformArgs?.DragEventArgs.DataView;
-        if (data is null || data.Contains(StandardDataFormats.StorageItems)) return null;
-        if (data.Contains(StandardDataFormats.WebLink))
-            return WebArticles.Address((await data.GetWebLinkAsync()).AbsoluteUri);
-        return null;
-    }
-
-    internal static async Task<string?> GetDropTextAsync(DropEventArgs args)
-    {
-        var data = args.PlatformArgs?.DragEventArgs.DataView;
-        if (data is null || data.Contains(StandardDataFormats.StorageItems) || !data.Contains(StandardDataFormats.Text))
-            return null;
-        return await data.GetTextAsync();
+        if (args.PlatformArgs?.DragEventArgs is not { } drag) return false;
+        var deferral = drag.GetDeferral();
+        var items = new List<ShareInboxItem>();
+        var handled = false;
+        try
+        {
+            var data = drag.DataView;
+            if (data.Contains(StandardDataFormats.StorageItems))
+            {
+                foreach (var file in (await data.GetStorageItemsAsync()).OfType<StorageFile>())
+                {
+                    if (!DesktopFile.Supports(file.Name)) continue;
+                    handled = true;
+                    try { items.Add(await StageFileAsync(file)); }
+                    catch (Exception error) { DesktopImport.ReportFailure(file.Name, error); }
+                }
+            }
+            else
+            {
+                var address = data.Contains(StandardDataFormats.WebLink)
+                    ? WebArticles.Address((await data.GetWebLinkAsync()).AbsoluteUri) : null;
+                var text = address is null && data.Contains(StandardDataFormats.Text) ? await data.GetTextAsync() : null;
+                handled = await DesktopImport.EnqueueDropTextAsync(address, text);
+            }
+        }
+        finally { deferral.Complete(); }
+        foreach (var item in items) DesktopImport.Publish(item);
+        return handled;
     }
 }

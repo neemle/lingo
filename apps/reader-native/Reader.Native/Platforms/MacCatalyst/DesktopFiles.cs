@@ -16,23 +16,23 @@ internal static class DesktopFiles
         ["public.heif"] = ".heif",
     };
 
-    internal static bool QueueFile(NSUrl url) => FromUrl(url) is { } file && DesktopImport.Enqueue(file);
-
-    private static DesktopFile? FromUrl(NSUrl url)
+    internal static bool QueueFile(NSUrl url)
     {
-        if (!url.IsFileUrl || url.Path is not { } path) return null;
-        var name = Path.GetFileName(path);
-        return DesktopFile.Supports(name) ? new DesktopFile(name, () => ReadUrlAsync(url)) : null;
+        if (FileName(url) is not { } name) return false;
+        _ = DesktopImport.ReceiveAsync(name, () => StageUrlAsync(url, name));
+        return true;
     }
 
-    private static async Task<byte[]> ReadUrlAsync(NSUrl url)
+    private static string? FileName(NSUrl url) => url.IsFileUrl && url.Path is { } path
+        && Path.GetFileName(path) is { } name && DesktopFile.Supports(name) ? name : null;
+
+    private static async Task<ShareInboxItem> StageUrlAsync(NSUrl url, string name)
     {
         var scoped = url.StartAccessingSecurityScopedResource();
         try
         {
             await using var stream = File.OpenRead(url.Path ?? throw new IOException("Не вдалося відкрити файл."));
-            return await NativeFiles.ReadBoundedAsync(stream, Reader.CoreClient.CoreClient.MaxImportBytes)
-                .ConfigureAwait(false);
+            return await ShareInbox.StageAsync("file", name, stream).ConfigureAwait(false);
         }
         finally
         {
@@ -40,31 +40,57 @@ internal static class DesktopFiles
         }
     }
 
-    internal static async Task<int> QueueDropAsync(DropEventArgs args)
+    internal static async Task<bool> QueueDropAsync(DropEventArgs args)
     {
-        if (args.PlatformArgs?.DropSession is not { } session) return 0;
-        var count = 0;
+        if (args.PlatformArgs?.DropSession is not { } session) return false;
+        var staged = new List<ShareInboxItem>();
+        var handled = false;
         foreach (var item in session.Items)
         {
             var provider = item.ItemProvider;
-            var declaredType = provider.RegisteredTypeIdentifiers.FirstOrDefault(DocumentTypes.ContainsKey);
-            if (declaredType is null && provider.HasItemConformingTo("public.file-url"))
-            {
-                var completion = new TaskCompletionSource<NSUrl?>(TaskCreationOptions.RunContinuationsAsynchronously);
-                provider.LoadItem("public.file-url", null, (value, error) =>
-                    completion.TrySetResult(error is null ? value as NSUrl : null));
-                if (await completion.Task is { } original && QueueFile(original)) count++;
-                continue;
-            }
-            if (declaredType is null) continue;
             var suggested = Path.GetFileName(provider.SuggestedName ?? "Документ");
-            var name = DesktopFile.Supports(suggested) ? suggested : suggested + DocumentTypes[declaredType];
-            if (DesktopImport.Enqueue(new DesktopFile(name, () => ReadProviderAsync(provider, declaredType)))) count++;
+            var declaredType = provider.RegisteredTypeIdentifiers.FirstOrDefault(type => DocumentTypes.ContainsKey(type)
+                && (type != "public.plain-text" || DesktopFile.Supports(suggested)));
+            try
+            {
+                if (declaredType is not null)
+                {
+                    var filename = DesktopFile.Supports(suggested) ? suggested : suggested + DocumentTypes[declaredType];
+                    staged.Add(await StageProviderAsync(provider, declaredType, filename));
+                    handled = true;
+                }
+                else if (provider.HasItemConformingTo("public.file-url") && await StageFileItemAsync(provider) is { } original)
+                {
+                    staged.Add(original);
+                    handled = true;
+                }
+            }
+            catch (Exception error)
+            {
+                handled = true;
+                DesktopImport.ReportFailure(suggested, error);
+            }
         }
-        return count;
+        foreach (var item in staged) DesktopImport.Publish(item);
+        if (handled) return true;
+        var address = await GetDropAddressAsync(args);
+        var text = address is null ? await GetDropTextAsync(args) : null;
+        return await DesktopImport.EnqueueDropTextAsync(address, text);
     }
 
-    internal static async Task<Uri?> GetDropAddressAsync(DropEventArgs args)
+    private static Task<ShareInboxItem?> StageFileItemAsync(NSItemProvider provider)
+    {
+        var completion = new TaskCompletionSource<ShareInboxItem?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        provider.LoadItem("public.file-url", null, (value, error) =>
+        {
+            if (error is not null) completion.TrySetException(new IOException(error.LocalizedDescription));
+            else if (value is NSUrl url && FileName(url) is { } name) StageInCallback(completion, url, name);
+            else completion.TrySetResult(null);
+        });
+        return completion.Task;
+    }
+
+    private static async Task<Uri?> GetDropAddressAsync(DropEventArgs args)
     {
         if (args.PlatformArgs?.DropSession is not { } session) return null;
         foreach (var item in session.Items)
@@ -79,7 +105,7 @@ internal static class DesktopFiles
         return null;
     }
 
-    internal static async Task<string?> GetDropTextAsync(DropEventArgs args)
+    private static async Task<string?> GetDropTextAsync(DropEventArgs args)
     {
         if (args.PlatformArgs?.DropSession is not { } session) return null;
         foreach (var item in session.Items)
@@ -102,9 +128,9 @@ internal static class DesktopFiles
         return null;
     }
 
-    private static Task<byte[]> ReadProviderAsync(NSItemProvider provider, string type)
+    private static async Task<ShareInboxItem> StageProviderAsync(NSItemProvider provider, string type, string name)
     {
-        var completion = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<ShareInboxItem?>(TaskCreationOptions.RunContinuationsAsynchronously);
         provider.LoadInPlaceFileRepresentation(type, (url, _, error) =>
         {
             if (error is not null || url is null)
@@ -112,13 +138,15 @@ internal static class DesktopFiles
                 completion.TrySetException(new IOException(error?.LocalizedDescription ?? "Не вдалося прочитати перетягнутий файл."));
                 return;
             }
-            try
-            {
-                // A provider may delete its temporary file when this callback returns.
-                completion.TrySetResult(ReadUrlAsync(url).GetAwaiter().GetResult());
-            }
-            catch (Exception failure) { completion.TrySetException(failure); }
+            StageInCallback(completion, url, name);
         });
-        return completion.Task;
+        return (await completion.Task.ConfigureAwait(false))!;
+    }
+
+    private static void StageInCallback(TaskCompletionSource<ShareInboxItem?> completion, NSUrl url, string name)
+    {
+        // A provider may invalidate its temporary URL as soon as this callback returns.
+        try { completion.TrySetResult(StageUrlAsync(url, name).GetAwaiter().GetResult()); }
+        catch (Exception error) { completion.TrySetException(error); }
     }
 }

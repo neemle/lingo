@@ -14,21 +14,7 @@ public partial class LibraryPage
         importing = true;
         try
         {
-            var input = await DisplayPromptAsync("Додати статтю", "Вставте адресу сторінки. Читай завантажить її текст і збереже на пристрої.",
-                "Завантажити", "Скасувати", "https://…", 4096, Keyboard.Url, suggested?.AbsoluteUri ?? "");
-            if (input is null) return;
-            var address = WebArticles.Address(input) ?? throw new InvalidDataException("Введіть дійсну адресу HTTP або HTTPS.");
-            ImportStatus.Text = "Завантажуємо статтю…";
-            var article = await Task.Run(() => WebArticles.DownloadAsync(address));
-            var session = AppState.Session;
-            await session.WaitUntilIdleAsync();
-            ImportStatus.Text = "";
-            var language = await ChooseLanguageAsync("Мова оригіналу", await session.DetectLanguageAsync(article.Text));
-            if (language is null) return;
-            await session.ImportAsync(article.Title + ".txt", Encoding.UTF8.GetBytes(article.Text), language,
-                article.Address.AbsoluteUri);
-            if (session.Error.Length == 0 && session.Document is { } document)
-                await AppState.OpenAsync(document.Id);
+            if (await ImportArticleCoreAsync(suggested) is { } id) await AppState.OpenAsync(id);
         }
         catch (Exception error) { await DisplayAlertAsync("Імпорт статті", error.Message, "Гаразд"); }
         finally
@@ -37,6 +23,25 @@ public partial class LibraryPage
             ImportStatus.Text = "";
             DesktopImport.Gate.Release();
         }
+    }
+
+    private async Task<string?> ImportArticleCoreAsync(Uri? suggested)
+    {
+        var input = await DisplayPromptAsync("Додати статтю", "Вставте адресу сторінки. Читай завантажить її текст і збереже на пристрої.",
+            "Завантажити", "Скасувати", "https://…", 4096, Keyboard.Url, suggested?.AbsoluteUri ?? "");
+        if (input is null) return null;
+        var address = WebArticles.Address(input) ?? throw new InvalidDataException("Введіть дійсну адресу HTTP або HTTPS.");
+        ImportStatus.Text = "Завантажуємо статтю…";
+        var article = await Task.Run(() => WebArticles.DownloadAsync(address));
+        var session = AppState.Session;
+        await session.WaitUntilIdleAsync();
+        ImportStatus.Text = "";
+        var language = await ChooseLanguageAsync("Мова оригіналу", await session.DetectLanguageAsync(article.Text));
+        if (language is null) return null;
+        await session.ImportAsync(article.Title + ".txt", Encoding.UTF8.GetBytes(article.Text), language,
+            article.Address.AbsoluteUri);
+        if (session.Error.Length > 0) throw new InvalidDataException(session.Error);
+        return session.Document?.Id;
     }
 
     private async void OpenArticleSourceClicked(object? sender, EventArgs args)

@@ -26,6 +26,8 @@
     <Button Text="Історія" Margin="0,0,8,6" Style="{StaticResource OutlineButton}" Clicked="ReadingHistoryClicked"
      IsEnabled="{Binding CanInteract}" SemanticProperties.Description="Історія читання" />
     <Button Text="Розпізнати PDF" Margin="0,0,8,6" Style="{StaticResource OutlineButton}" Clicked="ScanPdfClicked" IsEnabled="{Binding CanInteract}" />
+    <Button x:Name="OpenShareInbox" Text="Вхідні матеріали" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
+     Clicked="OpenShareInboxClicked" IsVisible="False" IsEnabled="{Binding CanInteract}" />
     <Button x:Name="ResumePdf" Text="Продовжити OCR" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
      Clicked="ResumePdfClicked" IsVisible="False" IsEnabled="{Binding CanInteract}" />
     <Button x:Name="PausePdf" Text="Призупинити OCR" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"

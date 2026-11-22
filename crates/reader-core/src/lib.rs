@@ -11,6 +11,7 @@ mod card_learning;
 pub use card_learning::SenseSnapshot;
 pub mod dictionary_transfer;
 pub mod document_layout;
+pub mod document_revisions;
 pub mod e5;
 pub mod knowledge;
 pub mod language_detection;
@@ -51,6 +52,8 @@ pub struct Document {
     pub title: String,
     pub language: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_revision_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocks: Vec<document_layout::DocumentBlock>,
     pub sentences: Vec<Sentence>,
@@ -269,6 +272,8 @@ pub struct Backup {
     pub resources: Vec<BackupResource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reading_sessions: Vec<reading_history::ReadingSession>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub document_revisions: Vec<document_revisions::DocumentRevision>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -347,7 +352,7 @@ pub struct Store {
 }
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
-        let connection = Connection::open(path).map_err(|e| e.to_string())?;
+        let mut connection = Connection::open(path).map_err(|e| e.to_string())?;
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, body TEXT NOT NULL, source_hash TEXT UNIQUE NOT NULL); CREATE TABLE IF NOT EXISTS originals (document_id TEXT PRIMARY KEY REFERENCES documents(id), name TEXT NOT NULL, bytes BLOB NOT NULL); CREATE TABLE IF NOT EXISTS vocabulary (id TEXT PRIMARY KEY, word_key TEXT UNIQUE NOT NULL, body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS review_events (id INTEGER PRIMARY KEY, entry_id TEXT NOT NULL, direction TEXT NOT NULL, grade INTEGER NOT NULL, reviewed_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS translation_cache (key TEXT PRIMARY KEY, body TEXT NOT NULL); PRAGMA user_version=1;").map_err(|e| e.to_string())?;
         connection.execute("CREATE TABLE IF NOT EXISTS speech_resume (document_id TEXT PRIMARY KEY REFERENCES documents(id), body TEXT NOT NULL)", [])
             .map_err(|e| e.to_string())?;
@@ -363,6 +368,7 @@ impl Store {
         dictionary_transfer::initialize(&connection)?;
         reading_history::initialize(&connection)?;
         ocr_jobs::initialize(&connection)?;
+        document_revisions::initialize(&mut connection)?;
         Ok(Self {
             connection,
             model_directory: path.with_file_name("translation-models"),
@@ -540,6 +546,7 @@ impl Store {
                 };
                 let mut updated = existing.clone();
                 self.edit_document(&existing.id, |document, tx| {
+                    let text_changed = document.text != parsed.text;
                     ocr::update_transcript(document, parsed.text)?;
                     Self::discard_changed_speech_resume(tx, document)?;
                     document.ocr_lines = Some(lines);
@@ -547,29 +554,45 @@ impl Store {
                     document.pdf_page_starts = parsed.pdf_page_starts;
                     document.blocks = parsed.blocks;
                     ocr::refresh_provenance(document);
+                    if text_changed {
+                        document_revisions::append(document, tx)?;
+                    }
                     updated = document.clone();
                     Ok(true)
                 })?;
                 return Ok(updated);
             }
             if existing.blocks.is_empty() {
-                // Reimports may rebuild the new derived layout without touching
-                // the stored canonical text, sentence IDs or user state.
+                // Rebuild missing reflow for older imports. OCR corrections keep their own transcript.
                 let parsed = if let Some(parsed) = parsed {
                     Some(parsed)
                 } else {
                     document_layout::parse(name, bytes).ok()
                 };
-                if let Some(parsed) = parsed.filter(|parsed| parsed.text == existing.text) {
+                if let Some(parsed) = parsed {
                     let id = existing.id.clone();
-                    self.edit_document(&id, |document, _| {
-                        if !document.blocks.is_empty() || parsed.text != document.text {
+                    self.edit_document(&id, |document, tx| {
+                        let text_changed = document.text != parsed.text;
+                        if !document.blocks.is_empty()
+                            || (text_changed
+                                && (document.ocr_lines.is_some() || ocr_lines.is_some()))
+                        {
                             existing = document.clone();
                             return Ok(false);
+                        }
+                        if text_changed {
+                            if ocr::update_transcript(document, parsed.text).is_err() {
+                                existing = document.clone();
+                                return Ok(false);
+                            }
+                            Self::discard_changed_speech_resume(tx, document)?;
                         }
                         document.pdf_page_starts = parsed.pdf_page_starts;
                         document.blocks = parsed.blocks;
                         ocr::refresh_provenance(document);
+                        if text_changed {
+                            document_revisions::append(document, tx)?;
+                        }
                         existing = document.clone();
                         Ok(true)
                     })?;
@@ -637,6 +660,7 @@ impl Store {
                 .into(),
             language: language.into(),
             text,
+            current_revision_id: None,
             blocks,
             position: 0,
             speech_resume: None,
@@ -656,6 +680,13 @@ impl Store {
                 .to_lowercase(),
         };
         ocr::refresh_provenance(&mut document);
+        let parser_version = document_revisions::parser_version(&document);
+        let created_at = document.created_at;
+        let revision = document_revisions::DocumentRevision::capture(
+            &mut document,
+            parser_version,
+            created_at,
+        );
         let tx = self.connection.transaction().map_err(|e| e.to_string())?;
         tx.execute(
             "INSERT INTO documents VALUES (?1,?2,?3)",
@@ -671,6 +702,7 @@ impl Store {
             params![document.id, name, bytes],
         )
         .map_err(|e| e.to_string())?;
+        revision.insert(&tx)?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(document)
     }
@@ -730,10 +762,14 @@ impl Store {
                 )?;
                 document_layout::from_ocr(text, lines, document.ocr_pdf_pages)
             };
+            let text_changed = document.text != parsed.text;
             ocr::update_transcript(document, parsed.text)?;
             document.pdf_page_starts = parsed.pdf_page_starts;
             document.blocks = parsed.blocks;
             ocr::refresh_provenance(document);
+            if text_changed {
+                document_revisions::append(document, tx)?;
+            }
             Self::discard_changed_speech_resume(tx, document)?;
             Ok(true)
         })
@@ -1122,6 +1158,7 @@ impl Store {
             practice: practice::read(&tx)?,
             resources: self.backup_resources(),
             reading_sessions: reading_history::export(&tx)?,
+            document_revisions: document_revisions::export(&tx)?,
         };
         tx.commit().map_err(|error| error.to_string())?;
         Ok(backup)
@@ -1129,6 +1166,14 @@ impl Store {
     pub fn restore(&mut self, backup: Backup) -> Result<()> {
         if backup.version != 1 {
             return Err("Невідома версія архіву".into());
+        }
+        let mut revisions =
+            std::collections::HashMap::<String, Vec<document_revisions::DocumentRevision>>::new();
+        for revision in backup.document_revisions {
+            revisions
+                .entry(revision.document_id.clone())
+                .or_default()
+                .push(revision);
         }
         // Validate and reparse originals rather than trusting imported derived offsets.
         let mut validated = Vec::new();
@@ -1161,11 +1206,41 @@ impl Store {
                 _ => return Err("В архіві PDF немає потрібних даних сторінок".into()),
             };
             let mut d = doc.clone();
-            d.text = parsed.text;
+            let mut history = revisions
+                .remove(&d.id)
+                .map(|history| document_revisions::validate_chain(&d, history))
+                .transpose()?
+                .unwrap_or_default();
+            let text_changed = if let Some(current) = history
+                .last()
+                .filter(|current| !current.matches_text(&parsed.text))
+            {
+                if !current.matches_text(&d.text) {
+                    return Err("Архів не містить підтвердженого тексту поточної ревізії".into());
+                }
+                d.sentences = segment(&d.text, &d.id);
+                ocr::update_transcript(&mut d, parsed.text)?;
+                true
+            } else {
+                d.text = parsed.text;
+                d.sentences = segment(&d.text, &d.id);
+                false
+            };
             d.blocks = parsed.blocks;
             d.pdf_page_starts = parsed.pdf_page_starts;
             ocr::refresh_provenance(&mut d);
-            d.sentences = segment(&d.text, &d.id);
+            if history.is_empty() || text_changed {
+                let parser = document_revisions::parser_version(&d);
+                let created_at = if history.is_empty() {
+                    d.current_revision_id = None;
+                    d.created_at
+                } else {
+                    now()
+                };
+                history.push(document_revisions::DocumentRevision::capture(
+                    &mut d, parser, created_at,
+                ));
+            }
             d.position = d.position.min(d.sentences.len().saturating_sub(1));
             d.speech_resume = d
                 .speech_resume
@@ -1203,13 +1278,16 @@ impl Store {
                     }
                 }
             }
-            validated.push((d, original));
+            validated.push((d, original, history));
+        }
+        if !revisions.is_empty() {
+            return Err("В архіві є ревізії без документа".into());
         }
         let tx = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        for (d, o) in validated {
+        for (d, o, history) in validated {
             let mut d = d;
             let speech_resume = d.speech_resume.take();
             let inserted = tx
@@ -1227,6 +1305,9 @@ impl Store {
                     params![d.id, o.name, o.bytes],
                 )
                 .map_err(|e| e.to_string())?;
+                for revision in history {
+                    revision.insert(&tx)?;
+                }
             }
         }
         let review_cards = dictionary_transfer::restore_backup_dictionary(

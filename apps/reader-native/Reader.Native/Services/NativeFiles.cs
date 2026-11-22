@@ -13,14 +13,21 @@ public static class NativeFiles
     internal static async Task<byte[]> ReadBoundedAsync(Stream stream, int maximum, CancellationToken cancellation = default)
     {
         using var copy = new MemoryStream();
+        await CopyBoundedAsync(stream, copy, maximum, cancellation).ConfigureAwait(false);
+        return copy.ToArray();
+    }
+
+    internal static async Task CopyBoundedAsync(Stream stream, Stream target, int maximum,
+        CancellationToken cancellation = default)
+    {
         var buffer = new byte[64 * 1024];
+        long total = 0;
         int count;
         while ((count = await stream.ReadAsync(buffer.AsMemory(), cancellation).ConfigureAwait(false)) != 0)
         {
-            if (copy.Length + count > maximum) throw new InvalidDataException("Файл перевищує допустимий розмір.");
-            await copy.WriteAsync(buffer.AsMemory(0, count), cancellation).ConfigureAwait(false);
+            if ((total += count) > maximum) throw new InvalidDataException("Файл перевищує допустимий розмір.");
+            await target.WriteAsync(buffer.AsMemory(0, count), cancellation).ConfigureAwait(false);
         }
-        return copy.ToArray();
     }
 
     public static async Task ShareBytesAsync(string name, byte[] bytes)

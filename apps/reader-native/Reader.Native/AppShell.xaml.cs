@@ -55,20 +55,23 @@ public partial class AppShell : Shell
 
     private async void DrainFileImports()
     {
-        if (openingFiles || !listening || !DesktopImport.HasPending) return;
+        if (openingFiles || !listening) return;
         openingFiles = true;
         try
         {
-            while (listening && DesktopImport.HasPending)
+            while (listening)
             {
+                if (DesktopImport.TakeFailure() is { } failure)
+                    await DisplayAlertAsync("Відкрити файл", failure, "Гаразд");
+                if (!DesktopImport.HasPending) break;
                 await DesktopImport.Gate.WaitAsync();
                 try
                 {
                     if (!listening) return;
                     if (CurrentPage is not LibraryPage) await GoToAsync("//library");
-                    if (CurrentPage is not LibraryPage library || !DesktopImport.TryTake(out var file) || file is null)
+                    if (CurrentPage is not LibraryPage library || !DesktopImport.TryTake(out var item) || item is null)
                         return;
-                    await library.ImportExternalAsync(file);
+                    await library.ImportExternalAsync(item);
                 }
                 finally { DesktopImport.Gate.Release(); }
             }

@@ -8,6 +8,7 @@ public sealed record Backup(
 {
     public BackupResource[] Resources { get; init; } = [];
     public ReadingSession[] ReadingSessions { get; init; } = [];
+    public DocumentRevision[] DocumentRevisions { get; init; } = [];
     public PracticeProgress? Practice { get; init; }
     public DictionarySource[] DictionarySources { get; init; } = [];
     public string[] DictionaryReviewOrigins { get; init; } = [];

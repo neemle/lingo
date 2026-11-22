@@ -71,6 +71,7 @@ public partial class LibraryPage : ContentPage
             ShowBooks(session.Snapshot);
             await session.RefreshAsync();
             await RefreshPendingPdfAsync();
+            await RefreshShareInboxAsync();
             var last = Preferences.Get("lastDocument", "");
             if (!string.IsNullOrEmpty(last)) await AppState.Session.SelectAsync(last);
         }
@@ -87,13 +88,7 @@ public partial class LibraryPage : ContentPage
     {
         try
         {
-            var address = await DesktopFiles.GetDropAddressAsync(args);
-            var text = address is null ? await DesktopFiles.GetDropTextAsync(args) : null;
-            if ((address ?? WebArticles.Address(text)) is { } webAddress)
-                await ImportArticleAsync(webAddress);
-            else if (!string.IsNullOrWhiteSpace(text))
-                await ImportPastedTextAsync(text);
-            else if (await DesktopFiles.QueueDropAsync(args) == 0)
+            if (!await DesktopFiles.QueueDropAsync(args))
                 ImportStatus.Text = "Серед перетягнутих об’єктів немає підтримуваних файлів, тексту або посилань.";
         }
         catch (Exception error) { await DisplayAlertAsync("Імпорт", error.Message, "Гаразд"); }
@@ -131,24 +126,8 @@ public partial class LibraryPage : ContentPage
         }
     }
 
-    internal async Task ImportExternalAsync(DesktopFile file)
-    {
-        await loading;
-        importing = true;
-        try
-        {
-            if (await ImportFileAsync(file, scanPdf: false, external: true) is { } id)
-                await AppState.OpenAsync(id);
-        }
-        catch (Exception error) { await DisplayAlertAsync(file.Name, error.Message, "Гаразд"); }
-        finally
-        {
-            importing = false;
-            ImportStatus.Text = "";
-        }
-    }
-
-    private async Task<string?> ImportFileAsync(DesktopFile file, bool scanPdf, bool external)
+    private async Task<string?> ImportFileAsync(DesktopFile file, bool scanPdf, bool external,
+        Func<Task>? pdfStaged = null)
     {
         var extension = Path.GetExtension(file.Name);
         var isPdf = extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase);
@@ -177,6 +156,7 @@ public partial class LibraryPage : ContentPage
                 if (missing.Length > 0)
                 {
                     var checkpoint = await Task.Run(() => PdfOcrCheckpoint.Create(file.Name, bytes, language, pages, missing));
+                    if (pdfStaged is not null) await pdfStaged();
                     ImportStatus.Text = "";
                     return await RunPdfOcrAsync(checkpoint, bytes);
                 }

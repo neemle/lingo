@@ -22,15 +22,7 @@ public partial class LibraryPage
         importing = true;
         try
         {
-            if (initial is not null && Encoding.UTF8.GetByteCount(initial) > Reader.CoreClient.CoreClient.MaxImportBytes)
-                throw new InvalidDataException("Текст перевищує 20 МБ.");
-            var pasted = await CollectPastedTextAsync(initial);
-            if (pasted is null) return;
-            var session = AppState.Session;
-            await session.WaitUntilIdleAsync();
-            await session.ImportAsync(pasted.Name, Encoding.UTF8.GetBytes(pasted.Text), pasted.Language);
-            if (session.Error.Length == 0 && session.Document is { } document)
-                await AppState.OpenAsync(document.Id);
+            if (await ImportPastedTextCoreAsync(initial) is { } id) await AppState.OpenAsync(id);
         }
         catch (Exception error) { await DisplayAlertAsync("Імпорт тексту", error.Message, "Гаразд"); }
         finally
@@ -38,6 +30,19 @@ public partial class LibraryPage
             importing = false;
             DesktopImport.Gate.Release();
         }
+    }
+
+    private async Task<string?> ImportPastedTextCoreAsync(string? initial)
+    {
+        if (initial is not null && Encoding.UTF8.GetByteCount(initial) > Reader.CoreClient.CoreClient.MaxImportBytes)
+            throw new InvalidDataException("Текст перевищує 20 МБ.");
+        var pasted = await CollectPastedTextAsync(initial);
+        if (pasted is null) return null;
+        var session = AppState.Session;
+        await session.WaitUntilIdleAsync();
+        await session.ImportAsync(pasted.Name, Encoding.UTF8.GetBytes(pasted.Text), pasted.Language);
+        if (session.Error.Length > 0) throw new InvalidDataException(session.Error);
+        return session.Document?.Id;
     }
 
     private async Task<PastedDocument?> CollectPastedTextAsync(string? initial)

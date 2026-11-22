@@ -12,6 +12,7 @@ public sealed record Document(
     string Format)
 {
     public string? SourceUrl { get; init; }
+    public string? CurrentRevisionId { get; init; }
     public DocumentBlock[] Blocks { get; init; } = [];
     public OcrLine[]? OcrLines { get; init; }
     public int? OcrPdfPages { get; init; }
@@ -23,3 +24,6 @@ public sealed record Document(
 }
 
 public sealed record SpeechResume(string SentenceId, string TextHash, int OffsetUtf16);
+
+public sealed record DocumentRevision(string Id, string DocumentId, string? ParentId, string SourceHash,
+    string ParserVersion, string TextHash, int CanonicalBytes, long CreatedAt);

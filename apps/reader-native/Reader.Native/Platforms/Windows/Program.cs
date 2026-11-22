@@ -20,8 +20,8 @@ internal static class Program
             return;
         }
 
-        instance.Activated += (_, args) => QueueActivation(args);
-        QueueActivation(activation);
+        instance.Activated += (sender, args) => _ = QueueActivationAsync(args);
+        _ = QueueActivationAsync(activation);
         Microsoft.UI.Xaml.Application.Start(_args =>
         {
             SynchronizationContext.SetSynchronizationContext(
@@ -31,10 +31,10 @@ internal static class Program
         GC.KeepAlive(instance);
     }
 
-    private static void QueueActivation(AppActivationArguments? args)
+    private static async Task QueueActivationAsync(AppActivationArguments? args)
     {
         if (args?.Kind != ExtendedActivationKind.File || args.Data is not IFileActivatedEventArgs files) return;
-        foreach (var file in files.Files.OfType<StorageFile>())
-            DesktopFiles.QueueFile(file);
+        foreach (var file in files.Files.OfType<StorageFile>().ToArray())
+            await DesktopFiles.QueueFileAsync(file).ConfigureAwait(false);
     }
 }
