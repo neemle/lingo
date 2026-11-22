@@ -14,7 +14,7 @@ use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -27,9 +27,11 @@ use zip::{
 };
 
 mod detached_archive;
+mod model_hint_archive;
 
 const VERSION: u32 = 2;
 const PAGE_CACHE_VERSION: u32 = 3;
+const MODEL_HINT_VERSION: u32 = 4;
 const MANIFEST: &str = "manifest.json";
 const MAX_DOCUMENTS: usize = 32_768;
 const MAX_ARCHIVE_ENTRIES: usize = u16::MAX as usize - 1;
@@ -113,6 +115,11 @@ pub(crate) fn write(store: &Store, output: &mut File) -> Result<()> {
             entry.detached_cache = Some(detached_archive::write(&tx, document, &mut zip)?);
             backup.version = PAGE_CACHE_VERSION;
         }
+    }
+    if model_hint_archive::present(&tx)? {
+        zip.start_file(model_hint_archive::ENTRY, stored).map_err(archive_error)?;
+        backup.model_hints = Some(model_hint_archive::write(&tx, &mut zip)?);
+        backup.version = MODEL_HINT_VERSION;
     }
     validate_manifest(&backup)?;
     zip.start_file(MANIFEST, stored).map_err(archive_error)?;
@@ -211,6 +218,7 @@ pub(crate) fn restore(store: &mut Store, file: File) -> Result<Vec<BackupResourc
             .map_err(archive_error)?;
         }
     }
+    restore_model_hints(&mut zip, &tx, &backup)?;
     restore_library_data(&tx, backup)?;
     if !published.paths.is_empty() {
         file_originals::sync_directory(root)?;
@@ -218,6 +226,41 @@ pub(crate) fn restore(store: &mut Store, file: File) -> Result<Vec<BackupResourc
     tx.commit().map_err(archive_error)?;
     published.paths.clear();
     Ok(resources)
+}
+
+fn restore_model_hints(
+    zip: &mut ZipArchive<BufReader<File>>, db: &Connection, backup: &Manifest,
+) -> Result<()> {
+    let mut local_ids = HashMap::new();
+    let mut find = db.prepare_cached("SELECT id FROM documents WHERE source_hash=?1").map_err(archive_error)?;
+    if backup.model_hints.is_some() {
+        for document in &backup.snapshot.documents {
+            let id: String = find.query_row([&document.source_hash], |row| row.get(0)).map_err(archive_error)?;
+            local_ids.insert(document.id.as_str(), id);
+        }
+    }
+    read_model_hints(zip, backup, |row| {
+        let local = local_ids.get(row.document_id.as_str()).ok_or("Документ для підказки відсутній.")?;
+        row.restore(db, local)
+    })
+}
+
+fn read_model_hints(
+    zip: &mut ZipArchive<BufReader<File>>, backup: &Manifest,
+    mut visit: impl FnMut(model_hint_archive::Row) -> Result<()>,
+) -> Result<()> {
+    let Some(metadata) = &backup.model_hints else { return Ok(()); };
+    let data = checked_entry(zip, model_hint_archive::ENTRY)?;
+    if data.size() != metadata.bytes {
+        return Err("Розмір архіву підказок не відповідає маніфесту.".into());
+    }
+    let documents: HashSet<_> = backup.snapshot.documents.iter().map(|doc| doc.id.as_str()).collect();
+    model_hint_archive::read(data, metadata, |row| {
+        if !documents.contains(row.document_id.as_str()) {
+            return Err("Документ для підказки відсутній у резервній копії.".into());
+        }
+        visit(row)
+    })
 }
 
 fn existing_file_pdf(db: &Connection, hash: &str) -> Result<Option<Document>> {
@@ -295,14 +338,20 @@ fn open(mut file: File) -> Result<(ZipArchive<BufReader<File>>, Manifest)> {
 fn archive_entry_count(backup: &Manifest) -> usize {
     1 + backup.originals.len()
         + backup.originals.iter().filter(|entry| entry.detached_cache.is_some()).count()
+        + usize::from(backup.model_hints.is_some())
 }
 
 fn validate_manifest(backup: &Manifest) -> Result<()> {
-    if !matches!(backup.version, VERSION | PAGE_CACHE_VERSION) {
+    if !matches!(backup.version, VERSION | PAGE_CACHE_VERSION | MODEL_HINT_VERSION) {
         return Err("Невідома версія резервної копії.".into());
     }
     if archive_entry_count(backup) > MAX_ARCHIVE_ENTRIES {
         return Err("У резервній копії забагато записів.".into());
+    }
+    if (backup.version == MODEL_HINT_VERSION) != backup.model_hints.is_some()
+        || backup.model_hints.as_ref().is_some_and(|metadata| !metadata.valid())
+    {
+        return Err("Некоректний опис архіву збережених підказок.".into());
     }
     validate_resources(&backup.resources)?;
     backup.reader_preferences.validate()?;
@@ -331,7 +380,7 @@ fn validate_manifest(backup: &Manifest) -> Result<()> {
             return Err("Некоректний запис оригіналу в резервній копії.".into());
         }
         if let Some(cache) = &entry.detached_cache {
-            if backup.version != PAGE_CACHE_VERSION || entry.pdf_page_text.is_none()
+            if backup.version < PAGE_CACHE_VERSION || entry.pdf_page_text.is_none()
                 || cache.count == 0 || u16::try_from(doc.pdf_page_starts.as_ref().map_or(0, Vec::len))
                     .map_or(true, |pages| cache.count > pages)
                 || cache.bytes == 0 || cache.sha256.len() != 64
@@ -375,6 +424,7 @@ fn validate_entries(
     backup: &Manifest,
     staging: Option<&Path>,
 ) -> Result<Vec<ValidatedDocument>> {
+    read_model_hints(zip, backup, |_| Ok(()))?;
     let mut revisions = revision_groups(
         backup,
         backup.snapshot.documents.iter().map(|doc| doc.id.as_str()),

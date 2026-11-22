@@ -241,6 +241,7 @@ pub(crate) fn assemble<O>(
         document_revisions: document_revisions::export(tx)?,
         pdf_reading_positions: pdf_reading_position::export(tx)?,
         reader_preferences: crate::reader_preferences::read(tx)?,
+        model_hints: None,
     })
 }
 

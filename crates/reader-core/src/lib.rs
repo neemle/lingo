@@ -329,6 +329,13 @@ pub struct Snapshot {
     pub vocabulary: Vec<Vocabulary>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BackupHintManifest {
+    pub count: u64,
+    pub bytes: u64,
+    pub sha256: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Backup<Originals = Vec<Original>> {
     pub version: u32,
@@ -352,6 +359,8 @@ pub struct Backup<Originals = Vec<Original>> {
     pub pdf_reading_positions: BTreeMap<String, u16>,
     #[serde(default, skip_serializing_if = "reader_preferences::ReaderPreferences::is_empty")]
     pub reader_preferences: reader_preferences::ReaderPreferences,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_hints: Option<BackupHintManifest>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
