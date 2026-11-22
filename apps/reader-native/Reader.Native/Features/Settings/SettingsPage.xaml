@@ -164,7 +164,9 @@
    <Border Style="{StaticResource ResourceCard}">
     <VerticalStackLayout Spacing="12">
      <Label Text="Словникові значення" Style="{StaticResource ResourceTitle}" SemanticProperties.HeadingLevel="Level2" />
-     <Picker x:Name="LexicalChoice" Title="Мова словника" HorizontalOptions="Start" MinimumWidthRequest="230" />
+     <Label x:Name="LexicalInventory" Style="{StaticResource ResourceDetail}" />
+     <Button x:Name="LexicalChoice" Text="Вибрати мову словника" Clicked="LexicalChoiceClicked"
+      HorizontalOptions="Start" MinimumWidthRequest="230" Style="{StaticResource OutlineButton}" IsEnabled="False" />
      <FlexLayout Wrap="Wrap" JustifyContent="Start">
       <Button x:Name="DownloadLexical" Text="Завантажити словник" Clicked="DownloadLexicalClicked" IsEnabled="False"
        Style="{StaticResource AccentButton}" Margin="0,0,8,8" />

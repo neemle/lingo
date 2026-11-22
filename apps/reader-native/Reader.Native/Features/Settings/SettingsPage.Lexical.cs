@@ -8,20 +8,20 @@ public partial class SettingsPage
 {
     private LexicalPackage[] lexicalPackages = [];
     private CancellationTokenSource? lexicalCopy;
+    private string? lexicalLanguage;
+    private bool choosingLexical;
 
     private async Task RefreshLexicalPackagesAsync()
     {
         try
         {
-            var previousLanguage = SelectedLexicalPackage()?.Language;
-            lexicalPackages = await AppState.Session.LexicalPackagesAsync();
+            var session = AppState.Session;
+            var preferred = lexicalLanguage ?? session.Document?.Language;
+            lexicalPackages = await session.LexicalPackagesAsync();
             lexicalInventoryRead = true;
-            LexicalChoice.ItemsSource = lexicalPackages.Select(package =>
-                $"{DocumentLanguages.Name(package.Language)} · {package.Bytes / 1_000_000d:F0} МБ · " +
-                (package.Installed ? "встановлено" : DocumentLanguages.Name(package.GlossLanguage) + " у визначеннях"))
-                .ToArray();
-            LexicalChoice.SelectedIndex = lexicalPackages.Length == 0 ? -1 :
-                Math.Max(0, Array.FindIndex(lexicalPackages, package => package.Language == previousLanguage));
+            lexicalLanguage = lexicalPackages.FirstOrDefault(package => package.Language == preferred)?.Language
+                ?? lexicalPackages.FirstOrDefault()?.Language;
+            LexicalInventory.Text = $"{lexicalPackages.Length} мов у каталозі · {lexicalPackages.Count(package => package.Installed)} встановлено";
             UpdateLexicalControls();
             UpdateCapabilityMatrix();
         }
@@ -34,13 +34,37 @@ public partial class SettingsPage
     }
 
     private LexicalPackage? SelectedLexicalPackage() =>
-        LexicalChoice.SelectedIndex >= 0 && LexicalChoice.SelectedIndex < lexicalPackages.Length
-            ? lexicalPackages[LexicalChoice.SelectedIndex] : null;
+        lexicalPackages.FirstOrDefault(package => package.Language == lexicalLanguage);
+
+    private static string LexicalPackageLabel(LexicalPackage package) =>
+        $"{DocumentLanguages.Name(package.Language)} · " +
+        (package.Installed ? "встановлено" : $"{package.Bytes / 1_000_000d:F0} МБ");
 
     private void UpdateLexicalControls()
     {
-        var enabled = lexicalCopy is null && lexicalPackages.Length > 0;
-        LexicalChoice.IsEnabled = DownloadLexical.IsEnabled = OpenLexical.IsEnabled = enabled;
+        var package = SelectedLexicalPackage();
+        LexicalChoice.Text = package is null ? "Вибрати мову словника" : $"{LexicalPackageLabel(package)} ▾";
+        LexicalChoice.IsEnabled = lexicalCopy is null && !choosingLexical && lexicalPackages.Length > 0;
+        DownloadLexical.IsEnabled = OpenLexical.IsEnabled = lexicalCopy is null && !choosingLexical && package is not null;
+    }
+
+    private async void LexicalChoiceClicked(object? sender, EventArgs args)
+    {
+        if (!LexicalChoice.IsEnabled) return;
+
+        choosingLexical = true;
+        UpdateLexicalControls();
+        try
+        {
+            var picked = await NativeChoices.ChooseAsync(this, "Мова словника", "Визначення Wiktionary подані англійською.",
+                lexicalPackages.Select(package => (package.Language, LexicalPackageLabel(package))), lexicalLanguage);
+            if (picked is not null) lexicalLanguage = picked;
+        }
+        finally
+        {
+            choosingLexical = false;
+            UpdateLexicalControls();
+        }
     }
 
     private async void DownloadLexicalClicked(object? sender, EventArgs args) => await InstallLexicalAsync(download: true);
