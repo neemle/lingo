@@ -145,6 +145,11 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public Task<string> InstallTranslationPackageAsync(string path) =>
         Task.Run(() => client.InstallTranslationPackage(path));
 
+    public Task CheckTranslationDownloadSpaceAsync(string source, string target, string stagingRoot, string archiveDirectory) =>
+        Task.Run(() => client.CheckTranslationDownloadSpace(source, target, stagingRoot, archiveDirectory));
+    public Task CheckTranslationArchiveSpaceAsync(string directory, long bytes) =>
+        Task.Run(() => client.CheckTranslationArchiveSpace(directory, bytes));
+
     public Task<MachineTranslation?> TranslateSentenceAsync(string id, string sentenceId, string target) =>
         Task.Run(() => client.TranslateSentence(id, sentenceId, target));
 

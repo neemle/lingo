@@ -82,6 +82,10 @@ public sealed class CoreClient : IDisposable
         Call<OcrSuggestion[]?>(new { version = 1, operation = "suggest_ocr", language, text });
     public string InstallTranslationPackage(string path) =>
         Call<string>(new { version = 1, operation = "install_translation_package", path });
+    public void CheckTranslationDownloadSpace(string source, string target, string stagingRoot, string archiveDirectory) =>
+        Call<JsonElement>(new { version = 1, operation = "check_translation_download_space", source, target, stagingRoot, archiveDirectory });
+    public void CheckTranslationArchiveSpace(string directory, long bytes) =>
+        Call<JsonElement>(new { version = 1, operation = "check_translation_archive_space", directory, bytes });
     public MachineTranslation? TranslateSentence(string id, string sentenceId, string target) =>
         Call<MachineTranslation?>(new { version = 1, operation = "translate_sentence", id, sentenceId, target });
     public Vocabulary SaveWord(Vocabulary entry) =>

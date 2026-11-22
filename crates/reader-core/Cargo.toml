@@ -18,3 +18,9 @@ candle-nn = "0.11.1"
 candle-transformers = "0.11.1"
 sentencepiece-rs = "0.2.2"
 tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", features = ["fs"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

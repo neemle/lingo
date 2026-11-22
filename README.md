@@ -105,6 +105,8 @@ The unpackaged Windows build can read and preview photos restored from a backup.
 The reader shows which route is available and sends you to the needed download when a package is missing.
 Choose a language pair in **Налаштування** and select **Завантажити пакет**. The download can be stopped
 and resumed. Translation uses local files after installation.
+Before a download, the app checks space for the remaining files, temporary archive, and installed model.
+It checks the destination again before extraction.
 For offline setup, the app also accepts a ZIP prepared from the pinned Helsinki-NLP packages below.
 Download `config.json`, `source.spm`, `target.spm`, `vocab.json` and `model.safetensors` from the same revision.
 

@@ -92,6 +92,20 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::InstallTranslationPackage { path } => {
             value(store.install_translation_package(std::path::Path::new(&path)))
         }
+        Command::CheckTranslationDownloadSpace {
+            source,
+            target,
+            staging_root,
+            archive_directory,
+        } => value(store.check_translation_download_space(
+            &source,
+            &target,
+            std::path::Path::new(&staging_root),
+            std::path::Path::new(&archive_directory),
+        )),
+        Command::CheckTranslationArchiveSpace { directory, bytes } => {
+            value(store.check_translation_archive_space(std::path::Path::new(&directory), bytes))
+        }
         Command::TranslateSentence {
             id,
             sentence_id,

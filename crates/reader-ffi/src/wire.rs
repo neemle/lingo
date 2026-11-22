@@ -108,6 +108,18 @@ pub enum Command {
     InstallTranslationPackage {
         path: String,
     },
+    CheckTranslationDownloadSpace {
+        source: String,
+        target: String,
+        #[serde(rename = "stagingRoot")]
+        staging_root: String,
+        #[serde(rename = "archiveDirectory")]
+        archive_directory: String,
+    },
+    CheckTranslationArchiveSpace {
+        directory: String,
+        bytes: u64,
+    },
     TranslateSentence {
         id: String,
         #[serde(rename = "sentenceId")]

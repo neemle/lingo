@@ -14,6 +14,7 @@ mod marian_provider;
 pub mod ocr;
 pub mod pdf_layers;
 pub mod practice;
+mod space;
 pub mod translation;
 
 pub type Result<T> = std::result::Result<T, String>;

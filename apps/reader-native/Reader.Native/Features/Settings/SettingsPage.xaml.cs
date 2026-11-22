@@ -158,9 +158,12 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         InstallTranslation.IsEnabled = DownloadTranslation.IsEnabled = ModelChoice.IsEnabled = false;
         CancelDownload.IsVisible = DownloadProgress.IsVisible = true;
         DownloadProgress.Progress = 0;
-        ModelStatus.Text = "Завантаження пакета…";
+        ModelStatus.Text = "Перевірка вільного місця…";
         try
         {
+            await AppState.Session.CheckTranslationDownloadSpaceAsync(package.Source, package.Target, root, FileSystem.CacheDirectory);
+            cancellation.Token.ThrowIfCancellationRequested();
+            ModelStatus.Text = "Завантаження пакета…";
             await Task.Run(() => Downloader.FetchArchiveAsync(package, root, archive, progress, cancellation.Token),
                 cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
@@ -205,8 +208,10 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
             if (file is null) return;
             Status.Text = "Перевірка мовного пакета…";
             await using (var input = await file.OpenReadAsync())
-            await using (var output = File.Create(path))
             {
+                if (input.CanSeek)
+                    await AppState.Session.CheckTranslationArchiveSpaceAsync(FileSystem.CacheDirectory, input.Length);
+                await using var output = File.Create(path);
                 var buffer = new byte[64 * 1024];
                 int count;
                 while ((count = await input.ReadAsync(buffer)) != 0)

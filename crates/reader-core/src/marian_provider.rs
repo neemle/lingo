@@ -12,6 +12,7 @@ use sentencepiece_rs::SentencePieceProcessor;
 use sha2::{Digest, Sha256};
 
 use crate::{
+    space::{ensure_capacity, PACKAGE_OVERHEAD},
     translation::{
         input_for_sentence, route_readiness, AlignedTranslation, ModelEdge, TranslationProvider,
         TranslationReadiness, TranslationRequest, TranslationSettings,
@@ -30,6 +31,7 @@ const ASSETS: [&str; 5] = [
     "vocab.json",
     "model.safetensors",
 ];
+const MAX_ARCHIVE_BYTES: u64 = 400_000_000;
 
 struct Package {
     pub source: &'static str,
@@ -73,6 +75,47 @@ struct MarianProvider<'a> {
 }
 
 impl Store {
+    pub fn check_translation_download_space(
+        &self,
+        source: &str,
+        target: &str,
+        staging_root: &Path,
+        archive_directory: &Path,
+    ) -> Result<()> {
+        let package = catalog::PACKAGES
+            .iter()
+            .find(|package| package.source == source && package.target == target)
+            .ok_or("Для цієї мовної пари немає пакета.")?;
+        let stage = staging_root.join(package.revision);
+        fs::create_dir_all(&stage).map_err(model_error)?;
+        fs::create_dir_all(archive_directory).map_err(model_error)?;
+        fs::create_dir_all(&self.model_directory).map_err(model_error)?;
+        let total: u64 = package.sizes.iter().sum();
+        let completed: u64 = ASSETS
+            .into_iter()
+            .zip(package.sizes)
+            .map(|(name, expected)| {
+                fs::metadata(stage.join(name))
+                    .ok()
+                    .filter(|info| info.is_file())
+                    .map_or(0, |info| info.len().min(expected))
+            })
+            .sum();
+        ensure_capacity([
+            (&stage, total - completed),
+            (archive_directory, total + PACKAGE_OVERHEAD),
+            (&self.model_directory, total + PACKAGE_OVERHEAD),
+        ])
+    }
+
+    pub fn check_translation_archive_space(&self, directory: &Path, bytes: u64) -> Result<()> {
+        if bytes > MAX_ARCHIVE_BYTES {
+            return Err("Архів мовного пакета завеликий".into());
+        }
+        fs::create_dir_all(directory).map_err(model_error)?;
+        ensure_capacity([(directory, bytes + PACKAGE_OVERHEAD)])
+    }
+
     pub fn translation_packages(&self) -> Vec<TranslationPackageStatus> {
         let provider = MarianProvider {
             directory: &self.model_directory,
@@ -100,7 +143,7 @@ impl Store {
 
     pub fn install_translation_package(&self, archive_path: &Path) -> Result<String> {
         let file = File::open(archive_path).map_err(model_error)?;
-        if file.metadata().map_err(model_error)?.len() > 400_000_000 {
+        if file.metadata().map_err(model_error)?.len() > MAX_ARCHIVE_BYTES {
             return Err("Архів мовного пакета завеликий".into());
         }
         let mut archive = zip::ZipArchive::new(file).map_err(model_error)?;
@@ -124,6 +167,10 @@ impl Store {
         }
         .path(package);
         fs::create_dir_all(&self.model_directory).map_err(model_error)?;
+        ensure_capacity([(
+            &self.model_directory,
+            package.sizes.iter().sum::<u64>() + PACKAGE_OVERHEAD,
+        )])?;
         let stage = tempfile::tempdir_in(&self.model_directory).map_err(model_error)?;
         for (asset, expected) in ASSETS.iter().zip(package.hashes) {
             let input = archive.by_name(asset).map_err(model_error)?;
