@@ -19,6 +19,11 @@ pub fn decode(input: &[u8]) -> Result<Command> {
 
 fn validate(command: &Command) -> Result<()> {
     match command {
+        Command::ModelTransfer {
+            action: reader_core::model_transfer::TransferAction::AcceptRange { path, .. }, ..
+        } if path.as_os_str().is_empty() || path.as_os_str().len() > 4096 => {
+            Err(Error::new("invalid_argument", "Invalid transfer response path"))
+        }
         Command::IntakeItem { id }
         | Command::IntakePayload { id }
         | Command::CompleteIntake { id, .. }

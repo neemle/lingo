@@ -60,6 +60,11 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         return encode_job(Ok(item));
     }
     let command = match command {
+        Command::ModelTransfer { package, action } => {
+            let transfer = registry::lock()?.store(handle)?
+                .prepare_model_transfer(package).map_err(gateway::domain)?;
+            return encode_job(transfer.run(action));
+        }
         Command::CompleteIntake { id, result } => {
             let worker = registry::lock()?.store(handle)?.prepare_store_worker();
             if let Some(worker) = worker {

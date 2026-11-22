@@ -395,6 +395,19 @@ pub struct OptionalModelInstallJob {
     staging_root: PathBuf,
 }
 
+pub(crate) fn download_manifest(id: &str) -> Result<crate::model_transfer::DownloadManifest> {
+    let model = model(id)?;
+    Ok(crate::model_transfer::DownloadManifest {
+        revision: model.revision,
+        assets: model.assets.iter().map(|asset| crate::model_transfer::DownloadAsset {
+            name: asset.name,
+            url: format!("https://huggingface.co/{}/resolve/{}/{}", model.repo, model.revision, asset.remote_path),
+            size: asset.bytes,
+            sha256: asset.sha256,
+        }).collect(),
+    })
+}
+
 impl OptionalModelInstallJob {
     pub fn run(self) -> Result<()> {
         install_optional_model_files(&self.root, self.model, &self.staging_root, |directory| {

@@ -175,6 +175,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::ExplainWord { .. }
         | Command::SemanticVocabulary { .. }
         | Command::InstallLexicalPackage { .. }
+        | Command::ModelTransfer { .. }
         | Command::SynthesizeSpeech { .. }
         | Command::PrefetchSpeech { .. } => Err(Error::new(
             "internal_error",

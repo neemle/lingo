@@ -51,6 +51,21 @@ const ASSETS: [&str; 5] = [
 ];
 const MAX_ARCHIVE_BYTES: u64 = 400_000_000;
 
+pub(crate) fn download_manifest(source: &str, target: &str) -> Result<crate::model_transfer::DownloadManifest> {
+    let package = catalog::PACKAGES.iter()
+        .find(|model| model.source == source && model.target == target)
+        .ok_or("Для цієї мовної пари немає пакета.")?;
+    Ok(crate::model_transfer::DownloadManifest {
+        revision: package.revision,
+        assets: ASSETS.iter().enumerate().map(|(index, &name)| crate::model_transfer::DownloadAsset {
+            name,
+            url: format!("https://huggingface.co/Helsinki-NLP/opus-mt-{}/resolve/{}/{name}", package.repository, package.revision),
+            size: package.sizes[index],
+            sha256: package.hashes[index],
+        }).collect(),
+    })
+}
+
 struct Package {
     pub source: &'static str,
     pub target: &'static str,
@@ -220,6 +235,33 @@ pub struct TranslationPackageFiles {
 }
 
 impl TranslationPackageFiles {
+    pub(crate) fn install_downloaded(
+        &self, source: &str, target: &str, downloaded: &Path,
+    ) -> Result<()> {
+        let package = catalog::PACKAGES.iter()
+            .find(|model| model.source == source && model.target == target)
+            .ok_or("Для цієї мовної пари немає пакета.")?;
+        let provider = MarianProvider::interactive(&self.directory);
+        fs::create_dir_all(&self.directory).map_err(model_error)?;
+        let _staging = lock_package(&self.directory.join(".install.lock"), true)?;
+        let _lock = provider.lock(package, true)?;
+        let active = provider.path(package);
+        if package_directory(&active)? && verify_files(&active, package, &ASSETS, &|| Ok(())).is_ok() {
+            return Ok(());
+        }
+        let total = package.sizes.iter().sum::<u64>() + PACKAGE_OVERHEAD;
+        ensure_capacity([(&self.directory, total)])?;
+        let stage = tempfile::tempdir_in(&self.directory).map_err(model_error)?;
+        for (index, asset) in ASSETS.iter().enumerate() {
+            let mut output = File::create(stage.path().join(asset)).map_err(model_error)?;
+            copy_verified_asset(downloaded, package, index, asset, &mut output, &|| Ok(()))?;
+            output.sync_all().map_err(model_error)?;
+        }
+        activate_verified_package(
+            stage.path(), &active, &provider.previous_path(package), &provider.removed_path(package),
+        )
+    }
+
     pub fn remove(&self, source: &str, target: &str) -> Result<bool> {
         let package = catalog::PACKAGES
             .iter()

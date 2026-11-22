@@ -236,6 +236,10 @@ pub enum Command {
         word: String,
     },
     OptionalModels,
+    ModelTransfer {
+        package: reader_core::model_transfer::ModelPackage,
+        action: reader_core::model_transfer::TransferAction,
+    },
     CheckOptionalModelSpace {
         id: String,
         #[serde(rename = "stagingRoot")]

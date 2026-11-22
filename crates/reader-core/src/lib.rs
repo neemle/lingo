@@ -26,6 +26,7 @@ mod marian_deadline;
 mod marian_provider;
 mod marian_target_uk;
 mod model_storage;
+pub mod model_transfer;
 pub mod ocr;
 pub mod ocr_jobs;
 mod onnx_runtime;
