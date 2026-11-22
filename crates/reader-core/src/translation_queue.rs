@@ -1,8 +1,8 @@
 use crate::{translation::ParagraphTranslation, valid_language, Document, Result, Store};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
+use std::fs::{File, TryLockError};
 
-const LEASE_SECONDS: i64 = 300;
 const RETRY_SECONDS: i64 = 15;
 
 #[derive(Deserialize)]
@@ -19,7 +19,7 @@ pub struct TranslationWindowRequest {
     pub sentence_id: String,
     pub revision_id: String,
     pub target: String,
-    /// Retry or lease deadline in Unix seconds, or zero for an immediately available job.
+    /// Retry deadline in Unix seconds, or zero when there is no scheduled backoff.
     pub available_at: i64,
 }
 
@@ -75,7 +75,8 @@ impl Store {
 
     pub fn pending_translation_window(&self, id: &str) -> Result<Option<TranslationWindowRequest>> {
         self.connection.query_row(
-            "SELECT w.sentence_id,w.revision_id,w.target,w.available_at
+            "SELECT w.sentence_id,w.revision_id,w.target,
+                    CASE WHEN w.lease IS NULL THEN w.available_at ELSE 0 END
              FROM translation_windows w JOIN documents d ON d.id=w.document_id
              WHERE w.document_id=?1 AND w.revision_id=json_extract(d.body,'$.currentRevisionId')
                AND w.source=json_extract(d.body,'$.language')",
@@ -101,13 +102,18 @@ impl Store {
     pub(crate) fn run_translation_window(
         &mut self, id: &str, expected: Option<&TranslationWindowAddress>,
     ) -> Result<Option<ParagraphTranslation>> {
+        let Some(_process_lock) = self.try_lock_translation_worker()? else {
+            return Ok(None);
+        };
+        // With the worker lock held, a leftover lease cannot belong to a live worker.
         let tx = self.connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(database_error)?;
         let now = crate::now();
         let job: Option<(String, String, String)> = tx.query_row(
             "SELECT w.sentence_id,w.target,d.body FROM translation_windows w
-             JOIN documents d ON d.id=w.document_id WHERE w.document_id=?1 AND w.available_at<=?2
+             JOIN documents d ON d.id=w.document_id
+             WHERE w.document_id=?1 AND (w.lease IS NOT NULL OR w.available_at<=?2)
                AND w.revision_id=json_extract(d.body,'$.currentRevisionId')
                AND w.source=json_extract(d.body,'$.language')
                AND (?3 IS NULL OR (w.sentence_id=?3 AND w.revision_id=?4 AND w.target=?5))",
@@ -129,8 +135,8 @@ impl Store {
             .ok_or("Речення для фонового перекладу не знайдено.")?;
         let lease = uuid::Uuid::new_v4().to_string();
         tx.execute(
-            "UPDATE translation_windows SET lease=?2,available_at=?3 WHERE document_id=?1",
-            params![id, lease, now + LEASE_SECONDS],
+            "UPDATE translation_windows SET lease=?2,available_at=0 WHERE document_id=?1",
+            params![id, lease],
         )
         .map_err(database_error)?;
         tx.commit().map_err(database_error)?;
@@ -172,6 +178,18 @@ impl Store {
             result.map(|window| complete.then_some(window))
         } else {
             Ok(None)
+        }
+    }
+
+    fn try_lock_translation_worker(&self) -> Result<Option<File>> {
+        crate::file_originals::ensure_root(&self.file_original_directory)?;
+        let file = File::options().read(true).write(true).create(true).truncate(false)
+            .open(self.file_original_directory.join(".translation-window.lock"))
+            .map_err(database_error)?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(file)),
+            Err(TryLockError::WouldBlock) => Ok(None),
+            Err(TryLockError::Error(error)) => Err(database_error(error)),
         }
     }
 }
