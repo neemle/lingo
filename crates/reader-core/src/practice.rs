@@ -155,6 +155,25 @@ fn write(connection: &Connection, progress: &PracticeProgress) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn clear_question_for_card(connection: &Connection, card_id: &str) -> Result<()> {
+    let body: Option<String> = connection
+        .query_row(
+            "SELECT body FROM practice WHERE id=1 AND json_extract(body, '$.question.cardId')=?1",
+            [card_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    if let Some(body) = body {
+        let mut progress: PracticeProgress =
+            serde_json::from_str(&body).map_err(|error| error.to_string())?;
+        progress.question = None;
+        progress.advance()?;
+        write(connection, &progress)?;
+    }
+    Ok(())
+}
+
 fn assert_revision(expected: u64, actual: u64) -> Result<()> {
     if expected == actual {
         Ok(())

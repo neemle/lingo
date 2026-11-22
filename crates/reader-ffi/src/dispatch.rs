@@ -231,8 +231,13 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::SaveWord { entry } => value(store.save_word(entry)),
         Command::SetVocabularyVariants {
             id,
+            translation,
             accepted_translations,
-        } => value(store.set_vocabulary_variants(&id, accepted_translations)),
+        } => value(store.edit_vocabulary_translation(
+            &id,
+            translation.as_deref(),
+            accepted_translations,
+        )),
         Command::VocabularyReviewHistory { id } => value(store.vocabulary_review_history(&id)),
         Command::Review {
             id,

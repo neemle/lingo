@@ -269,6 +269,7 @@ pub enum Command {
     },
     SetVocabularyVariants {
         id: String,
+        translation: Option<String>,
         #[serde(rename = "acceptedTranslations")]
         accepted_translations: Vec<String>,
     },

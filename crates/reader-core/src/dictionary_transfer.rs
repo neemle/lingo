@@ -254,7 +254,9 @@ fn restore_archive(
             crate::card_learning::prepare_variants(&card.translation, card.accepted_translations)?;
         let key = card.word_key();
         if let Some(mut local) = matching_card(tx, &card, &key)? {
-            local.merge_accepted_translations(&card)?;
+            if local.id != card.id || local.translation == card.translation {
+                local.merge_accepted_translations(&card)?;
+            }
             card_ids.insert(source_id, local.id.clone());
             write_card(tx, &local)?;
             imported.entry(local.id).or_default().push(card);
@@ -491,10 +493,26 @@ fn matching_card(db: &Connection, incoming: &Vocabulary, key: &str) -> Result<Op
         body.map(|body| serde_json::from_str(&body).map_err(error))
             .transpose()
     };
+    let at_id: Option<String> = db
+        .query_row(
+            "SELECT body FROM vocabulary WHERE id=?1",
+            [&incoming.id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(error)?;
+    let at_id: Option<Vocabulary> = at_id
+        .map(|body| serde_json::from_str(&body).map_err(error))
+        .transpose()?;
+    if let Some(card) = at_id
+        .as_ref()
+        .filter(|card| same_card_identity(card, incoming))
+    {
+        return Ok(Some(card.clone()));
+    }
     if let Some(card) = by_key(key)? {
         return Ok(Some(card));
     }
-
     if incoming.sense.is_some() {
         return Ok(None);
     }
@@ -506,16 +524,7 @@ fn matching_card(db: &Connection, incoming: &Vocabulary, key: &str) -> Result<Op
             .or_else(|| card.expression.as_ref().map(|e| e.surface.clone()))
             .unwrap_or_else(|| card.word.clone())
     };
-    let at_id: Option<String> = db
-        .query_row(
-            "SELECT body FROM vocabulary WHERE id=?1",
-            [&incoming.id],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(error)?;
-    if let Some(body) = at_id {
-        let card: Vocabulary = serde_json::from_str(&body).map_err(error)?;
+    if let Some(card) = at_id {
         let same_surface =
             card.surface_key(&surface(&card)) == incoming.surface_key(&surface(incoming));
         let same_word = card.surface_key(&card.word) == incoming.surface_key(&incoming.word);
@@ -530,6 +539,30 @@ fn matching_card(db: &Connection, incoming: &Vocabulary, key: &str) -> Result<Op
         }
     }
     Ok(None)
+}
+
+fn same_card_identity(local: &Vocabulary, incoming: &Vocabulary) -> bool {
+    if local.language != incoming.language
+        || local.target_language != incoming.target_language
+        || local.word != incoming.word
+    {
+        return false;
+    }
+    match (&local.sense, &incoming.sense) {
+        (Some(local), Some(incoming)) => return local.id == incoming.id,
+        (None, None) => {}
+        _ => return false,
+    }
+    match (&local.expression, &incoming.expression) {
+        (Some(local), Some(incoming)) => return local.kind == incoming.kind,
+        (None, None) => {}
+        _ => return false,
+    }
+    match (&local.analysis, &incoming.analysis) {
+        (Some(local), Some(incoming)) => local.part_of_speech == incoming.part_of_speech,
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 fn promote(mut local: Vocabulary, incoming: &Vocabulary) -> Vocabulary {

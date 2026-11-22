@@ -105,6 +105,27 @@ impl Store {
         id: &str,
         accepted_translations: Vec<String>,
     ) -> Result<Vocabulary> {
+        self.edit_vocabulary_translation(id, None, accepted_translations)
+    }
+
+    pub fn edit_vocabulary_translation(
+        &mut self,
+        id: &str,
+        translation: Option<&str>,
+        accepted_translations: Vec<String>,
+    ) -> Result<Vocabulary> {
+        let translation = translation.map(str::trim);
+        if translation.is_some_and(|text| {
+            text.is_empty()
+                || text.len() > MAX_TRANSLATION_BYTES
+                || text
+                    .chars()
+                    .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+        }) {
+            return Err(
+                "Основний переклад має бути одним непорожнім рядком до 2000 байтів.".into(),
+            );
+        }
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -118,13 +139,34 @@ impl Store {
             .ok_or("Словникову картку не знайдено.")?;
         let mut card: Vocabulary =
             serde_json::from_str(&body).map_err(|error| error.to_string())?;
+        let word_key =
+            if let Some(updated) = translation.filter(|updated| *updated != card.translation) {
+                card.translation = updated.to_owned();
+                let key = card.word_key();
+                let duplicate: bool = tx
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM vocabulary WHERE word_key=?1 AND id<>?2)",
+                        params![key, id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| error.to_string())?;
+                if duplicate {
+                    return Err("Картка з таким перекладом уже існує.".into());
+                }
+                Some(key)
+            } else {
+                None
+            };
         card.accepted_translations = prepare_variants(&card.translation, accepted_translations)?;
         let body = serde_json::to_string(&card).map_err(|error| error.to_string())?;
         tx.execute(
-            "UPDATE vocabulary SET body=?1 WHERE id=?2",
-            params![body, id],
+            "UPDATE vocabulary SET word_key=COALESCE(?1, word_key), body=?2 WHERE id=?3",
+            params![word_key, body, id],
         )
         .map_err(|error| error.to_string())?;
+        if word_key.is_some() {
+            crate::practice::clear_question_for_card(&tx, id)?;
+        }
         tx.commit().map_err(|error| error.to_string())?;
         Ok(card)
     }
@@ -171,6 +213,79 @@ mod tests {
     use super::*;
     use crate::practice::{PracticeCollection, PracticeProgress, SavedQuestion};
     use crate::ReviewState;
+
+    #[test]
+    fn correcting_translation_keeps_card_and_replays_old_archive_without_reverting() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let entry = |translation: &str| Vocabulary {
+            id: String::new(),
+            word: "fenêtre".into(),
+            translation: translation.into(),
+            language: "fr".into(),
+            target_language: "uk".into(),
+            context: String::new(),
+            document_id: String::new(),
+            forward: crate::ReviewState::default(),
+            reverse: crate::ReviewState::default(),
+            analysis: None,
+            expression: None,
+            sense: None,
+            accepted_translations: Vec::new(),
+        };
+        let card = store.save_word(entry("двері")).unwrap();
+        store.review(&card.id, "forward", 2).unwrap();
+        let practice = store
+            .set_practice(PracticeProgress {
+                revision: 0,
+                direction: "reverse".into(),
+                mode: 0,
+                question: Some(SavedQuestion {
+                    card_id: card.id.clone(),
+                    prompt: card.translation.clone(),
+                    answers: vec![card.word.clone()],
+                    options: vec![],
+                    revealed: true,
+                    given_answer: None,
+                    elapsed_ms: None,
+                }),
+                collection: None,
+            })
+            .unwrap();
+        let old_archive = store.export_dictionary(None).unwrap();
+
+        let corrected = store
+            .edit_vocabulary_translation(
+                &card.id,
+                Some("  вікно  "),
+                vec!["ВІКНО".into(), "віконце".into()],
+            )
+            .unwrap();
+        assert_eq!(corrected.id, card.id);
+        assert_eq!(corrected.translation, "вікно");
+        assert_eq!(corrected.accepted_translations, ["віконце"]);
+        assert_eq!(corrected.forward.reviews, 1);
+        let updated = store.practice().unwrap();
+        assert!(updated.question.is_none());
+        assert_eq!(updated.revision, practice.revision + 1);
+        assert_eq!(updated.direction, practice.direction);
+
+        let other = store.save_word(entry("двері")).unwrap();
+        assert_ne!(other.id, card.id);
+        let error = store
+            .edit_vocabulary_translation(&card.id, Some("двері"), vec![])
+            .unwrap_err();
+        assert_eq!(error, "Картка з таким перекладом уже існує.");
+        let restored = store.import_dictionary(old_archive).unwrap();
+        assert_eq!(restored.added_cards, 0);
+        assert_eq!(restored.added_reviews, 0);
+        let cards = store.snapshot().unwrap().vocabulary;
+        let current = cards.iter().find(|item| item.id == card.id).unwrap();
+        assert_eq!(current.translation, "вікно");
+        assert_eq!(current.accepted_translations, ["віконце"]);
+        assert_eq!(current.forward.reviews, 1);
+        assert_eq!(store.vocabulary_review_history(&other.id).unwrap().len(), 0);
+    }
 
     #[test]
     fn vocabulary_sense_and_approved_variants_survive_practice_and_transfer() {
