@@ -10,6 +10,7 @@ use std::{
 use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
+pub(crate) mod annotation_cache;
 mod expressions;
 mod grammar_cues;
 mod lexicon;

@@ -449,6 +449,7 @@ impl Store {
         pdf_reading_position::initialize(&connection)?;
         reader_preferences::initialize(&connection)?;
         translation_queue::initialize(&connection)?;
+        knowledge::annotation_cache::initialize(&connection)?;
         let file_original_directory = file_originals::directory(path);
         file_originals::cleanup_orphans(&mut connection, &file_original_directory);
         Ok(Self {

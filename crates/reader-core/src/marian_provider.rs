@@ -420,8 +420,9 @@ impl StoreWorker {
 
     pub fn analyze_linguistics(
         self, id: &str, sentence_id: &str, revision: &str, scope: crate::knowledge::AnalysisScope,
-    ) -> Result<crate::knowledge::LinguisticAnalysis> {
-        self.open(OpenFlags::SQLITE_OPEN_READ_ONLY)?.analyze_linguistics(id, sentence_id, revision, scope)
+    ) -> Result<serde_json::Value> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?
+            .cached_linguistic_analysis(id, sentence_id, revision, scope)
     }
 
     pub fn translate_sentence(

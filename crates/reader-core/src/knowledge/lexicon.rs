@@ -598,6 +598,12 @@ pub(super) fn lookup(
     Ok((Some(pack.describe(true)), meanings))
 }
 
+pub(super) fn index_identity(root: &Path, language: &str) -> Option<(&'static str, u32)> {
+    let pack = find_pack(language)?;
+    let (_, version) = pack.installed_path(root)?;
+    Some((pack.sha256, version))
+}
+
 pub(super) fn available(root: &Path, language: &str) -> bool {
     find_pack(language).is_some_and(|pack| pack.installed_path(root).is_some())
 }

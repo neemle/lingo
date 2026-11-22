@@ -1,19 +1,24 @@
 use super::{
-    expressions::ExpressionMatch, ocr_suggestions::SpellingSuggestion, syntax_parse, versioned_index,
-    KnowledgePackage, WordAnalysis, WordContext, PACKS,
+    annotation_cache, expressions::ExpressionMatch, lexicon, ocr_suggestions::SpellingSuggestion,
+    syntax_parse, versioned_index, KnowledgePackage, Pack, WordAnalysis, WordContext, PACKS,
 };
 use crate::{
     document_tokens::{find_sentence, revision_id, token_id, word_parts},
     ocr::OcrSpan,
-    Result, Store,
+    Document, Result, Sentence, Store,
 };
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 const SENTENCE_PAGE_SIZE: usize = 24;
 const MAX_READINGS: usize = 8;
+// Bump when generated annotations or their serialized representation changes.
+const ANNOTATION_VERSION: u32 = 1;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum AnalysisScope {
     Word {
@@ -87,26 +92,66 @@ impl Store {
         scope: AnalysisScope,
     ) -> Result<LinguisticAnalysis> {
         let document = self.token_document(document_id)?;
-        let revision = revision_id(&document)?;
-        if revision != expected_revision {
-            return Err("Текст документа змінився. Оновіть запит аналізу.".into());
-        }
-        let sentence = find_sentence(&document, sentence_id)?;
-        let (selected, next_start) = select_words(&sentence.text, &scope)?;
+        let sentence = analysis_sentence(&document, sentence_id, expected_revision)?;
+        let index = self.open_knowledge_index(&document.language)?;
+        self.analyze_scope(
+            &document, sentence, expected_revision, &scope, versioned_index(&index)?,
+        )
+    }
+
+    pub fn cached_linguistic_analysis(
+        &self,
+        document_id: &str,
+        sentence_id: &str,
+        expected_revision: &str,
+        scope: AnalysisScope,
+    ) -> Result<Value> {
+        let document = self.token_document(document_id)?;
+        let sentence = analysis_sentence(&document, sentence_id, expected_revision)?;
         let language = document.language.as_str();
         let index = self.open_knowledge_index(language)?;
         let lookup_index = versioned_index(&index)?;
+        let grammar = lookup_index.map(|(pack, _, version)| (pack.sha256, version));
+        let lexical = lexicon::index_identity(&self.knowledge_directory, language);
+        let address = serde_json::to_vec(&(
+            ANNOTATION_VERSION, expected_revision, sentence_id, language, grammar, lexical, &scope,
+        ))
+        .map_err(|error| error.to_string())?;
+        let key = Sha256::digest(address);
+        if let Some(annotation) = annotation_cache::read(&self.connection, document_id, key.as_ref()) {
+            return Ok(annotation);
+        }
+        let analysis =
+            self.analyze_scope(&document, sentence, expected_revision, &scope, lookup_index)?;
+        let annotation = serde_json::to_value(analysis).map_err(|error| error.to_string())?;
+        if lexicon::index_identity(&self.knowledge_directory, language) == lexical {
+            annotation_cache::write(&self.connection, document_id, key.as_ref(), &annotation);
+        }
+        Ok(annotation)
+    }
+
+    fn analyze_scope(
+        &self,
+        document: &Document,
+        sentence: &Sentence,
+        revision: &str,
+        scope: &AnalysisScope,
+        lookup_index: Option<(&Pack, &Connection, u32)>,
+    ) -> Result<LinguisticAnalysis> {
+        let (selected, next_start) = select_words(&sentence.text, scope)?;
+        let language = document.language.as_str();
+        let sentence_id = sentence.id.as_str();
         let package = PACKS.iter().find(|pack| pack.language == language).map(|pack| {
             pack.describe(lookup_index.map_or(0, |(_, _, version)| version))
         });
         let id_at = |offset| token_id(revision, sentence_id, offset);
-        let syntax_parse = match (&scope, lookup_index) {
+        let syntax_parse = match (scope, lookup_index) {
             (AnalysisScope::Sentence { start: 0 }, Some((_, db, version))) if version >= 5 => {
                 Some(syntax_parse::analyze(db, &sentence.text, id_at)?)
             }
             _ => None,
         };
-        let members = match &scope {
+        let members = match scope {
             AnalysisScope::Expression { member_starts_utf16 } => Some(member_starts_utf16),
             _ => None,
         };
@@ -198,6 +243,15 @@ impl Store {
             syntax_parse,
         })
     }
+}
+
+fn analysis_sentence<'a>(
+    document: &'a Document, sentence_id: &str, expected_revision: &str,
+) -> Result<&'a Sentence> {
+    if revision_id(document)? != expected_revision {
+        return Err("Текст документа змінився. Оновіть запит аналізу.".into());
+    }
+    find_sentence(document, sentence_id)
 }
 
 type WordPart<'a> = (usize, usize, &'a str);
