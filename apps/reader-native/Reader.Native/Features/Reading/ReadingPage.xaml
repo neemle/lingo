@@ -64,14 +64,7 @@
  <Grid Padding="30,22,30,16" RowDefinitions="Auto,Auto,*,Auto,Auto" RowSpacing="13">
   <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="16">
    <VerticalStackLayout Spacing="7">
-    <HorizontalStackLayout Spacing="8">
-     <Border x:Name="SourceLanguageBadge" Padding="6,3" Stroke="#DCE1D3" BackgroundColor="#E9ECE2"
-      StrokeShape="RoundRectangle 4">
-      <Label x:Name="SourceLanguageCode" TextColor="{StaticResource Sage}" FontSize="10" FontAttributes="Bold" />
-     </Border>
-     <Label x:Name="SourceLanguageName" Style="{StaticResource ReaderMeta}" />
-     <Label Text="{Binding Document.Format}" Style="{StaticResource ReaderMeta}" />
-    </HorizontalStackLayout>
+    <Label Text="{Binding Document.Format}" Style="{StaticResource ReaderMeta}" />
     <Label Text="{Binding Document.Title, TargetNullValue='Читання'}" Style="{StaticResource SerifTitle}"
      FontSize="40" LineBreakMode="TailTruncation" MaxLines="1" />
    </VerticalStackLayout>
@@ -108,15 +101,22 @@
    StrokeShape="RoundRectangle 11">
    <Border.Shadow><Shadow Brush="#434B30" Opacity="0.08" Radius="7" Offset="0,3" /></Border.Shadow>
    <Grid RowDefinitions="Auto,Auto,*,Auto">
-    <Grid Padding="15,7" ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="7">
-     <Label Text="→" FontSize="19" VerticalOptions="Center" TextColor="{StaticResource Sage}" />
-     <Picker Grid.Column="1" x:Name="TargetLanguage" Title="Мова перекладу"
+    <Grid Padding="17,7" ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
+     <HorizontalStackLayout Spacing="7" VerticalOptions="Center">
+      <Border x:Name="SourceLanguageBadge" Padding="6,3" Stroke="#DCE1D3" BackgroundColor="#E9ECE2"
+       StrokeShape="RoundRectangle 4" VerticalOptions="Center">
+       <Label x:Name="SourceLanguageCode" TextColor="{StaticResource Sage}" FontSize="10" FontAttributes="Bold" />
+      </Border>
+      <Label x:Name="SourceLanguageName" Style="{StaticResource ReaderMeta}" />
+     </HorizontalStackLayout>
+     <Label Grid.Column="1" Text="→" FontSize="19" VerticalOptions="Center" TextColor="{StaticResource Sage}" />
+     <Picker Grid.Column="2" x:Name="TargetLanguage" Title="Мова перекладу"
       SelectedIndexChanged="TargetChanged" SemanticProperties.Description="Мова перекладу речення" />
-     <Button Grid.Column="2" Text="A−" Style="{StaticResource PlayerButton}" Clicked="DecreaseReaderFont"
+     <Button Grid.Column="3" Text="A−" Style="{StaticResource PlayerButton}" Clicked="DecreaseReaderFont"
       SemanticProperties.Description="Зменшити шрифт читання" />
-     <Button Grid.Column="3" Text="A+" Style="{StaticResource PlayerButton}" Clicked="IncreaseReaderFont"
+     <Button Grid.Column="4" Text="A+" Style="{StaticResource PlayerButton}" Clicked="IncreaseReaderFont"
       SemanticProperties.Description="Збільшити шрифт читання" />
-     <Button Grid.Column="4" x:Name="ReaderLayoutButton" Text="Авто" Style="{StaticResource PlayerButton}"
+     <Button Grid.Column="5" x:Name="ReaderLayoutButton" Text="Авто" Style="{StaticResource PlayerButton}"
       Clicked="ReaderLayoutClicked" SemanticProperties.Description="Змінити розкладку читання" />
     </Grid>
     <BoxView Grid.Row="1" Color="{StaticResource BorderTone}" HeightRequest="1" />
@@ -223,9 +223,10 @@
    <Border Grid.Row="1" x:Name="ReaderControls" AutomationId="ReadingControls" BackgroundColor="{StaticResource Panel}"
     Stroke="{StaticResource BorderTone}" StrokeShape="RoundRectangle 11">
     <Border.Shadow><Shadow Brush="#62644E" Opacity="0.09" Radius="10" Offset="0,4" /></Border.Shadow>
-    <Grid RowDefinitions="Auto,46,Auto,Auto,Auto,3" RowSpacing="3">
-     <Grid Margin="14,7,14,0" ColumnDefinitions="*,165" ColumnSpacing="10">
-      <Grid ColumnDefinitions="34,*" ColumnSpacing="8">
+    <Grid RowDefinitions="Auto,Auto,Auto,3" RowSpacing="3">
+     <Grid x:Name="PlayerMain" Margin="14,9,14,8" ColumnDefinitions="*,Auto,*"
+      RowDefinitions="Auto,0" ColumnSpacing="10">
+      <Grid x:Name="PlayerDocument" ColumnDefinitions="34,*" ColumnSpacing="8" VerticalOptions="Center">
        <Border Padding="7" BackgroundColor="#EEEBE0" Stroke="#E6E1D1" StrokeShape="RoundRectangle 4">
         <Image Source="nav_book.png" WidthRequest="18" HeightRequest="20" />
        </Border>
@@ -234,37 +235,55 @@
         <Label Text="{Binding Progress, StringFormat='Речення {0}'}" Style="{StaticResource ReaderMeta}" />
        </VerticalStackLayout>
       </Grid>
-      <Picker Grid.Column="1" x:Name="VoicePicker" Title="Голос"
-       SelectedIndexChanged="VoiceChanged" SemanticProperties.Description="Голос для цієї мови" />
+      <ScrollView Grid.Column="1" x:Name="PlayerTransport" Orientation="Horizontal"
+       VerticalOptions="Center" HorizontalScrollBarVisibility="Never">
+       <HorizontalStackLayout Spacing="5" VerticalOptions="Center">
+        <Button Text="‹" Style="{StaticResource PlayerButton}" Clicked="PreviousClicked"
+         IsEnabled="{Binding CanInteract}" SemanticProperties.Description="Попереднє речення" />
+        <Button x:Name="PrimarySpeech" Text="▶" Style="{StaticResource AccentButton}" TextColor="White" WidthRequest="42" HeightRequest="42"
+         Padding="0" CornerRadius="21" FontSize="16" Clicked="ToggleSpeechClicked"
+         IsEnabled="{Binding CanInteract}" SemanticProperties.Description="Відтворити озвучення" />
+        <Button Text="›" Style="{StaticResource PlayerButton}" Clicked="NextClicked"
+         IsEnabled="{Binding CanInteract}" SemanticProperties.Description="Наступне речення" />
+        <Button Text="■" Style="{StaticResource PlayerButton}" Clicked="StopClicked"
+         SemanticProperties.Description="Зупинити озвучення" />
+       </HorizontalStackLayout>
+      </ScrollView>
+      <Grid Grid.Column="2" ColumnDefinitions="*,Auto" ColumnSpacing="5" VerticalOptions="Center">
+       <Picker x:Name="VoicePicker" Title="Голос" SelectedIndexChanged="VoiceChanged"
+        HorizontalOptions="End" MaximumWidthRequest="155" SemanticProperties.Description="Голос для цієї мови" />
+       <Button Grid.Column="1" x:Name="PlaybackOptionsButton" Text="⋯" Style="{StaticResource PlayerButton}"
+        Clicked="TogglePlaybackOptions" SemanticProperties.Description="Параметри озвучення" />
+      </Grid>
      </Grid>
-     <ScrollView Grid.Row="1" Margin="14,0" Orientation="Horizontal" HorizontalScrollBarVisibility="Never">
-      <HorizontalStackLayout Spacing="5" VerticalOptions="Center">
-       <Button Text="‹" Margin="0,0,5,3" Style="{StaticResource PlayerButton}"
-        Clicked="PreviousClicked" IsEnabled="{Binding CanInteract}" SemanticProperties.Description="Попереднє речення" />
-       <Button Text="▶" Style="{StaticResource AccentButton}" WidthRequest="42" HeightRequest="42"
-        Padding="0" CornerRadius="21" FontSize="16" Margin="0,0,5,3"
-        Clicked="SpeakClicked" IsEnabled="{Binding CanInteract}" SemanticProperties.Description="Озвучити або повторити речення" />
-       <Button Text="›" Margin="0,0,5,3" Style="{StaticResource PlayerButton}"
-        Clicked="NextClicked" IsEnabled="{Binding CanInteract}" SemanticProperties.Description="Наступне речення" />
-       <Button x:Name="PauseSpeech" Text="Пауза" Style="{StaticResource PlayerButton}" Margin="0,0,5,3"
-        IsEnabled="False" Clicked="PauseClicked" />
-       <Button Text="Стоп" Margin="0,0,5,3" Style="{StaticResource PlayerButton}" Clicked="StopClicked" />
+     <VerticalStackLayout Grid.Row="1" x:Name="PlaybackOptions" Margin="14,0,14,6" Spacing="5" IsVisible="False">
+      <BoxView HeightRequest="1" Color="{StaticResource BorderTone}" />
+      <FlexLayout Wrap="Wrap" AlignItems="Center">
        <Picker x:Name="Rate" WidthRequest="74" Title="Темп" SelectedIndexChanged="SpeechPreferencesChanged" />
-       <Button Text="Вимова…" Margin="0,0,5,3" Style="{StaticResource PlayerButton}"
+       <Button x:Name="PauseSpeech" Text="Пауза" Style="{StaticResource PlayerButton}" IsEnabled="False"
+        Clicked="PauseClicked" PropertyChanged="PauseSpeechChanged" />
+       <Button Text="Повторити" Margin="5,0,0,0" Style="{StaticResource PlayerButton}" Clicked="SpeakClicked"
+        IsEnabled="{Binding CanInteract}" SemanticProperties.Description="Повторити поточне речення" />
+       <Button Text="Вимова…" Margin="5,0,0,0" Style="{StaticResource PlayerButton}"
         Clicked="EditSpeechTextClicked" IsEnabled="{Binding CanBookmark}" SemanticProperties.Description="Редагувати вимову речення" />
-      </HorizontalStackLayout>
-     </ScrollView>
-     <Grid Grid.Row="2" Margin="12,0,12,3" RowDefinitions="Auto,Auto" ColumnDefinitions="Auto,*" ColumnSpacing="4">
-      <CheckBox x:Name="ContinueSpeech" CheckedChanged="SpeechPreferencesChanged"
-       SemanticProperties.Description="Автоматично озвучувати наступні речення" />
-      <Label Grid.Column="1" Text="Озвучувати наступні речення" Style="{StaticResource ReaderMeta}" VerticalOptions="Center" />
-      <Button Grid.Row="1" Grid.ColumnSpan="2" HorizontalOptions="Start" x:Name="ResumeSpeech"
-       Text="Продовжити зі збереженого слова" Style="{StaticResource PlayerButton}"
-       Clicked="ResumeSpeechClicked" IsEnabled="{Binding CanInteract}" IsVisible="False" />
-     </Grid>
-     <Label Grid.Row="3" x:Name="VoiceStatus" Margin="14,0,14,3" Style="{StaticResource ReaderMeta}" IsVisible="False" />
-     <Label Grid.Row="4" x:Name="SpeechStatus" Margin="14,0,14,3" Style="{StaticResource ReaderMeta}" />
-     <ProgressBar Grid.Row="5" x:Name="PlayerProgress" HeightRequest="3" ProgressColor="#BC997A" />
+       <HorizontalStackLayout Margin="5,0,0,0" Spacing="2">
+        <CheckBox x:Name="ContinueSpeech" CheckedChanged="SpeechPreferencesChanged"
+         SemanticProperties.Description="Автоматично озвучувати наступні речення" />
+        <Label Text="Озвучувати наступні речення" Style="{StaticResource ReaderMeta}" />
+       </HorizontalStackLayout>
+      </FlexLayout>
+      <Button HorizontalOptions="Start" x:Name="ResumeSpeech" Text="Продовжити зі збереженого слова"
+       Style="{StaticResource PlayerButton}" Clicked="ResumeSpeechClicked" IsEnabled="{Binding CanInteract}" IsVisible="False" />
+      <Label x:Name="VoiceStatus" Style="{StaticResource ReaderMeta}" IsVisible="False" />
+     </VerticalStackLayout>
+     <Label Grid.Row="2" x:Name="SpeechStatus" Text="" Margin="14,0,14,3" Style="{StaticResource ReaderMeta}">
+      <Label.Triggers>
+       <Trigger TargetType="Label" Property="Text" Value="">
+        <Setter Property="IsVisible" Value="False" />
+       </Trigger>
+      </Label.Triggers>
+     </Label>
+     <ProgressBar Grid.Row="3" x:Name="PlayerProgress" HeightRequest="3" ProgressColor="#BC997A" />
     </Grid>
    </Border>
   </Grid>

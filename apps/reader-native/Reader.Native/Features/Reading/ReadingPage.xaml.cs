@@ -12,6 +12,7 @@ public partial class ReadingPage : ContentPage
     private string? lastSourceLanguage;
     private bool updatingTargets;
     private bool narrowReader;
+    private bool narrowPlayer;
     private ReaderLayout readingLayout;
     private bool TranslationVisible => readingLayout != ReaderLayout.Source;
     private enum ReaderLayout { Automatic, Columns, Stacked, Source, Translation }
@@ -154,10 +155,46 @@ public partial class ReadingPage : ContentPage
     protected override void OnSizeAllocated(double width, double height)
     {
         base.OnSizeAllocated(width, height);
-        if (ReadingColumns is null || SourcePane is null || TranslationPane is null ||
-            ReaderLayoutButton is null || SourceHint is null || width <= 0 || narrowReader == (width < 720)) return;
-        narrowReader = width < 720;
-        ArrangeReadingColumns();
+        if (width <= 0 || ReadingColumns is null || SourcePane is null || TranslationPane is null
+            || ReaderLayoutButton is null || SourceHint is null || SourceLanguageName is null
+            || PlayerMain is null || PlayerDocument is null || PlayerTransport is null) return;
+
+        var stackColumns = width < 720;
+        if (narrowReader != stackColumns)
+        {
+            narrowReader = stackColumns;
+            ArrangeReadingColumns();
+        }
+
+        var wrapPlayer = width < 600;
+        if (narrowPlayer != wrapPlayer)
+        {
+            narrowPlayer = wrapPlayer;
+            PlayerMain.RowDefinitions[1].Height = wrapPlayer ? GridLength.Auto : 0;
+            PlayerMain.RowSpacing = wrapPlayer ? 5 : 0;
+            Grid.SetColumnSpan(PlayerDocument, wrapPlayer ? 2 : 1);
+            Grid.SetColumn(PlayerTransport, wrapPlayer ? 0 : 1);
+            Grid.SetColumnSpan(PlayerTransport, wrapPlayer ? 3 : 1);
+            Grid.SetRow(PlayerTransport, wrapPlayer ? 1 : 0);
+            PlayerTransport.HorizontalOptions = wrapPlayer ? LayoutOptions.Center : LayoutOptions.Fill;
+        }
+    }
+
+    private void TogglePlaybackOptions(object? sender, EventArgs args)
+    {
+        PlaybackOptions.IsVisible = !PlaybackOptions.IsVisible;
+        SemanticProperties.SetDescription(PlaybackOptionsButton,
+            PlaybackOptions.IsVisible ? "Сховати параметри озвучення" : "Показати параметри озвучення");
+    }
+
+    private void PauseSpeechChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        if (PrimarySpeech is null || sender is not Button pause ||
+            args.PropertyName is not (nameof(Button.IsEnabled) or nameof(Button.Text))) return;
+
+        var playing = pause.IsEnabled && !speechPaused;
+        PrimarySpeech.Text = playing ? "Ⅱ" : "▶";
+        SemanticProperties.SetDescription(PrimarySpeech, playing ? "Призупинити озвучення" : "Відтворити озвучення");
     }
 
     private void ArrangeReadingColumns()
@@ -169,6 +206,7 @@ public partial class ReadingPage : ContentPage
             || readingLayout == ReaderLayout.Automatic && narrowReader);
         var columns = split && !stacked;
         SourcePane.IsVisible = sourceVisible;
+        SourceLanguageName.IsVisible = !narrowReader;
         SourceHint.IsVisible = sourceVisible && !PdfPageNotice.IsVisible;
         TranslationPane.IsVisible = TranslationVisible;
         ReadingColumns.ColumnDefinitions[1].Width = columns ? GridLength.Star : 0;
