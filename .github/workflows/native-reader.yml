@@ -79,10 +79,37 @@ jobs:
             done
             sleep 1
           done
-          echo 'The Catalyst app did not initialize its local SQLite database' >&2
+          echo 'The installed Catalyst app did not remain running with a valid SQLite database' >&2
           ps -axo pid=,stat=,command= | awk -v app="$app/Contents/MacOS/" 'index($0, app) && !index($0, "awk")'
           find "$HOME/Library" -maxdepth 5 -name reader-native.db -print 2>/dev/null || true
+          head -n 65 "$stdout" "$stderr"
           tail -n 30 "$stdout" "$stderr"
+          python3 - "$executable" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          directory = Path.home() / "Library/Logs/DiagnosticReports"
+          reports = sorted(directory.glob(sys.argv[1] + "*.ips"),
+                           key=lambda path: path.stat().st_mtime, reverse=True)
+          for path in reports[:2]:
+              try:
+                  raw = path.read_text()
+                  header, end = json.JSONDecoder().raw_decode(raw)
+                  report = json.loads(raw[end:]) if raw[end:].strip() else header
+              except (OSError, ValueError) as error:
+                  print(f"Could not read {path.name}: {error}")
+                  continue
+              print(f"Crash report: {path.name}")
+              for key in ("exception", "termination", "asi"):
+                  if key in report:
+                      print(f"{key}: {json.dumps(report[key])[:4096]}")
+              images = report.get("usedImages", [])
+              for frame in report.get("lastExceptionBacktrace", [])[:24]:
+                  index = frame.get("imageIndex", -1)
+                  image = images[index].get("name", "") if 0 <= index < len(images) else ""
+                  print(f"{image} {frame.get('symbol', frame.get('imageOffset', ''))}")
+          PY
           /usr/bin/log show --last 2m --style compact --predicate "process == '$executable'" | tail -n 30
           exit 1
   windows:
