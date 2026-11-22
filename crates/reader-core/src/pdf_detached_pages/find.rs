@@ -65,7 +65,7 @@ impl Store {
         let mut statement = self.connection.prepare(
             "SELECT page,text FROM pdf_detached_pages WHERE document_id=?1 AND page>=?2 ORDER BY page LIMIT ?3",
         ).map_err(database_error)?;
-        let mut pages = statement.query(params![id, start.page, MAX_SCAN_PAGES + 1]).map_err(database_error)?;
+        let mut pages = statement.query(params![id, start.page, MAX_SCAN_PAGES as u32 + 1]).map_err(database_error)?;
         let mut scanned = 0;
         let mut scanned_sentences = 0;
         while let Some(row) = pages.next().map_err(database_error)? {

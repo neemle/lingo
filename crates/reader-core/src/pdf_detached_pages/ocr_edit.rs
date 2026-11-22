@@ -1,4 +1,4 @@
-use super::{annotations, database_error, page_revision};
+use super::{annotations, database_error, page_revision, sqlite_offset};
 use crate::{ocr, Result, Sentence, Store};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
@@ -199,7 +199,7 @@ fn move_sentence_anchors(
         .query_row(
             "SELECT sentence FROM pdf_detached_positions WHERE document_id=?1 AND page=?2",
             params![id, page],
-            |row| row.get(0),
+            |row| Ok(row.get::<_, u32>(0)? as usize),
         )
         .optional()
         .map_err(database_error)?;
@@ -211,7 +211,7 @@ fn move_sentence_anchors(
         let position = sentence_at(&new_sentences, edit.map_start(old_start)).unwrap_or(0);
         db.execute(
             "UPDATE pdf_detached_positions SET sentence=?3 WHERE document_id=?1 AND page=?2",
-            params![id, page, position],
+            params![id, page, sqlite_offset(position)?],
         )
         .map_err(database_error)?;
     }

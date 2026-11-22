@@ -122,7 +122,7 @@ impl Store {
              LEFT JOIN pdf_detached_positions c ON c.document_id=p.document_id AND c.page=p.page
              WHERE p.document_id=?1 AND p.page=?2",
             params![id, page],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, u32>(2)? as usize)),
         ).optional().map_err(database_error)?;
         let Some((text, language, saved)) = result else { return Ok(None); };
         let revision = page_revision(&text);
@@ -136,7 +136,7 @@ fn write_position(db: &Connection, id: &str, page: u16, position: usize) -> Resu
         "INSERT INTO pdf_detached_positions (document_id,page,sentence)
          SELECT document_id,page,?3 FROM pdf_detached_pages WHERE document_id=?1 AND page=?2
          ON CONFLICT(document_id,page) DO UPDATE SET sentence=excluded.sentence",
-        params![id, page, position],
+        params![id, page, sqlite_offset(position)?],
     ).map_err(database_error)?;
     Ok(())
 }
@@ -316,7 +316,7 @@ pub(crate) fn visit_cached_pages(
     while let Some(row) = rows.next().map_err(database_error)? {
         let encoded: Option<String> = row.get(3).map_err(database_error)?;
         let text: String = row.get(1).map_err(database_error)?;
-        let position: Option<usize> = row.get(4).map_err(database_error)?;
+        let position = row.get::<_, Option<u32>>(4).map_err(database_error)?.map(|value| value as usize);
         let page = row.get(0).map_err(database_error)?;
         let language: String = row.get(5).map_err(database_error)?;
         let annotations = annotations::list(db, id, page)?;
@@ -382,7 +382,7 @@ pub(crate) fn adopt_cached_page(db: &Connection, document: &crate::Document, pag
     if let Some(position) = page.position {
         db.execute(
             "INSERT OR IGNORE INTO pdf_detached_positions (document_id,page,sentence) VALUES (?1,?2,?3)",
-            params![document.id, page.page, position],
+            params![document.id, page.page, sqlite_offset(position)?],
         ).map_err(database_error)?;
     }
     Ok(())
@@ -394,6 +394,10 @@ fn page_revision(text: &str) -> String {
 
 fn sentence_prefix(document_id: &str, page: u16, revision: &str) -> String {
     format!("{document_id}:{page}:{revision}")
+}
+
+fn sqlite_offset(value: usize) -> Result<u32> {
+    u32::try_from(value).map_err(database_error)
 }
 
 fn database_error(error: impl std::fmt::Display) -> String {

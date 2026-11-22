@@ -160,10 +160,9 @@ fn include_neighbors(
             + next.as_ref().map_or(0, |part| part.len() + 2),
     );
     let mut center_byte = 0;
-    let mut center_utf16 = 0;
     if let Some(previous) = previous {
         center_byte = sentences[0].start_utf8;
-        center_utf16 = sentences[0].start_utf16;
+        let center_utf16 = sentences[0].start_utf16;
         let prefix = word_break::boundary_sentence(&previous, id, page - 1);
         let shift_bytes = previous.len() + 2;
         let shift_utf16 = prefix.end_utf16 + 2;

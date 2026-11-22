@@ -306,17 +306,19 @@ pub(crate) fn refresh_line_provenance(
 /// Match only sentences at the same page-relative source offset with identical text.
 pub(crate) fn corresponding_pdf_sentences<'a>(
     from: &'a crate::Document,
-    to: &'a crate::Document,
+    to_format: &str,
+    to_starts: Option<&[Option<usize>]>,
+    to_sentences: &'a [crate::Sentence],
 ) -> Option<std::collections::HashMap<&'a str, &'a str>> {
     let old_starts = from.pdf_page_starts.as_deref()?;
-    let new_starts = to.pdf_page_starts.as_deref()?;
-    if from.format != "pdf" || to.format != "pdf" || old_starts.len() != new_starts.len() {
+    let new_starts = to_starts?;
+    if from.format != "pdf" || to_format != "pdf" || old_starts.len() != new_starts.len() {
         return None;
     }
     let old_pages = page_anchors(old_starts);
     Some(from.sentences.iter().filter_map(|old| {
-        let index = match_page_sentence(&old_pages, new_starts, &to.sentences, old)?;
-        Some((old.id.as_str(), to.sentences[index].id.as_str()))
+        let index = match_page_sentence(&old_pages, new_starts, to_sentences, old)?;
+        Some((old.id.as_str(), to_sentences[index].id.as_str()))
     }).collect())
 }
 

@@ -477,9 +477,9 @@ impl Store {
     }
 }
 
-fn versioned_index(
-    index: &Option<(&'static Pack, Connection)>,
-) -> Result<Option<(&'static Pack, &Connection, u32)>> {
+fn versioned_index<'a>(
+    index: &'a Option<(&'static Pack, Connection)>,
+) -> Result<Option<(&'static Pack, &'a Connection, u32)>> {
     index.as_ref().map(|(pack, db)| {
         let version = db.query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| error.to_string())?;

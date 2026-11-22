@@ -1,4 +1,4 @@
-use super::{database_error, DetachedPdfSentence};
+use super::{database_error, sqlite_offset, DetachedPdfSentence};
 use crate::{Result, Store};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -91,7 +91,7 @@ pub(super) fn reviewed(
     let mut statement = db.prepare(
         "SELECT target,text FROM pdf_detached_translations WHERE document_id=?1 AND page=?2 AND start_utf16=?3",
     ).map_err(database_error)?;
-    let rows = statement.query_map(params![id, page, start], |row| Ok((row.get(0)?, row.get(1)?)))
+    let rows = statement.query_map(params![id, page, sqlite_offset(start)?], |row| Ok((row.get(0)?, row.get(1)?)))
         .map_err(database_error)?;
     rows.collect::<rusqlite::Result<_>>().map_err(database_error)
 }
@@ -102,7 +102,7 @@ pub(super) fn reviewed_for_page(
     let mut statement = db.prepare_cached(
         "SELECT start_utf16,text FROM pdf_detached_translations WHERE document_id=?1 AND page=?2 AND target=?3",
     ).map_err(database_error)?;
-    let rows = statement.query_map(params![id, page, target], |row| Ok((row.get(0)?, row.get(1)?)))
+    let rows = statement.query_map(params![id, page, target], |row| Ok((row.get::<_, u32>(0)? as usize, row.get(1)?)))
         .map_err(database_error)?;
     rows.collect::<rusqlite::Result<_>>().map_err(database_error)
 }
@@ -110,7 +110,7 @@ pub(super) fn reviewed_for_page(
 pub(super) fn speech_text(db: &Connection, id: &str, page: u16, start: usize) -> Result<Option<String>> {
     db.query_row(
         "SELECT text FROM pdf_detached_speech_text WHERE document_id=?1 AND page=?2 AND start_utf16=?3",
-        params![id, page, start], |row| row.get(0),
+        params![id, page, sqlite_offset(start)?], |row| row.get(0),
     ).optional().map_err(database_error)
 }
 
@@ -125,7 +125,7 @@ pub(super) fn read(
     db.query_row(
         "SELECT bookmarked,note FROM pdf_detached_annotations
          WHERE document_id=?1 AND page=?2 AND start_utf16=?3",
-        params![id, page, start],
+        params![id, page, sqlite_offset(start)?],
         |row| Ok((row.get(0)?, row.get(1)?)),
     ).optional().map(|result| result.unwrap_or_default()).map_err(database_error)
 }
@@ -144,7 +144,7 @@ pub(super) fn list(db: &Connection, id: &str, page: u16) -> Result<Vec<ArchivedA
          WHERE document_id=?1 AND page=?2",
     ).map_err(database_error)?;
     let rows = statement.query_map(params![id, page], |row| Ok(ArchivedAnnotation {
-        start_utf16: row.get(0)?,
+        start_utf16: row.get::<_, u32>(0)? as usize,
         bookmarked: row.get(1)?,
         note: row.get(2)?,
         translations: BTreeMap::new(),
@@ -159,7 +159,7 @@ pub(super) fn list(db: &Connection, id: &str, page: u16) -> Result<Vec<ArchivedA
         "SELECT start_utf16,target,text FROM pdf_detached_translations WHERE document_id=?1 AND page=?2",
     ).map_err(database_error)?;
     let rows = statement.query_map(params![id, page], |row|
-        Ok((row.get::<_, usize>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+        Ok((row.get::<_, u32>(0)? as usize, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
     ).map_err(database_error)?;
     for row in rows {
         let (start_utf16, target, text) = row.map_err(database_error)?;
@@ -171,7 +171,7 @@ pub(super) fn list(db: &Connection, id: &str, page: u16) -> Result<Vec<ArchivedA
     let mut statement = db.prepare(
         "SELECT start_utf16,text FROM pdf_detached_speech_text WHERE document_id=?1 AND page=?2",
     ).map_err(database_error)?;
-    let rows = statement.query_map(params![id, page], |row| Ok((row.get::<_, usize>(0)?, row.get::<_, String>(1)?)))
+    let rows = statement.query_map(params![id, page], |row| Ok((row.get::<_, u32>(0)? as usize, row.get::<_, String>(1)?)))
         .map_err(database_error)?;
     for row in rows {
         let (start_utf16, text) = row.map_err(database_error)?;
@@ -192,20 +192,20 @@ pub(super) fn merge(db: &Connection, id: &str, page: u16, annotations: &[Archive
                  ON CONFLICT(document_id,page,start_utf16) DO UPDATE SET
                     bookmarked=max(bookmarked,excluded.bookmarked),
                     note=coalesce(note,excluded.note)",
-                params![id, page, item.start_utf16, item.bookmarked, item.note],
+                params![id, page, sqlite_offset(item.start_utf16)?, item.bookmarked, item.note],
             ).map_err(database_error)?;
         }
         if let Some(text) = &item.speech_text {
             db.execute(
                 "INSERT OR IGNORE INTO pdf_detached_speech_text VALUES (?1,?2,?3,?4)",
-                params![id, page, item.start_utf16, text],
+                params![id, page, sqlite_offset(item.start_utf16)?, text],
             ).map_err(database_error)?;
         }
         for (target, text) in &item.translations {
             db.execute(
                 "INSERT OR IGNORE INTO pdf_detached_translations (document_id,page,start_utf16,target,text)
                  VALUES (?1,?2,?3,?4,?5)",
-                params![id, page, item.start_utf16, target, text],
+                params![id, page, sqlite_offset(item.start_utf16)?, target, text],
             ).map_err(database_error)?;
         }
     }
@@ -237,12 +237,12 @@ impl Store {
                         tx.execute(
                             "INSERT INTO pdf_detached_speech_text VALUES (?1,?2,?3,?4)
                              ON CONFLICT(document_id,page,start_utf16) DO UPDATE SET text=excluded.text",
-                            params![id, page, start, text],
+                            params![id, page, sqlite_offset(start)?, text],
                         ).map_err(database_error)?;
                     } else {
                         tx.execute(
                             "DELETE FROM pdf_detached_speech_text WHERE document_id=?1 AND page=?2 AND start_utf16=?3",
-                            params![id, page, start],
+                            params![id, page, sqlite_offset(start)?],
                         ).map_err(database_error)?;
                     }
                     super::speech_resume::remove(&tx, id, page, sentence_id)?;
@@ -262,7 +262,7 @@ impl Store {
                     tx.execute(
                         "DELETE FROM pdf_detached_translations
                          WHERE document_id=?1 AND page=?2 AND start_utf16=?3 AND target=?4",
-                        params![id, page, start, target],
+                        params![id, page, sqlite_offset(start)?, target],
                     ).map_err(database_error)?;
                     current.reviewed_translations.remove(&target);
                 } else {
@@ -271,7 +271,7 @@ impl Store {
                         "INSERT INTO pdf_detached_translations (document_id,page,start_utf16,target,text)
                          VALUES (?1,?2,?3,?4,?5)
                          ON CONFLICT(document_id,page,start_utf16,target) DO UPDATE SET text=excluded.text",
-                        params![id, page, start, target, text],
+                        params![id, page, sqlite_offset(start)?, target, text],
                     ).map_err(database_error)?;
                     current.reviewed_translations.insert(target, text.to_owned());
                 }
@@ -282,7 +282,7 @@ impl Store {
         if !current.bookmarked && current.note.is_none() {
             tx.execute(
                 "DELETE FROM pdf_detached_annotations WHERE document_id=?1 AND page=?2 AND start_utf16=?3",
-                params![id, page, start],
+                params![id, page, sqlite_offset(start)?],
             ).map_err(database_error)?;
         } else {
             tx.execute(
@@ -290,7 +290,7 @@ impl Store {
                  VALUES (?1,?2,?3,?4,?5)
                  ON CONFLICT(document_id,page,start_utf16) DO UPDATE SET
                     bookmarked=excluded.bookmarked,note=excluded.note",
-                params![id, page, start, current.bookmarked, current.note],
+                params![id, page, sqlite_offset(start)?, current.bookmarked, current.note],
             ).map_err(database_error)?;
         }
         tx.commit().map_err(database_error)?;

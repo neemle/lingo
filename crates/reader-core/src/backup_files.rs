@@ -80,7 +80,7 @@ pub(crate) fn merge_existing_document(
             .zip(&local.sentences)
             .map(|(incoming, local)| (incoming.id.as_str(), local.id.as_str()))
             .collect()
-    } else if let Some(ids) = ocr::corresponding_pdf_sentences(incoming, &local) {
+    } else if let Some(ids) = ocr::corresponding_pdf_sentences(incoming, &local.format, local.pdf_page_starts.as_deref(), &local.sentences) {
         ids
     } else {
         return Ok(true);
