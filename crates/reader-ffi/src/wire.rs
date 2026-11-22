@@ -282,6 +282,14 @@ pub enum Command {
         language: String,
         lines: Vec<reader_core::ocr::OcrLine>,
     },
+    ReconcilePdfOcrPage {
+        id: String,
+        page: u16,
+        #[serde(rename = "revisionId")]
+        revision_id: String,
+        language: String,
+        reference: String,
+    },
     PdfOcrJob {
         job: reader_core::ocr_jobs::JobRequest,
     },

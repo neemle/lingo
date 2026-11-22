@@ -459,6 +459,34 @@ impl Store {
         self.commit_pdf_page(id, page, lines, None, None, Some((revision, language)))
     }
 
+    pub fn reconcile_pdf_ocr_page(
+        &mut self, id: &str, page: u16, revision: &str, language: &str, reference: &str,
+    ) -> Result<bool> {
+        if reference.len() > crate::MAX_IMPORT || reference.contains('\0') {
+            return Err("Некоректний текстовий шар сторінки PDF.".into());
+        }
+        let mut changed = false;
+        self.edit_document(id, |document, tx| {
+            if document.current_revision_id.as_deref() != Some(revision) || document.language != language {
+                return Err("Текст або мова PDF змінилися. Відкрийте сторінку знову.".into());
+            }
+            let pages = file_originals::native_pdf_page_text(tx, id)?
+                .ok_or("Оригінал PDF недоступний.")?;
+            if usize::from(page) >= pages.len() || !has_ocr_lines(document, page) {
+                return Err("Розпізнаний текст сторінки недоступний.".into());
+            }
+            let lines = document.ocr_lines.get_or_insert_with(Vec::new);
+            let start = lines.partition_point(|line| line.page < page);
+            let end = lines.partition_point(|line| line.page <= page);
+            changed = reconcile_ocr_with_layer(reference, &mut lines[start..end]);
+            if changed {
+                reflow_pdf_document(tx, document, pages)?;
+            }
+            Ok(changed)
+        })?;
+        Ok(changed)
+    }
+
     fn commit_pdf_page(
         &mut self, id: &str, page: u16, mut lines: Vec<ocr::OcrLine>, token: Option<&str>,
         text_layer: Option<String>, replaces_revision: Option<(&str, &str)>,
@@ -538,6 +566,7 @@ impl Store {
                         return Ok(cleared_refresh);
                     }
                 }
+                reconcile_ocr_with_layer(old_layer, &mut lines);
                 pages[usize::from(page)].clear();
                 let page_text = serde_json::to_string(&pages).map_err(database_error)?;
                 tx.execute("UPDATE file_originals SET pdf_page_text=?2 WHERE document_id=?1",
@@ -651,6 +680,63 @@ impl Store {
         }
         updated.ok_or_else(|| "Не вдалося оновити сторінку PDF".to_owned())
     }
+}
+
+fn reconcile_ocr_with_layer(reference: &str, lines: &mut [ocr::OcrLine]) -> bool {
+    use crate::document_tokens::word_parts;
+    const CONTEXT: usize = 4;
+    const MAX_LAYER_WORDS: usize = 4096;
+    let layer: Vec<_> = word_parts(reference).map(|(_, _, word)| word)
+        .take(MAX_LAYER_WORDS + 1).collect();
+    if !(CONTEXT + 1..=MAX_LAYER_WORDS).contains(&layer.len()) {
+        return false;
+    }
+
+    let mut changed = false;
+    let mut remaining = MAX_LAYER_WORDS;
+    for line in lines.iter_mut().filter(|line| line.correction.is_none()) {
+        let words: Vec<_> = word_parts(&line.text).take(remaining + 1).collect();
+        if words.len() > remaining { break; }
+        remaining -= words.len();
+        let mut corrected = line.text.clone();
+        for (index, &(start, _, word)) in words.iter().enumerate().rev() {
+            let after = (words.len() - index - 1).min(CONTEXT - index.min(2));
+            let before = CONTEXT - after;
+            if index < before || word.chars().count() < 4 ||
+                !word.chars().all(char::is_alphabetic)
+            {
+                continue;
+            }
+            let neighbors = &words[index - before..=index + after];
+            let mut matches = layer.windows(CONTEXT + 1).filter(|sample| {
+                neighbors.iter().zip(*sample).enumerate().all(|(position, ((_, _, recognized), original))| {
+                    position == before || recognized == original
+                })
+            }).map(|sample| sample[before]);
+            let Some(candidate) = matches.next() else { continue; };
+            if candidate != word && candidate.chars().all(char::is_alphabetic)
+                && candidate.starts_with(char::is_uppercase) == word.starts_with(char::is_uppercase)
+                && matches.all(|other| other == candidate) && differs_by_one_glyph(word, candidate)
+            {
+                corrected.replace_range(start..start + word.len(), candidate);
+            }
+        }
+        if corrected != line.text {
+            line.correction = Some(corrected);
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn differs_by_one_glyph(left: &str, right: &str) -> bool {
+    let shared: usize = left.chars().zip(right.chars()).take_while(|(a, b)| a == b)
+        .map(|(ch, _)| ch.len_utf8()).sum();
+    let (left, right) = (&left[shared..], &right[shared..]);
+    let left_tail = left.chars().next().map(|ch| &left[ch.len_utf8()..]);
+    let right_tail = right.chars().next().map(|ch| &right[ch.len_utf8()..]);
+    left_tail == Some(right) || right_tail == Some(left) ||
+        left_tail.is_some_and(|tail| Some(tail) == right_tail)
 }
 
 fn update_focused_page(db: &Connection, document: &mut Document, page: u16, pages: Vec<String>) -> Result<()> {

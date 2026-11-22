@@ -95,7 +95,7 @@
      Clicked="RetryPdfOcrClicked" IsVisible="False" />
     <Button Grid.Column="4" x:Name="RepairPdfText" Text="Розпізнати зі скану" Style="{StaticResource PlayerButton}"
      Clicked="RepairPdfTextClicked" IsVisible="False"
-     SemanticProperties.Description="Замінити текст цієї сторінки розпізнаванням із зображення" />
+     SemanticProperties.Description="Уточнити розпізнаний текст цієї сторінки PDF" />
    </Grid>
   </Grid>
 
