@@ -57,7 +57,7 @@ public partial class LibraryPage
             {
                 var original = await session.IntakeFileAsync(item.Id);
                 ImportStatus.Text = "Читаємо текстовий шар PDF…";
-                var pageTexts = await PdfScan.ExtractTextAsync(original.Path);
+                var (pageTexts, deferredFrom) = await PdfScan.ReadTextForIntakeAsync(original.Path);
                 var language = await ChooseAsync(() =>
                 {
                     if (source?.ScanPdf == true) return Task.FromResult<string?>(null);
@@ -68,7 +68,7 @@ public partial class LibraryPage
                 if (language is null) return null;
                 ImportStatus.Text = "Зберігаємо документ…";
                 await session.WaitUntilIdleAsync();
-                await session.CompletePdfIntakeAsync(item.Id, language, pageTexts);
+                await session.CompletePdfIntakeAsync(item.Id, language, pageTexts, deferredFrom);
                 break;
             }
 #endif

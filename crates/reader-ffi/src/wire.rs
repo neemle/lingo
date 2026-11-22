@@ -163,6 +163,8 @@ pub enum Command {
         page: u16,
         lines: Vec<reader_core::ocr::OcrLine>,
         token: Option<String>,
+        #[serde(rename = "textLayer")]
+        text_layer: Option<String>,
     },
     PdfOcrJob {
         job: reader_core::ocr_jobs::JobRequest,

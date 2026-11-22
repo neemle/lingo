@@ -20,7 +20,7 @@ pub(super) enum ImportMaterial {
     Document { name: String, bytes: Vec<u8>, language: Option<String> },
     Article { name: String, bytes: Vec<u8>, url: String, language: Option<String> },
     Photo { name: String, bytes: Vec<u8>, lines: Vec<ocr::OcrLine>, language: Option<String> },
-    Pdf { name: String, path: PathBuf, page_texts: Vec<String>, language: String },
+    Pdf { name: String, path: PathBuf, page_texts: Vec<String>, deferred_from: Option<u16>, language: String },
 }
 
 pub(super) fn complete(
@@ -57,10 +57,12 @@ pub(super) fn complete(
                 name: item.metadata.name.clone(), bytes, lines, language,
             }
         }
-        (IntakeKind::Pdf, IntakePayload::File { path }, IntakeImport::Pdf { page_texts, language }) => {
-            item.metadata.kind = pdf_kind(&page_texts);
+        (IntakeKind::Pdf, IntakePayload::File { path }, IntakeImport::Pdf { page_texts, deferred_from, language }) => {
+            if deferred_from.is_none() {
+                item.metadata.kind = pdf_kind(&page_texts);
+            }
             ImportMaterial::Pdf {
-                name: item.metadata.name.clone(), path, page_texts, language,
+                name: item.metadata.name.clone(), path, page_texts, deferred_from, language,
             }
         }
         _ => return Err("Результат обробки не відповідає типу матеріалу.".into()),

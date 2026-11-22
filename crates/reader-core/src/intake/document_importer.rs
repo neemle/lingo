@@ -19,10 +19,13 @@ impl DocumentImporter for Store {
                 })?;
                 self.import_image(&name, &bytes, &language, lines)?
             }
-            ImportMaterial::Pdf { name, path, page_texts, language } => {
-                let prepared = file_originals::prepare_pdf_import(
+            ImportMaterial::Pdf { name, path, page_texts, deferred_from, language } => {
+                let mut prepared = file_originals::prepare_pdf_import(
                     &self.file_original_directory, &name, &path, &language, page_texts, Vec::new(),
                 )?;
+                if let Some(first_page) = deferred_from {
+                    prepared.defer_text_layers_from(first_page)?;
+                }
                 self.import_pdf_file(prepared)?
             }
         };

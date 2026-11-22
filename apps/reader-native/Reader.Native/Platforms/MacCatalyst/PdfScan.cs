@@ -24,27 +24,56 @@ internal static class PdfScan
         return checked((int)document.PageCount);
     });
 
-    internal static Task<string[]> ExtractTextAsync(string path, CancellationToken cancellation = default) => Task.Run(() =>
+    internal static Task<string[]> ExtractTextAsync(string path, CancellationToken cancellation = default) =>
+        Task.Run(() => ReadTextLayers(path, allowDeferred: false, cancellation).PageTexts, cancellation);
+
+    internal static Task<(string[] PageTexts, int? DeferredFrom)> ReadTextForIntakeAsync(
+        string path, CancellationToken cancellation = default) =>
+        Task.Run(() => ReadTextLayers(path, allowDeferred: true, cancellation), cancellation);
+
+    private static (string[] PageTexts, int? DeferredFrom) ReadTextLayers(
+        string path, bool allowDeferred, CancellationToken cancellation)
     {
         using var pool = new NSAutoreleasePool();
         using var document = Open(path);
         var count = checked((int)document.PageCount);
         PdfRecognition.CheckPageCount(count);
         var pages = new string[count];
+        const int openingWindowPages = 3;
+        const int openingWindowBytes = 1024 * 1024;
         long totalBytes = 0;
+        var openingPages = 0;
         for (var index = 0; index < count; index++)
         {
             cancellation.ThrowIfCancellationRequested();
             using var pagePool = new NSAutoreleasePool();
             using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
             var text = page.Text?.Trim() ?? "";
-            totalBytes += Encoding.UTF8.GetByteCount(text);
+            if (text.Length > 0) totalBytes += Encoding.UTF8.GetByteCount(text) + 2L;
             if (totalBytes > Client.MaxImportBytes)
-                throw new InvalidDataException("Текстовий шар PDF перевищує 20 МіБ.");
+            {
+                if (!allowDeferred) throw new InvalidDataException("Текстовий шар PDF перевищує 20 МіБ.");
+                Array.Fill(pages, "", openingPages, count - openingPages);
+                return (pages, openingPages);
+            }
             pages[index] = text;
+            if (index < openingWindowPages && totalBytes <= openingWindowBytes)
+                openingPages = index + 1;
         }
-        return pages;
-    }, cancellation);
+        return (pages, null);
+    }
+
+    internal static Task<string> ReadPageTextAsync(string path, int index, int expectedPages, CancellationToken cancellation) =>
+        Task.Run(() =>
+        {
+            cancellation.ThrowIfCancellationRequested();
+            using var pool = new NSAutoreleasePool();
+            using var document = Open(path);
+            if (document.PageCount != expectedPages)
+                throw new InvalidDataException("Кількість сторінок PDF змінилася.");
+            using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
+            return page.Text?.Trim() ?? "";
+        }, cancellation);
 
     internal static Task<PhotoPreview> PreviewAsync(string path, int page) => Task.Run(() =>
     {

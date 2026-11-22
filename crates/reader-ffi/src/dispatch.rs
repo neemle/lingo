@@ -120,8 +120,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
                 value(store.retry_pdf_ocr_page(&id, page, &token))
             }
         }
-        Command::CachePdfOcrPage { id, page, lines, token } => {
-            value(store.complete_pdf_ocr_page(&id, page, lines, token.as_deref()))
+        Command::CachePdfOcrPage { id, page, lines, token, text_layer } => {
+            value(store.complete_pdf_page(&id, page, lines, token.as_deref(), text_layer))
         }
         Command::PdfOcrJob { job } => value(store.pdf_ocr_job(job)),
         Command::ImportMixedPdf {

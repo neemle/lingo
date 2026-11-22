@@ -159,8 +159,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
 
     public Task<string> ReadIntakeLinkAsync(string id) => Task.Run(() => client.ReadIntakeLink(id));
 
-    public Task CompletePdfIntakeAsync(string id, string language, string[] pageTexts) =>
-        CompleteIntakeAsync(() => client.CompletePdfIntake(id, language, pageTexts));
+    public Task CompletePdfIntakeAsync(string id, string language, string[] pageTexts, int? deferredFrom = null) =>
+        CompleteIntakeAsync(() => client.CompletePdfIntake(id, language, pageTexts, deferredFrom));
 
     public Task CompleteDocumentIntakeAsync(string id, string language) =>
         CompleteIntakeAsync(() => client.CompleteDocumentIntake(id, language));
@@ -199,8 +199,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
 
     public Task<PdfOcrRequest?> ClaimPdfOcrPageAsync(string id) => Task.Run(() => client.ClaimPdfOcrPage(id));
 
-    public Task CachePdfOcrPageAsync(string id, PdfOcrRequest claim, OcrLine[] lines) =>
-        Task.Run(() => client.CachePdfOcrPage(id, claim, lines));
+    public Task CachePdfOcrPageAsync(string id, PdfOcrRequest claim, OcrLine[] lines, string? textLayer = null) =>
+        Task.Run(() => client.CachePdfOcrPage(id, claim, lines, textLayer));
 
     public Task ReleasePdfOcrPageAsync(string id, PdfOcrRequest claim, bool canceled) =>
         Task.Run(() => client.ReleasePdfOcrPage(id, claim, canceled));

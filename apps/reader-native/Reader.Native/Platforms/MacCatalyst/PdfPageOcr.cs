@@ -22,11 +22,17 @@ internal static class PdfPageOcr
                 if (await session.ClaimPdfOcrPageAsync(document.Id) is not { } claim) return;
                 try
                 {
+                    var textLayer = claim.ReadTextLayer
+                        ? await PdfScan.ReadPageTextAsync(path, claim.Page, count, cancellation) : null;
                     OcrLine[] lines = [];
-                    await PdfScan.RecognizeAsync(path, claim.Language ?? document.Language, count, [claim.Page],
-                        (_, recognized) => lines = recognized, cancellation);
+                    if (string.IsNullOrWhiteSpace(textLayer))
+                    {
+                        textLayer = null;
+                        await PdfScan.RecognizeAsync(path, claim.Language ?? document.Language, count, [claim.Page],
+                            (_, recognized) => lines = recognized, cancellation);
+                    }
                     cancellation.ThrowIfCancellationRequested();
-                    await session.CachePdfOcrPageAsync(document.Id, claim, lines);
+                    await session.CachePdfOcrPageAsync(document.Id, claim, lines, textLayer);
                 }
                 catch
                 {

@@ -99,8 +99,8 @@ public sealed class CoreClient : IDisposable
     public string ReadIntakeLink(string id) =>
         Call<IntakeLink>(new { version = 1, operation = "intake_payload", id }).Url;
 
-    public IntakeItem CompletePdfIntake(string id, string language, string[] pageTexts) =>
-        CompleteIntake(id, new { kind = "pdf", language, pageTexts });
+    public IntakeItem CompletePdfIntake(string id, string language, string[] pageTexts, int? deferredFrom = null) =>
+        CompleteIntake(id, new { kind = "pdf", language, pageTexts, deferredFrom });
 
     public IntakeItem CompleteDocumentIntake(string id, string language) =>
         CompleteIntake(id, new { kind = "document", language });
@@ -132,10 +132,10 @@ public sealed class CoreClient : IDisposable
     public PdfOcrRequest? ClaimPdfOcrPage(string id) =>
         Call<PdfOcrRequest?>(new { version = 1, operation = "claim_pdf_ocr_page", id });
 
-    public void CachePdfOcrPage(string id, PdfOcrRequest claim, OcrLine[] lines) =>
+    public void CachePdfOcrPage(string id, PdfOcrRequest claim, OcrLine[] lines, string? textLayer = null) =>
         Call<JsonElement>(new
         {
-            version = 1, operation = "cache_pdf_ocr_page", id, page = claim.Page, token = claim.Token, lines,
+            version = 1, operation = "cache_pdf_ocr_page", id, page = claim.Page, token = claim.Token, lines, textLayer,
         });
 
     public void ReleasePdfOcrPage(string id, PdfOcrRequest claim, bool canceled) =>

@@ -35,6 +35,7 @@ pub struct PreparedPdfImport {
     lines: Vec<ocr::OcrLine>,
     empty_pages: Vec<u16>,
     needs_cache_merge: bool,
+    deferred_from: Option<u16>,
     extracted: document_layout::Extracted,
 }
 
@@ -95,11 +96,24 @@ pub fn prepare_pdf_import_with_empty_pages(
         lines,
         empty_pages,
         needs_cache_merge: false,
+        deferred_from: None,
         extracted,
     })
 }
 
 impl PreparedPdfImport {
+    pub(crate) fn defer_text_layers_from(&mut self, first_page: u16) -> Result<()> {
+        let pages: Vec<String> = serde_json::from_str(&self.page_text).map_err(storage_error)?;
+        let tail = pages.get(usize::from(first_page)..)
+            .filter(|tail| !tail.is_empty())
+            .ok_or("Немає сторінок PDF для відкладеного читання.")?;
+        if tail.iter().any(|text| !text.is_empty()) {
+            return Err("Відкладені сторінки PDF мають бути без витягнутого тексту.".into());
+        }
+        self.deferred_from = Some(first_page);
+        Ok(())
+    }
+
     pub fn validate_checkpoint_source(&mut self, expected: &str) -> Result<()> {
         if self.hash == expected {
             self.needs_cache_merge = true;
@@ -251,6 +265,7 @@ impl Store {
             lines,
             empty_pages,
             needs_cache_merge,
+            deferred_from,
             extracted,
         } = prepared;
         let tx = self
@@ -307,6 +322,7 @@ impl Store {
             ocr_lines: Some(lines),
             ocr_pdf_pages: Some(page_count),
             pdf_ocr_refresh_pages: Default::default(),
+            pdf_pending_text_pages: deferred_from.map_or_else(Default::default, |start| (start..page_count).collect()),
             pdf_page_starts: extracted.pdf_page_starts,
             created_at: now(),
             source_hash: hash,

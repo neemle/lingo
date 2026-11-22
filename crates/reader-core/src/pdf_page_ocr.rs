@@ -17,6 +17,7 @@ pub enum PdfReadPageState {
     Recognized,
     Empty,
     NeedsOcr,
+    NeedsTextLayer,
     Unavailable,
 }
 
@@ -48,6 +49,7 @@ pub struct PdfOcrRequest {
     pub token: String,
     pub expires_at: i64,
     pub language: String,
+    pub read_text_layer: bool,
 }
 
 pub(crate) fn initialize(db: &Connection) -> Result<()> {
@@ -292,14 +294,17 @@ impl Store {
         let Some(page) = page else {
             return Ok(None);
         };
-        let language = tx.query_row(
-            "SELECT json_extract(body, '$.language') FROM documents WHERE id=?1",
-            [id],
-            |row| row.get(0),
+        let (language, read_text_layer) = tx.query_row(
+            "SELECT json_extract(body, '$.language'),
+                EXISTS(SELECT 1 FROM json_each(body, '$.pdfPendingTextPages') WHERE value=?2)
+             FROM documents WHERE id=?1",
+            params![id, page],
+            |row| Ok((row.get(0)?, row.get(1)?)),
         ).map_err(database_error)?;
         let request = PdfOcrRequest {
             page,
             language,
+            read_text_layer,
             token: uuid::Uuid::new_v4().to_string(),
             expires_at: now + OCR_LEASE_SECONDS,
         };
@@ -350,6 +355,20 @@ impl Store {
         lines: Vec<ocr::OcrLine>,
         token: Option<&str>,
     ) -> Result<Document> {
+        self.complete_pdf_page(id, page, lines, token, None)
+    }
+
+    pub fn complete_pdf_page(
+        &mut self, id: &str, page: u16, lines: Vec<ocr::OcrLine>, token: Option<&str>,
+        text_layer: Option<String>,
+    ) -> Result<Document> {
+        if let Some(text) = &text_layer {
+            if token.is_none() || !lines.is_empty() || text.trim().is_empty()
+                || text.contains('\0') || text.len() > crate::MAX_IMPORT
+            {
+                return Err("Некоректний текстовий шар сторінки PDF.".into());
+            }
+        }
         if lines
             .iter()
             .any(|line| line.page != page || line.correction.is_some())
@@ -372,13 +391,28 @@ impl Store {
                     return Err("Запит OCR для цієї сторінки вже неактивний".into());
                 }
             }
-            let pages = file_originals::native_pdf_page_text(tx, id)?
+            let mut pages = file_originals::native_pdf_page_text(tx, id)?
                 .ok_or("Оригінал PDF для розпізнавання недоступний")?;
             let needs_text = pages
                 .get(usize::from(page))
                 .ok_or("Сторінку PDF не знайдено")?
                 .trim()
                 .is_empty();
+            if let Some(text) = text_layer {
+                if !needs_text || !document.pdf_pending_text_pages.remove(&page) {
+                    return Err("Сторінка PDF не очікує витягання тексту.".into());
+                }
+                pages[usize::from(page)] = text;
+                let page_text = serde_json::to_string(&pages).map_err(database_error)?;
+                tx.execute(
+                    "UPDATE file_originals SET pdf_page_text=?2 WHERE document_id=?1",
+                    params![id, page_text],
+                ).map_err(database_error)?;
+                remove_request(tx, id, page)?;
+                update_focused_page(tx, document, page, pages)?;
+                updated = Some(document.clone());
+                return Ok(true);
+            }
             let cached: bool = tx
                 .query_row(
                     "SELECT EXISTS(SELECT 1 FROM pdf_ocr_completed_pages WHERE document_id=?1 AND page=?2)",
@@ -395,10 +429,11 @@ impl Store {
 
             mark_completed(tx, id, page)?;
             let cleared_refresh = document.pdf_ocr_refresh_pages.remove(&page);
+            let resolved_text_layer = document.pdf_pending_text_pages.remove(&page);
             // An empty rerun must not erase a previous OCR result.
             if lines.is_empty() {
                 updated = Some(document.clone());
-                return Ok(cleared_refresh);
+                return Ok(cleared_refresh || resolved_text_layer);
             }
 
             let existing = document.ocr_lines.get_or_insert_with(Vec::new);
@@ -409,20 +444,25 @@ impl Store {
                 insertion
             };
             existing.splice(insertion..end, lines);
-            reflow_pdf_document(tx, document, pages)?;
-            let focused: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM pdf_reading_positions WHERE document_id=?1 AND page=?2)",
-                params![id, page],
-                |row| row.get(0),
-            ).map_err(database_error)?;
-            if focused {
-                crate::pdf_reading_position::focus_page_text(document, page);
-            }
+            update_focused_page(tx, document, page, pages)?;
             updated = Some(document.clone());
             Ok(true)
         })?;
         updated.ok_or_else(|| "Не вдалося оновити сторінку PDF".to_owned())
     }
+}
+
+fn update_focused_page(db: &Connection, document: &mut Document, page: u16, pages: Vec<String>) -> Result<()> {
+    reflow_pdf_document(db, document, pages)?;
+    let focused: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pdf_reading_positions WHERE document_id=?1 AND page=?2)",
+        params![document.id, page],
+        |row| row.get(0),
+    ).map_err(database_error)?;
+    if focused {
+        crate::pdf_reading_position::focus_page_text(document, page);
+    }
+    Ok(())
 }
 
 /// Bring in previously unseen OCR pages for the same file-backed PDF.
@@ -488,6 +528,7 @@ pub(crate) fn merge_cached_pages(
         return Ok(true);
     }
     for page in adopted_pages {
+        local.pdf_pending_text_pages.remove(&page);
         if stale.contains(&page) {
             local.pdf_ocr_refresh_pages.insert(page);
         } else {
@@ -548,7 +589,9 @@ fn reading_page(
         refresh_pending: file_backed && should_refresh(document, page),
     };
     let Some(start_utf16) = starts[index] else {
-        result.state = if completed.binary_search(&page).is_ok() {
+        result.state = if document.pdf_pending_text_pages.contains(&page) {
+            PdfReadPageState::NeedsTextLayer
+        } else if completed.binary_search(&page).is_ok() {
             PdfReadPageState::Empty
         } else if file_backed {
             PdfReadPageState::NeedsOcr

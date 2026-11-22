@@ -96,6 +96,8 @@ pub struct Document {
     /// Cached pages eligible for a new OCR pass after the document language changes.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub pdf_ocr_refresh_pages: BTreeSet<u16>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub pdf_pending_text_pages: BTreeSet<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pdf_page_starts: Option<Vec<Option<usize>>>,
     pub created_at: i64,
@@ -757,6 +759,7 @@ impl Store {
             ocr_lines,
             ocr_pdf_pages,
             pdf_ocr_refresh_pages: BTreeSet::new(),
+            pdf_pending_text_pages: BTreeSet::new(),
             pdf_page_starts,
             created_at: now(),
             source_hash: hash,

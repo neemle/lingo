@@ -282,6 +282,11 @@ fn validate_manifest(backup: &Manifest) -> Result<()> {
                 || !uuid::Uuid::parse_str(&doc.id).is_ok_and(|id| id.to_string() == doc.id)
                 || u16::try_from(pages.len()).ok() != doc.ocr_pdf_pages
                 || pages.is_empty()
+                || doc.pdf_pending_text_pages.iter().any(|&page| {
+                    !pages.get(usize::from(page)).is_some_and(|text| text.is_empty())
+                        || entry.ocr_completed_pages.binary_search(&page).is_ok()
+                })
+                || doc.ocr_lines.iter().flatten().any(|line| doc.pdf_pending_text_pages.contains(&line.page))
                 || entry.ocr_completed_pages.windows(2).any(|pair| pair[0] >= pair[1])
                 || entry.ocr_completed_pages.iter().chain(&doc.pdf_ocr_refresh_pages).any(|&page| {
                     !pages.get(usize::from(page)).is_some_and(|text| text.trim().is_empty())
@@ -290,7 +295,7 @@ fn validate_manifest(backup: &Manifest) -> Result<()> {
                 return Err("Некоректний запис великого PDF у резервній копії.".into());
             }
         } else if entry.size > MAX_IMPORT as u64 || !entry.ocr_completed_pages.is_empty()
-            || !doc.pdf_ocr_refresh_pages.is_empty()
+            || !doc.pdf_ocr_refresh_pages.is_empty() || !doc.pdf_pending_text_pages.is_empty()
         {
             return Err("Оригінал у резервній копії перевищує допустимий розмір.".into());
         }

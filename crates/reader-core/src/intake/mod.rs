@@ -33,6 +33,8 @@ pub enum IntakeImport {
     Pdf {
         #[serde(rename = "pageTexts")]
         page_texts: Vec<String>,
+        #[serde(rename = "deferredFrom")]
+        deferred_from: Option<u16>,
         language: String,
     },
 }

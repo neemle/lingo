@@ -202,10 +202,10 @@ public partial class ReadingPage
     {
         if (pdfWindow is not { } window) return;
         var page = Array.Find(window.Pages, candidate => candidate.Page == window.Center);
-        var waiting = page is { State: "needsOcr" } or { State: "empty", RefreshPending: true };
+        var waiting = page is { State: "needsOcr" or "needsTextLayer" } or { State: "empty", RefreshPending: true };
         var pendingMessage = pdfOcrError ?? (readerPdfOcr is not null
-            ? "Розпізнаємо текст цієї сторінки…"
-            : "Текст сторінки ще не розпізнано.");
+            ? "Готуємо текст цієї сторінки…"
+            : "Текст сторінки ще не отримано.");
         var message = waiting ? pendingMessage : page?.State switch
         {
             "textLayer" or "recognized" => null,
@@ -252,7 +252,7 @@ public partial class ReadingPage
             && pdfWindow?.Pages.Any(RequiresPdfOcr) == true;
     }
 
-    private static bool RequiresPdfOcr(PdfReadPage page) => page.State == "needsOcr" || page.RefreshPending;
+    private static bool RequiresPdfOcr(PdfReadPage page) => page.State is "needsOcr" or "needsTextLayer" || page.RefreshPending;
 
     private void StartReaderPdfOcr(ReaderSession session, Document document)
     {
