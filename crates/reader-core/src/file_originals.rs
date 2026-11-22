@@ -33,6 +33,8 @@ pub struct PreparedPdfImport {
     page_text: String,
     page_count: u16,
     lines: Vec<ocr::OcrLine>,
+    empty_pages: Vec<u16>,
+    needs_cache_merge: bool,
     extracted: document_layout::Extracted,
 }
 
@@ -44,6 +46,18 @@ pub fn prepare_pdf_import(
     page_text: Vec<String>,
     lines: Vec<ocr::OcrLine>,
 ) -> Result<PreparedPdfImport> {
+    prepare_pdf_import_with_empty_pages(root, name, path, language, page_text, lines, Vec::new())
+}
+
+pub fn prepare_pdf_import_with_empty_pages(
+    root: &Path,
+    name: &str,
+    path: &Path,
+    language: &str,
+    page_text: Vec<String>,
+    lines: Vec<ocr::OcrLine>,
+    mut empty_pages: Vec<u16>,
+) -> Result<PreparedPdfImport> {
     valid_language(language)?;
     let name = pdf_name(name)?;
     let page_count = u16::try_from(page_text.len()).map_err(|_| "PDF містить забагато сторінок")?;
@@ -53,6 +67,12 @@ pub fn prepare_pdf_import(
     if text_bytes > crate::MAX_IMPORT {
         return Err("Текст PDF завеликий".into());
     }
+    if empty_pages.iter().any(|&page| page >= page_count) {
+        return Err("Збережений результат OCR має некоректний номер сторінки.".into());
+    }
+    empty_pages.retain(|&page| page_text[usize::from(page)].trim().is_empty());
+    empty_pages.sort_unstable();
+    empty_pages.dedup();
     let page_text_json = serde_json::to_string(&page_text).map_err(storage_error)?;
     let (text, starts) = pdf_layers::merge_page_text(page_text, &lines)?;
     let extracted = document_layout::from_transcript(text, Some(starts));
@@ -73,8 +93,21 @@ pub fn prepare_pdf_import(
         page_text: page_text_json,
         page_count,
         lines,
+        empty_pages,
+        needs_cache_merge: false,
         extracted,
     })
+}
+
+impl PreparedPdfImport {
+    pub fn validate_checkpoint_source(&mut self, expected: &str) -> Result<()> {
+        if self.hash == expected {
+            self.needs_cache_merge = true;
+            Ok(())
+        } else {
+            Err("Збережений оригінал PDF змінився під час перенесення.".into())
+        }
+    }
 }
 
 pub(crate) fn open_pdf_source(path: &Path) -> Result<(File, u64)> {
@@ -216,6 +249,8 @@ impl Store {
             page_text,
             page_count,
             lines,
+            empty_pages,
+            needs_cache_merge,
             extracted,
         } = prepared;
         let tx = self
@@ -230,8 +265,22 @@ impl Store {
             )
             .optional()
             .map_err(storage_error)?;
-        if let Some(body) = existing {
-            return serde_json::from_str(&body).map_err(storage_error);
+        if let Some(mut body) = existing {
+            if !lines.is_empty() || !empty_pages.is_empty() {
+                let incoming_pages: Vec<String> = serde_json::from_str(&page_text).map_err(storage_error)?;
+                let merged = crate::pdf_page_ocr::merge_cached_pages(
+                    &tx, &hash, &language, &lines, &incoming_pages, &empty_pages,
+                )?;
+                if needs_cache_merge && !merged {
+                    return Err("Наявна копія PDF несумісна з результатами OCR. Чернетку збережено.".into());
+                }
+                body = tx.query_row(
+                    "SELECT body FROM documents WHERE source_hash=?1", [&hash], |row| row.get(0),
+                ).map_err(storage_error)?;
+            }
+            let document = serde_json::from_str(&body).map_err(storage_error)?;
+            tx.commit().map_err(storage_error)?;
+            return Ok(document);
         }
         let id = Uuid::new_v4().to_string();
         let path = original_path(&self.file_original_directory, &id)?;
@@ -281,6 +330,9 @@ impl Store {
             params![document.id, name, size as i64, page_text],
         )
         .map_err(storage_error)?;
+        for page in empty_pages {
+            crate::pdf_page_ocr::mark_completed(&tx, &document.id, page)?;
+        }
         revision.insert(&tx)?;
         // After publishing the source, synchronize the entry before committing its reference.
         verify_root(&self.file_original_directory)?;

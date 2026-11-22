@@ -87,6 +87,8 @@ fn validate(command: &Command) -> Result<()> {
             name,
             page_texts,
             lines,
+            empty_pages,
+            source_hash,
             ..
         } if path.is_empty()
             || path.len() > 4096
@@ -96,7 +98,11 @@ fn validate(command: &Command) -> Result<()> {
             || page_texts.is_empty()
             || page_texts.len() > usize::from(u16::MAX)
             || page_texts.iter().map(String::len).sum::<usize>() > reader_core::MAX_IMPORT
-            || lines.len() > 8192 =>
+            || lines.len() > 8192
+            || empty_pages.len() > page_texts.len()
+            || source_hash.as_ref().is_some_and(|hash| {
+                hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }) =>
         {
             Err(Error::new(
                 "invalid_argument",

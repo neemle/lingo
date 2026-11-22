@@ -144,8 +144,14 @@ public sealed class CoreClient : IDisposable
             version = 1, operation = "retry_pdf_ocr_page", id, page = claim.Page, token = claim.Token, canceled,
         });
 
-    public Document ImportPdfFile(string name, string path, string language, string[] pageTexts, OcrLine[] lines) =>
-        CallIndependent<Document>(new { version = 1, operation = "import_pdf_file", name, path, language, pageTexts, lines });
+    public Document ImportPdfFile(string name, string path, string language, string[] pageTexts, OcrLine[] lines,
+        int[]? emptyPages = null, string? sourceHash = null) =>
+        CallIndependent<Document>(new
+        {
+            version = 1, operation = "import_pdf_file", name, path, language, pageTexts, lines,
+            emptyPages = emptyPages ?? [], sourceHash,
+        });
+
     public Document Import(string name, ReadOnlySpan<byte> bytes, string language, string? sourceUrl = null)
     {
         if (bytes.Length is 0 or > MaxImportBytes)

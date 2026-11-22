@@ -104,21 +104,27 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         language,
         page_texts,
         lines,
+        empty_pages,
+        source_hash,
     } = command
     {
         let root = registry::lock()?
             .store(handle)?
             .pdf_original_root()
             .to_owned();
-        let prepared = reader_core::file_originals::prepare_pdf_import(
+        let mut prepared = reader_core::file_originals::prepare_pdf_import_with_empty_pages(
             &root,
             &name,
             std::path::Path::new(&path),
             &language,
             page_texts,
             lines,
+            empty_pages,
         )
         .map_err(gateway::domain)?;
+        if let Some(expected) = source_hash {
+            prepared.validate_checkpoint_source(&expected).map_err(gateway::domain)?;
+        }
         let document = {
             let mut state = registry::lock()?;
             catch_unwind(AssertUnwindSafe(|| state.import_pdf_file(handle, prepared)))

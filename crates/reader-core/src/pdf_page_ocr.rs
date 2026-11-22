@@ -364,39 +364,54 @@ pub(crate) fn merge_backup_cache(
     incoming_pages: &[String],
     completed: &[u16],
 ) -> Result<()> {
+    merge_cached_pages(
+        db, &incoming.source_hash, &incoming.language,
+        incoming.ocr_lines.as_deref().unwrap_or_default(), incoming_pages, completed,
+    ).map(|_| ())
+}
+
+pub(crate) fn merge_cached_pages(
+    db: &Connection,
+    hash: &str,
+    language: &str,
+    lines: &[ocr::OcrLine],
+    incoming_pages: &[String],
+    completed: &[u16],
+) -> Result<bool> {
     let matched: Option<(String, String)> = db
         .query_row(
             "SELECT documents.body, file_originals.pdf_page_text
              FROM documents JOIN file_originals ON file_originals.document_id=documents.id
              WHERE documents.source_hash=?1",
-            [&incoming.source_hash],
+            [hash],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
         .map_err(database_error)?;
     let Some((body, page_text)) = matched else {
-        return Ok(());
+        return Ok(false);
     };
     let mut local: Document = serde_json::from_str(&body).map_err(database_error)?;
     let pages: Vec<String> = serde_json::from_str(&page_text).map_err(database_error)?;
-    if local.language != incoming.language || pages.as_slice() != incoming_pages {
-        return Ok(());
+    if local.language != language || pages.as_slice() != incoming_pages {
+        return Ok(false);
     }
 
     for &page in completed {
         mark_completed(db, &local.id, page)?;
     }
-    let added: Vec<_> = incoming
-        .ocr_lines
+    let added: Vec<_> = lines
         .iter()
-        .flatten()
         .filter(|line| !has_ocr_lines(&local, line.page))
         .cloned()
         .collect();
     if added.is_empty() {
-        return Ok(());
+        return Ok(true);
     }
 
+    for page in added.iter().map(|line| line.page).collect::<std::collections::BTreeSet<_>>() {
+        remove_request(db, &local.id, page)?;
+    }
     let lines = local.ocr_lines.get_or_insert_with(Vec::new);
     lines.extend(added);
     lines.sort_by_key(|line| line.page);
@@ -407,7 +422,7 @@ pub(crate) fn merge_backup_cache(
         params![body, local.id],
     )
     .map_err(database_error)?;
-    Ok(())
+    Ok(true)
 }
 
 fn reflow_pdf_document(db: &Connection, document: &mut Document, pages: Vec<String>) -> Result<()> {

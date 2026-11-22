@@ -78,6 +78,10 @@ pub enum Command {
         #[serde(rename = "pageTexts")]
         page_texts: Vec<String>,
         lines: Vec<reader_core::ocr::OcrLine>,
+        #[serde(default, rename = "emptyPages")]
+        empty_pages: Vec<u16>,
+        #[serde(rename = "sourceHash")]
+        source_hash: Option<String>,
     },
     ImportImage {
         name: String,
