@@ -22,8 +22,10 @@ public partial class ReadingPage
     private int detachedAudioRun;
     private Action? checkpointDetachedSpeech;
     private CancellationTokenSource? detachedAudioCancellation;
+    private CancellationTokenSource? detachedSpeechTravel;
     private int detachedTranslationRun;
 
+#if MACCATALYST
     private void ShowDetachedPdfPage(Document document, PdfReadPage page)
     {
         TargetLanguage.IsEnabled = !AppState.Session.Busy;
@@ -32,8 +34,9 @@ public partial class ReadingPage
 
         StopDetachedPdfReader();
         detachedAddress = address;
-        _ = LoadDetachedSentenceAsync(address, position: null);
+        detachedInitialSentence = LoadDetachedSentenceAsync(address, position: null, automatic: true);
     }
+#endif
 
     private void StopDetachedPdfReader()
     {
@@ -46,12 +49,14 @@ public partial class ReadingPage
         ResetDetachedTranslation();
     }
 
-    private async Task LoadDetachedSentenceAsync(DetachedAddress address, int? position, string? sentenceId = null)
+    private async Task LoadDetachedSentenceAsync(
+        DetachedAddress address, int? position, string? sentenceId = null, bool automatic = false)
     {
+        if (!automatic) CancelDetachedSpeechTravel();
         var request = ++detachedSentenceRequest;
         loadingDetachedSentence = true;
         detachedSelection = null;
-        ClearDetachedSpeech();
+        if (!automatic) ClearDetachedSpeech();
         ResetDetachedTranslation();
         try
         {
@@ -356,7 +361,8 @@ public partial class ReadingPage
 
     private async Task SpeakDetachedAsync(bool resumePlayback)
     {
-        if (loadingDetachedSentence || detachedAddress is not { } address || detachedSentence is not { } current) return;
+        CancelDetachedSpeechTravel();
+        if (loadingDetachedSentence || detachedAddress is not { } address || detachedSentence is null) return;
         if (speakingDetachedSentence)
         {
             if (detachedPaused ? detachedSpeech.Resume() : detachedSpeech.Pause())
@@ -372,8 +378,43 @@ public partial class ReadingPage
         using var cancellation = new CancellationTokenSource();
         detachedAudioCancellation = cancellation;
         var token = cancellation.Token;
-        var run = ++detachedAudioRun;
         speakingDetachedSentence = true;
+        var advancePage = false;
+        try
+        {
+            while (ReferenceEquals(detachedAudioCancellation, cancellation) &&
+                detachedAddress == address && detachedSentence is { } sentence)
+            {
+                var completed = await PlayDetachedSentenceAsync(address, sentence,
+                    resumePlayback ? sentence.SpeechResume : null, token);
+                resumePlayback = false;
+                if (!completed || !ContinueSpeech.IsChecked || !readingPageActive ||
+                    !ReferenceEquals(detachedAudioCancellation, cancellation)) break;
+
+                var next = sentence.Position + 1;
+                if (next >= sentence.Total)
+                {
+                    advancePage = true;
+                    break;
+                }
+
+                await LoadDetachedSentenceAsync(address, next, automatic: true);
+                if (detachedSentence?.Position != next) break;
+            }
+        }
+        finally
+        {
+            if (ReferenceEquals(detachedAudioCancellation, cancellation)) ClearDetachedSpeech();
+        }
+
+        if (advancePage && readingPageActive && detachedAddress == address)
+            await ContinueDetachedOnFollowingPageAsync(address);
+    }
+
+    private async Task<bool> PlayDetachedSentenceAsync(DetachedAddress address, DetachedPdfSentence current,
+        SpeechResume? saved, CancellationToken token)
+    {
+        var run = ++detachedAudioRun;
         var ratePercent = SpeechRatePercent;
         var rate = ratePercent / 100f;
         detachedSpeech.Rate = rate;
@@ -381,7 +422,6 @@ public partial class ReadingPage
         var session = AppState.Session;
         var sentence = current.Sentence;
         var hash = SpeechProgress.TextHash(sentence);
-        var saved = resumePlayback ? current.SpeechResume : null;
         SpeechResume? pending = null;
         IDispatcherTimer? timer = null;
         var lastSavedAt = Environment.TickCount64 - 2000;
@@ -407,7 +447,7 @@ public partial class ReadingPage
         try
         {
             await loadingVoices.WaitAsync(token);
-            if (run != detachedAudioRun) return;
+            if (run != detachedAudioRun) return false;
             var voice = SelectedVoice();
             string? status;
             if (voice?.Engine is { } engine)
@@ -418,7 +458,7 @@ public partial class ReadingPage
                     ? ModelResumePosition(saved, voice, current.Language, ratePercent) ?? 0 : 0;
                 DetachedSentenceStatus.Text = "Готуємо локальне озвучення…";
                 var audio = await PrepareAudio(session, key, token, address.Page).WaitAsync(token);
-                if (run != detachedAudioRun) return;
+                if (run != detachedAudioRun) return false;
                 DetachedSentenceStatus.Text = $"Речення {current.Position + 1} із {current.Total}";
                 status = await detachedSpeech.PlayWaveAsync(audio, startAtMs, actualStartMs =>
                 {
@@ -445,7 +485,7 @@ public partial class ReadingPage
             {
                 detachedSpeech.PreferredVoice = voice?.Id == SystemDefaultVoice ? null : voice?.Id;
                 var pronounced = await PrepareSystemSpeechAsync(session, current.Language, sentence.Text);
-                if (run != detachedAudioRun) return;
+                if (run != detachedAudioRun) return false;
                 var startAt = SpeechProgress.ResumeOffset(sentence, saved) ?? 0;
                 checkpointDetachedSpeech = () => { if (pending is { } resume) Save(resume); };
                 var input = SourceRanges.ProjectPronunciation(sentence.Text, pronounced, startAt, (start, length) =>
@@ -460,14 +500,14 @@ public partial class ReadingPage
                     }));
                 status = await detachedSpeech.SpeakAsync(input.Text, current.Language, input.Boundary);
             }
-            if (run != detachedAudioRun) return;
+            if (run != detachedAudioRun) return false;
             if (status == LocalSpeech.CompletedStatus)
             {
                 checkpointDetachedSpeech = null;
                 Save(null);
+                return true;
             }
-            else if (status is not null)
-                DetachedSentenceStatus.Text = status;
+            if (status is not null) DetachedSentenceStatus.Text = status;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) {}
         catch (Exception error)
@@ -477,8 +517,22 @@ public partial class ReadingPage
         finally
         {
             timer?.Stop();
-            if (run == detachedAudioRun) ClearDetachedSpeech();
+            if (run == detachedAudioRun)
+            {
+                checkpointDetachedSpeech?.Invoke();
+                checkpointDetachedSpeech = null;
+                detachedAudioRun++;
+                DetachedPdfText.SpokenWord = null;
+            }
         }
+        return false;
+    }
+
+    private void CancelDetachedSpeechTravel()
+    {
+        var running = detachedSpeechTravel;
+        detachedSpeechTravel = null;
+        running?.Cancel();
     }
 
     private void ClearDetachedSpeech()

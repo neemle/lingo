@@ -75,6 +75,7 @@ public partial class ReadingPage
 
     private void StopReaderPdf()
     {
+        CancelDetachedSpeechTravel();
 #if MACCATALYST
         pdfSnapshot = null;
         pdfWindow = null;
@@ -93,6 +94,8 @@ public partial class ReadingPage
     private Task pdfWindowRead = Task.CompletedTask;
     private (string Id, int Page, string Language)? pdfOcrFocus;
     private CancellationTokenSource? readerPdfOcr;
+    private Task readerPdfOcrTask = Task.CompletedTask;
+    private Task detachedInitialSentence = Task.CompletedTask;
     private string? pdfOcrError;
     private DateTimeOffset pdfOcrRetryAt;
     private bool movingPdfPage;
@@ -166,8 +169,10 @@ public partial class ReadingPage
     private bool IsCurrentPdfSnapshot(ReaderSession session, Document document) =>
         readingPageActive && ReferenceEquals(pdfSnapshot, document) && ReferenceEquals(session.Document, document);
 
-    private async Task OpenPdfPageAsync(int page)
+    private async Task OpenPdfPageAsync(int page, CancellationTokenSource? narration = null)
     {
+        if (narration is null) CancelDetachedSpeechTravel();
+        else if (!ReferenceEquals(detachedSpeechTravel, narration)) return;
         var session = AppState.Session;
         if (movingPdfPage || pdfWindowLoading || session.Busy || pdfWindow is not { } window ||
             session.Document is not { } document || document.Id != pdfSnapshot?.Id) return;
@@ -200,6 +205,84 @@ public partial class ReadingPage
                 }
                 UpdatePdfPageButtons();
             }
+        }
+    }
+
+    private async Task ContinueDetachedOnFollowingPageAsync(DetachedAddress address)
+    {
+        using var narration = new CancellationTokenSource();
+        CancelDetachedSpeechTravel();
+        detachedSpeechTravel = narration;
+        var token = narration.Token;
+        var session = AppState.Session;
+        try
+        {
+            while (readingPageActive && ContinueSpeech.IsChecked &&
+                session.Document?.Id == address.Document &&
+                pdfWindow is { } window && window.Center + 1 < window.PageCount)
+            {
+                token.ThrowIfCancellationRequested();
+                var nextPage = window.Center + 1;
+                await OpenPdfPageAsync(nextPage, narration);
+                token.ThrowIfCancellationRequested();
+                if (pdfWindow is not { } opened || opened.Center != nextPage) return;
+
+                var page = opened.Pages.FirstOrDefault(candidate => candidate.Page == nextPage);
+                if (page is { State: "needsOcr" or "needsTextLayer" } or { State: "empty", RefreshPending: true })
+                {
+                    if (readerPdfOcr is null) return;
+                    await readerPdfOcrTask.WaitAsync(token);
+                    await pdfWindowRead.WaitAsync(token);
+                    page = pdfWindow?.Pages.FirstOrDefault(candidate => candidate.Page == nextPage);
+                }
+                if (!readingPageActive || session.Document?.Id != address.Document || !ContinueSpeech.IsChecked)
+                    return;
+                if (page is { State: "empty", RefreshPending: false }) continue;
+
+                if (page is { State: "detached" } &&
+                    detachedAddress is { } target && target.Document == address.Document && target.Page == nextPage)
+                {
+                    await detachedInitialSentence.WaitAsync(token);
+                    if (detachedSentence is { Position: > 0 } && detachedAddress == target)
+                        await LoadDetachedSentenceAsync(target, 0, automatic: true).WaitAsync(token);
+                    token.ThrowIfCancellationRequested();
+                    if (ReferenceEquals(detachedSpeechTravel, narration) && ContinueSpeech.IsChecked &&
+                        detachedAddress == target && detachedSentence is { Position: 0 })
+                    {
+                        detachedSpeechTravel = null;
+                        _ = SpeakDetachedAsync(resumePlayback: false);
+                    }
+                }
+                else if (page?.Span is { } span)
+                {
+                    if (session.Sentence is not { } selected ||
+                        selected.StartUtf16 >= span.EndUtf16 || selected.EndUtf16 <= span.StartUtf16)
+                    {
+                        if (!await session.OpenPdfReadingPageAsync(address.Document, revisionId: null, page: nextPage))
+                            return;
+                        await pdfWindowRead.WaitAsync(token);
+                    }
+                    token.ThrowIfCancellationRequested();
+                    if (readingPageActive && ContinueSpeech.IsChecked && session.Document?.Id == address.Document &&
+                        session.Sentence is { } sentence && sentence.StartUtf16 < span.EndUtf16 &&
+                        sentence.EndUtf16 > span.StartUtf16)
+                    {
+                        detachedSpeechTravel = null;
+                        await SpeakAsync();
+                    }
+                }
+                return;
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) {}
+        catch (Exception error)
+        {
+            if (ReferenceEquals(detachedSpeechTravel, narration) && readingPageActive)
+                PdfPageStatus.Text = error.Message;
+        }
+        finally
+        {
+            if (ReferenceEquals(detachedSpeechTravel, narration)) detachedSpeechTravel = null;
         }
     }
 
@@ -273,7 +356,7 @@ public partial class ReadingPage
             !window.Pages.Any(RequiresPdfOcr)) return;
         var run = new CancellationTokenSource();
         readerPdfOcr = run;
-        _ = RecognizeReaderPdfAsync(session, document, window.Center, run);
+        readerPdfOcrTask = RecognizeReaderPdfAsync(session, document, window.Center, run);
     }
 
     private async Task RecognizeReaderPdfAsync(
@@ -321,6 +404,8 @@ public partial class ReadingPage
         readerPdfOcr = null;
         run?.Cancel();
     }
+#else
+    private static Task ContinueDetachedOnFollowingPageAsync(DetachedAddress address) => Task.CompletedTask;
 #endif
 
     private void RetryPdfOcrClicked(object? sender, EventArgs args)
