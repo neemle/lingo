@@ -4,7 +4,6 @@ use serde_json::Value;
 
 use crate::{now, ocr::OcrLine, valid_language, Document, Result, Store};
 
-const MAX_PAGES: u16 = 40;
 const MAX_PAGE_RESULT: usize = 32 * 1024 * 1024;
 const JOB_COLUMNS: &str = "id, kind, input_hash, name, language, engine_version, page_count,
     missing_pages, attempts, state, document_id,
@@ -150,7 +149,7 @@ impl Store {
                     || name.contains(['\0', '/', '\\'])
                     || engine_version.is_empty()
                     || engine_version.len() > 128
-                    || !(1..=MAX_PAGES).contains(&pages)
+                    || pages == 0
                     || missing_pages.is_empty()
                     || missing_pages.iter().any(|&page| page >= pages)
                     || missing_pages.windows(2).any(|pair| pair[0] >= pair[1])
@@ -333,7 +332,7 @@ mod tests {
                 .unwrap()
         };
         let create = json!({"action":"create", "hash":"a".repeat(64), "name":"scan.pdf",
-            "language":"uk", "engineVersion":"native/1", "pages":3, "missingPages":[0,2]});
+            "language":"uk", "engineVersion":"native/1", "pages":42, "missingPages":[0,41]});
         let job = request(&mut store, create.clone());
         let id = &job["id"];
         assert_eq!(job["state"], "pending");
@@ -343,7 +342,7 @@ mod tests {
         );
         request(
             &mut store,
-            json!({"action":"save_page", "id":id,"page":0,"lines":[]}),
+            json!({"action":"save_page", "id":id,"page":41,"lines":[]}),
         );
         drop(store);
 
@@ -352,11 +351,11 @@ mod tests {
         assert_eq!(jobs[0]["savedPages"], 1);
         assert_eq!(jobs[0]["attempts"], 1);
         assert_eq!(
-            request(&mut store, json!({"action":"read_page","id":id,"page":0})),
+            request(&mut store, json!({"action":"read_page","id":id,"page":41})),
             json!([])
         );
         assert_eq!(
-            request(&mut store, json!({"action":"read_page","id":id,"page":2})),
+            request(&mut store, json!({"action":"read_page","id":id,"page":0})),
             Value::Null
         );
         request(
@@ -377,7 +376,7 @@ mod tests {
         );
         assert_eq!(request(&mut store, create)["state"], "canceled");
         assert_eq!(
-            request(&mut store, json!({"action":"read_page","id":id,"page":0})),
+            request(&mut store, json!({"action":"read_page","id":id,"page":41})),
             Value::Null
         );
     }

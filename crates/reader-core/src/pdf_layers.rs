@@ -6,7 +6,7 @@ use crate::{
 };
 
 pub fn text_pages(name: &str, bytes: &[u8], expected: u16) -> Result<Vec<String>> {
-    if !(1..=40).contains(&expected)
+    if expected == 0
         || bytes.len() > MAX_IMPORT
         || !bytes.starts_with(b"%PDF-")
         || !Path::new(name)
@@ -14,27 +14,10 @@ pub fn text_pages(name: &str, bytes: &[u8], expected: u16) -> Result<Vec<String>
             .and_then(|suffix| suffix.to_str())
             .is_some_and(|suffix| suffix.eq_ignore_ascii_case("pdf"))
     {
-        return Err("Для розпізнавання потрібен PDF до 20 МБ і 40 сторінок".into());
+        return Err("Для розпізнавання потрібен PDF до 20 МБ із принаймні однією сторінкою".into());
     }
 
-    let pages = pdf_extract::extract_text_from_mem_by_pages(bytes)
-        .map_err(|error| format!("Не вдалося прочитати текстові шари PDF: {error}"))?;
-    if pages.len() != usize::from(expected) {
-        return Err("Не вдалося звірити сторінки PDF з текстовим шаром".into());
-    }
-
-    let mut result = Vec::with_capacity(pages.len());
-    let mut total: usize = 0;
-    for page in pages {
-        let text =
-            page.trim_matches(|c: char| c.is_whitespace() || c.is_control() || c == '\u{fffd}');
-        total = total.checked_add(text.len()).ok_or("Текст PDF завеликий")?;
-        if total > MAX_IMPORT {
-            return Err("Текст PDF завеликий".into());
-        }
-        result.push(text.to_owned());
-    }
-    Ok(result)
+    crate::document_layout::pdf_text_pages(bytes, expected)
 }
 
 pub fn merge(

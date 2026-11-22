@@ -87,7 +87,7 @@ pub fn recognized_text(
         .unwrap_or_default()
         .to_ascii_lowercase();
     let valid = match (extension.as_str(), pdf_pages) {
-        ("pdf", Some(1..=40)) => bytes.starts_with(b"%PDF-"),
+        ("pdf", Some(1..)) => bytes.starts_with(b"%PDF-"),
         ("png", None) => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
         ("jpg" | "jpeg", None) => bytes.starts_with(b"\xff\xd8\xff"),
         ("webp", None) => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"),

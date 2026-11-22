@@ -417,11 +417,12 @@ fn mixed_pdf_uses_embedded_text_and_keeps_existing_annotations() {
         call(
             handle,
             json!({
-                "version":1,"operation":"pdf_pages_needing_ocr","name":"mixed.pdf","bytes":pdf,"pages":2
+                "version":1,"operation":"pdf_pages_needing_ocr","name":"mixed.pdf","bytes":pdf,"pages":42
             }),
         )
     };
-    assert_eq!(inspect(store.handle)["data"], json!([0]));
+    let missing: Vec<_> = (0..42).filter(|&page| page != 1).collect();
+    assert_eq!(inspect(store.handle)["data"], json!(missing));
 
     let old = call(
         store.handle,
@@ -453,9 +454,10 @@ fn mixed_pdf_uses_embedded_text_and_keeps_existing_annotations() {
         call(
             store.handle,
             json!({
-                "version":1,"operation":"import_mixed_pdf","name":"mixed.pdf","bytes":pdf,"language":"en","pages":2,
+                "version":1,"operation":"import_mixed_pdf","name":"mixed.pdf","bytes":pdf,"language":"en","pages":42,
                 "lines":[{"page":page,"text":"Scanned first page.","x":0.1,"y":0.1,"width":0.7,"height":0.1,"confidence":null,
-                    "words":[{"text":"first","x":0.3,"y":0.1,"width":0.2,"height":0.1,"rawStartUtf16":8}]}]
+                    "words":[{"text":"first","x":0.3,"y":0.1,"width":0.2,"height":0.1,"rawStartUtf16":8}]},
+                    {"page":41,"text":"Scanned last page.","x":0.1,"y":0.1,"width":0.7,"height":0.1,"confidence":null}]
             }),
         )
     };
@@ -465,9 +467,13 @@ fn mixed_pdf_uses_embedded_text_and_keeps_existing_annotations() {
     assert_eq!(mixed["data"]["id"], *id);
     assert_eq!(
         mixed["data"]["text"],
-        "Scanned first page.\n\nEmbedded second page."
+        "Scanned first page.\n\nEmbedded second page.\n\nScanned last page."
     );
-    assert_eq!(mixed["data"]["pdfPageStarts"], json!([0, 21]));
+    let mut starts = vec![None; 42];
+    starts[0] = Some(0);
+    starts[1] = Some(21);
+    starts[41] = Some(44);
+    assert_eq!(mixed["data"]["pdfPageStarts"], json!(starts));
     assert_eq!(
         mixed["data"]["ocrLines"][0]["words"][0]["sourceSpan"],
         json!({"startUtf8":8,"endUtf8":13,"startUtf16":8,"endUtf16":13})
@@ -496,14 +502,17 @@ fn mixed_pdf_uses_embedded_text_and_keeps_existing_annotations() {
 fn mixed_pdf_fixture() -> Vec<u8> {
     use std::io::Write;
     let content = "BT /F1 24 Tf 50 700 Td (Embedded second page.) Tj ET";
-    let objects = [
+    let kids: Vec<_> = (7..47).map(|object| format!("{object} 0 R")).collect();
+    let blank_page = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>";
+    let mut objects = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
-        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_owned(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_owned(),
+        format!("<< /Type /Pages /Kids [3 0 R 4 0 R {}] /Count 42 >>", kids.join(" ")),
+        blank_page.to_owned(),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>".to_owned(),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
     ];
+    objects.extend((0..40).map(|_| blank_page.to_owned()));
     let mut pdf = b"%PDF-1.4\n".to_vec();
     let mut offsets = Vec::new();
     for (index, object) in objects.iter().enumerate() {
@@ -511,13 +520,14 @@ fn mixed_pdf_fixture() -> Vec<u8> {
         writeln!(&mut pdf, "{} 0 obj\n{object}\nendobj", index + 1).unwrap();
     }
     let xref = pdf.len();
-    writeln!(&mut pdf, "xref\n0 7\n0000000000 65535 f ").unwrap();
+    let size = objects.len() + 1;
+    writeln!(&mut pdf, "xref\n0 {size}\n0000000000 65535 f ").unwrap();
     for offset in offsets {
         writeln!(&mut pdf, "{offset:010} 00000 n ").unwrap();
     }
     writeln!(
         &mut pdf,
-        "trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF"
+        "trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF"
     )
     .unwrap();
     pdf

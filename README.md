@@ -104,10 +104,9 @@ recognition confidence, and raw OCR output. An edit that would detach an annotat
 With a grammar package installed, **Підказки** shows observed alternatives for unfamiliar words in the selected
 line. Select a replacement to apply it. The reader checks for common OCR confusions and one-character edits.
 
-For a scanned or mixed PDF, use **Розпізнати PDF** in the library. It reads each available text layer
-and runs OCR only on pages without extractable text, up to 40 pages. The original is preserved, and
-the reader can open the source page for the active sentence. Ordinary PDF import still reads only
-the embedded text layer.
+Import a scanned or mixed PDF from the library, or use **Розпізнати PDF** to pick one directly.
+The reader extracts embedded text and runs OCR only on pages without it. You can pause and resume OCR
+from the library. The reader preserves the original and opens the source page for the active sentence.
 
 Mac Catalyst uses Apple Vision. The installed Windows MSIX uses the system recognition language for OCR.
 The unpackaged Windows build can read and preview photos restored from a backup.

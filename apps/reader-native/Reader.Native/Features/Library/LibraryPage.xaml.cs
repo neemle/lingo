@@ -147,22 +147,17 @@ public partial class LibraryPage : ContentPage
         {
             ImportStatus.Text = "Відкриваємо PDF…";
             var pages = await PdfScan.PageCountAsync(bytes);
-            if (!scanPdf && pages > PdfRecognition.MaxPages)
-                await session.ImportAsync(file.Name, bytes, language);
-            else
+            PdfRecognition.CheckPageCount(pages);
+            var missing = await session.PdfPagesNeedingOcrAsync(file.Name, bytes, pages);
+            if (missing.Length > 0)
             {
-                PdfRecognition.CheckPageCount(pages);
-                var missing = await session.PdfPagesNeedingOcrAsync(file.Name, bytes, pages);
-                if (missing.Length > 0)
-                {
-                    var checkpoint = await Task.Run(() => PdfOcrCheckpoint.Create(file.Name, bytes, language, pages, missing));
-                    if (pdfStaged is not null) await pdfStaged();
-                    ImportStatus.Text = "";
-                    return await RunPdfOcrAsync(checkpoint, bytes);
-                }
-                await session.WaitUntilIdleAsync();
-                await session.ImportMixedPdfAsync(file.Name, bytes, language, [], pages);
+                var checkpoint = await Task.Run(() => PdfOcrCheckpoint.Create(file.Name, bytes, language, pages, missing));
+                if (pdfStaged is not null) await pdfStaged();
+                ImportStatus.Text = "";
+                return await RunPdfOcrAsync(checkpoint, bytes);
             }
+            await session.WaitUntilIdleAsync();
+            await session.ImportMixedPdfAsync(file.Name, bytes, language, [], pages);
         }
         else if (ImageExtensions.Contains(extension))
         {

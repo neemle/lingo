@@ -469,7 +469,12 @@ impl OutputDev for PageOutput<'_> {
     }
 }
 
-fn parse_pdf(bytes: &[u8]) -> Result<Extracted> {
+struct PdfText {
+    text: String,
+    boundaries: Vec<(usize, usize)>,
+}
+
+fn extract_pdf_text(bytes: &[u8]) -> Result<PdfText> {
     if !bytes.starts_with(b"%PDF-") {
         return Err("Некоректний PDF".into());
     }
@@ -488,8 +493,33 @@ fn parse_pdf(bytes: &[u8]) -> Result<Extracted> {
         OutputError::FormatError(_) => "Витягнутий текст PDF завеликий".into(),
         error => pdf_error(&error),
     })?;
-    let boundaries = output.boundaries;
-    let text = text.into_inner();
+    Ok(PdfText {
+        boundaries: output.boundaries,
+        text: text.into_inner(),
+    })
+}
+
+pub(crate) fn pdf_text_pages(bytes: &[u8], expected: u16) -> Result<Vec<String>> {
+    let PdfText { text, boundaries } = extract_pdf_text(bytes)?;
+    if boundaries.len() != usize::from(expected) {
+        return Err("Не вдалося звірити сторінки PDF з текстовим шаром".into());
+    }
+    Ok(boundaries
+        .iter()
+        .enumerate()
+        .map(|(index, &(_, start))| {
+            let end = boundaries
+                .get(index + 1)
+                .map_or(text.len(), |&(_, end)| end);
+            text[start..end]
+                .trim_matches(|c: char| c.is_whitespace() || c.is_control() || c == '\u{fffd}')
+                .to_owned()
+        })
+        .collect())
+}
+
+fn parse_pdf(bytes: &[u8]) -> Result<Extracted> {
+    let PdfText { text, boundaries } = extract_pdf_text(bytes)?;
     let mut page_starts = vec![None; boundaries.len()];
     let mut ranges = Vec::new();
     let mut previous = 0;
