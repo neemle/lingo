@@ -51,6 +51,60 @@ const PACKS: &[Pack] = &[
         bytes: 36_040_429,
         sha256: "2b8074025c192314a3906b6bb33587ff1c97f06b398f422308001561124b9586",
     },
+    Pack {
+        language: "de",
+        name: "German",
+        bytes: 99_294_210,
+        sha256: "e16ea346863a1d0bc9e0533f83015b3847ec8b0a065ad2620b76a19bb005b520",
+    },
+    Pack {
+        language: "es",
+        name: "Spanish",
+        bytes: 102_536_460,
+        sha256: "b25cd18584e510c516e4c9afac42a87e5acfd6bc1a13ea96a94057899521a427",
+    },
+    Pack {
+        language: "it",
+        name: "Italian",
+        bytes: 76_647_674,
+        sha256: "edfb787898b80c6ed20db5601741c8d42ad6f59c1c618e396ab34c702a448b63",
+    },
+    Pack {
+        language: "pt",
+        name: "Portuguese",
+        bytes: 60_132_567,
+        sha256: "0db87ddd508032c4e986fe818826801c9b167b2ee4f8315763166f0fa4014480",
+    },
+    Pack {
+        language: "pl",
+        name: "Polish",
+        bytes: 89_394_855,
+        sha256: "c620e7fc1fe4287720cbb72939e5fa0e4cd95797c1719a5c480b16de5d959bd0",
+    },
+    Pack {
+        language: "nl",
+        name: "Dutch",
+        bytes: 30_804_351,
+        sha256: "17499b37f390857aa36aa59cff7370d09158db15b3c09ee2dc9e8d7790c4eb4d",
+    },
+    Pack {
+        language: "cs",
+        name: "Czech",
+        bytes: 24_290_587,
+        sha256: "059a3ce05418761b751f22d588b58b46adc927d8dbccb50cc53cb9962b6b0037",
+    },
+    Pack {
+        language: "ro",
+        name: "Romanian",
+        bytes: 39_931_394,
+        sha256: "820a084160beef8856a268ebdc9488ba2a7f2c1aa62d18fb9484a006f0c0b652",
+    },
+    Pack {
+        language: "sv",
+        name: "Swedish",
+        bytes: 34_178_064,
+        sha256: "b9c5b0f7dfe4f4895582449c5970c0efaa232f9861f5fe3527012555a234ae91",
+    },
 ];
 
 #[derive(Debug, Serialize)]
