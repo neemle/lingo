@@ -52,11 +52,38 @@ pub struct DictionaryExample {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DictionarySourceSelection {
+    pub(crate) start_utf16: usize,
+    pub(crate) text: String,
+}
+
+impl DictionarySourceSelection {
+    pub(crate) fn from_selection(start_utf16: usize, text: &str) -> Option<Self> {
+        let trimmed = text.trim_start();
+        let start_utf16 = start_utf16.checked_add(text[..text.len() - trimmed.len()].encode_utf16().count())?;
+        let text = trimmed.trim_end().to_owned();
+        let selection = Self { start_utf16, text };
+        selection.is_valid(start_utf16).then_some(selection)
+    }
+
+    fn is_valid(&self, sentence_start: usize) -> bool {
+        self.start_utf16 >= sentence_start
+            && self.start_utf16 <= crate::MAX_IMPORT
+            && !self.text.trim().is_empty()
+            && self.text.len() <= 500
+            && !self.text.contains('\0')
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DictionarySentenceAnchor {
     pub(crate) sentence_id: String,
     pub(crate) revision_id: String,
     pub(crate) page: Option<u16>,
     pub(crate) sentence_start_utf16: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) selection: Option<DictionarySourceSelection>,
 }
 
 #[derive(Deserialize)]
@@ -77,6 +104,8 @@ pub struct DictionarySourceLocation {
     revision_id: String,
     page: Option<u16>,
     position: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selection: Option<DictionarySourceSelection>,
 }
 
 impl Store {
@@ -111,15 +140,21 @@ impl Store {
                 let Some(revision) = loaded.current_revision_id.as_deref() else { continue; };
                 location_in_revision(&anchor, &text, revision, &loaded.sentences, loaded.pdf_soft_lines.then_some(loaded.text.as_str()))
             };
-            if let Some((position, sentence_id, revision_id)) = resolved {
-                if seen.insert((document.clone(), anchor.page, position)) {
+            if let Some((position, sentence_id, revision_id, selection)) = resolved {
+                if seen.insert((document.clone(), anchor.page, position, selection.as_ref().map(|item| item.start_utf16))) {
                     locations.push(DictionarySourceLocation {
                         document_id: document, title, sentence: text, sentence_id, revision_id,
-                        page: anchor.page, position,
+                        page: anchor.page, position, selection,
                     });
                 }
             }
         }
+        locations.sort_by(|left, right| {
+            let start = |location: &DictionarySourceLocation|
+                location.selection.as_ref().map(|selection| selection.start_utf16);
+            (&left.title, &left.document_id, left.page, left.position, start(left))
+                .cmp(&(&right.title, &right.document_id, right.page, right.position, start(right)))
+        });
         Ok(locations)
     }
 }
@@ -127,12 +162,23 @@ impl Store {
 fn location_in_revision(
     anchor: &DictionarySentenceAnchor, text: &str, revision: &str, sentences: &[crate::Sentence],
     source: Option<&str>,
-) -> Option<(usize, String, String)> {
+) -> Option<(usize, String, String, Option<DictionarySourceSelection>)> {
     let offset = anchor.sentence_start_utf16;
     let position = sentences.partition_point(|sentence| sentence.end_utf16 <= offset);
     let sentence = sentences.get(position)?;
-    if offset == sentence.start_utf16 && sentence.text == text {
-        return Some((position, sentence.id.clone(), revision.to_owned()));
+    let same_sentence = offset == sentence.start_utf16 && sentence.text == text;
+    if let Some(selection) = anchor.selection.as_ref().filter(|_| same_sentence || revision == anchor.revision_id) {
+        let position = sentences.partition_point(|sentence| sentence.end_utf16 <= selection.start_utf16);
+        if let Some(candidate) = sentences.get(position) {
+            let resolved = selection.start_utf16.checked_sub(candidate.start_utf16)
+                .and_then(|relative| crate::ocr::byte_at_utf16(&candidate.text, relative));
+            if resolved.and_then(|start| candidate.text.get(start..)).is_some_and(|tail| tail.starts_with(&selection.text)) {
+                return Some((position, candidate.id.clone(), revision.to_owned(), Some(selection.clone())));
+            }
+        }
+    }
+    if same_sentence {
+        return Some((position, sentence.id.clone(), revision.to_owned(), None));
     }
     if revision != anchor.revision_id {
         return None;
@@ -141,7 +187,7 @@ fn location_in_revision(
     let relative = offset.checked_sub(sentence.start_utf16)?;
     let start = sentence.start_utf8 + crate::ocr::byte_at_utf16(&sentence.text, relative)?;
     source?.get(start..)?.starts_with(text)
-        .then(|| (position, sentence.id.clone(), revision.to_owned()))
+        .then(|| (position, sentence.id.clone(), revision.to_owned(), None))
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -1052,7 +1098,9 @@ fn validate_archive(archive: &DictionaryArchive) -> Result<()> {
                     || !valid_example(&example.surface, &example.sentence)
                     || example.anchors.iter().any(|anchor|
                         !identifier(&anchor.sentence_id) || !identifier(&anchor.revision_id)
-                            || anchor.page == Some(u16::MAX) || anchor.sentence_start_utf16 > crate::MAX_IMPORT))
+                            || anchor.page == Some(u16::MAX) || anchor.sentence_start_utf16 > crate::MAX_IMPORT
+                            || anchor.selection.as_ref().is_some_and(|selection|
+                                !selection.is_valid(anchor.sentence_start_utf16))))
         {
             return Err("Некоректне джерело карток в архіві словника".into());
         }

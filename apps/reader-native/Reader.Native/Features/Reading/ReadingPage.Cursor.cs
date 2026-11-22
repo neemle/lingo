@@ -1,5 +1,6 @@
 using Reader.Contracts;
 using Reader.Native.Services;
+using Reader.Presentation;
 
 namespace Reader.Native.Features.Reading;
 
@@ -7,6 +8,49 @@ public partial class ReadingPage
 {
     private (string Document, ReadingCursor Cursor)? canonicalWord;
     private (string Document, string Revision, string Sentence, int Offset)? loadingReadingWord;
+
+    private DictionarySourceLocation? dictionaryFocus;
+
+    internal async Task RevealDictionarySourceAsync(DictionarySourceLocation source)
+    {
+#if MACCATALYST
+        await pdfWindowRead;
+        if (source.Page is int page)
+        {
+            await detachedInitialSentence;
+            if (!readingPageActive || detachedAddress is not { } address ||
+                address.Document != source.DocumentId || address.Page != page) return;
+            if (detachedSentence?.Sentence.Id != source.SentenceId)
+                await LoadDetachedSentenceAsync(address, source.Position, source.SentenceId);
+            if (detachedSentence is not { } current || current.RevisionId != source.RevisionId ||
+                current.Sentence.Id != source.SentenceId) return;
+            dictionaryFocus = source;
+            var focus = DictionaryFocus(address.Document, current.RevisionId, current.Sentence, page);
+            DetachedPdfText.HighlightStart = focus?.StartUtf16 ?? current.Sentence.StartUtf16;
+            DetachedPdfText.HighlightLength = focus?.LengthUtf16 ?? current.Sentence.EndUtf16 - current.Sentence.StartUtf16;
+            DetachedPdfText.RevealOffset(DetachedPdfText.HighlightStart);
+            UpdateInlinePdfHighlight();
+            return;
+        }
+#endif
+        var session = AppState.Session;
+        if (!readingPageActive || session.Document is not { } document || document.Id != source.DocumentId ||
+            document.CurrentRevisionId != source.RevisionId || session.Sentence?.Id != source.SentenceId) return;
+        dictionaryFocus = source;
+        UpdateHighlight();
+        SourceText.RevealOffset(SourceText.HighlightStart);
+    }
+
+    private TextSelection? DictionaryFocus(string document, string? revision, Sentence sentence, int? page)
+    {
+        if (dictionaryFocus is not { Selection: { } selected } source || source.DocumentId != document ||
+            source.RevisionId != revision || source.SentenceId != sentence.Id || source.Page != page) return null;
+
+        var relative = selected.StartUtf16 - sentence.StartUtf16;
+        if (relative < 0 || relative > sentence.Text.Length - selected.Text.Length ||
+            !sentence.Text.AsSpan(relative, selected.Text.Length).SequenceEqual(selected.Text)) return null;
+        return new TextSelection(selected.StartUtf16, selected.Text.Length, selected.Text);
+    }
 
     private async Task RestoreReadingWordAsync()
     {

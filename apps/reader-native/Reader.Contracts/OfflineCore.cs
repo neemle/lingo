@@ -37,9 +37,11 @@ public sealed record DictionarySource(string DocumentId, string? Title, string? 
 
 public sealed record DictionaryExample(string EntryId, string Surface, string Sentence,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DictionarySentenceAnchor[]? Anchors = null);
-public sealed record DictionarySentenceAnchor(string SentenceId, string RevisionId, int? Page, int SentenceStartUtf16);
+public sealed record DictionarySourceSelection(int StartUtf16, string Text);
+public sealed record DictionarySentenceAnchor(string SentenceId, string RevisionId, int? Page, int SentenceStartUtf16,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DictionarySourceSelection? Selection = null);
 public sealed record DictionarySourceLocation(string DocumentId, string Title, string Sentence, string SentenceId,
-    string RevisionId, int? Page, int Position);
+    string RevisionId, int? Page, int Position, DictionarySourceSelection? Selection = null);
 public sealed record DictionaryImport(int AddedCards, int ExistingCards, int AddedReviews, bool RestoredPractice = false);
 
 public sealed record SpeechAudio(int SampleRate, int Samples, int[] WavBytes);

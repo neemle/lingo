@@ -506,11 +506,13 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     {
         if (source.Page is int page)
         {
-            if (client.DetachedPdfSentence(source.DocumentId, page, source.Position, source.SentenceId) is null)
-                throw new InvalidDataException("Речення на сторінці PDF більше недоступне.");
+            var current = client.DetachedPdfSentence(source.DocumentId, page, source.Position, source.SentenceId);
+            if (current?.RevisionId != source.RevisionId)
+                throw new InvalidDataException("Речення на сторінці PDF змінилося.");
             client.SetPdfReadingPage(source.DocumentId, page);
         }
-        else
+        else if (source.Selection is not { } selected ||
+            client.AnchorReadingSelection(source.DocumentId, source.RevisionId, selected.StartUtf16, selected.Text.Length) is null)
         {
             client.SetReadingCursor(source.DocumentId, source.SentenceId, source.RevisionId);
         }

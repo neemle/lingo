@@ -97,6 +97,7 @@ public partial class ReadingPage : ContentPage
     protected override void OnDisappearing()
     {
         readingPageActive = false;
+        dictionaryFocus = null;
         StopReaderPdf();
         StopAnalysisPrefetch();
         CancelScheduledTranslation();
@@ -150,8 +151,11 @@ public partial class ReadingPage : ContentPage
         SourceLanguageCode.Text = document?.Language.ToUpperInvariant() ?? "";
         SourceLanguageName.Text = document is null ? "" : DocumentLanguages.Name(document.Language);
         var word = document is not null && sentence is not null ? ReadingWord(document, sentence) : null;
-        SourceText.HighlightStart = word?.Start ?? sentence?.StartUtf16 ?? 0;
-        SourceText.HighlightLength = word?.Length ?? (sentence is null ? 0 : sentence.EndUtf16 - sentence.StartUtf16);
+        var focus = document is not null && sentence is not null
+            ? DictionaryFocus(document.Id, document.CurrentRevisionId, sentence, page: null) : null;
+        SourceText.HighlightStart = focus?.StartUtf16 ?? word?.Start ?? sentence?.StartUtf16 ?? 0;
+        SourceText.HighlightLength = focus?.LengthUtf16 ?? word?.Length ??
+            (sentence is null ? 0 : sentence.EndUtf16 - sentence.StartUtf16);
         UpdateInlinePdfHighlight();
         if (documentId == AppState.Session.Document?.Id) return;
         documentId = AppState.Session.Document?.Id;
@@ -432,6 +436,7 @@ public partial class ReadingPage : ContentPage
     {
         var session = AppState.Session;
         if (session.Document is not { } doc) return;
+        dictionaryFocus = null;
         RecordReadingActivity();
         if (selection != selected)
         {

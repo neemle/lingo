@@ -196,7 +196,10 @@ public partial class ReadingPage
         }
         var selected = detached ? (DetachedWordCard.IsVisible ? detachedSelection : null)
             : (WordCard.IsVisible ? selection : null);
-        var focus = selected ?? view.SpokenWord;
+        var dictionarySelection = DictionaryFocus(document.Id,
+            detached ? detachedSentence?.RevisionId : document.CurrentRevisionId,
+            sentence, detached ? address.Page : null);
+        var focus = selected ?? view.SpokenWord ?? dictionarySelection;
         overlay.Drawable = new PdfReadingHighlight(preview.Width, preview.Height, lines, offset,
             sentence.StartUtf16, sentence.EndUtf16, focus?.StartUtf16, focus?.LengthUtf16 ?? 0,
             ReferenceEquals(lines, inlineNativeBoxes));

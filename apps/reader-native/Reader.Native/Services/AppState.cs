@@ -43,8 +43,9 @@ public static class AppState
         (Shell.Current as AppShell)?.RefreshRecent();
         var shell = Shell.Current;
         await shell.GoToAsync(AppShell.ReadingRoute);
-        if (source is null && Session.Document is { Id: var selected, Format: "pdf" } && selected == id &&
-            shell.CurrentPage is ReadingPage reader)
+        if (shell.CurrentPage is not ReadingPage reader) return;
+        if (source is not null) await reader.RevealDictionarySourceAsync(source);
+        else if (Session.Document is { Id: var selected, Format: "pdf" } && selected == id)
             await reader.ShowOriginalAsync();
     }
 }

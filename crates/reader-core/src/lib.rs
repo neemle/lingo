@@ -1296,6 +1296,7 @@ impl Store {
             revision_id: selection.revision_id,
             page: None,
             sentence_start_utf16: sentence.start_utf16,
+            selection: dictionary_transfer::DictionarySourceSelection::from_selection(selection.start_utf16, &entry.word),
         };
         let projected = pdf_detached_pages::word_break::project_canonical_selection(
             self, &document, sentence, selection.start_utf16, &entry.word,

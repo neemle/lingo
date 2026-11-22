@@ -318,6 +318,7 @@ impl Store {
             revision_id: cached.revision,
             page: Some(page),
             sentence_start_utf16: sentence.start_utf16,
+            selection: crate::dictionary_transfer::DictionarySourceSelection::from_selection(input.start_utf16, &input.selected_text),
         };
         self.save_word_with_anchor(crate::Vocabulary {
             id: String::new(),

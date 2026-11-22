@@ -56,7 +56,11 @@ public partial class ReadingPage
     private async Task LoadDetachedSentenceAsync(
         DetachedAddress address, int? position, string? sentenceId = null, bool automatic = false)
     {
-        if (!automatic) CancelDetachedSpeechTravel();
+        if (!automatic)
+        {
+            dictionaryFocus = null;
+            CancelDetachedSpeechTravel();
+        }
         var request = ++detachedSentenceRequest;
         loadingDetachedSentence = true;
         SyncAnalysisPrefetch();
@@ -110,6 +114,7 @@ public partial class ReadingPage
     private void ShowDetachedWord(TextSelection selected, (VisualElement View, Point Point)? pdfAnchor = null)
     {
         if (detachedAddress is null || loadingDetachedSentence) return;
+        dictionaryFocus = null;
         SetDetachedSelection(selected);
         UpdateDetachedControls();
         DetachedSelectedWord.Text = selected.Text;

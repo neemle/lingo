@@ -213,12 +213,16 @@ public partial class VocabularyPage : ContentPage
             var chosen = sources[0];
             if (sources.Length > 1)
             {
-                var labels = sources.Select((source, index) =>
-                    $"{index + 1}. {source.Title} · {(source.Page is int page ? $"стор. {page + 1}, " : "")}речення {source.Position + 1}")
-                    .ToArray();
-                var label = await DisplayActionSheetAsync("Джерела картки", "Скасувати", null, labels);
-                var index = Array.IndexOf(labels, label);
-                if (index < 0 || activeAppearance != appearance) return;
+                var options = sources.Select((source, index) =>
+                {
+                    var context = string.Join(' ', source.Sentence.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+                    if (context.Length > 95) context = context[..95] + "…";
+                    var page = source.Page is int number ? $"стор. {number + 1}, " : "";
+                    return (index.ToString(), $"{index + 1}. {source.Title} · {page}речення {source.Position + 1}\n{context}");
+                });
+                var choice = await NativeChoices.ChooseAsync(this, "Джерела картки", card.Word, options);
+                if (!int.TryParse(choice, out var index) || index < 0 || index >= sources.Length ||
+                    Shell.Current.CurrentPage != this || AppState.Session.Busy) return;
                 chosen = sources[index];
             }
             await AppState.OpenAsync(chosen.DocumentId, chosen);
