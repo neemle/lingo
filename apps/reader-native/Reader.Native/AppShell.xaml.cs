@@ -32,7 +32,11 @@ public partial class AppShell : Shell
             if (id.Length > 0) await trackedSession.SelectAsync(id);
             if (!DesktopImport.HasPending) await GoToAsync(previousRoute);
         }
-        catch (Exception error) { await DisplayAlertAsync("Локальний читач", error.Message, "Гаразд"); }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine(error);
+            await DisplayAlertAsync("Локальний читач", error.Message, "Гаразд");
+        }
         finally
         {
             listening = true;

@@ -72,7 +72,10 @@ jobs:
             '$0 == entry { found = 1 } END { exit !found }'
           sudo installer -pkg "$package" -target /
           app="/Applications/Lingo.app"
-          open -n "$app"
+          stdout="$RUNNER_TEMP/lingo-startup.stdout"
+          stderr="$RUNNER_TEMP/lingo-startup.stderr"
+          touch "$stdout" "$stderr"
+          open -n --stdout "$stdout" --stderr "$stderr" "$app"
           bundle_home="$HOME/Library/Containers/$bundle_id/Data"
           for attempt in {1..30}; do
             for library in "$bundle_home/Library" "$HOME/Library"; do
@@ -87,6 +90,10 @@ jobs:
             sleep 1
           done
           echo 'The Catalyst app did not initialize its local SQLite database' >&2
+          ps -axo pid=,stat=,command= | awk -v app="$app/Contents/MacOS/" 'index($0, app) && !index($0, "awk")'
+          find "$HOME/Library" -maxdepth 5 -name reader-native.db -print 2>/dev/null || true
+          tail -n 30 "$stdout" "$stderr"
+          /usr/bin/log show --last 2m --style compact --predicate "process == '$executable'" | tail -n 30
           exit 1
   windows:
     runs-on: windows-2022
