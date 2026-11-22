@@ -188,13 +188,14 @@
    </ScrollView>
   </Border>
 
-  <VerticalStackLayout Grid.Row="4" Spacing="4">
+  <Grid Grid.Row="4" RowDefinitions="Auto,Auto" RowSpacing="4">
    <Label Text="{Binding Error}" TextColor="{StaticResource Accent}" />
-   <Border AutomationId="ReadingControls" BackgroundColor="{StaticResource Panel}" Stroke="{StaticResource BorderTone}" StrokeShape="RoundRectangle 11">
+   <Border Grid.Row="1" AutomationId="ReadingControls" BackgroundColor="{StaticResource Panel}"
+    Stroke="{StaticResource BorderTone}" StrokeShape="RoundRectangle 11">
     <Border.Shadow><Shadow Brush="#62644E" Opacity="0.09" Radius="10" Offset="0,4" /></Border.Shadow>
-    <VerticalStackLayout>
-     <FlexLayout Padding="14,7,14,3" Wrap="Wrap" JustifyContent="SpaceBetween" AlignItems="Center">
-      <Grid ColumnDefinitions="34,*" WidthRequest="158" ColumnSpacing="8" Margin="0,0,10,3">
+    <Grid RowDefinitions="Auto,46,Auto,Auto,Auto,3" RowSpacing="3">
+     <Grid Margin="14,7,14,0" ColumnDefinitions="*,165" ColumnSpacing="10">
+      <Grid ColumnDefinitions="34,*" ColumnSpacing="8">
        <Border Padding="7" BackgroundColor="#EEEBE0" Stroke="#E6E1D1" StrokeShape="RoundRectangle 4">
         <Image Source="nav_book.png" WidthRequest="18" HeightRequest="20" />
        </Border>
@@ -203,7 +204,11 @@
         <Label Text="{Binding Progress, StringFormat='Речення {0}'}" Style="{StaticResource ReaderMeta}" />
        </VerticalStackLayout>
       </Grid>
-      <FlexLayout Wrap="Wrap" AlignItems="Center">
+      <Picker Grid.Column="1" x:Name="VoicePicker" Title="Голос"
+       SelectedIndexChanged="VoiceChanged" SemanticProperties.Description="Голос для цієї мови" />
+     </Grid>
+     <ScrollView Grid.Row="1" Margin="14,0" Orientation="Horizontal" HorizontalScrollBarVisibility="Never">
+      <HorizontalStackLayout Spacing="5" VerticalOptions="Center">
        <Button Text="‹" Margin="0,0,5,3" Style="{StaticResource PlayerButton}"
         Clicked="PreviousClicked" IsEnabled="{Binding CanInteract}" SemanticProperties.Description="Попереднє речення" />
        <Button Text="▶" Style="{StaticResource AccentButton}" WidthRequest="42" HeightRequest="42"
@@ -217,22 +222,21 @@
        <Picker x:Name="Rate" WidthRequest="74" Title="Темп" SelectedIndex="1" SelectedIndexChanged="SpeechPreferencesChanged">
         <Picker.Items><x:String>0.75×</x:String><x:String>1×</x:String><x:String>1.25×</x:String></Picker.Items>
        </Picker>
-      </FlexLayout>
-      <Picker x:Name="VoicePicker" Title="Голос" WidthRequest="165" Margin="0,0,0,3"
-       SelectedIndexChanged="VoiceChanged" SemanticProperties.Description="Голос для цієї мови" />
-     </FlexLayout>
-     <FlexLayout Padding="12,0,12,3" Wrap="Wrap" AlignItems="Center">
+      </HorizontalStackLayout>
+     </ScrollView>
+     <Grid Grid.Row="2" Margin="12,0,12,3" RowDefinitions="Auto,Auto" ColumnDefinitions="Auto,*" ColumnSpacing="4">
       <CheckBox x:Name="ContinueSpeech" CheckedChanged="SpeechPreferencesChanged"
        SemanticProperties.Description="Автоматично озвучувати наступні речення" />
-      <Label Text="Озвучувати наступні речення" Style="{StaticResource ReaderMeta}" Margin="0,0,10,0" />
-      <Button x:Name="ResumeSpeech" Text="Продовжити зі збереженого слова" Style="{StaticResource PlayerButton}"
+      <Label Grid.Column="1" Text="Озвучувати наступні речення" Style="{StaticResource ReaderMeta}" VerticalOptions="Center" />
+      <Button Grid.Row="1" Grid.ColumnSpan="2" HorizontalOptions="Start" x:Name="ResumeSpeech"
+       Text="Продовжити зі збереженого слова" Style="{StaticResource PlayerButton}"
        Clicked="ResumeSpeechClicked" IsEnabled="{Binding CanInteract}" IsVisible="False" />
-     </FlexLayout>
-     <Label x:Name="VoiceStatus" Margin="14,0,14,3" Style="{StaticResource ReaderMeta}" IsVisible="False" />
-     <Label x:Name="SpeechStatus" Margin="14,0,14,3" Style="{StaticResource ReaderMeta}" />
-     <ProgressBar x:Name="PlayerProgress" HeightRequest="3" ProgressColor="#BC997A" />
-    </VerticalStackLayout>
+     </Grid>
+     <Label Grid.Row="3" x:Name="VoiceStatus" Margin="14,0,14,3" Style="{StaticResource ReaderMeta}" IsVisible="False" />
+     <Label Grid.Row="4" x:Name="SpeechStatus" Margin="14,0,14,3" Style="{StaticResource ReaderMeta}" />
+     <ProgressBar Grid.Row="5" x:Name="PlayerProgress" HeightRequest="3" ProgressColor="#BC997A" />
+    </Grid>
    </Border>
-  </VerticalStackLayout>
+  </Grid>
  </Grid>
 </ContentPage>
