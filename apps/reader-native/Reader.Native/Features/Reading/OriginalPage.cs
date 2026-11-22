@@ -7,6 +7,14 @@ namespace Reader.Native.Features.Reading;
 internal sealed class OriginalPage : ContentPage
 {
     private readonly Image image = new() { Aspect = Aspect.AspectFit };
+    private static readonly double[] ZoomLevels = [1, 1.25, 1.5, 2, 2.5, 3];
+    private readonly ScrollView viewport = new() { Orientation = ScrollOrientation.Both };
+    private readonly Grid pageCanvas = new();
+    private readonly Grid surface = new() { HorizontalOptions = LayoutOptions.Center, VerticalOptions = LayoutOptions.Center };
+    private readonly Button zoomOut = new() { Text = "−" };
+    private readonly Button zoomIn = new() { Text = "+" };
+    private readonly Button fit = new() { Text = "Вмістити" };
+    private int zoomLevel;
     private readonly GraphicsView overlay = new() { InputTransparent = true, IsVisible = false };
     private readonly Label status = new() { VerticalOptions = LayoutOptions.Center };
     private readonly Button previous = new() { Text = "←" };
@@ -67,6 +75,12 @@ internal sealed class OriginalPage : ContentPage
         SemanticProperties.SetDescription(previous, "Попередня сторінка");
         SemanticProperties.SetDescription(next, "Наступна сторінка");
         SemanticProperties.SetDescription(jump, "Перейти за номером сторінки PDF");
+        SemanticProperties.SetDescription(zoomOut, "Зменшити масштаб оригіналу");
+        SemanticProperties.SetDescription(zoomIn, "Збільшити масштаб оригіналу");
+        SemanticProperties.SetDescription(fit, "Вмістити оригінал у вікно");
+        zoomOut.Clicked += (_, _) => SetZoom(zoomLevel - 1);
+        zoomIn.Clicked += (_, _) => SetZoom(zoomLevel + 1);
+        fit.Clicked += (_, _) => SetZoom(0);
         previous.IsVisible = next.IsVisible = jump.IsVisible = pageCount > 1;
         jump.Clicked += async (_, _) => await JumpPageAsync();
         previous.Clicked += async (_, _) => await LoadAsync(pageIndex - 1);
@@ -85,7 +99,7 @@ internal sealed class OriginalPage : ContentPage
         readPage.IsVisible = isPdf;
         readPage.Clicked += async (_, _) => await ReadPageAsync();
         var controls = new FlexLayout { Wrap = Microsoft.Maui.Layouts.FlexWrap.Wrap };
-        foreach (var control in new View[] { previous, next, jump, readPage, toggle, wordCard, status })
+        foreach (var control in new View[] { previous, next, jump, readPage, zoomOut, zoomIn, fit, toggle, wordCard, status })
         {
             control.Margin = new Thickness(0, 0, 8, 5);
             controls.Children.Add(control);
@@ -127,13 +141,17 @@ internal sealed class OriginalPage : ContentPage
                 new RowDefinition(GridLength.Auto),
             },
         };
-        var surface = new Grid { Children = { image, overlay } };
+        surface.Children.Add(image);
+        surface.Children.Add(overlay);
+        pageCanvas.Children.Add(surface);
+        viewport.Content = pageCanvas;
+        viewport.SizeChanged += (_, _) => ResizePage();
         var tap = new TapGestureRecognizer();
         tap.Tapped += (_, args) => SelectOcrAt(surface, args);
         surface.GestureRecognizers.Add(tap);
-        Grid.SetRow(surface, 1);
+        Grid.SetRow(viewport, 1);
         content.Children.Add(controls);
-        content.Children.Add(surface);
+        content.Children.Add(viewport);
         Grid.SetRow(editor, 2);
         Grid.SetRow(editStatus, 3);
         content.Children.Add(editor);
@@ -185,6 +203,7 @@ internal sealed class OriginalPage : ContentPage
         UpdateEditButtons();
         try
         {
+            var changingPage = index != pageIndex;
             var preview = await loadPage(index);
             var cached = recognizeWindow is null ? null : await session.DetachedPdfOcrAsync(documentId, index);
             if (index != pageIndex || detachedOcr is not null || cached is not null)
@@ -196,9 +215,12 @@ internal sealed class OriginalPage : ContentPage
             image.Source = ImageSource.FromStream(() => new MemoryStream(preview.Bytes, writable: false));
             previewWidth = preview.Width;
             previewHeight = preview.Height;
+            ResizePage();
             ApplyOcrLines(cached);
             status.Text = pageCount == 1 ? "" : $"{pageIndex + 1} / {pageCount}";
             QueuePageOcr(index);
+            if (changingPage && (viewport.ScrollX > 0 || viewport.ScrollY > 0))
+                await viewport.ScrollToAsync(0, 0, animated: false);
         }
         catch (Exception error) { status.Text = error.Message; }
         finally
@@ -206,6 +228,28 @@ internal sealed class OriginalPage : ContentPage
             loading = false;
             UpdateEditButtons();
         }
+    }
+
+    private void SetZoom(int level)
+    {
+        if (loading || image.Source is null) return;
+        zoomLevel = Math.Clamp(level, 0, ZoomLevels.Length - 1);
+        ResizePage();
+        UpdateEditButtons();
+    }
+
+    private void ResizePage()
+    {
+        var width = viewport.Width;
+        var height = viewport.Height;
+        if (width <= 0 || height <= 0 || previewWidth <= 0 || previewHeight <= 0) return;
+
+        var scale = Math.Min(width / previewWidth, height / previewHeight) * ZoomLevels[zoomLevel];
+        surface.WidthRequest = Math.Floor(previewWidth * scale);
+        surface.HeightRequest = Math.Floor(previewHeight * scale);
+        pageCanvas.WidthRequest = Math.Max(width, surface.WidthRequest);
+        pageCanvas.HeightRequest = Math.Max(height, surface.HeightRequest);
+        overlay.Invalidate();
     }
 
     private void QueuePageOcr(int index)
@@ -478,6 +522,9 @@ internal sealed class OriginalPage : ContentPage
     {
         var index = LineIndex();
         var canInteract = !loading && !editing && !leavingOriginal && !choosingPage;
+        var canZoom = canInteract && image.Source is not null;
+        zoomIn.IsEnabled = canZoom && zoomLevel + 1 < ZoomLevels.Length;
+        zoomOut.IsEnabled = fit.IsEnabled = canZoom && zoomLevel > 0;
         previous.IsEnabled = canInteract && pageIndex > 0;
         next.IsEnabled = canInteract && pageIndex + 1 < pageCount;
         jump.IsEnabled = canInteract && pageCount > 1;
