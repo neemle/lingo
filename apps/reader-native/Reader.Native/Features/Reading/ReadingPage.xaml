@@ -265,7 +265,7 @@
      <Picker x:Name="VocabularyReading" Title="Форма для словникової картки" IsVisible="False" />
      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
       <Entry x:Name="Translation" Placeholder="Ваш перевірений переклад"
-       SemanticProperties.Description="Український переклад виділеного слова" ReturnType="Done"
+       SemanticProperties.Description="Переклад виділеного слова" ReturnType="Done"
        Completed="SaveWordClicked" />
       <Button Grid.Column="1" Text="До словника" Style="{StaticResource AccentButton}"
        Clicked="SaveWordClicked" IsEnabled="{Binding CanInteract}" />

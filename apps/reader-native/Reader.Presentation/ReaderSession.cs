@@ -544,13 +544,15 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         return Read();
     });
 
-    public Task SaveWordAsync(TextSelection selection, string translation, LemmaSnapshot? analysis = null,
-        ExpressionSnapshot? expression = null, SenseSnapshot? sense = null) => RunAsync(() =>
+    public Task SaveWordAsync(TextSelection selection, string translation, string targetLanguage,
+        LemmaSnapshot? analysis = null, ExpressionSnapshot? expression = null, SenseSnapshot? sense = null) => RunAsync(() =>
     {
         if (Document is not { } doc) return Read();
+        if (targetLanguage == doc.Language || !DocumentLanguages.All.Any(language => language.Code == targetLanguage))
+            throw new InvalidDataException("Виберіть мову перекладу для словникової картки.");
         var context = doc.Sentences.FirstOrDefault(sentence => selection.StartUtf16 >= sentence.StartUtf16
             && selection.StartUtf16 < sentence.EndUtf16)?.Text ?? "";
-        client.SaveWord(new Vocabulary("", selection.Text, translation, doc.Language, "uk",
+        client.SaveWord(new Vocabulary("", selection.Text, translation, doc.Language, targetLanguage,
             context, doc.Id, new ReviewState(), new ReviewState()) { Analysis = analysis, Expression = expression, Sense = sense });
         return Read();
     });

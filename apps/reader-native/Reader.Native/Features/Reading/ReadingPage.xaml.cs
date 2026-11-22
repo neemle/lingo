@@ -271,6 +271,10 @@ public partial class ReadingPage : ContentPage
             finally { updatingTargets = false; }
         }
 
+        var wordTranslationLabel = TargetCode is { } cardTarget
+            ? $"Ваш переклад · {DocumentLanguages.Name(cardTarget)}" : "Виберіть мову перекладу";
+        Translation.Placeholder = wordTranslationLabel;
+        SemanticProperties.SetDescription(Translation, wordTranslationLabel);
         var active = session.Sentence is not null && TargetCode is not null;
         var text = TargetCode is { } target ? session.ReviewedTranslation(target) : null;
         var key = ActiveTranslationKey();
@@ -377,7 +381,8 @@ public partial class ReadingPage : ContentPage
 
     private void TargetChanged(object? sender, EventArgs args)
     {
-        if (TranslationNotice is null || updatingTargets) return;
+        if (TranslationNotice is null || Translation is null || updatingTargets) return;
+        Translation.Text = "";
         if (AppState.Session.Document is { } document && TargetCode is { } target)
             SaveReaderPreference(ReaderPreferenceChange.TranslationTarget(document.Language, target));
         UpdateTranslation();
@@ -512,7 +517,7 @@ public partial class ReadingPage : ContentPage
 
     private async void SaveWordClicked(object? sender, EventArgs args)
     {
-        if (selection is not { } selected) return;
+        if (selection is not { } selected || TargetCode is not { } target) return;
         var index = VocabularyReading.SelectedIndex - 1;
         var reading = VocabularyReading.IsVisible && index >= 0 && index < vocabularyReadings.Length
             ? vocabularyReadings[index] : null;
@@ -527,8 +532,8 @@ public partial class ReadingPage : ContentPage
             (!string.Equals(lemma.Lemma.Trim().Normalize(), sense.Lemma.Normalize(), StringComparison.OrdinalIgnoreCase) ||
              lemma.PartOfSpeech != sense.PartOfSpeech))
             lemma = null;
-        await AppState.Session.SaveWordAsync(selected, Translation.Text ?? "", lemma, reading?.Expression, selectedSense);
-        if (selection == selected && AppState.Session.Error.Length == 0)
+        await AppState.Session.SaveWordAsync(selected, Translation.Text ?? "", target, lemma, reading?.Expression, selectedSense);
+        if (selection == selected && TargetCode == target && AppState.Session.Error.Length == 0)
         {
             WordCard.IsVisible = false;
             Translation.Text = "";
