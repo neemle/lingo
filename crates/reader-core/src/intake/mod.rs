@@ -22,7 +22,13 @@ pub enum IntakeInput {
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum IntakeImport {
     Document { language: Option<String> },
-    Article { name: String, text: String, language: Option<String> },
+    Article {
+        name: String,
+        text: String,
+        language: Option<String>,
+        #[serde(rename = "sourceUrl")]
+        source_url: Option<String>,
+    },
     Photo { lines: Vec<ocr::OcrLine>, language: Option<String> },
     Pdf {
         #[serde(rename = "pageTexts")]

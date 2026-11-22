@@ -47,21 +47,50 @@ public sealed class CoreClient : IDisposable
         Call<OriginalFile?>(new { version = 1, operation = "original_file", id });
 
     public IntakeItem StagePdfIntake(Guid requestId, string name, string path) =>
-        CallIndependent<IntakeItem>(new
-        {
-            version = 1, operation = "stage_intake", requestId,
-            input = new { kind = "pdfFile", name, path },
-        });
+        StageIntake(requestId, new { kind = "pdfFile", name, path });
+
+    public IntakeItem StageFileIntake(Guid requestId, string name, byte[] bytes) =>
+        StageIntake(requestId, new { kind = "file", name, bytes = Array.ConvertAll(bytes, value => (int)value) });
+
+    public IntakeItem StageTextIntake(Guid requestId, string name, string text) =>
+        StageIntake(requestId, new { kind = "text", name, text });
+
+    public IntakeItem StageLinkIntake(Guid requestId, string url) =>
+        StageIntake(requestId, new { kind = "link", url });
+
+    private IntakeItem StageIntake(Guid requestId, object input) =>
+        CallIndependent<IntakeItem>(new { version = 1, operation = "stage_intake", requestId, input });
+
+    public IntakeItem[] ListIntake(int start) =>
+        Call<IntakeItem[]>(new { version = 1, operation = "list_intake", start });
+
+    public IntakeItem? FindIntake(Guid id) =>
+        Call<IntakeItem?>(new { version = 1, operation = "find_intake", id });
 
     public IntakeFile IntakeFile(string id) =>
         Call<IntakeFile>(new { version = 1, operation = "intake_payload", id });
 
+    public byte[] ReadIntakeBytes(string id) =>
+        Array.ConvertAll(Call<IntakeBytes>(new { version = 1, operation = "intake_payload", id }).Bytes,
+            value => checked((byte)value));
+
+    public string ReadIntakeLink(string id) =>
+        Call<IntakeLink>(new { version = 1, operation = "intake_payload", id }).Url;
+
     public IntakeItem CompletePdfIntake(string id, string language, string[] pageTexts) =>
-        CallIndependent<IntakeItem>(new
-        {
-            version = 1, operation = "complete_intake", id,
-            result = new { kind = "pdf", language, pageTexts },
-        });
+        CompleteIntake(id, new { kind = "pdf", language, pageTexts });
+
+    public IntakeItem CompleteDocumentIntake(string id, string language) =>
+        CompleteIntake(id, new { kind = "document", language });
+
+    public IntakeItem CompletePhotoIntake(string id, string language, OcrLine[] lines) =>
+        CompleteIntake(id, new { kind = "photo", language, lines });
+
+    public IntakeItem CompleteArticleIntake(string id, string name, string text, string language, string sourceUrl) =>
+        CompleteIntake(id, new { kind = "article", name, text, language, sourceUrl });
+
+    private IntakeItem CompleteIntake(string id, object result) =>
+        CallIndependent<IntakeItem>(new { version = 1, operation = "complete_intake", id, result });
 
     public bool DiscardIntake(Guid id) =>
         CallIndependent<bool>(new { version = 1, operation = "discard_intake", id });

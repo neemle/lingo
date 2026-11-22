@@ -43,6 +43,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::StageIntake { .. } => Err(Error::new("invalid_state", "Intake needs staging")),
         Command::ListIntake { start } => value(store.list_intake(start)),
         Command::IntakeItem { id } => value(store.intake_item(&id)),
+        Command::FindIntake { id } => value(store.intake_item_for_request(&id)),
         Command::IntakePayload { id } => value(store.intake_payload(&id)),
         Command::CompleteIntake { id, result } => value(store.complete_intake(&id, result)),
         Command::DiscardIntake { id } => value(store.discard_intake(&id)),

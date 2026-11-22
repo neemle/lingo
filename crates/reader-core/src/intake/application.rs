@@ -41,7 +41,13 @@ pub(super) fn complete(
         ) => ImportMaterial::Document {
             name: item.metadata.name.clone(), bytes, language,
         },
-        (IntakeKind::Link, IntakePayload::Link { url }, IntakeImport::Article { name, text, language }) => {
+        (
+            IntakeKind::Link,
+            IntakePayload::Link { url },
+            IntakeImport::Article { name, text, language, source_url },
+        ) => {
+            let url = source_url.unwrap_or(url);
+            validate_article_url(&url)?;
             ImportMaterial::Article {
                 name: text_name(&name)?, bytes: text_bytes(text)?, url, language,
             }

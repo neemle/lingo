@@ -43,18 +43,21 @@ public partial class LibraryPage
         {
             importing = false;
             DesktopImport.Gate.Release();
+            await RefreshShareInboxAsync();
         }
     }
 
-    private async Task<string?> ImportPastedTextCoreAsync(string? initial)
+    private async Task<string?> ImportPastedTextCoreAsync(string? initial, ShareInboxItem? source = null)
     {
         if (initial is not null && Encoding.UTF8.GetByteCount(initial) > Reader.CoreClient.CoreClient.MaxImportBytes)
             throw new InvalidDataException("Текст перевищує 20 МБ.");
         var pasted = await CollectPastedTextAsync(initial);
         if (pasted is null) return null;
         var session = AppState.Session;
+        var intake = await session.StageTextIntakeAsync(source?.Id ?? Guid.NewGuid(), pasted.Name, pasted.Text);
+        if (intake.DocumentId is { } completed) return completed;
         await session.WaitUntilIdleAsync();
-        await session.ImportAsync(pasted.Name, Encoding.UTF8.GetBytes(pasted.Text), pasted.Language);
+        await session.CompleteDocumentIntakeAsync(intake.Id, pasted.Language);
         if (session.Error.Length > 0) throw new InvalidDataException(session.Error);
         return session.Document?.Id;
     }

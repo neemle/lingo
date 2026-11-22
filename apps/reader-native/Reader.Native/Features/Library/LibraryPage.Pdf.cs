@@ -74,34 +74,6 @@ public partial class LibraryPage
         active.Cancel();
     }
 
-#if MACCATALYST
-    private async Task<string?> ImportPdfForReadingAsync(ShareInboxItem item, bool chooseLanguage)
-    {
-        var session = AppState.Session;
-        await session.WaitUntilIdleAsync();
-        ImportStatus.Text = "Зберігаємо оригінал PDF…";
-        var intake = await session.StagePdfIntakeAsync(item.Id, item.Name, ShareInbox.PayloadPath(item));
-        if (intake.DocumentId is { } completed) return completed;
-        var source = await session.IntakeFileAsync(intake.Id);
-        ImportStatus.Text = "Читаємо текстовий шар PDF…";
-        var pageTexts = await PdfScan.ExtractTextAsync(source.Path);
-        var language = await ResolveImportLanguageAsync(item, chooseLanguage, () =>
-        {
-            if (item.ScanPdf) return Task.FromResult<string?>(null);
-            var excerpt = string.Join('\n', pageTexts.Where(text => !string.IsNullOrWhiteSpace(text)).Take(4)
-                .Select(text => text[..Math.Min(text.Length, 2000)]));
-            return session.DetectLanguageAsync(excerpt);
-        });
-        if (language is null) return null;
-
-        await session.WaitUntilIdleAsync();
-        ImportStatus.Text = "Зберігаємо документ…";
-        await session.CompletePdfIntakeAsync(intake.Id, language, pageTexts);
-        if (session.Error.Length != 0) throw new InvalidDataException(session.Error);
-        return session.Document?.Id;
-    }
-#endif
-
     private async Task<string?> RunPdfOcrAsync(PdfOcrCheckpoint job, byte[]? source = null, string[]? pageTexts = null)
     {
         using var active = new CancellationTokenSource();

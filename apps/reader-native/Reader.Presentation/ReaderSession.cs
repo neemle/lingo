@@ -103,12 +103,50 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public Task<IntakeItem> StagePdfIntakeAsync(Guid requestId, string name, string path) =>
         Task.Run(() => client.StagePdfIntake(requestId, name, path));
 
+    public Task<IntakeItem> StageFileIntakeAsync(Guid requestId, string name, byte[] bytes) =>
+        Task.Run(() => client.StageFileIntake(requestId, name, bytes));
+
+    public Task<IntakeItem> StageTextIntakeAsync(Guid requestId, string name, string text) =>
+        Task.Run(() => client.StageTextIntake(requestId, name, text));
+
+    public Task<IntakeItem> StageLinkIntakeAsync(Guid requestId, string url) =>
+        Task.Run(() => client.StageLinkIntake(requestId, url));
+
+    public Task<IntakeItem[]> ListIntakeAsync() => Task.Run(() =>
+    {
+        var entries = new List<IntakeItem>();
+        while (true)
+        {
+            var page = client.ListIntake(entries.Count);
+            entries.AddRange(page);
+            if (page.Length < 100) return entries.ToArray();
+        }
+    });
+
+    public Task<IntakeItem?> FindIntakeAsync(Guid id) => Task.Run(() => client.FindIntake(id));
+
     public Task<IntakeFile> IntakeFileAsync(string id) => Task.Run(() => client.IntakeFile(id));
 
-    public Task CompletePdfIntakeAsync(string id, string language, string[] pageTexts) => RunAsync(() =>
+    public Task<byte[]> ReadIntakeBytesAsync(string id) => Task.Run(() => client.ReadIntakeBytes(id));
+
+    public Task<string> ReadIntakeLinkAsync(string id) => Task.Run(() => client.ReadIntakeLink(id));
+
+    public Task CompletePdfIntakeAsync(string id, string language, string[] pageTexts) =>
+        CompleteIntakeAsync(() => client.CompletePdfIntake(id, language, pageTexts));
+
+    public Task CompleteDocumentIntakeAsync(string id, string language) =>
+        CompleteIntakeAsync(() => client.CompleteDocumentIntake(id, language));
+
+    public Task CompletePhotoIntakeAsync(string id, string language, OcrLine[] lines) =>
+        CompleteIntakeAsync(() => client.CompletePhotoIntake(id, language, lines));
+
+    public Task CompleteArticleIntakeAsync(string id, string name, string text, string language, string sourceUrl) =>
+        CompleteIntakeAsync(() => client.CompleteArticleIntake(id, name, text, language, sourceUrl));
+
+    private Task CompleteIntakeAsync(Func<IntakeItem> complete) => RunAsync(() =>
     {
-        var result = client.CompletePdfIntake(id, language, pageTexts);
-        return (client.Snapshot(), result.DocumentId ?? throw new InvalidDataException("Імпорт PDF не підтверджено."));
+        var result = complete();
+        return (client.Snapshot(), result.DocumentId ?? throw new InvalidDataException("Імпорт не підтверджено."));
     });
 
     public Task DiscardIntakeAsync(Guid id) => Task.Run(() => client.DiscardIntake(id));

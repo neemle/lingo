@@ -25,6 +25,7 @@ fn validate(command: &Command) -> Result<()> {
             Err(Error::new("invalid_argument", "Invalid transfer response path"))
         }
         Command::IntakeItem { id }
+        | Command::FindIntake { id }
         | Command::IntakePayload { id }
         | Command::CompleteIntake { id, .. }
         | Command::DiscardIntake { id }

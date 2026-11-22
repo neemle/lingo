@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Globalization;
-using System.Text;
 using Reader.Contracts;
 using Reader.Native.Services;
 using Reader.Presentation;
@@ -10,8 +9,6 @@ namespace Reader.Native.Features.Library;
 public partial class LibraryPage : ContentPage
 {
     private const int MaxDocumentTitleLength = 240;
-    private static readonly HashSet<string> ImageExtensions =
-        new([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"], StringComparer.OrdinalIgnoreCase);
     private bool importing;
     private bool changingLanguage;
     private bool editingDocument;
@@ -206,53 +203,32 @@ public partial class LibraryPage : ContentPage
         }
     }
 
-    private async Task<string?> ImportFileAsync(ShareInboxItem item, byte[] bytes, bool chooseLanguage)
+#if !MACCATALYST
+    private async Task<string?> ImportLegacyPdfAsync(ShareInboxItem item, byte[] bytes, bool chooseLanguage)
     {
-        var extension = Path.GetExtension(item.Name).ToLowerInvariant();
-        var isPdf = extension == ".pdf";
-        if (item.ScanPdf && !isPdf) throw new InvalidDataException("Виберіть файл PDF для розпізнавання.");
         var session = AppState.Session;
         await session.WaitUntilIdleAsync();
-        var language = await ResolveImportLanguageAsync(item, chooseLanguage, () => extension switch
-        {
-            ".txt" => session.DetectLanguageAsync(Encoding.UTF8.GetString(bytes.AsSpan(0, Math.Min(bytes.Length, 32_000)))),
-            ".docx" or ".pdf" when !item.ScanPdf => session.DetectDocumentLanguageAsync(item.Name, bytes),
-            _ => Task.FromResult<string?>(null),
-        });
+        var language = await ResolveImportLanguageAsync(item, chooseLanguage, () => item.ScanPdf
+            ? Task.FromResult<string?>(null) : session.DetectDocumentLanguageAsync(item.Name, bytes));
         if (language is null) return null;
 
-        if (isPdf)
+        ImportStatus.Text = "Відкриваємо PDF…";
+        var pages = await PdfScan.PageCountAsync(bytes);
+        PdfRecognition.CheckPageCount(pages);
+        var missing = await session.PdfPagesNeedingOcrAsync(item.Name, bytes, pages);
+        if (missing.Length > 0)
         {
-            ImportStatus.Text = "Відкриваємо PDF…";
-            var pages = await PdfScan.PageCountAsync(bytes);
-            PdfRecognition.CheckPageCount(pages);
-            var missing = await session.PdfPagesNeedingOcrAsync(item.Name, bytes, pages);
-            if (missing.Length > 0)
-            {
-                var checkpoint = await Task.Run(() => PdfOcrCheckpoint.Create(item.Name, bytes, language, pages, missing));
-                await RemoveShareItemAsync(item);
-                ImportStatus.Text = "";
-                return await RunPdfOcrAsync(checkpoint, bytes);
-            }
-            await session.WaitUntilIdleAsync();
-            await session.ImportMixedPdfAsync(item.Name, bytes, language, [], pages);
+            var checkpoint = await Task.Run(() => PdfOcrCheckpoint.Create(item.Name, bytes, language, pages, missing));
+            await RemoveShareItemAsync(item);
+            ImportStatus.Text = "";
+            return await RunPdfOcrAsync(checkpoint, bytes);
         }
-        else if (ImageExtensions.Contains(extension))
-        {
-            ImportStatus.Text = "Розпізнавання тексту на пристрої…";
-            var lines = await PhotoOcr.RecognizeAsync(bytes, language);
-            if (lines.Length == 0) throw new InvalidDataException("На зображенні не знайдено тексту.");
-            await session.WaitUntilIdleAsync();
-            await session.ImportImageAsync(item.Name, bytes, language, lines);
-        }
-        else
-        {
-            await session.WaitUntilIdleAsync();
-            await session.ImportAsync(item.Name, bytes, language);
-        }
+        await session.WaitUntilIdleAsync();
+        await session.ImportMixedPdfAsync(item.Name, bytes, language, [], pages);
         if (session.Error.Length != 0) throw new InvalidDataException(session.Error);
         return session.Document?.Id;
     }
+#endif
 
     private async Task<string?> ResolveImportLanguageAsync(ShareInboxItem item, bool chooseLanguage,
         Func<Task<string?>> detectLanguage)

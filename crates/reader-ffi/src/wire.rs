@@ -30,6 +30,9 @@ pub enum Command {
     IntakeItem {
         id: String,
     },
+    FindIntake {
+        id: String,
+    },
     IntakePayload {
         id: String,
     },
