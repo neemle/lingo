@@ -61,7 +61,7 @@ jobs:
           targets: x86_64-pc-windows-msvc
       - run: dotnet workload install maui-windows
       - run: cargo build -p reader-ffi --release --locked --target x86_64-pc-windows-msvc
-      - name: Build and install a signed x64 MSIX
+      - name: Build, install, and launch a signed x64 MSIX
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -87,9 +87,16 @@ jobs:
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $zip = [IO.Compression.ZipFile]::OpenRead($msix.FullName)
           try {
-            foreach ($name in 'AppxManifest.xml', 'AppxSignature.p7x', 'Reader.Native.exe', 'reader_ffi.dll', 'coreclr.dll', 'Microsoft.UI.Xaml.dll') {
-              if (-not $zip.GetEntry($name)) { throw "Missing $name in $($msix.Name)" }
+            $entries = @($zip.Entries.FullName)
+            foreach ($name in 'AppxManifest.xml', 'AppxSignature.p7x', 'Reader.Native.exe', 'reader_ffi.dll', 'coreclr.dll', 'Microsoft.UI.Xaml.dll', 'Microsoft.WindowsAppRuntime.dll') {
+              # Windows App SDK spells the WinUI payload Microsoft.ui.xaml.dll.
+              if ($entries -notcontains $name) { throw "Missing $name in $($msix.Name)" }
             }
+            $manifestEntry = $zip.Entries | Where-Object FullName -eq 'AppxManifest.xml'
+            $manifestReader = [IO.StreamReader]::new($manifestEntry.Open())
+            try { [xml]$manifest = $manifestReader.ReadToEnd() }
+            finally { $manifestReader.Dispose() }
+            if ($manifest.Package.Identity.ProcessorArchitecture -ne 'x64') { throw 'MSIX is not x64' }
           } finally { $zip.Dispose() }
 
           $dependencyFolder = Join-Path $msix.DirectoryName 'Dependencies\x64'
@@ -106,6 +113,54 @@ jobs:
             throw 'Installed MSIX identity did not match the manifest'
           }
           Write-Host "Installed $($installed.PackageFullName)"
+
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+
+          [ComImport, Guid("2E941141-7F97-4756-BA1D-9DECDE894A3D"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+          public interface IApplicationActivationManager
+          {
+              [PreserveSig]
+              int ActivateApplication([MarshalAs(UnmanagedType.LPWStr)] string id,
+                  [MarshalAs(UnmanagedType.LPWStr)] string args, uint options, out uint processId);
+          }
+
+          public static class PackagedApplication
+          {
+              public static uint Launch(string id)
+              {
+                  var type = Type.GetTypeFromCLSID(new Guid("45BA127D-10A8-46EA-8AB7-56EA9078943C"));
+                  var manager = (IApplicationActivationManager)Activator.CreateInstance(type);
+                  uint processId;
+                  Marshal.ThrowExceptionForHR(manager.ActivateApplication(id, null, 2, out processId));
+                  return processId;
+              }
+          }
+          '@
+          $appId = $manifest.Package.Applications.Application.Id
+          $readerProcessId = [PackagedApplication]::Launch("$($installed.PackageFamilyName)!$appId")
+          $database = Join-Path $env:LOCALAPPDATA "Packages\$($installed.PackageFamilyName)\LocalState\reader-native.db"
+          for ($i = 0; $i -lt 30; $i++) {
+            if (-not (Get-Process -Id $readerProcessId -ErrorAction SilentlyContinue)) {
+              throw 'Packaged reader exited before initializing its database'
+            }
+            if ((Test-Path $database -PathType Leaf) -and (Get-Item $database).Length -ge 16) { break }
+            Start-Sleep -Seconds 1
+          }
+          if (-not (Test-Path $database -PathType Leaf) -or
+              -not (Get-Process -Id $readerProcessId -ErrorAction SilentlyContinue)) {
+            throw 'Packaged reader did not initialize its local SQLite database'
+          }
+          $databaseStream = [IO.File]::Open($database, 'Open', 'Read', 'ReadWrite')
+          $databaseReader = [IO.BinaryReader]::new($databaseStream)
+          try {
+            $header = $databaseReader.ReadBytes(16)
+            if ($header.Length -ne 16 -or [Text.Encoding]::ASCII.GetString($header, 0, 15) -ne 'SQLite format 3') {
+              throw 'Packaged reader did not create a valid SQLite database'
+            }
+          } finally { $databaseReader.Dispose() }
+          Write-Host 'Packaged reader started and initialized its SQLite database'
   cleanup:
     needs: [headless, catalyst, windows]
     if: ${{ always() && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
