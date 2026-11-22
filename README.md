@@ -30,6 +30,16 @@ dotnet build "$reader_project" -t:Run -f net10.0-maccatalyst -p:EnableCodeSignin
 Catalyst links the Rust static library built for `aarch64-apple-ios-macabi`; a regular macOS dylib is incompatible.
 The current native macOS head targets Apple Silicon.
 
+To create the locally installable package with the same layout as CI:
+
+```sh
+dotnet build "$reader_project" -f net10.0-maccatalyst -c Release -p:EnableCodeSigning=false
+app="$(find apps/reader-native/Reader.Native/bin/Release/net10.0-maccatalyst -type d -name '*.app' -print -quit)"
+bash apps/reader-native/package-macos.sh "$app" "$PWD/Lingo.pkg"
+```
+
+Open `Lingo.pkg` to install `/Applications/Lingo.app` on this Mac.
+
 Windows, x64:
 
 ```powershell
