@@ -11,9 +11,9 @@ internal static class DesktopFiles
 {
     private const string DroppedImageName = "Перетягнуте зображення";
 
-    internal static Task QueueFileAsync(StorageFile file) => DesktopFile.Supports(file.Name)
-        ? DesktopImport.ReceiveAsync(file.Name, () => StageFileAsync(file))
-        : Task.CompletedTask;
+    internal static Task QueueFilesAsync(IEnumerable<StorageFile> files) => DesktopImport.ReceiveBatchAsync(files
+        .Where(file => DesktopFile.Supports(file.Name))
+        .Select(file => (file.Name, new Func<Task<ShareInboxItem>>(() => StageFileAsync(file)))));
 
     internal static async Task<ShareInboxItem?> StageClipboardImageAsync()
     {
@@ -64,7 +64,7 @@ internal static class DesktopFiles
             }
         }
         finally { deferral.Complete(); }
-        foreach (var item in items) DesktopImport.Publish(item);
+        DesktopImport.PublishBatch(items);
         return handled;
     }
 

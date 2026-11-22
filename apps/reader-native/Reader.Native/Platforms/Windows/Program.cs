@@ -34,7 +34,6 @@ internal static class Program
     private static async Task QueueActivationAsync(AppActivationArguments? args)
     {
         if (args?.Kind != ExtendedActivationKind.File || args.Data is not IFileActivatedEventArgs files) return;
-        foreach (var file in files.Files.OfType<StorageFile>().ToArray())
-            await DesktopFiles.QueueFileAsync(file).ConfigureAwait(false);
+        await DesktopFiles.QueueFilesAsync(files.Files.OfType<StorageFile>().ToArray()).ConfigureAwait(false);
     }
 }
