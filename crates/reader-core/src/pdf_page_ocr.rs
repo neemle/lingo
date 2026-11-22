@@ -97,7 +97,12 @@ fn needed_pages(
     let window = [Some(center), center.checked_sub(1), center.checked_add(1)];
     let mut needed = Vec::with_capacity(3);
     for page in window.into_iter().flatten() {
-        if !pages.get(usize::from(page)).is_some_and(|text| text.trim().is_empty()) {
+        let Some(text) = pages.get(usize::from(page)) else { continue; };
+        if !text.trim().is_empty() {
+            if (completed.binary_search(&page).is_err() || should_refresh(document, page))
+                && can_recover_text_layer(document, page, text) {
+                needed.push(page);
+            }
             continue;
         }
         let pending = match pdf_detached_pages::source_language(db, &document.id, page)? {
@@ -118,15 +123,25 @@ fn should_refresh(document: &Document, page: u16) -> bool {
     if document.ocr_lines.iter().flatten().any(|line| line.page == page && line.correction.is_some()) {
         return false;
     }
+    !page_has_sentence_annotations(document, page)
+}
+
+fn can_recover_text_layer(document: &Document, page: u16, text: &str) -> bool {
+    !has_ocr_lines(document, page)
+        && pdf_layers::damaged_text_layer(text)
+        && !page_has_sentence_annotations(document, page)
+}
+
+fn page_has_sentence_annotations(document: &Document, page: u16) -> bool {
     if document.bookmarks.is_empty() && document.notes.is_empty()
         && document.speech_text_overrides.is_empty() && document.reviewed_translations.is_empty()
     {
-        return true;
+        return false;
     }
     let Some((start, end)) = crate::pdf_reading_position::page_bounds(document, page) else {
-        return true;
+        return false;
     };
-    !document.sentences.iter().any(|sentence| {
+    document.sentences.iter().any(|sentence| {
         sentence.start_utf16 < end && sentence.end_utf16 > start
             && (document.bookmarks.contains(&sentence.id)
                 || document.notes.contains_key(&sentence.id)
@@ -497,17 +512,30 @@ impl Store {
             }
             let mut pages = file_originals::native_pdf_page_text(tx, id)?
                 .ok_or("Оригінал PDF для розпізнавання недоступний")?;
-            let needs_text = pages
+            let old_layer = pages
                 .get(usize::from(page))
-                .ok_or("Сторінку PDF не знайдено")?
-                .trim()
-                .is_empty();
-            if let Some((revision, language)) = replaces_revision {
-                if document.current_revision_id.as_deref() != Some(revision)
+                .ok_or("Сторінку PDF не знайдено")?;
+            let needs_text = old_layer.trim().is_empty();
+            if replaces_revision.is_some_and(|(revision, language)| {
+                document.current_revision_id.as_deref() != Some(revision)
                     || document.language != language
                     || needs_text || has_ocr_lines(document, page)
-                {
-                    return Err("Текст або мова PDF змінилися. Відкрийте сторінку й повторіть OCR.".into());
+            }) {
+                return Err("Текст або мова PDF змінилися. Відкрийте сторінку й повторіть OCR.".into());
+            }
+            let automatic_repair = token.is_some() && !needs_text &&
+                can_recover_text_layer(document, page, old_layer);
+            if replaces_revision.is_some() || automatic_repair {
+                if automatic_repair {
+                    let old_letters = old_layer.chars().filter(|ch| ch.is_alphabetic()).count();
+                    let new_letters = lines.iter().flat_map(|line| line.reading_text().chars())
+                        .filter(|ch| ch.is_alphabetic()).count();
+                    if lines.is_empty() || new_letters * 3 < old_letters * 2 {
+                        mark_completed(tx, id, page)?;
+                        let cleared_refresh = document.pdf_ocr_refresh_pages.remove(&page);
+                        updated = Some(document.clone());
+                        return Ok(cleared_refresh);
+                    }
                 }
                 pages[usize::from(page)].clear();
                 let page_text = serde_json::to_string(&pages).map_err(database_error)?;
@@ -543,6 +571,16 @@ impl Store {
             if let Some(text) = text_layer {
                 if !needs_text || !document.pdf_pending_text_pages.contains(&page) {
                     return Err("Сторінка PDF не очікує витягання тексту.".into());
+                }
+                if pdf_layers::damaged_text_layer(&text) {
+                    // The next claim renders this page instead of reading its broken text layer again.
+                    document.pdf_pending_text_pages.remove(&page);
+                    tx.execute(
+                        "UPDATE pdf_ocr_requests SET token=NULL, available_at=0 WHERE document_id=?1 AND page=?2",
+                        params![id, page],
+                    ).map_err(database_error)?;
+                    updated = Some(document.clone());
+                    return Ok(true);
                 }
                 if text.trim().len() + 2 > remaining {
                     pdf_detached_pages::write_text_layer(tx, id, page, text.trim())?;
@@ -854,6 +892,8 @@ fn reading_page(
     } else {
         PdfReadPageState::TextLayer
     };
+    result.refresh_pending |= file_backed && completed.binary_search(&page).is_err()
+        && can_recover_text_layer(document, page, content);
     result.text = content.to_owned();
     result.span = Some(ocr::OcrSpan {
         start_utf8,

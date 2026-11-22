@@ -299,7 +299,7 @@ pub(super) fn validate_pdf_draft(draft: &PdfTextDraft) -> Result<String> {
         file_originals::validate_deferred_text_layers(&draft.page_texts, from)?;
     }
     Ok(draft.page_texts.iter().map(|page| page.trim())
-        .filter(|page| !page.is_empty()).take(4)
+        .filter(|page| !page.is_empty() && !crate::pdf_layers::damaged_text_layer(page)).take(4)
         .map(|page| page.chars().take(2000).collect::<String>())
         .collect::<Vec<_>>().join("\n"))
 }

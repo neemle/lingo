@@ -33,6 +33,30 @@ pub fn merge(
     Ok(merged)
 }
 
+/// Detect broken PDF character maps while allowing isolated custom bullets and symbols.
+pub(crate) fn damaged_text_layer(text: &str) -> bool {
+    let mut characters = 0usize;
+    let mut damaged = 0usize;
+    for line in text.lines() {
+        let mut line_characters = 0usize;
+        let mut line_damaged = 0usize;
+        for ch in line.chars().filter(|ch| !ch.is_whitespace()) {
+            line_characters += 1;
+            if matches!(ch,
+                '\u{fffd}' | '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}'
+            ) {
+                line_damaged += 1;
+            }
+        }
+        if line_damaged >= 4 && line_damaged * 5 >= line_characters {
+            return true;
+        }
+        characters += line_characters;
+        damaged += line_damaged;
+    }
+    damaged >= 4 && damaged * 100 >= characters
+}
+
 pub(crate) fn merge_page_text(
     mut pages: Vec<String>,
     lines: &[OcrLine],

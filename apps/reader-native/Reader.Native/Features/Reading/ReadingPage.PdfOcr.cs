@@ -356,7 +356,7 @@ public partial class ReadingPage
             _ => "Для цієї сторінки немає тексту. Відкрийте оригінал.",
         };
         PdfPageStatus.Text = $"Сторінка {window.Center + 1} із {window.PageCount}";
-        if (page is { State: "recognized" or "detached", RefreshPending: true })
+        if (page is { State: "recognized" or "detached" or "textLayer", RefreshPending: true })
             PdfPageStatus.Text += pdfOcrError is not null ? " · помилка оновлення OCR"
                 : readerPdfOcr is not null ? " · оновлюємо OCR" : " · OCR потребує оновлення";
         else if (pdfOcrError is not null && message is null)
