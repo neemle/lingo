@@ -107,14 +107,16 @@ public static class LanguageCapabilities
         var detail = string.Join(Environment.NewLine, routes.Select(route =>
         {
             var other = DocumentLanguages.Name(outgoing ? route.Target : route.Source);
-            var via = route.PivotLanguage is null ? "прямий" : $"через {DocumentLanguages.Name(route.PivotLanguage)}";
+            var path = route.PivotLanguage is { } pivot
+                ? DocumentLanguages.PivotRoute(route.Source, pivot, route.Target)
+                : $"{other} · прямий";
             var state = route.Level switch
             {
                 CapabilityLevel.Validated => "пробний офлайн-переклад пройдено",
                 CapabilityLevel.Installed => "файли на місці",
                 _ => "потрібен пакет",
             };
-            return $"{other} · {via} · {state}";
+            return $"{path} · {state}";
         }));
         return new LanguageCapability(routes.Max(route => route.Level), detail,
             routes.Select(route => route.PivotLanguage is null

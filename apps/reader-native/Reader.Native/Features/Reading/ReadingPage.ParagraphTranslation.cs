@@ -436,11 +436,15 @@ public partial class ReadingPage
         ParagraphPreview.IsVisible = false;
         if (document is null || window is not { IsParagraph: true }) return;
 
+        var hasMachinePreview = false;
         foreach (var unit in window.Units)
         {
             if (unit == active || !unit.Matches(document)) continue;
             if (MachineFor(document, window, unit) is { } translated)
+            {
+                hasMachinePreview = true;
                 AddPreviewRow(document.Id, unit.First, unit.Sources[0].Id, unit.Sources.Length, translated.Text, reviewed: false);
+            }
             else
                 for (var i = 0; i < unit.Sources.Length; i++)
                     if (ReviewedFor(document, window.Scope.Target, unit.Sources[i].Id) is { } review)
@@ -448,8 +452,8 @@ public partial class ReadingPage
         }
         if (ParagraphPreview.Children.Count == 0) return;
         var caption = IsPreferredRoute(window) ? "Переклади поруч" : "Збережені переклади поруч";
-        if (window.Pivot is { } pivot)
-            caption += $" · машинні через {DocumentLanguages.Name(pivot)}";
+        if (hasMachinePreview && window.Pivot is { } pivot)
+            caption += $" · {DocumentLanguages.PivotRoute(window.Scope.Source, pivot, window.Scope.Target)}";
         caption += ".";
         if (IsPreferredRoute(window) && (window.MoreBefore || window.MoreAfter))
             caption += " Виберіть інше речення, щоб перекласти ще частину абзацу.";

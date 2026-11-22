@@ -9,5 +9,8 @@ public static class DocumentLanguages
         ("nl", "Нідерландська"), ("cs", "Чеська"), ("ro", "Румунська"), ("sv", "Шведська"),
     ];
 
+    public static string PivotRoute(string source, string pivot, string target) =>
+        $"{Name(source)} → {Name(pivot)} → {Name(target)}";
+
     public static string Name(string code) => All.FirstOrDefault(language => language.Code == code).Name ?? code;
 }

@@ -237,8 +237,8 @@ public partial class ReadingPage : ContentPage
         var machine = alignment?.Translation;
         var machineLabel = alignment?.Unit.Sources.Length > 1 ? "Машинний переклад групи речень"
             : machine?.JoinedLines == true ? "Машинний переклад об’єднаних рядків" : "Машинний переклад";
-        if (machine?.PivotLanguage is { } pivot)
-            machineLabel += $" через {DocumentLanguages.Name(pivot)}";
+        if (alignment is { Window.Scope: var scope, Translation.PivotLanguage: { } pivot })
+            machineLabel += $" · {DocumentLanguages.PivotRoute(scope.Source, pivot, scope.Target)}";
         var currentStatus = key == statusKey ? machineStatus : null;
         if (alignment is { } result && !IsPreferredRoute(result.Window))
             machineLabel = $"Збережено раніше · {machineLabel}. {currentStatus ?? ReadinessMessage()}";
@@ -274,8 +274,8 @@ public partial class ReadingPage : ContentPage
         if (readinessError is not null) return readinessError;
         if (readiness is null) return "Перевіряємо мовні пакети…";
         if (readiness.Ready)
-            return readiness.PivotLanguage is { } pivot
-                ? $"Доступний офлайн-переклад через {DocumentLanguages.Name(pivot)}."
+            return readiness.PivotLanguage is { } pivot && readinessPair is { } pair
+                ? $"Доступний офлайн-переклад · {DocumentLanguages.PivotRoute(pair.Source, pivot, pair.Target)}."
                 : "Доступний прямий офлайн-переклад.";
         if (readiness.Missing.Length == 0) return "Для цієї пари в каталозі немає офлайн-моделі.";
         var pairs = readiness.Missing.Select(pair => $"{DocumentLanguages.Name(pair.Source)} → {DocumentLanguages.Name(pair.Target)}");
