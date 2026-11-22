@@ -195,6 +195,7 @@ pub(crate) fn restore_library_data<O>(db: &Connection, backup: Backup<O>) -> Res
     )?;
     reading_history::restore(db, backup.reading_sessions, &backup.snapshot.documents)?;
     pdf_reading_position::restore(db, backup.pdf_reading_positions, &backup.snapshot.documents)?;
+    crate::reader_preferences::restore(db, backup.reader_preferences)?;
     if let Some(progress) = backup.practice {
         practice::restore_if_fresh(db, progress, &review_cards)?;
     }
@@ -238,6 +239,7 @@ pub(crate) fn assemble<O>(
         reading_sessions: reading_history::export(tx)?,
         document_revisions: document_revisions::export(tx)?,
         pdf_reading_positions: pdf_reading_position::export(tx)?,
+        reader_preferences: crate::reader_preferences::read(tx)?,
     })
 }
 
@@ -408,6 +410,7 @@ pub(crate) struct PreparedDocument<'a> {
 pub(crate) fn prepare_documents(
     backup: &Backup,
 ) -> Result<impl Iterator<Item = Result<PreparedDocument<'_>>>> {
+    backup.reader_preferences.validate()?;
     let documents = &backup.snapshot.documents;
     pdf_reading_position::validate(&backup.pdf_reading_positions, documents)?;
     let originals = checked_originals(backup.version, documents, &backup.originals)?;

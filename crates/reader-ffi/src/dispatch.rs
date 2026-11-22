@@ -40,6 +40,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
     match command {
         Command::Open { .. } => Err(Error::new("invalid_handle", "Open requires handle zero")),
         Command::Snapshot => value(store.snapshot()),
+        Command::ReaderPreferences => value(store.reader_preferences()),
+        Command::UpdateReaderPreference { change } => value(store.update_reader_preference(change)),
         Command::RecentReadingSessions => value(store.recent_reading_sessions()),
         Command::CheckpointReading { session } => value(store.checkpoint_reading(session)),
         Command::PrepareUkrainianSpeech { text } => {

@@ -35,6 +35,7 @@ mod pdf_reading_position;
 pub use pdf_page_ocr::{PdfReadPage, PdfReadPageState, PdfReadWindow};
 pub mod practice;
 pub mod qwen;
+pub mod reader_preferences;
 pub mod reading_history;
 mod review_schedule;
 pub use review_schedule::FsrsMemory;
@@ -333,6 +334,8 @@ pub struct Backup<Originals = Vec<Original>> {
     pub document_revisions: Vec<document_revisions::DocumentRevision>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pdf_reading_positions: BTreeMap<String, u16>,
+    #[serde(default, skip_serializing_if = "reader_preferences::ReaderPreferences::is_empty")]
+    pub reader_preferences: reader_preferences::ReaderPreferences,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -437,6 +440,7 @@ impl Store {
         file_originals::initialize(&connection)?;
         pdf_page_ocr::initialize(&connection)?;
         pdf_reading_position::initialize(&connection)?;
+        reader_preferences::initialize(&connection)?;
         let file_original_directory = file_originals::directory(path);
         file_originals::cleanup_orphans(&mut connection, &file_original_directory);
         Ok(Self {

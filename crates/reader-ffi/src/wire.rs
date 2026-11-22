@@ -18,6 +18,10 @@ pub enum Command {
         path: String,
     },
     Snapshot,
+    ReaderPreferences,
+    UpdateReaderPreference {
+        change: reader_core::reader_preferences::ReaderPreferenceChange,
+    },
     RecentReadingSessions,
     CheckpointReading {
         session: reader_core::reading_history::ReadingSession,

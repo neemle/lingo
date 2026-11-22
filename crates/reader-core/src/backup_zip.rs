@@ -250,6 +250,7 @@ fn validate_manifest(backup: &Manifest) -> Result<()> {
         return Err("Невідома версія резервної копії.".into());
     }
     validate_resources(&backup.resources)?;
+    backup.reader_preferences.validate()?;
     crate::pdf_reading_position::validate(&backup.pdf_reading_positions, &backup.snapshot.documents)?;
     if backup.originals.len() != backup.snapshot.documents.len()
         || backup.originals.len() > MAX_DOCUMENTS
