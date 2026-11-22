@@ -283,6 +283,12 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         string id, string sentenceId, string revisionId, int step, CancellationToken cancellation) =>
         Task.Run(() => client.PrefetchLinguistics(id, sentenceId, revisionId, step), cancellation);
 
+    public Task<LinguisticAnalysis> AnalyzeDetachedPdfSentenceAsync(string id, int page, string sentenceId, int start) =>
+        Task.Run(() => client.AnalyzeDetachedPdfSentence(id, page, sentenceId, start));
+
+    public Task<LinguisticAnalysis> AnalyzeDetachedPdfSelectionAsync(string id, int page, TextSelection selection) =>
+        Task.Run(() => client.AnalyzeDetachedPdfSelection(id, page, selection.StartUtf16, selection.Text));
+
     public Task<LinguisticAnalysis> AnalyzeExpressionAsync(
         string id, string sentenceId, string revisionId, int[] memberStartsUtf16) =>
         Task.Run(() => client.AnalyzeExpression(id, sentenceId, revisionId, memberStartsUtf16));

@@ -148,6 +148,11 @@ pub enum Command {
         revision_id: String,
         scope: reader_core::knowledge::AnalysisScope,
     },
+    AnalyzeDetachedPdf {
+        id: String,
+        page: u16,
+        request: reader_core::knowledge::DetachedPageAnalysis,
+    },
     PrefetchLinguistics {
         id: String,
         #[serde(rename = "sentenceId")]

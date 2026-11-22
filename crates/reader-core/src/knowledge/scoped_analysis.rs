@@ -36,6 +36,17 @@ pub enum AnalysisScope {
     },
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum DetachedPageAnalysis {
+    Sentence {
+        sentence_id: String,
+        #[serde(default)]
+        start: usize,
+    },
+    Selection { start_utf16: usize, text: String },
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LinguisticAnalysis {
@@ -96,7 +107,7 @@ impl Store {
         let sentence = analysis_sentence(&document, sentence_id, expected_revision)?;
         let index = self.open_knowledge_index(&document.language)?;
         self.analyze_scope(
-            &document, sentence, expected_revision, &scope, versioned_index(&index)?,
+            &document.language, sentence, expected_revision, &scope, versioned_index(&index)?,
         )
     }
 
@@ -113,7 +124,29 @@ impl Store {
         let index = self.open_knowledge_index(language)?;
         let lexical = lexicon::index_identity(&self.knowledge_directory, language);
         self.cached_scope(
-            &document, sentence, expected_revision, &scope, versioned_index(&index)?, lexical,
+            (&document.id, language), sentence, expected_revision, &scope, versioned_index(&index)?, lexical,
+        )
+    }
+
+    pub fn cached_detached_pdf_analysis(
+        &self, document_id: &str, page: u16, request: DetachedPageAnalysis,
+    ) -> Result<Value> {
+        let cached = self.detached_pdf_sentences(document_id, page)?
+            .ok_or("Текст сторінки PDF недоступний.")?;
+        let (sentence, scope) = match request {
+            DetachedPageAnalysis::Sentence { sentence_id, start } => {
+                let sentence = cached.sentences.iter().find(|sentence| sentence.id == sentence_id)
+                    .ok_or("Речення сторінки PDF змінилося.")?;
+                (sentence, AnalysisScope::Sentence { start })
+            }
+            DetachedPageAnalysis::Selection { start_utf16, text } =>
+                detached_selection(&cached.sentences, start_utf16, &text)?,
+        };
+        let index = self.open_knowledge_index(&cached.language)?;
+        let lexical = lexicon::index_identity(&self.knowledge_directory, &cached.language);
+        self.cached_scope(
+            (document_id, &cached.language), sentence, &cached.revision, &scope,
+            versioned_index(&index)?, lexical,
         )
     }
 
@@ -145,7 +178,7 @@ impl Store {
         let lexical = lexicon::index_identity(&self.knowledge_directory, language);
         if lookup_index.is_some() || lexical.is_some() {
             self.cached_scope(
-                &document, sentence, expected_revision, &AnalysisScope::Sentence { start: 0 },
+                (&document.id, language), sentence, expected_revision, &AnalysisScope::Sentence { start: 0 },
                 lookup_index, lexical,
             )?;
         }
@@ -154,42 +187,41 @@ impl Store {
 
     fn cached_scope(
         &self,
-        document: &Document,
+        source: (&str, &str),
         sentence: &Sentence,
         revision: &str,
         scope: &AnalysisScope,
         lookup_index: Option<(&Pack, &Connection, u32)>,
         lexical: Option<(&str, u32)>,
     ) -> Result<Value> {
-        let language = document.language.as_str();
+        let (document_id, language) = source;
         let grammar = lookup_index.map(|(pack, _, version)| (pack.sha256, version));
         let address = serde_json::to_vec(&(
             ANNOTATION_VERSION, revision, &sentence.id, language, grammar, lexical, scope,
         ))
         .map_err(|error| error.to_string())?;
         let key = Sha256::digest(address);
-        if let Some(annotation) = annotation_cache::read(&self.connection, &document.id, key.as_ref()) {
+        if let Some(annotation) = annotation_cache::read(&self.connection, document_id, key.as_ref()) {
             return Ok(annotation);
         }
         let analysis =
-            self.analyze_scope(document, sentence, revision, scope, lookup_index)?;
+            self.analyze_scope(language, sentence, revision, scope, lookup_index)?;
         let annotation = serde_json::to_value(analysis).map_err(|error| error.to_string())?;
         if lexicon::index_identity(&self.knowledge_directory, language) == lexical {
-            annotation_cache::write(&self.connection, &document.id, key.as_ref(), &annotation);
+            annotation_cache::write(&self.connection, document_id, key.as_ref(), &annotation);
         }
         Ok(annotation)
     }
 
     fn analyze_scope(
         &self,
-        document: &Document,
+        language: &str,
         sentence: &Sentence,
         revision: &str,
         scope: &AnalysisScope,
         lookup_index: Option<(&Pack, &Connection, u32)>,
     ) -> Result<LinguisticAnalysis> {
         let (selected, next_start) = select_words(&sentence.text, scope)?;
-        let language = document.language.as_str();
         let sentence_id = sentence.id.as_str();
         let package = PACKS.iter().find(|pack| pack.language == language).map(|pack| {
             pack.describe(lookup_index.map_or(0, |(_, _, version)| version))
@@ -293,6 +325,50 @@ impl Store {
             syntax_parse,
         })
     }
+}
+
+fn detached_selection<'a>(
+    sentences: &'a [Sentence], start_utf16: usize, selected: &str,
+) -> Result<(&'a Sentence, AnalysisScope)> {
+    const MAX_SELECTION_BYTES: usize = 4096;
+    if selected.is_empty() || selected.len() > MAX_SELECTION_BYTES {
+        return Err("Виділіть слово або вираз до восьми слів.".into());
+    }
+    let left_trimmed = selected.trim_start();
+    let prefix = selected.len() - left_trimmed.len();
+    let start_utf16 = start_utf16.checked_add(selected[..prefix].encode_utf16().count())
+        .ok_or("Виділення сторінки PDF завелике.")?;
+    let selected = left_trimmed.trim_end();
+    let end_utf16 = start_utf16.checked_add(selected.encode_utf16().count())
+        .ok_or("Виділення сторінки PDF завелике.")?;
+    let sentence = sentences.iter().find(|sentence| {
+        sentence.start_utf16 <= start_utf16 && sentence.end_utf16 >= end_utf16
+    }).ok_or("Виділення має бути в межах одного речення.")?;
+    let start = start_utf16 - sentence.start_utf16;
+    let end = end_utf16 - sentence.start_utf16;
+    let (Some(first), Some(last)) = (
+        crate::ocr::byte_at_utf16(&sentence.text, start),
+        crate::ocr::byte_at_utf16(&sentence.text, end),
+    ) else {
+        return Err("Некоректна позиція виділення PDF.".into());
+    };
+    if sentence.text.get(first..last) != Some(selected) {
+        return Err("Текст виділення на сторінці PDF змінився.".into());
+    }
+    let members: Vec<_> = word_parts(&sentence.text)
+        .take_while(|(_, offset, _)| *offset < end)
+        .filter(|(_, offset, text)| *offset + text.encode_utf16().count() > start)
+        .map(|(_, offset, _)| offset)
+        .take(9)
+        .collect();
+    let scope = match members.as_slice() {
+        [start_utf16] => AnalysisScope::Word { start_utf16: *start_utf16 },
+        members if (2..=8).contains(&members.len()) => AnalysisScope::Expression {
+            member_starts_utf16: members.to_vec(),
+        },
+        _ => return Err("Виділіть слово або вираз до восьми слів.".into()),
+    };
+    Ok((sentence, scope))
 }
 
 fn analysis_sentence<'a>(

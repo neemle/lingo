@@ -229,6 +229,15 @@ public sealed class CoreClient : IDisposable
             version = 1, operation = "prefetch_linguistics", id, sentenceId, revisionId, step,
         });
 
+    public LinguisticAnalysis AnalyzeDetachedPdfSentence(string id, int page, string sentenceId, int start) =>
+        AnalyzeDetachedPdf(id, page, new { kind = "sentence", sentenceId, start });
+
+    public LinguisticAnalysis AnalyzeDetachedPdfSelection(string id, int page, int startUtf16, string text) =>
+        AnalyzeDetachedPdf(id, page, new { kind = "selection", startUtf16, text });
+
+    private LinguisticAnalysis AnalyzeDetachedPdf(string id, int page, object request) =>
+        CallIndependent<LinguisticAnalysis>(new { version = 1, operation = "analyze_detached_pdf", id, page, request });
+
     public LinguisticAnalysis AnalyzeExpression(string id, string sentenceId, string revisionId, int[] memberStartsUtf16) =>
         AnalyzeLinguistics(id, sentenceId, revisionId, new { kind = "expression", memberStartsUtf16 });
 

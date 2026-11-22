@@ -10,6 +10,7 @@ public partial class ReadingPage
     private readonly LocalSpeech detachedSpeech = new();
     private DetachedAddress? detachedAddress;
     private DetachedPdfSentence? detachedSentence;
+    private TextSelection? detachedSelection;
     private bool loadingDetachedSentence;
     private bool translatingDetachedSentence;
     private bool speakingDetachedSentence;
@@ -34,6 +35,7 @@ public partial class ReadingPage
         if (detachedAddress is null) return;
         detachedAddress = null;
         detachedSentence = null;
+        detachedSelection = null;
         loadingDetachedSentence = false;
         ClearDetachedSpeech();
         ResetDetachedTranslation();
@@ -42,6 +44,7 @@ public partial class ReadingPage
     private async Task LoadDetachedSentenceAsync(DetachedAddress address, int? position)
     {
         loadingDetachedSentence = true;
+        detachedSelection = null;
         ClearDetachedSpeech();
         ResetDetachedTranslation();
         try
@@ -79,6 +82,29 @@ public partial class ReadingPage
             return Task.CompletedTask;
         var next = current.Position + change;
         return next >= 0 && next < current.Total ? LoadDetachedSentenceAsync(address, next) : Task.CompletedTask;
+    }
+
+    private void DetachedPdfSelected(object? sender, TextSelection selected)
+    {
+        if (detachedAddress is null || loadingDetachedSentence) return;
+        detachedSelection = selected;
+        UpdateDetachedControls();
+    }
+
+    private async void DetachedAnalyzeClicked(object? sender, EventArgs args)
+    {
+        if (!DetachedAnalyze.IsEnabled || detachedAddress is not { } address || detachedSentence is not { } current) return;
+        var session = AppState.Session;
+        await ShowAnalysisPageAsync("Аналіз речення", current.Sentence.Text,
+            start => session.AnalyzeDetachedPdfSentenceAsync(address.Document, address.Page, current.Sentence.Id, start));
+    }
+
+    private async void DetachedAnalyzeSelectionClicked(object? sender, EventArgs args)
+    {
+        if (!DetachedAnalyzeSelection.IsEnabled || detachedAddress is not { } address || detachedSelection is not { } selected) return;
+        var session = AppState.Session;
+        await ShowAnalysisPageAsync("Аналіз виділення", selected.Text,
+            _ => session.AnalyzeDetachedPdfSelectionAsync(address.Document, address.Page, selected));
     }
 
     private async void DetachedTranslateClicked(object? sender, EventArgs args)
@@ -210,6 +236,9 @@ public partial class ReadingPage
         DetachedPrevious.IsEnabled = available && detachedSentence is { Position: > 0 };
         DetachedNext.IsEnabled = available && detachedSentence is { } current && current.Position + 1 < current.Total;
         DetachedSpeak.IsEnabled = available;
+        DetachedAnalyze.IsEnabled = available;
+        DetachedAnalyzeSelection.IsVisible = DetachedAnalyzeSelection.IsEnabled =
+            !loadingDetachedSentence && detachedSelection is not null;
         DetachedTranslate.IsEnabled = available && !translatingDetachedSentence && TargetCode is not null;
         var playing = speakingDetachedSentence && !detachedPaused;
         DetachedSpeak.Text = playing ? "Ⅱ" : "▶";

@@ -112,6 +112,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::AnalyzeLinguistics { id, sentence_id, revision_id, scope } => {
             value(store.cached_linguistic_analysis(&id, &sentence_id, &revision_id, scope))
         }
+        Command::AnalyzeDetachedPdf { id, page, request } =>
+            value(store.cached_detached_pdf_analysis(&id, page, request)),
         Command::PrefetchLinguistics { id, sentence_id, revision_id, step } => {
             value(store.prefetch_linguistics(&id, &sentence_id, &revision_id, step))
         }

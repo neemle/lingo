@@ -425,6 +425,13 @@ impl StoreWorker {
             .cached_linguistic_analysis(id, sentence_id, revision, scope)
     }
 
+    pub fn analyze_detached_pdf(
+        self, id: &str, page: u16, request: crate::knowledge::DetachedPageAnalysis,
+    ) -> Result<serde_json::Value> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?
+            .cached_detached_pdf_analysis(id, page, request)
+    }
+
     pub fn prefetch_linguistics(
         self, id: &str, anchor_id: &str, revision: &str, step: i8,
     ) -> Result<()> {

@@ -34,17 +34,18 @@ pub struct DetachedPdfSentence {
     pub language: String,
 }
 
-struct CachedSentences {
-    language: String,
+pub(crate) struct CachedSentences {
+    pub(crate) language: String,
     saved: usize,
-    sentences: Vec<Sentence>,
+    pub(crate) sentences: Vec<Sentence>,
+    pub(crate) revision: String,
 }
 
 impl Store {
     pub fn detached_pdf_sentence(
         &self, id: &str, page: u16, requested: Option<usize>,
     ) -> Result<Option<DetachedPdfSentence>> {
-        let Some(CachedSentences { language, saved, sentences }) = self.detached_pdf_sentences(id, page)? else {
+        let Some(CachedSentences { language, saved, sentences, .. }) = self.detached_pdf_sentences(id, page)? else {
             return Ok(None);
         };
         let total = sentences.len();
@@ -63,7 +64,7 @@ impl Store {
     pub(crate) fn detached_pdf_speech_source(
         &self, id: &str, page: u16, sentence_id: &str, next: bool,
     ) -> Result<Option<(String, crate::speech::SpeechSource)>> {
-        let CachedSentences { language, saved, sentences } = self.detached_pdf_sentences(id, page)?
+        let CachedSentences { language, saved, sentences, .. } = self.detached_pdf_sentences(id, page)?
             .ok_or("Текст сторінки PDF недоступний.")?;
         let position = saved.min(sentences.len() - 1);
         if sentences[position].id != sentence_id {
@@ -74,7 +75,7 @@ impl Store {
         }))
     }
 
-    fn detached_pdf_sentences(&self, id: &str, page: u16) -> Result<Option<CachedSentences>> {
+    pub(crate) fn detached_pdf_sentences(&self, id: &str, page: u16) -> Result<Option<CachedSentences>> {
         let result: Option<(String, String, usize)> = self.connection.query_row(
             "SELECT p.text, json_extract(d.body, '$.language'), coalesce(c.sentence,0)
              FROM pdf_detached_pages p JOIN documents d ON d.id=p.document_id
@@ -84,9 +85,9 @@ impl Store {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional().map_err(database_error)?;
         let Some((text, language, saved)) = result else { return Ok(None); };
-        let revision = format!("{id}:{page}:{:x}", Sha256::digest(text.as_bytes()));
-        let sentences = crate::segment(&text, &revision);
-        Ok((!sentences.is_empty()).then_some(CachedSentences { language, saved, sentences }))
+        let revision = format!("{:x}", Sha256::digest(text.as_bytes()));
+        let sentences = crate::segment(&text, &format!("{id}:{page}:{revision}"));
+        Ok((!sentences.is_empty()).then_some(CachedSentences { language, saved, sentences, revision }))
     }
 }
 

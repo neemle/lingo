@@ -176,7 +176,7 @@
       HorizontalTextAlignment="Center" VerticalOptions="Center" />
      <Grid x:Name="DetachedPdfReader" IsVisible="False" RowDefinitions="*,Auto,Auto" RowSpacing="4">
       <controls:NativeReaderView x:Name="DetachedPdfText" BackgroundColor="{StaticResource Panel}"
-       SemanticProperties.Description="Текст поточної сторінки PDF" />
+       SourceSelected="DetachedPdfSelected" SemanticProperties.Description="Текст поточної сторінки PDF" />
       <ScrollView Grid.Row="1" MaximumHeightRequest="120" Margin="14,0" x:Name="DetachedTranslationPane" IsVisible="False">
        <Label x:Name="DetachedTranslation" FontFamily="Georgia" FontSize="19" LineHeight="1.4" />
       </ScrollView>
@@ -189,6 +189,10 @@
         SemanticProperties.Description="Наступне речення сторінки" />
        <Button x:Name="DetachedTranslate" Text="Перекласти" Clicked="DetachedTranslateClicked"
         Margin="5,0" Style="{StaticResource PlayerButton}" />
+       <Button x:Name="DetachedAnalyze" Text="Аналіз речення" Clicked="DetachedAnalyzeClicked"
+        Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
+       <Button x:Name="DetachedAnalyzeSelection" Text="Аналіз виділення" IsVisible="False"
+        Clicked="DetachedAnalyzeSelectionClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Picker x:Name="DetachedVoicePicker" Title="Голос" SelectedIndexChanged="DetachedVoiceChanged"
         MaximumWidthRequest="148" SemanticProperties.Description="Голос для сторінки PDF" />
        <Label x:Name="DetachedSentenceStatus" Margin="5,0" Style="{StaticResource ReaderMeta}" />

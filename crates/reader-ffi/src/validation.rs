@@ -152,6 +152,12 @@ fn validate(command: &Command) -> Result<()> {
         {
             Err(Error::new("invalid_argument", "Invalid speech address"))
         }
+        Command::AnalyzeDetachedPdf {
+            id, request: reader_core::knowledge::DetachedPageAnalysis::Sentence { sentence_id, .. }, ..
+        } if !valid_token_address(id, sentence_id) =>
+        {
+            Err(Error::new("invalid_argument", "Invalid detached PDF sentence address"))
+        }
         Command::SentenceTokens { id, sentence_id, limit, .. }
             if !valid_token_address(id, sentence_id)
                 || limit.is_some_and(|limit| !(1..=reader_core::document_tokens::MAX_TOKEN_PAGE_SIZE).contains(&limit)) =>
@@ -216,6 +222,7 @@ fn validate(command: &Command) -> Result<()> {
         | Command::OpenPdfReadingPage { id, .. }
         | Command::PdfReadWindow { id, .. }
         | Command::DetachedPdfSentence { id, .. }
+        | Command::AnalyzeDetachedPdf { id, .. }
         | Command::PdfOcrNeededPages { id, .. }
         | Command::ClaimPdfOcrPage { id }
         | Command::RetryPdfOcrPage { id, .. }
