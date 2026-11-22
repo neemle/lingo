@@ -109,8 +109,9 @@ public partial class ReadingPage
     {
         if (!DetachedAnalyze.IsEnabled || detachedAddress is not { } address || detachedSentence is not { } current) return;
         var session = AppState.Session;
-        await ShowAnalysisPageAsync("Аналіз речення", current.Sentence.Text,
-            start => session.AnalyzeDetachedPdfSentenceAsync(address.Document, address.Page, current.Sentence.Id, start));
+        await ShowAnalysisPageAsync("Перевірка речення", current.Sentence.Text,
+            start => session.AnalyzeDetachedPdfSentenceAsync(address.Document, address.Page, current.Sentence.Id, start),
+            model => session.ReviewSentenceAsync(model, address.Document, address.Page, current.Sentence.Id));
     }
 
     private async void DetachedAnalyzeSelectionClicked(object? sender, EventArgs args)

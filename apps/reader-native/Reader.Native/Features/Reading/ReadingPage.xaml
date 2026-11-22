@@ -207,7 +207,7 @@
         Clicked="DetachedShareTranslationClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button Text="Знайти" Clicked="FindInDocumentClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}"
         SemanticProperties.Description="Знайти в документі" />
-       <Button x:Name="DetachedAnalyze" Text="Аналіз речення" Clicked="DetachedAnalyzeClicked"
+       <Button x:Name="DetachedAnalyze" Text="Перевірка речення…" Clicked="DetachedAnalyzeClicked"
         Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedAnalyzeSelection" Text="Аналіз виділення" IsVisible="False"
         Clicked="DetachedAnalyzeSelectionClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />

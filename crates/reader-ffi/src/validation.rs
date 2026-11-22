@@ -183,6 +183,11 @@ fn validate(command: &Command) -> Result<()> {
         {
             Err(Error::new("invalid_argument", "Invalid reading address"))
         }
+        Command::ReviewSentence { model, document, sentence, .. }
+            if model.len() > 32 || !valid_token_address(document, sentence) =>
+        {
+            Err(Error::new("invalid_argument", "Invalid local sentence review request"))
+        }
         Command::ExplainWord {
             model,
             document,

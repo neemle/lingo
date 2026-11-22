@@ -211,6 +211,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             text,
         } => value(store.set_reviewed_translation(&id, &sentence_id, &target, &text)),
         Command::ExplainWord { .. }
+        | Command::ReviewSentence { .. }
         | Command::SemanticVocabulary { .. }
         | Command::InstallLexicalPackage { .. }
         | Command::ModelTransfer { .. }

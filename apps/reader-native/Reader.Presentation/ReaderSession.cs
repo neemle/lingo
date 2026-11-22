@@ -389,6 +389,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         return Read();
     });
 
+    public Task<SentenceReview> ReviewSentenceAsync(string model, string document, int? page, string sentence) =>
+        Task.Run(() => client.ReviewSentence(model, document, page, sentence));
+
     public Task<WordExplanation> ExplainWordAsync(string model, string document, string sentence, string word) =>
         Task.Run(() => client.ExplainWord(model, document, sentence, word));
 

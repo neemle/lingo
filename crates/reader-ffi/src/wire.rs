@@ -336,6 +336,12 @@ pub enum Command {
         #[serde(rename = "documentId")]
         document_id: Option<String>,
     },
+    ReviewSentence {
+        model: String,
+        document: String,
+        page: Option<u16>,
+        sentence: String,
+    },
     ExplainWord {
         model: String,
         document: String,

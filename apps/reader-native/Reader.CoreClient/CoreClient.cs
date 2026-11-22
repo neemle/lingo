@@ -294,6 +294,9 @@ public sealed class CoreClient : IDisposable
         Call<JsonElement>(new { version = 1, operation = "set_speech_text", id, sentenceId, text });
     public void SetReviewedTranslation(string id, string sentenceId, string target, string text) =>
         Call<JsonElement>(new { version = 1, operation = "set_reviewed_translation", id, sentenceId, target, text });
+    public SentenceReview ReviewSentence(string model, string document, int? page, string sentence) =>
+        CallIndependent<SentenceReview>(new { version = 1, operation = "review_sentence", model, document, page, sentence });
+
     public WordExplanation ExplainWord(string model, string document, string sentence, string word) =>
         CallIndependent<WordExplanation>(new { version = 1, operation = "explain_word", model, document, sentence, word });
     public string[] SemanticVocabulary(string query, string? documentId = null) =>

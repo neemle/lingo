@@ -84,8 +84,9 @@ public partial class ReadingPage
         var session = AppState.Session;
         if (PdfPageNotice.IsVisible || session.Busy || session.Document is not { CurrentRevisionId: { } revision } document
             || session.Sentence is not { } sentence) return;
-        await ShowAnalysisPageAsync("Аналіз речення", sentence.Text,
-            start => session.AnalyzeSentenceAsync(document.Id, sentence.Id, revision, start));
+        await ShowAnalysisPageAsync("Перевірка речення", sentence.Text,
+            start => session.AnalyzeSentenceAsync(document.Id, sentence.Id, revision, start),
+            model => session.ReviewSentenceAsync(model, document.Id, null, sentence.Id));
     }
 
     private async void OpenExpressionAnalysisClicked(object? sender, EventArgs args)
@@ -134,11 +135,12 @@ public partial class ReadingPage
         current.Id == document.Id && current.CurrentRevisionId == document.CurrentRevisionId &&
         AppState.Session.Sentence?.Id == sentence.Id;
 
-    private async Task ShowAnalysisPageAsync(string title, string text, Func<int, Task<LinguisticAnalysis>> load)
+    private async Task ShowAnalysisPageAsync(string title, string text, Func<int, Task<LinguisticAnalysis>> load,
+        Func<string, Task<SentenceReview>>? review = null)
     {
         if (!readingPageActive) return;
         StopAnalysisPrefetch();
-        try { await Navigation.PushModalAsync(new AnalysisPage(title, text, load)); }
+        try { await Navigation.PushModalAsync(new AnalysisPage(title, text, load, review)); }
         catch (Exception error) { await DisplayAlertAsync(title, error.Message, "Гаразд"); }
     }
 
@@ -153,7 +155,8 @@ public partial class ReadingPage
         private bool started;
         private bool loading;
 
-        internal AnalysisPage(string title, string text, Func<int, Task<LinguisticAnalysis>> load)
+        internal AnalysisPage(string title, string text, Func<int, Task<LinguisticAnalysis>> load,
+            Func<string, Task<SentenceReview>>? review)
         {
             Title = title;
             this.load = load;
@@ -164,10 +167,50 @@ public partial class ReadingPage
             stack.Children.Add(new Label { Text = title, FontSize = 27, FontAttributes = FontAttributes.Bold });
             stack.Children.Add(new Label { Text = text, FontSize = 19 });
             stack.Children.Add(close);
+            if (review is not null)
+            {
+                var check = new Button { Text = "Перевірити речення з Qwen", HorizontalOptions = LayoutOptions.Start };
+                var hints = new Label { IsVisible = false };
+                check.Clicked += async (_, _) => await ReviewLocallyAsync(review, check, hints);
+                stack.Children.Add(check);
+                stack.Children.Add(hints);
+            }
             stack.Children.Add(status);
             stack.Children.Add(results);
             stack.Children.Add(more);
             Content = new ScrollView { Content = stack };
+        }
+
+        private static async Task ReviewLocallyAsync(
+            Func<string, Task<SentenceReview>> review, Button check, Label hints)
+        {
+            if (!check.IsEnabled) return;
+            check.IsEnabled = false;
+            hints.IsVisible = true;
+            hints.Text = "Перевіряємо локальні моделі…";
+            try
+            {
+                var models = (await AppState.Session.OptionalModelsAsync()).Where(model =>
+                    model.FilesPresent && (model.Id is "qwen-0.8b" or "qwen-2b")).ToArray();
+                var model = models.Where(item => item.Memory?.Ready != false)
+                    .OrderBy(item => item.Id == "qwen-2b" ? 1 : 0).FirstOrDefault();
+                if (model is null)
+                {
+                    hints.Text = models.Length == 0
+                        ? "Установіть Qwen у налаштуваннях. Підказки мовного пакета залишаються доступними."
+                        : "Для встановлених моделей Qwen зараз бракує пам’яті.";
+                    return;
+                }
+                hints.Text = $"{model.Name} перевіряє речення…";
+                var result = await review(model.Id);
+                var notes = new List<string> { $"Підказки {model.Name}" };
+                if (result.Spelling is { } spelling) notes.Add($"Правопис · {spelling}");
+                if (result.Syntax is { } syntax) notes.Add($"Синтаксис · {syntax}");
+                if (notes.Count == 1) notes.Add("Модель не запропонувала виправлень.");
+                hints.Text = string.Join(Environment.NewLine, notes);
+            }
+            catch (Exception error) { hints.Text = error.Message; }
+            finally { check.IsEnabled = true; }
         }
 
         protected override async void OnAppearing()

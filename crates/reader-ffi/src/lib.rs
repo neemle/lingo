@@ -247,6 +247,13 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
+        Command::ReviewSentence { model, document, page, sentence } => {
+            let job = registry::lock()?
+                .store(handle)?
+                .prepare_sentence_review(model, document, *page, sentence)
+                .map_err(gateway::domain)?;
+            return encode_job(job.run());
+        }
         Command::ExplainWord {
             model,
             document,
