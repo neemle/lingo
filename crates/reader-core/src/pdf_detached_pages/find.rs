@@ -79,7 +79,7 @@ impl Store {
 
             let text: String = row.get(1).map_err(database_error)?;
             let prefix = super::sentence_prefix(id, page, &super::page_revision(&text));
-            let sentences = crate::pdf_sentences::segment(&text, &prefix, row.get(2).map_err(database_error)?);
+            let sentences = super::Layout::from_storage(row.get(2).map_err(database_error)?).segment(&text, &prefix);
             let (projection, original) = if let Some((target, source, _)) = &routes {
                 (Some(self.project_pdf_translation_page(id, page, target, text, sentences, source.clone())?), Vec::new())
             } else {

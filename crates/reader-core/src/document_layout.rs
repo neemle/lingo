@@ -234,6 +234,11 @@ fn starts_dialogue(line: &str, previous: &str) -> bool {
             .is_some_and(|rest| rest.trim_start().starts_with(char::is_alphabetic))
 }
 
+pub(crate) fn keep_pdf_sentence_break(previous: &str, next: &str) -> bool {
+    standalone_heading(previous) || standalone_heading(next) || starts_dialogue(next, previous)
+        || (ends_sentence(previous) && footnote_start(next))
+}
+
 pub(crate) fn detached_pdf_document(text: String, ocr_lines: Option<Vec<crate::ocr::OcrLine>>) -> Document {
     let layout = from_transcript(text, Some(vec![Some(0)]));
     let mut document = Document {

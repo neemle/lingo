@@ -9,6 +9,40 @@ pub(crate) fn segment(text: &str, id: &str, soft_lines: bool) -> Vec<Sentence> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum Layout {
+    Literal = 0,
+    SoftLines = 1,
+    Structured = 2,
+}
+
+impl Layout {
+    pub(crate) fn from_storage(value: u8) -> Self {
+        match value {
+            2 => Self::Structured,
+            1 => Self::SoftLines,
+            _ => Self::Literal,
+        }
+    }
+
+    pub(crate) fn segment(self, text: &str, id: &str) -> Vec<Sentence> {
+        match self {
+            Self::Structured => crate::segment_pdf_structured(text, id),
+            Self::SoftLines => crate::segment_pdf(text, id),
+            Self::Literal => crate::segment(text, id),
+        }
+    }
+}
+
+pub(crate) fn segment_document(document: &Document, text: &str) -> Vec<Sentence> {
+    if document.format == "pdf" && document.pdf_structured_sentences {
+        crate::segment_pdf_structured(text, &document.id)
+    } else {
+        segment(text, &document.id, document.pdf_soft_lines)
+    }
+}
+
 pub(crate) fn position_at(sentences: &[Sentence], offset: usize) -> usize {
     sentences
         .partition_point(|sentence| sentence.end_utf16 <= offset)
@@ -17,10 +51,37 @@ pub(crate) fn position_at(sentences: &[Sentence], offset: usize) -> usize {
 
 /// The legacy sentence remains intact if changing it would alter a saved translation or annotation.
 pub(crate) fn upgrade_document(document: &mut Document) -> bool {
-    if document.format != "pdf" || document.pdf_soft_lines {
+    if document.format != "pdf" || document.pdf_structured_sentences {
         return false;
     }
-    let sentences = crate::segment_pdf(&document.text, &document.id);
+    let structured = crate::segment_pdf_structured(&document.text, &document.id);
+    let (sentences, structured) = if preserves_anchors(document, &structured) {
+        (structured, true)
+    } else if !document.pdf_soft_lines {
+        let soft = crate::segment_pdf(&document.text, &document.id);
+        if !preserves_anchors(document, &soft) {
+            return false;
+        }
+        (soft, false)
+    } else {
+        return false;
+    };
+
+    if let Some(previous) = document.sentences.get(document.position) {
+        let offset = previous.start_utf16 + document.reading_token_utf16.unwrap_or(0);
+        document.position = position_at(&sentences, offset);
+        document.reading_token_utf16 = document.reading_token_utf16.and_then(|_| {
+            let new = sentences.get(document.position)?;
+            (new.start_utf16 <= offset && offset < new.end_utf16).then(|| offset - new.start_utf16)
+        });
+    }
+    document.sentences = sentences;
+    document.pdf_soft_lines = true;
+    document.pdf_structured_sentences = structured;
+    true
+}
+
+fn preserves_anchors(document: &Document, sentences: &[Sentence]) -> bool {
     let original = &document.sentences;
     let protected = document
         .bookmarks
@@ -56,16 +117,6 @@ pub(crate) fn upgrade_document(document: &mut Document) -> bool {
         }
     }
 
-    if let Some(previous) = original.get(document.position) {
-        let offset = previous.start_utf16 + document.reading_token_utf16.unwrap_or(0);
-        document.position = position_at(&sentences, offset);
-        document.reading_token_utf16 = document.reading_token_utf16.and_then(|_| {
-            let new = sentences.get(document.position)?;
-            (new.start_utf16 <= offset && offset < new.end_utf16).then(|| offset - new.start_utf16)
-        });
-    }
-    document.sentences = sentences;
-    document.pdf_soft_lines = true;
     true
 }
 
@@ -73,7 +124,7 @@ pub(crate) fn upgrade_documents(connection: &mut Connection) -> Result<()> {
     if connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
         .map_err(storage_error)?
-        >= 2
+        >= 3
     {
         return Ok(());
     }
@@ -84,7 +135,7 @@ pub(crate) fn upgrade_documents(connection: &mut Connection) -> Result<()> {
     if tx
         .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
         .map_err(storage_error)?
-        < 2
+        < 3
     {
         let ids = {
             let mut query = tx
@@ -115,7 +166,8 @@ pub(crate) fn upgrade_documents(connection: &mut Connection) -> Result<()> {
                 .map_err(storage_error)?;
             }
         }
-        tx.pragma_update(None, "user_version", 2)
+        crate::pdf_detached_pages::upgrade_sentence_layouts(&tx)?;
+        tx.pragma_update(None, "user_version", 3)
             .map_err(storage_error)?;
     }
     tx.commit().map_err(storage_error)
@@ -128,6 +180,20 @@ fn storage_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn structured_pdf_splits_headings_and_dialogue_but_keeps_wrapped_lines() {
+        let text = "CHAPITRE 1\nIl veut rejoindre\nson bateau\n– Je viens,\nmon ami !\n– Moi aussi.";
+        let legacy = Layout::SoftLines.segment(text, "pdf");
+        let structured = Layout::Structured.segment(text, "pdf");
+        let excerpts: Vec<_> = structured.iter().map(|sentence| sentence.text.as_str()).collect();
+        assert_eq!(excerpts, ["CHAPITRE 1", "Il veut rejoindre\nson bateau", "– Je viens,\nmon ami !", "– Moi aussi."]);
+        assert!(structured.len() > legacy.len());
+        for sentence in structured {
+            assert_eq!(&text[sentence.start_utf8..sentence.end_utf8], sentence.text);
+            assert_eq!(text[..sentence.start_utf8].encode_utf16().count(), sentence.start_utf16);
+        }
+    }
 
     #[test]
     fn wrapped_pdf_sentences_keep_source_offsets_and_saved_contexts() {

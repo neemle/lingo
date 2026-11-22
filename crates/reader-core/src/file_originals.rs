@@ -11,7 +11,7 @@ use tempfile::NamedTempFile;
 use uuid::Uuid;
 
 use crate::{
-    document_layout, document_revisions, now, ocr, pdf_layers, segment_pdf, valid_language, Document,
+    document_layout, document_revisions, now, ocr, pdf_layers, segment_pdf_structured, valid_language, Document,
     Result, Store,
 };
 
@@ -442,7 +442,7 @@ impl Store {
             .unwrap_or(&name);
         let text = extracted.text;
         let mut document = Document {
-            sentences: segment_pdf(&text, &id),
+            sentences: segment_pdf_structured(&text, &id),
             id,
             title: title.into(),
             language,
@@ -463,6 +463,7 @@ impl Store {
             pdf_pending_text_pages: deferred_from.map_or_else(Default::default, |start| (start..page_count).collect()),
             pdf_page_starts: extracted.pdf_page_starts,
             pdf_soft_lines: true,
+            pdf_structured_sentences: true,
             created_at: now(),
             source_hash: hash,
             format: "pdf".into(),

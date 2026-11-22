@@ -102,14 +102,14 @@ impl Store {
             let anchor: DictionarySentenceAnchor = serde_json::from_str(&anchor).map_err(error)?;
             let resolved = if let Some(page) = anchor.page {
                 let Some(cached) = self.detached_pdf_sentences(&document, page)? else { continue; };
-                location_in_revision(&anchor, &text, &cached.revision, &cached.sentences, true)
+                location_in_revision(&anchor, &text, &cached.revision, &cached.sentences, Some(&cached.text))
             } else {
                 if !canonical.as_ref().is_some_and(|loaded: &Document| loaded.id == document) {
                     canonical = Some(self.token_document(&document)?);
                 }
                 let loaded = canonical.as_ref().expect("document loaded");
                 let Some(revision) = loaded.current_revision_id.as_deref() else { continue; };
-                location_in_revision(&anchor, &text, revision, &loaded.sentences, loaded.pdf_soft_lines)
+                location_in_revision(&anchor, &text, revision, &loaded.sentences, loaded.pdf_soft_lines.then_some(loaded.text.as_str()))
             };
             if let Some((position, sentence_id, revision_id)) = resolved {
                 if seen.insert((document.clone(), anchor.page, position)) {
@@ -126,7 +126,7 @@ impl Store {
 
 fn location_in_revision(
     anchor: &DictionarySentenceAnchor, text: &str, revision: &str, sentences: &[crate::Sentence],
-    allow_wrapped_context: bool,
+    source: Option<&str>,
 ) -> Option<(usize, String, String)> {
     let offset = anchor.sentence_start_utf16;
     let position = sentences.partition_point(|sentence| sentence.end_utf16 <= offset);
@@ -134,13 +134,13 @@ fn location_in_revision(
     if offset == sentence.start_utf16 && sentence.text == text {
         return Some((position, sentence.id.clone(), revision.to_owned()));
     }
-    if !allow_wrapped_context || revision != anchor.revision_id {
+    if revision != anchor.revision_id {
         return None;
     }
-    // A saved context can be an old visual line within the same unchanged PDF text.
+    // An unchanged PDF may have different sentence boundaries after reflow.
     let relative = offset.checked_sub(sentence.start_utf16)?;
-    let start = crate::ocr::byte_at_utf16(&sentence.text, relative)?;
-    sentence.text.get(start..)?.starts_with(text)
+    let start = sentence.start_utf8 + crate::ocr::byte_at_utf16(&sentence.text, relative)?;
+    source?.get(start..)?.starts_with(text)
         .then(|| (position, sentence.id.clone(), revision.to_owned()))
 }
 

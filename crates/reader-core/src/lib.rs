@@ -107,6 +107,8 @@ pub struct Document {
     pub pdf_page_starts: Option<Vec<Option<usize>>>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) pdf_soft_lines: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) pdf_structured_sentences: bool,
     pub created_at: i64,
     pub source_hash: String,
     pub format: String,
@@ -410,13 +412,24 @@ pub fn segment(text: &str, id: &str) -> Vec<Sentence> {
 }
 
 pub(crate) fn segment_pdf(text: &str, id: &str) -> Vec<Sentence> {
+    segment_pdf_lines(text, id, false)
+}
+
+pub(crate) fn segment_pdf_structured(text: &str, id: &str) -> Vec<Sentence> {
+    segment_pdf_lines(text, id, true)
+}
+
+fn segment_pdf_lines(text: &str, id: &str, structured: bool) -> Vec<Sentence> {
     let mut softened = text.as_bytes().to_vec();
     let mut start = 0;
     let mut lines = text.split_inclusive('\n').peekable();
     while let Some(line) = lines.next() {
         let end = start + line.len();
         if line.ends_with('\n') && !line.trim().is_empty()
-            && lines.peek().is_some_and(|next| !next.trim().is_empty())
+            && lines.peek().is_some_and(|next| {
+                let next = next.trim();
+                !next.is_empty() && (!structured || !document_layout::keep_pdf_sentence_break(line.trim(), next))
+            })
         {
             let ending = if line.ends_with("\r\n") { 2 } else { 1 };
             softened[end - ending..end].fill(b' ');
@@ -805,7 +818,7 @@ impl Store {
             .and_then(|extension| extension.to_str())
             .unwrap_or("txt")
             .to_lowercase();
-        let sentences = if format == "pdf" { segment_pdf(&text, &id) } else { segment(&text, &id) };
+        let sentences = if format == "pdf" { segment_pdf_structured(&text, &id) } else { segment(&text, &id) };
         let mut document = Document {
             sentences,
             id,
@@ -833,6 +846,7 @@ impl Store {
             pdf_pending_text_pages: BTreeSet::new(),
             pdf_page_starts,
             pdf_soft_lines: format == "pdf",
+            pdf_structured_sentences: format == "pdf",
             created_at: now(),
             source_hash: hash,
             source_url: source_url.map(str::to_owned),

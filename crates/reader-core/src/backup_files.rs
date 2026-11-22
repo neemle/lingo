@@ -502,7 +502,7 @@ pub(crate) fn prepare_layout(
         if !current.matches_text(&d.text) {
             return Err("Архів не містить підтвердженого тексту поточної ревізії".into());
         }
-        d.sentences = crate::pdf_sentences::segment(&d.text, &d.id, d.pdf_soft_lines);
+        d.sentences = crate::pdf_sentences::segment_document(&d, &d.text);
         ocr::update_transcript(&mut d, parsed.text)?;
         true
     } else {
@@ -510,7 +510,7 @@ pub(crate) fn prepare_layout(
             d.reading_token_utf16 = None;
         }
         d.text = parsed.text;
-        d.sentences = crate::pdf_sentences::segment(&d.text, &d.id, d.pdf_soft_lines);
+        d.sentences = crate::pdf_sentences::segment_document(&d, &d.text);
         false
     };
     d.blocks = parsed.blocks;
