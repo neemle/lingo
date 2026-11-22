@@ -124,9 +124,18 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
 
     public Task SelectSentenceAsync(int position) => RunAsync(() =>
     {
-        if (Document is not { } doc || position < 0 || position >= doc.Sentences.Length) return Read();
+        var documents = snapshot.Documents;
+        var index = Array.FindIndex(documents, document => document.Id == selectedId);
+        if (index < 0) return (snapshot, selectedId);
+
+        var doc = documents[index];
+        if (position < 0 || position >= doc.Sentences.Length || position == doc.Position)
+            return (snapshot, selectedId);
+
         client.Position(doc.Id, position);
-        return Read();
+        var updated = (Document[])documents.Clone();
+        updated[index] = doc with { Position = position };
+        return (snapshot with { Documents = updated }, selectedId);
     });
 
     public Task ToggleBookmarkAsync() => RunAsync(() =>
