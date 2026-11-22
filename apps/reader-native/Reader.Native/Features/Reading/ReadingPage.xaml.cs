@@ -265,6 +265,8 @@ public partial class ReadingPage : ContentPage
         var session = AppState.Session;
         if (session.Document is not { } doc) return;
         if (selection != selected) Translation.Text = "";
+        WordExplanationText.Text = "";
+        WordExplanationText.IsVisible = false;
         selection = selected;
         vocabularyReadings = [];
         VocabularyReading.IsVisible = false;

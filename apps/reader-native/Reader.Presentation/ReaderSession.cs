@@ -131,6 +131,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
             return Read();
         });
 
+    public Task<WordExplanation> ExplainWordAsync(string model, string document, string sentence, string word) =>
+        Task.Run(() => client.ExplainWord(model, document, sentence, word));
+
     public Task<OptionalModel[]> OptionalModelsAsync() => Task.Run(client.OptionalModels);
     public Task CheckOptionalModelSpaceAsync(string id, string stagingRoot) =>
         Task.Run(() => client.CheckOptionalModelSpace(id, stagingRoot));

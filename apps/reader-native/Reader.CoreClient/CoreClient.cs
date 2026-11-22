@@ -68,6 +68,22 @@ public sealed class CoreClient : IDisposable
         Call<JsonElement>(new { version = 1, operation = "set_bookmark", id, sentenceId, saved });
     public void SetReviewedTranslation(string id, string sentenceId, string target, string text) =>
         Call<JsonElement>(new { version = 1, operation = "set_reviewed_translation", id, sentenceId, target, text });
+    public WordExplanation ExplainWord(string model, string document, string sentence, string word)
+    {
+        var added = false;
+        try
+        {
+            lock (sync)
+            {
+                ObjectDisposedException.ThrowIf(disposed, this);
+                handle.DangerousAddRef(ref added);
+            }
+            return Invoke<WordExplanation>(handle.Value,
+                new { version = 1, operation = "explain_word", model, document, sentence, word });
+        }
+        finally { if (added) handle.DangerousRelease(); }
+    }
+
     public OptionalModel[] OptionalModels() =>
         Call<OptionalModel[]>(new { version = 1, operation = "optional_models" });
     public void CheckOptionalModelSpace(string id, string stagingRoot) =>

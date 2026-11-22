@@ -18,6 +18,7 @@ candle-nn = "0.11.1"
 candle-transformers = "0.11.1"
 sentencepiece-rs = "0.2.2"
 tempfile = "3"
+llama-cpp-2 = { version = "=0.1.161", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", features = ["fs"] }

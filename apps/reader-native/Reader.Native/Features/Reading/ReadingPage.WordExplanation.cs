@@ -1,0 +1,67 @@
+using Reader.Contracts;
+using Reader.Native.Services;
+
+namespace Reader.Native.Features.Reading;
+
+public partial class ReadingPage
+{
+    private bool explainingWord;
+
+    private async void ExplainWordClicked(object? sender, EventArgs args)
+    {
+        var session = AppState.Session;
+        if (explainingWord || selection is not { } word || session.Document is not { } document) return;
+        var sentence = Array.Find(document.Sentences,
+            item => word.StartUtf16 >= item.StartUtf16 && word.StartUtf16 < item.EndUtf16);
+        if (sentence is null) return;
+
+        bool CurrentSelection() => selection == word && session.Document is { } current &&
+            current.Id == document.Id && current.Language == document.Language && WordCard.IsVisible;
+
+        explainingWord = true;
+        ExplainWord.IsEnabled = false;
+        try
+        {
+            var installed = (await session.OptionalModelsAsync())
+                .Where(model => model.FilesPresent && (model.Id is "qwen-0.8b" or "qwen-2b"))
+                .ToArray();
+            if (!CurrentSelection()) return;
+            if (installed.Length == 0)
+            {
+                if (await DisplayAlertAsync("Локальне пояснення",
+                    "Для пояснень встановіть одну з моделей Qwen у налаштуваннях.",
+                    "Налаштування", "Закрити"))
+                    await Shell.Current.GoToAsync("//settings");
+                return;
+            }
+
+            OptionalModel? selected = installed[0];
+            if (installed.Length > 1)
+            {
+                var names = installed.ToDictionary(model => model.Memory?.Ready == false
+                    ? $"{model.Name} · бракує пам’яті" : model.Name);
+                var choice = await DisplayActionSheetAsync("Модель пояснення", "Скасувати", null, names.Keys.ToArray());
+                selected = choice is null ? null : names.GetValueOrDefault(choice);
+            }
+            if (selected is null || !CurrentSelection()) return;
+            WordExplanationText.IsVisible = true;
+            WordExplanationText.Text = $"{selected.Name} готує пояснення…";
+            var explanation = await session.ExplainWordAsync(selected.Id, document.Id, sentence.Id, word.Text);
+            if (CurrentSelection())
+                WordExplanationText.Text = $"Припущення {selected.Name} · {explanation.Explanation}";
+        }
+        catch (Exception error)
+        {
+            if (CurrentSelection())
+            {
+                WordExplanationText.IsVisible = true;
+                WordExplanationText.Text = error.Message;
+            }
+        }
+        finally
+        {
+            explainingWord = false;
+            ExplainWord.IsEnabled = true;
+        }
+    }
+}

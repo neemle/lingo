@@ -32,11 +32,14 @@
     <ProjectReference Include="../Reader.Presentation/Reader.Presentation.csproj" />
     <MauiIcon Include="Resources/AppIcon/appicon.svg" Color="#63725C" />
     <MauiSplashScreen Include="Resources/Splash/splash.svg" Color="#F6F3EC" BaseSize="128,128" />
+    <MauiAsset Include="Resources/InferenceLicenses.txt" LogicalName="InferenceLicenses.txt" />
     <PackageReference Include="Microsoft.Maui.Controls" Version="10.0.0" />
   </ItemGroup>
   <ItemGroup Condition="$(TargetFramework.Contains('maccatalyst'))">
     <NativeReference Include="../../../target/aarch64-apple-ios-macabi/release/libreader_ffi.a">
-      <Kind>Static</Kind><ForceLoad>true</ForceLoad><SmartLink>false</SmartLink>
+      <Kind>Static</Kind><SmartLink>false</SmartLink>
+      <Frameworks>Accelerate Foundation Metal</Frameworks>
+      <LinkerFlags>-lc++ -u _reader_abi_version -u _reader_call -u _reader_close -u _reader_release</LinkerFlags>
     </NativeReference>
   </ItemGroup>
   <ItemGroup Condition="$(TargetFramework.Contains('windows'))">

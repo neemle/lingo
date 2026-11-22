@@ -48,6 +48,12 @@ impl Registry {
         dispatch::execute(store, command)
     }
 
+    pub fn store(&self, handle: u64) -> Result<&gateway::Store> {
+        self.stores
+            .get(&handle)
+            .ok_or_else(|| Error::new("invalid_handle", "Store handle is missing or closed"))
+    }
+
     pub fn close(&mut self, handle: u64) -> bool {
         self.stores.remove(&handle).is_some()
     }

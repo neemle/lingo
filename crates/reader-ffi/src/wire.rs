@@ -86,6 +86,12 @@ pub enum Command {
         target: String,
         text: String,
     },
+    ExplainWord {
+        model: String,
+        document: String,
+        sentence: String,
+        word: String,
+    },
     OptionalModels,
     CheckOptionalModelSpace {
         id: String,

@@ -40,6 +40,21 @@ fn validate(command: &Command) -> Result<()> {
                 "Import must contain 1..20MiB and a bounded filename",
             ))
         }
+        Command::ExplainWord {
+            model,
+            document,
+            sentence,
+            word,
+        } if model.len() > 32
+            || document.len() > 128
+            || sentence.len() > 128
+            || word.len() > 320 =>
+        {
+            Err(Error::new(
+                "invalid_argument",
+                "Word explanation fields exceed their wire bounds",
+            ))
+        }
         Command::Review {
             direction, grade, ..
         } if !["forward", "reverse"].contains(&direction.as_str()) || *grade > 3 => Err(

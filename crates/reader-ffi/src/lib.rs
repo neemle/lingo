@@ -5,7 +5,7 @@ mod validation;
 mod wire;
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use wire::{Error, Result, MAX_WIRE, VERSION};
+use wire::{Command, Error, Result, MAX_WIRE, VERSION};
 
 #[repr(C)]
 #[derive(Default)]
@@ -53,6 +53,21 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         unsafe { std::slice::from_raw_parts(input, len as usize) }
     };
     let command = validation::decode(bytes)?;
+    if let Command::ExplainWord {
+        model,
+        document,
+        sentence,
+        word,
+    } = &command
+    {
+        let job = registry::lock()?
+            .store(handle)?
+            .prepare_word_explanation(model, document, sentence, word)
+            .map_err(gateway::domain)?;
+        let explanation = job.run().map_err(gateway::domain)?;
+        return serde_json::to_value(explanation)
+            .map_err(|_| Error::new("serialization_error", "Cannot encode core response"));
+    }
     let mut state = registry::lock()?;
     catch_unwind(AssertUnwindSafe(|| state.call(handle, command))).unwrap_or_else(|_| {
         state.close(handle);

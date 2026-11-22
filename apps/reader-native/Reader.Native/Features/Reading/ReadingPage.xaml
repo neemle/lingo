@@ -83,6 +83,8 @@
    <VerticalStackLayout Spacing="8">
     <Label x:Name="SelectedWord" FontSize="21" FontAttributes="Bold" />
     <Label x:Name="KnowledgeAnalysis" FontSize="12" />
+    <Button x:Name="ExplainWord" Text="Пояснити з Qwen" Clicked="ExplainWordClicked" />
+    <Label x:Name="WordExplanationText" IsVisible="False" />
     <Picker x:Name="VocabularyReading" Title="Форма для словникової картки" IsVisible="False" />
     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
      <Entry x:Name="Translation" Placeholder="Ваш перевірений переклад"

@@ -10,7 +10,7 @@ Translation and grammar packages are optional and installed separately. The app 
 ## Build and run
 
 Use an installed .NET SDK that supports the `net10.0` targets, its compatible MAUI workload, and Rust.
-Windows requires MSVC and the Windows SDK. Mac Catalyst requires full Xcode compatible with the installed
+The Rust build also uses CMake and libclang for llama.cpp. Windows requires MSVC and the Windows SDK. Mac Catalyst requires full Xcode compatible with the installed
 .NET Apple workload; Command Line Tools alone cannot build or launch the app. No Node or browser runtime is used.
 Run commands from the repository root.
 
@@ -18,7 +18,10 @@ macOS, Apple Silicon:
 
 ```sh
 rustup target add aarch64-apple-ios-macabi
-cargo build -p reader-ffi --release --locked --target aarch64-apple-ios-macabi
+CMAKE_OSX_SYSROOT="$(xcrun --sdk macosx --show-sdk-path)" \
+  CFLAGS_aarch64_apple_ios_macabi="-target arm64-apple-ios15.0-macabi" \
+  CXXFLAGS_aarch64_apple_ios_macabi="-target arm64-apple-ios15.0-macabi" \
+  cargo build -p reader-ffi --release --locked --target aarch64-apple-ios-macabi
 reader_project=apps/reader-native/Reader.Native/Reader.Native.csproj
 dotnet build "$reader_project" -f net10.0-maccatalyst -p:EnableCodeSigning=false
 dotnet build "$reader_project" -t:Run -f net10.0-maccatalyst -p:EnableCodeSigning=false
@@ -31,6 +34,7 @@ Windows, x64:
 
 ```powershell
 rustup target add x86_64-pc-windows-msvc
+$env:LIBCLANG_PATH = "C:\Program Files\LLVM\bin"
 cargo build -p reader-ffi --release --locked --target x86_64-pc-windows-msvc
 $readerProject = "apps/reader-native/Reader.Native/Reader.Native.csproj"
 dotnet build $readerProject -f net10.0-windows10.0.19041.0 `
@@ -133,7 +137,9 @@ and the source text, bookmarks, and current reading position remain intact.
 In **Налаштування → Додаткові локальні моделі**, choose a model to download, verify or remove.
 Stopping a download keeps the partial files so the next attempt can resume. Each completed file must match
 its pinned SHA-256 before the model is activated. An interrupted replacement preserves the previous files.
-Inference with the Qwen and E5 files is pending. Reading, translation and the vocabulary work without them.
+Select a word and choose **Пояснити з Qwen** for a local, generated explanation. The app checks available
+memory before loading the model and labels the result with the model name. Qwen is optional for reading,
+translation and the vocabulary. Semantic search with E5 is pending.
 
 - [Qwen3.5-0.8B GGUF](https://huggingface.co/ggml-org/Qwen3.5-0.8B-GGUF/tree/004fd086eccea9f7cf867aa07ba328773beef81d), four-bit, Apache-2.0.
 - [Qwen3.5-2B GGUF](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/tree/f6d5376be1edb4d416d56da11e5397a961aca8ae), four-bit, Apache-2.0.

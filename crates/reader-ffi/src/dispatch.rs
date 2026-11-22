@@ -75,6 +75,10 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             target,
             text,
         } => value(store.set_reviewed_translation(&id, &sentence_id, &target, &text)),
+        Command::ExplainWord { .. } => Err(Error::new(
+            "internal_error",
+            "ExplainWord requires unlocked dispatch",
+        )),
         Command::OptionalModels => value(Ok(store.optional_models())),
         Command::CheckOptionalModelSpace { id, staging_root } => {
             value(store.check_optional_model_space(&id, std::path::Path::new(&staging_root)))
