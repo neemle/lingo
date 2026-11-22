@@ -50,7 +50,15 @@ impl Store {
                 let word: String = card.word.chars().take(100).collect();
                 let translation: String = card.translation.chars().take(160).collect();
                 let context: String = card.context.chars().take(400).collect();
-                let text = format!("passage: {word} — {translation}. {context}");
+                let details: String = card
+                    .sense
+                    .iter()
+                    .map(|sense| sense.gloss.as_str())
+                    .chain(card.accepted_translations.iter().map(String::as_str))
+                    .flat_map(|value| value.chars().chain(['.', ' ']))
+                    .take(200)
+                    .collect();
+                let text = format!("passage: {word} — {translation}. {details}{context}");
                 let mut hash = Sha256::new();
                 hash.update(model.revision().as_bytes());
                 hash.update([0]);

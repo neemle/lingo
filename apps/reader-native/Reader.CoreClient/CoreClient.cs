@@ -125,6 +125,8 @@ public sealed class CoreClient : IDisposable
         Call<MachineTranslation?>(new { version = 1, operation = "translate_sentence", id, sentenceId, target });
     public Vocabulary SaveWord(Vocabulary entry) =>
         Call<Vocabulary>(new { version = 1, operation = "save_word", entry });
+    public Vocabulary SetVocabularyVariants(string id, string[] acceptedTranslations) =>
+        Call<Vocabulary>(new { version = 1, operation = "set_vocabulary_variants", id, acceptedTranslations });
     public void Review(string id, string direction, byte grade) =>
         Call<JsonElement>(new { version = 1, operation = "review", id, direction, grade });
     public PracticeProgress GetPractice() =>

@@ -188,13 +188,19 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         Task.Run(() => client.TranslateSentence(id, sentenceId, target));
 
     public Task SaveWordAsync(TextSelection selection, string translation, LemmaSnapshot? analysis = null,
-        ExpressionSnapshot? expression = null) => RunAsync(() =>
+        ExpressionSnapshot? expression = null, SenseSnapshot? sense = null) => RunAsync(() =>
     {
         if (Document is not { } doc) return Read();
         var context = doc.Sentences.FirstOrDefault(sentence => selection.StartUtf16 >= sentence.StartUtf16
             && selection.StartUtf16 < sentence.EndUtf16)?.Text ?? "";
         client.SaveWord(new Vocabulary("", selection.Text, translation, doc.Language, "uk",
-            context, doc.Id, new ReviewState(), new ReviewState()) { Analysis = analysis, Expression = expression });
+            context, doc.Id, new ReviewState(), new ReviewState()) { Analysis = analysis, Expression = expression, Sense = sense });
+        return Read();
+    });
+
+    public Task SetVocabularyVariantsAsync(string id, string[] acceptedTranslations) => RunAsync(() =>
+    {
+        client.SetVocabularyVariants(id, acceptedTranslations);
         return Read();
     });
 

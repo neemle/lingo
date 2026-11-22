@@ -58,6 +58,23 @@
         <VerticalStackLayout Grid.Column="1" Spacing="5">
          <Label Text="{Binding Word}" Style="{StaticResource SerifTitle}" FontSize="26" />
          <Label Text="{Binding Translation}" FontSize="15" TextColor="{StaticResource Sage}" />
+         <Label Text="{Binding AcceptedTranslationsLabel, StringFormat='Варіанти: {0}'}" FontSize="13"
+          TextColor="{StaticResource Sage}" LineBreakMode="WordWrap">
+          <Label.Triggers>
+           <DataTrigger TargetType="Label" Binding="{Binding AcceptedTranslationsLabel}" Value="">
+            <Setter Property="IsVisible" Value="False" />
+           </DataTrigger>
+          </Label.Triggers>
+         </Label>
+         <VerticalStackLayout Spacing="3">
+          <VerticalStackLayout.Triggers>
+           <DataTrigger TargetType="VerticalStackLayout" Binding="{Binding Sense}" Value="{x:Null}">
+            <Setter Property="IsVisible" Value="False" />
+           </DataTrigger>
+          </VerticalStackLayout.Triggers>
+          <Label Text="{Binding Sense.Gloss}" FontSize="14" LineBreakMode="WordWrap" />
+          <Label Text="{Binding Sense.SourceName}" TextColor="{StaticResource Muted}" FontSize="11" />
+         </VerticalStackLayout>
          <Label Text="{Binding Context}" FontFamily="Georgia" FontAttributes="Italic" FontSize="14"
           TextColor="{StaticResource Muted}" LineBreakMode="WordWrap" Margin="0,3,0,0" />
          <VerticalStackLayout Spacing="3" Margin="0,5,0,0">
@@ -102,6 +119,9 @@
          <Label Text="{Binding Reverse.Reviews, StringFormat='Зворотний · {0}'}" HorizontalTextAlignment="End"
           SemanticProperties.Description="{Binding Reverse.Reviews, StringFormat='Повторень у зворотному напрямі: {0}'}"
           TextColor="{StaticResource Muted}" FontSize="11" />
+         <Button Text="Варіанти" FontSize="11" HorizontalOptions="End" Style="{StaticResource OutlineButton}"
+          Clicked="EditVariantsClicked" CommandParameter="{Binding .}"
+          SemanticProperties.Description="{Binding Word, StringFormat='Редагувати варіанти перекладу для {0}'}" />
          <Button Text="Поширити" FontSize="11" HorizontalOptions="End" Style="{StaticResource OutlineButton}"
           Clicked="ShareCardClicked" CommandParameter="{Binding .}"
           SemanticProperties.Description="{Binding Word, StringFormat='Поширити картку {0}'}" />

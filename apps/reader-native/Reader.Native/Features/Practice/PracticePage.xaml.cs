@@ -74,11 +74,15 @@ public partial class PracticePage : ContentPage
         var session = AppState.Session;
         var noCards = session.Snapshot.Vocabulary.Length == 0;
         Prompt.Text = saved?.Prompt ?? (noCards ? "Знайдімо ваші перші слова" : "На сьогодні все");
+        var card = saved is null ? null : session.Snapshot.Vocabulary.FirstOrDefault(entry => entry.Id == saved.CardId);
         var context = saved is null
             ? noCards ? "Збережіть кілька слів під час читання, щоб почати практику."
                 : "Усі картки цього напряму повторено. Можна змінити напрям або повернутися до читання."
             : state.Direction == "reverse" ? "Згадайте слово мовою оригіналу."
-                : session.Snapshot.Vocabulary.FirstOrDefault(card => card.Id == saved.CardId)?.Context;
+                : card?.Context;
+        if (state.Direction == "forward" && card?.Sense is { } sense &&
+            !string.Equals(sense.GlossLanguage, card.TargetLanguage, StringComparison.OrdinalIgnoreCase))
+            context = string.IsNullOrWhiteSpace(context) ? sense.Gloss : $"{context}{Environment.NewLine}{sense.Gloss}";
         QuestionContext.Text = context;
         QuestionContext.IsVisible = !string.IsNullOrWhiteSpace(context);
         EmptyAction.Text = session.Document is null ? "Відкрити бібліотеку" : "Продовжити читати";

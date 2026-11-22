@@ -5,6 +5,8 @@ use std::{collections::BTreeMap, path::Path};
 use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
 
+mod card_learning;
+pub use card_learning::SenseSnapshot;
 pub mod dictionary_transfer;
 pub mod document_layout;
 pub mod e5;
@@ -110,6 +112,10 @@ pub struct Vocabulary {
     pub analysis: Option<Box<LemmaSnapshot>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expression: Option<Box<ExpressionSnapshot>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sense: Option<Box<SenseSnapshot>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accepted_translations: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +160,12 @@ impl Vocabulary {
     }
 
     fn word_key(&self) -> String {
+        if let Some(sense) = &self.sense {
+            return format!(
+                "sense:{}",
+                serde_json::json!([self.language, self.target_language, sense.id])
+            );
+        }
         if let Some(expression) = &self.expression {
             return format!(
                 "expression:{}",
@@ -217,7 +229,7 @@ impl Vocabulary {
                 return Err("Некоректні граматичні ознаки словникової картки".into());
             }
         }
-        Ok(())
+        self.validate_learning()
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -781,6 +793,9 @@ impl Store {
         {
             return Err("Вкажіть слово й переклад (до 500 / 2000 символів)".into());
         }
+        if let Some(sense) = &mut entry.sense {
+            sense.surface.clone_from(&entry.word);
+        }
         if let Some(analysis) = &mut entry.analysis {
             analysis.lemma = analysis.lemma.trim().to_owned();
             analysis.surface = entry.word;
@@ -798,6 +813,16 @@ impl Store {
             expression.document_id = None;
             entry.word = expression.canonical.clone();
         }
+        if let Some(sense) = &entry.sense {
+            entry.word.clone_from(&sense.lemma);
+            if let Some(analysis) = &mut entry.analysis {
+                if knowledge::word_key(&analysis.lemma) == knowledge::word_key(&sense.lemma) {
+                    analysis.lemma.clone_from(&sense.lemma);
+                }
+            }
+        }
+        entry.accepted_translations =
+            card_learning::prepare_variants(&entry.translation, entry.accepted_translations)?;
         entry.validate_annotations()?;
 
         let key = entry.word_key();
@@ -814,9 +839,23 @@ impl Store {
             .optional()
             .map_err(|error| error.to_string())?;
         if let Some(body) = existing {
-            return serde_json::from_str(&body).map_err(|e| e.to_string());
+            let mut card: Vocabulary = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+            card.merge_accepted_translations(&entry)?;
+            tx.execute(
+                "UPDATE vocabulary SET body=?1 WHERE id=?2",
+                params![
+                    serde_json::to_string(&card).map_err(|e| e.to_string())?,
+                    card.id
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+            if card.sense.is_some() && card.document_id != entry.document_id {
+                dictionary_transfer::link_card_document(&tx, &card.id, &entry.document_id)?;
+            }
+            tx.commit().map_err(|e| e.to_string())?;
+            return Ok(card);
         }
-        if entry.analysis.is_some() || entry.expression.is_some() {
+        if entry.sense.is_none() && (entry.analysis.is_some() || entry.expression.is_some()) {
             let legacy_key = entry.surface_key(&entry.word);
             let legacy: Option<String> = tx
                 .query_row(
@@ -829,17 +868,18 @@ impl Store {
             if let Some(body) = legacy {
                 let mut card: Vocabulary =
                     serde_json::from_str(&body).map_err(|error| error.to_string())?;
-                card.word = entry.word;
+                card.word.clone_from(&entry.word);
                 if entry.context != card.context || entry.document_id != card.document_id {
                     if let Some(analysis) = &mut entry.analysis {
                         analysis.context = Some(entry.context.clone());
                         analysis.document_id = Some(entry.document_id.clone());
                     }
                     if let Some(expression) = &mut entry.expression {
-                        expression.context = Some(entry.context);
-                        expression.document_id = Some(entry.document_id);
+                        expression.context = Some(entry.context.clone());
+                        expression.document_id = Some(entry.document_id.clone());
                     }
                 }
+                card.merge_accepted_translations(&entry)?;
                 card.analysis = entry.analysis;
                 card.expression = entry.expression;
                 tx.execute(
@@ -1181,6 +1221,8 @@ mod tests {
                 reverse: ReviewState::default(),
                 analysis: None,
                 expression: None,
+                sense: None,
+                accepted_translations: Vec::new(),
             })
             .unwrap();
         db.review(&entry.id, "forward", 2).unwrap();
@@ -1259,6 +1301,8 @@ mod tests {
                         document_id: None,
                     })
                 }),
+                sense: None,
+                accepted_translations: Vec::new(),
             };
         let legacy = db
             .save_word(make_card("read", "читати", None, "I read every day."))
@@ -1334,6 +1378,8 @@ mod tests {
                 context: None,
                 document_id: None,
             })),
+            sense: None,
+            accepted_translations: Vec::new(),
         };
         let mut manual = make_card("turn off", "вимикати", "Turn off the fan.");
         manual.word = "turn off".into();

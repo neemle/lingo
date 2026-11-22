@@ -1,4 +1,4 @@
-use crate::{Result, Store};
+use crate::{card_learning::answer_key, Result, Store, Vocabulary};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -74,9 +74,46 @@ pub(crate) fn read(connection: &Connection) -> Result<Option<PracticeProgress>> 
         .query_row("SELECT body FROM practice WHERE id=1", [], |row| row.get(0))
         .optional()
         .map_err(|error| error.to_string())?;
-    body.as_deref()
-        .map(|body| serde_json::from_str(body).map_err(|error| error.to_string()))
-        .transpose()
+    body.map(|body| {
+        let mut progress = serde_json::from_str(&body).map_err(|error| error.to_string())?;
+        align_question(connection, &mut progress)?;
+        Ok(progress)
+    })
+    .transpose()
+}
+
+fn align_question(connection: &Connection, progress: &mut PracticeProgress) -> Result<()> {
+    let Some(question) = &mut progress.question else {
+        return Ok(());
+    };
+    let body: String = connection
+        .query_row(
+            "SELECT body FROM vocabulary WHERE id=?1",
+            [&question.card_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or("Словникову картку не знайдено.")?;
+    let card: Vocabulary = serde_json::from_str(&body).map_err(|error| error.to_string())?;
+    let reverse = progress.direction == "reverse";
+    question.answers = card.practice_answers(reverse);
+    question.prompt = if reverse { card.translation } else { card.word };
+    let correct_options = question
+        .options
+        .iter()
+        .filter(|option| {
+            let key = answer_key(option);
+            question
+                .answers
+                .iter()
+                .any(|answer| answer_key(answer) == key)
+        })
+        .count();
+    if correct_options != 1 {
+        question.options.clear();
+    }
+    Ok(())
 }
 
 fn write(connection: &Connection, progress: &PracticeProgress) -> Result<()> {
@@ -106,18 +143,7 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
         assert_revision(progress.revision, read(&tx)?.unwrap_or_default().revision)?;
-        if let Some(question) = &progress.question {
-            let exists: bool = tx
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM vocabulary WHERE id=?1)",
-                    [&question.card_id],
-                    |row| row.get(0),
-                )
-                .map_err(|error| error.to_string())?;
-            if !exists {
-                return Err("Словникову картку не знайдено.".into());
-            }
-        }
+        align_question(&tx, &mut progress)?;
         progress.advance()?;
         write(&tx, &progress)?;
         tx.commit().map_err(|error| error.to_string())?;
@@ -159,6 +185,7 @@ pub(crate) fn restore_if_fresh(
             .ok_or("В архіві немає картки для практики.")?
             .clone();
     }
+    align_question(connection, &mut incoming)?;
     incoming.revision = 0;
     incoming.advance()?;
     write(connection, &incoming)
@@ -167,7 +194,7 @@ pub(crate) fn restore_if_fresh(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ReviewState, Vocabulary};
+    use crate::ReviewState;
 
     #[test]
     fn restart_keeps_choice_order_and_consumes_grade_once() {
@@ -187,6 +214,8 @@ mod tests {
                 reverse: ReviewState::default(),
                 analysis: None,
                 expression: None,
+                sense: None,
+                accepted_translations: Vec::new(),
             })
             .unwrap();
         let options = vec!["merci".into(), "bonjour".into(), "salut".into()];

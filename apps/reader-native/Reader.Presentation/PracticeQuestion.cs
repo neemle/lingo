@@ -13,15 +13,16 @@ public sealed record PracticeQuestion(string Prompt, string[] Answers, string[] 
         string AnswerOf(Vocabulary entry) => reverse ? entry.Word : entry.Translation;
 
         var prompt = PromptOf(card);
-        var pair = vocabulary.Where(entry =>
-            Comparer.Equals(entry.Language, card.Language) &&
-            Comparer.Equals(entry.TargetLanguage, card.TargetLanguage)).Append(card).ToArray();
-        var promptKey = Normalize(prompt);
-        var answers = pair.Where(entry => Comparer.Equals(Normalize(PromptOf(entry)), promptKey))
-            .Select(AnswerOf).Where(answer => !string.IsNullOrWhiteSpace(answer))
+        var answers = (reverse ? new[] { card.Word } : new[] { card.Translation }.Concat(card.AcceptedTranslations))
+            .Where(answer => !string.IsNullOrWhiteSpace(answer))
             .DistinctBy(Normalize, Comparer).ToArray();
         if (!includeOptions) return new PracticeQuestion(prompt, answers, []);
 
+        var promptKey = Normalize(prompt);
+        var pair = vocabulary.Where(entry =>
+            Comparer.Equals(entry.Language, card.Language) &&
+            Comparer.Equals(entry.TargetLanguage, card.TargetLanguage) &&
+            !Comparer.Equals(Normalize(PromptOf(entry)), promptKey));
         var accepted = answers.Select(Normalize).ToHashSet(Comparer);
         var distractors = pair.Select(AnswerOf).Where(answer =>
             !string.IsNullOrWhiteSpace(answer) && !accepted.Contains(Normalize(answer)))
@@ -41,5 +42,5 @@ public sealed record PracticeQuestion(string Prompt, string[] Answers, string[] 
     public bool Matches(string text) => Answers.Any(answer => Comparer.Equals(Normalize(answer), Normalize(text)));
 
     private static string Normalize(string value) =>
-        string.Join(' ', value.Normalize().Replace('’', '\'').Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        string.Join(' ', value.Normalize().Replace('ʼ', '\'').Replace('’', '\'').Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }

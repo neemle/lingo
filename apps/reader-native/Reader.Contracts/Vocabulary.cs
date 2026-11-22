@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Reader.Contracts;
 
 public sealed record Vocabulary(
@@ -13,6 +15,11 @@ public sealed record Vocabulary(
 {
     public LemmaSnapshot? Analysis { get; init; }
     public ExpressionSnapshot? Expression { get; init; }
+    public SenseSnapshot? Sense { get; init; }
+    public string[] AcceptedTranslations { get; init; } = [];
+
+    [JsonIgnore]
+    public string AcceptedTranslationsLabel => string.Join(" · ", AcceptedTranslations);
 }
 
 public sealed record LemmaSnapshot(string Lemma, string Surface, string PartOfSpeech, string Features,
@@ -20,3 +27,8 @@ public sealed record LemmaSnapshot(string Lemma, string Surface, string PartOfSp
 
 public sealed record ExpressionSnapshot(string Canonical, string Surface, string Kind, int Observations,
     string Source, string SourceVersion, string? Context = null, string? DocumentId = null);
+
+
+public sealed record SenseSnapshot(string Id, string Lemma, string Surface, string PartOfSpeech,
+    string Gloss, string GlossLanguage, string SourceName, string SourceUrl, string SourceLicense,
+    string SourceRevision);

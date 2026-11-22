@@ -193,8 +193,11 @@ fn restore_archive(
     for mut card in archive.entries {
         let source_id = card.id.clone();
         remap_card_sources(&mut card, &sources);
+        card.accepted_translations =
+            crate::card_learning::prepare_variants(&card.translation, card.accepted_translations)?;
         let key = card.word_key();
-        if let Some(local) = matching_card(tx, &card, &key)? {
+        if let Some(mut local) = matching_card(tx, &card, &key)? {
+            local.merge_accepted_translations(&card)?;
             card_ids.insert(source_id, local.id.clone());
             write_card(tx, &local)?;
             imported.entry(local.id).or_default().push(card);
@@ -428,6 +431,9 @@ fn matching_card(db: &Connection, incoming: &Vocabulary, key: &str) -> Result<Op
         return Ok(Some(card));
     }
 
+    if incoming.sense.is_some() {
+        return Ok(None);
+    }
     let plain = |card: &Vocabulary| card.analysis.is_none() && card.expression.is_none();
     let surface = |card: &Vocabulary| {
         card.analysis
@@ -449,7 +455,7 @@ fn matching_card(db: &Connection, incoming: &Vocabulary, key: &str) -> Result<Op
         let same_surface =
             card.surface_key(&surface(&card)) == incoming.surface_key(&surface(incoming));
         let same_word = card.surface_key(&card.word) == incoming.surface_key(&incoming.word);
-        if plain(&card) != plain(incoming) && (same_surface || same_word) {
+        if card.sense.is_none() && plain(&card) != plain(incoming) && (same_surface || same_word) {
             return Ok(Some(promote(card, incoming)));
         }
     }
@@ -490,6 +496,27 @@ fn promote(mut local: Vocabulary, incoming: &Vocabulary) -> Vocabulary {
         }
     }
     local
+}
+
+pub(crate) fn link_card_document(db: &Connection, card_id: &str, document_id: &str) -> Result<()> {
+    let Some((title, source_hash)) = source_metadata(db, document_id)? else {
+        return Ok(());
+    };
+    let document_id = resolve_source(
+        db,
+        &DictionarySource {
+            document_id: document_id.to_owned(),
+            title,
+            source_hash,
+            entry_ids: Vec::new(),
+        },
+    )?;
+    db.execute(
+        "INSERT OR IGNORE INTO dictionary_card_sources(card_id,document_id) VALUES (?1,?2)",
+        params![card_id, document_id],
+    )
+    .map_err(error)?;
+    Ok(())
 }
 
 fn source_metadata(db: &Connection, id: &str) -> Result<Option<(Option<String>, Option<String>)>> {

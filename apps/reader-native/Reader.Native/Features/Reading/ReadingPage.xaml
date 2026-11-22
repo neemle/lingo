@@ -158,6 +158,12 @@
        Margin="0,0,7,0" SemanticProperties.Description="Поширити виділений уривок оригіналу" />
       <Button x:Name="ExplainWord" Text="Пояснити з Qwen" Style="{StaticResource PlayerButton}" Clicked="ExplainWordClicked" />
      </FlexLayout>
+     <Grid x:Name="SelectedSenseRow" ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="False">
+      <Label x:Name="SelectedSense" Style="{StaticResource ReaderMeta}" LineBreakMode="WordWrap"
+       VerticalOptions="Center" />
+      <Button Grid.Column="1" Text="Зняти вибір" Style="{StaticResource PlayerButton}" Clicked="ClearSenseClicked"
+       SemanticProperties.Description="Прибрати вибране значення з картки" />
+     </Grid>
      <Label x:Name="WordExplanationText" IsVisible="False" />
      <Picker x:Name="VocabularyReading" Title="Форма для словникової картки" IsVisible="False" />
      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">

@@ -23,6 +23,7 @@ public partial class VocabularyPage : ContentPage
     private int queryRevision;
 
     private bool sharingCard;
+    private bool editingVariants;
 
     private CollectionChoice ActiveCollection =>
         CollectionPicker.SelectedIndex >= 0 && CollectionPicker.SelectedIndex < choices.Length
@@ -168,7 +169,8 @@ public partial class VocabularyPage : ContentPage
         var query = VocabularyQuery.Text?.Trim() ?? "";
         bool Matches(string value) => value.Contains(query, StringComparison.CurrentCultureIgnoreCase);
         VocabularyList.ItemsSource = query.Length == 0 ? entries : entries.Where(entry =>
-            Matches(entry.Word) || Matches(entry.Translation) || Matches(entry.Context)).ToArray();
+            Matches(entry.Word) || Matches(entry.Translation) || Matches(entry.Context) ||
+            entry.AcceptedTranslations.Any(Matches) || (entry.Sense is { } sense && Matches(sense.Gloss))).ToArray();
 
         EmptyVocabulary.Text = loadingCollection ? "Завантажуємо добірку…"
             : query.Length > 0 ? "Збігів за текстом немає."
@@ -244,6 +246,83 @@ public partial class VocabularyPage : ContentPage
         }
     }
 
+    private async void EditVariantsClicked(object? sender, EventArgs args)
+    {
+        if (editingVariants || transferring ||
+            sender is not Button { CommandParameter: VocabularyCard selected } ||
+            entries.FirstOrDefault(entry => entry.Id == selected.Id) is not { } card) return;
+        var editor = new Editor
+        {
+            Text = string.Join(Environment.NewLine, card.AcceptedTranslations),
+            Placeholder = "Один варіант на рядок",
+            HeightRequest = 150,
+        };
+        SemanticProperties.SetDescription(editor, "Підтверджені варіанти перекладу");
+        var save = new Button { Text = "Зберегти варіанти" };
+        var cancel = new Button { Text = "Скасувати" };
+        var body = new VerticalStackLayout { Padding = 24, Spacing = 12 };
+        body.Children.Add(new Label { Text = $"{card.Word} → {card.Translation}", FontSize = 24 });
+        if (card.Sense is { } sense)
+        {
+            body.Children.Add(new Label { Text = sense.Gloss });
+            var attribution = $"{sense.SourceName} · {sense.SourceLicense}";
+            if (Uri.TryCreate(sense.SourceUrl, UriKind.Absolute, out var source) &&
+                source.Scheme == Uri.UriSchemeHttps && source.Host == "en.wiktionary.org")
+            {
+                var link = new Button { Text = attribution, HorizontalOptions = LayoutOptions.Start };
+                link.Clicked += async (_, _) =>
+                {
+                    try { await Launcher.Default.OpenAsync(source); }
+                    catch (Exception error) { await DisplayAlertAsync("Джерело", error.Message, "Гаразд"); }
+                };
+                body.Children.Add(link);
+            }
+            else body.Children.Add(new Label { Text = attribution });
+        }
+        body.Children.Add(new Label { Text = "Додайте переклади, які підходять саме цій картці. Один варіант на рядок." });
+        body.Children.Add(editor);
+        body.Children.Add(save);
+        body.Children.Add(cancel);
+        var page = new ContentPage { Title = "Варіанти перекладу", Content = new ScrollView { Content = body } };
+        cancel.Clicked += async (_, _) =>
+        {
+            if (body.IsEnabled && Navigation.ModalStack.LastOrDefault() == page)
+            {
+                body.IsEnabled = false;
+                await Navigation.PopModalAsync();
+            }
+        };
+        save.Clicked += async (_, _) =>
+        {
+            if (!body.IsEnabled) return;
+            body.IsEnabled = false;
+            try
+            {
+                var variants = (editor.Text ?? "").Split(new[] { '\r', '\n' },
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var session = AppState.Session;
+                await session.SetVocabularyVariantsAsync(card.Id, variants);
+                if (session.Error.Length > 0)
+                {
+                    await page.DisplayAlertAsync("Варіанти перекладу", session.Error, "Гаразд");
+                    return;
+                }
+                if (Navigation.ModalStack.LastOrDefault() == page)
+                    await Navigation.PopModalAsync();
+                await RefreshCollectionsAsync(appearance);
+            }
+            finally { body.IsEnabled = true; }
+        };
+        page.Disappearing += (_, _) => editingVariants = false;
+        editingVariants = true;
+        try { await Navigation.PushModalAsync(page); }
+        catch (Exception error)
+        {
+            editingVariants = false;
+            ShowArchiveStatus(error.Message);
+        }
+    }
+
     private async void ShareCardClicked(object? sender, EventArgs args)
     {
         if (sharingCard || sender is not Button { CommandParameter: VocabularyCard card }) return;
@@ -254,6 +333,11 @@ public partial class VocabularyPage : ContentPage
             var target = DocumentLanguages.Name(card.TargetLanguage);
             var heading = $"{card.Word} → {card.Translation}";
             var text = $"{heading}{Environment.NewLine}{source} → {target}";
+            if (card.AcceptedTranslations.Length > 0)
+                text += $"{Environment.NewLine}Варіанти: {card.AcceptedTranslationsLabel}";
+            if (card.Sense is { } sense)
+                text += $"{Environment.NewLine}{sense.Gloss}{Environment.NewLine}{sense.SourceName} · " +
+                    $"{sense.SourceLicense}{Environment.NewLine}{sense.SourceUrl}";
             if (!string.IsNullOrWhiteSpace(card.Context))
                 text += $"{Environment.NewLine}{Environment.NewLine}{card.Context}";
             await Share.Default.RequestAsync(new ShareTextRequest(text, "Словникова картка"));

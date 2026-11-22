@@ -157,6 +157,10 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
                 }),
         ),
         Command::SaveWord { entry } => value(store.save_word(entry)),
+        Command::SetVocabularyVariants {
+            id,
+            accepted_translations,
+        } => value(store.set_vocabulary_variants(&id, accepted_translations)),
         Command::Review {
             id,
             direction,

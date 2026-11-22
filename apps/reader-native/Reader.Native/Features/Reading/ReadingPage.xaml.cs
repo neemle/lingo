@@ -71,9 +71,13 @@ public partial class ReadingPage : ContentPage
         StopSpeech();
         voiceCatalogRevision++;
         readinessRequest++;
-        selection = null;
-        WordCard.IsVisible = false;
-        Translation.Text = "";
+        if (!showingMeanings)
+        {
+            selection = null;
+            SetSelectedSense(null);
+            WordCard.IsVisible = false;
+            Translation.Text = "";
+        }
         AppState.Session.PropertyChanged -= SessionChanged;
         base.OnDisappearing();
     }
@@ -110,6 +114,7 @@ public partial class ReadingPage : ContentPage
         if (documentId == AppState.Session.Document?.Id) return;
         documentId = AppState.Session.Document?.Id;
         selection = null;
+        SetSelectedSense(null);
         WordCard.IsVisible = false;
         Translation.Text = "";
     }
@@ -287,7 +292,11 @@ public partial class ReadingPage : ContentPage
     {
         var session = AppState.Session;
         if (session.Document is not { } doc) return;
-        if (selection != selected) Translation.Text = "";
+        if (selection != selected)
+        {
+            Translation.Text = "";
+            SetSelectedSense(null);
+        }
         WordExplanationText.Text = "";
         WordExplanationText.IsVisible = false;
         selection = selected;
@@ -356,11 +365,23 @@ public partial class ReadingPage : ContentPage
         var index = VocabularyReading.SelectedIndex - 1;
         var reading = VocabularyReading.IsVisible && index >= 0 && index < vocabularyReadings.Length
             ? vocabularyReadings[index] : null;
-        await AppState.Session.SaveWordAsync(selected, Translation.Text ?? "", reading?.Lemma, reading?.Expression);
+        if (selectedSense is not null && reading?.Expression is not null)
+        {
+            await DisplayAlertAsync("Словникова картка", "Зніміть вибір значення або виберіть слово чи лему.",
+                "Гаразд");
+            return;
+        }
+        var lemma = reading?.Lemma;
+        if (selectedSense is { } sense && lemma is not null &&
+            (!string.Equals(lemma.Lemma.Trim().Normalize(), sense.Lemma.Normalize(), StringComparison.OrdinalIgnoreCase) ||
+             lemma.PartOfSpeech != sense.PartOfSpeech))
+            lemma = null;
+        await AppState.Session.SaveWordAsync(selected, Translation.Text ?? "", lemma, reading?.Expression, selectedSense);
         if (selection == selected && AppState.Session.Error.Length == 0)
         {
             WordCard.IsVisible = false;
             Translation.Text = "";
+            SetSelectedSense(null);
         }
     }
 

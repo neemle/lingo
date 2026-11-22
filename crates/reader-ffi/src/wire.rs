@@ -192,6 +192,11 @@ pub enum Command {
     SaveWord {
         entry: Vocabulary,
     },
+    SetVocabularyVariants {
+        id: String,
+        #[serde(rename = "acceptedTranslations")]
+        accepted_translations: Vec<String>,
+    },
     Review {
         id: String,
         direction: String,
