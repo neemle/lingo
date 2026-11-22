@@ -37,7 +37,7 @@ public partial class ReadingPage
     }
 
     private static string PdfPronunciation(Document document, Sentence sentence, string speechText) =>
-        document.Format == "pdf" && speechText.Any(char.IsNumber) &&
+        document.Format == "pdf" && (speechText.Contains('\n') || speechText.Any(char.IsNumber)) &&
             !document.SpeechTextOverrides.ContainsKey(sentence.Id)
             ? AppState.Session.GetSpeechNarration(document.Id, sentence.Id, pronunciationOnly: true) ?? speechText
             : speechText;

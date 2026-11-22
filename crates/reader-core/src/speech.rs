@@ -203,7 +203,7 @@ impl Store {
             return Ok(None);
         }
         let narration = word_break::canonical_narration(&self.connection, &document, sentence)?;
-        Ok(without_pdf_note_markers(&document, sentence, narration.as_deref().unwrap_or(&sentence.text)))
+        Ok(pdf_narration(&document, sentence, narration.as_deref().unwrap_or(&sentence.text)))
     }
 
     fn first_canonical_on_page(
@@ -230,7 +230,7 @@ impl Store {
             if document.speech_text_overrides.contains_key(&sentence.id) {
                 narration
             } else {
-                model_pdf_narration(document, sentence, narration)
+                pdf_narration(document, sentence, &narration).unwrap_or(narration)
             }
         };
         Ok((sentence.id.clone(), SpeechSource { language: document.language.clone(), text }))
@@ -238,12 +238,13 @@ impl Store {
 }
 
 
-pub(crate) fn model_pdf_narration(document: &Document, sentence: &Sentence, text: String) -> String {
-    let text = without_pdf_note_markers(document, sentence, &text).unwrap_or(text);
-    if document.format == "pdf" && text.contains('\n') {
-        crate::translation::normalize_ocr_input(document, &text, sentence.start_utf16)
+pub(crate) fn pdf_narration(document: &Document, sentence: &Sentence, text: &str) -> Option<String> {
+    let masked = without_pdf_note_markers(document, sentence, text);
+    let narration = masked.as_deref().unwrap_or(text);
+    if document.format == "pdf" && narration.contains('\n') {
+        Some(crate::translation::normalize_ocr_input(document, narration, sentence.start_utf16))
     } else {
-        text
+        masked
     }
 }
 
@@ -261,11 +262,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn model_narration_joins_pdf_wraps_but_keeps_french_inversion() {
+    fn narration_joins_pdf_wraps_but_keeps_french_inversion() {
         let input = "Les marchan-\ndises sont ici. Est-\nelle au port ?";
         let document = crate::document_layout::detached_pdf_document(input.into(), "fr", None);
         let sentences = crate::segment_pdf_with_titles(input, "pdf");
-        let narrate = |sentence: &Sentence| model_pdf_narration(&document, sentence, sentence.text.clone());
+        let narrate = |sentence: &Sentence| pdf_narration(&document, sentence, &sentence.text).unwrap();
         assert_eq!(narrate(&sentences[0]), "Les marchandises sont ici.");
         assert_eq!(narrate(&sentences[1]), "Est-elle au port ?");
     }

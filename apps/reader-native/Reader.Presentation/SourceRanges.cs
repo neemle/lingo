@@ -22,35 +22,90 @@ public sealed class SourceRanges(string text)
         return (spoken, MapSpeechBoundary(source.Length, spoken.Length, originalStarts, spokenStarts, 0, boundary));
     }
 
-    public static (string Text, Action<int, int> Boundary) ProjectPronunciation(
+    public static (string Text, Action<int, int>? Boundary) ProjectPronunciation(
         string source, string spoken, int sourceOffset, Action<int, int> boundary)
     {
         if (spoken != source)
         {
-            // The core only inserts accents. Each grapheme still corresponds to the same original grapheme.
             var originalStarts = StringInfo.ParseCombiningCharacters(source);
             var spokenStarts = StringInfo.ParseCombiningCharacters(spoken);
-            var first = Array.BinarySearch(originalStarts, sourceOffset);
-            if (first >= 0 && originalStarts.Length == spokenStarts.Length)
+            if (originalStarts.Length == spokenStarts.Length)
             {
+                var first = Array.BinarySearch(originalStarts, sourceOffset);
+                if (first >= 0)
+                {
+                    var from = spokenStarts[first];
+                    return (spoken[from..],
+                        MapSpeechBoundary(source.Length, spoken.Length, originalStarts, spokenStarts, from, boundary));
+                }
+            }
+            else if (TryMapOcrPronunciation(source, spoken, originalStarts, spokenStarts) is { } map)
+            {
+                var first = CeilingIndex(map.Starts, sourceOffset);
+                if (first == spokenStarts.Length) return ("", null);
                 var from = spokenStarts[first];
                 return (spoken[from..],
-                    MapSpeechBoundary(source.Length, spoken.Length, originalStarts, spokenStarts, from, boundary));
+                    MapSpeechBoundary(source.Length, spoken.Length, map.Starts, spokenStarts, from, boundary, map.Ends));
             }
+
+            // Keep the cleaned pronunciation even when a source word cannot be mapped exactly.
+            return (spoken, null);
         }
 
         return (source[sourceOffset..], (start, length) => boundary(sourceOffset + start, length));
     }
 
+    private static (int[] Starts, int[] Ends)? TryMapOcrPronunciation(
+        string source, string spoken, int[] originalStarts, int[] spokenStarts)
+    {
+        if (spokenStarts.Length >= originalStarts.Length) return null;
+
+        var starts = new int[spokenStarts.Length];
+        var ends = new int[spokenStarts.Length];
+        var matched = 0;
+        for (var index = 0; index < originalStarts.Length; index++)
+        {
+            var start = originalStarts[index];
+            var end = index + 1 < originalStarts.Length ? originalStarts[index + 1] : source.Length;
+            var original = source.AsSpan(start, end - start);
+            if (matched < spokenStarts.Length)
+            {
+                var from = spokenStarts[matched];
+                var to = matched + 1 < spokenStarts.Length ? spokenStarts[matched + 1] : spoken.Length;
+                var pronounced = spoken.AsSpan(from, to - from);
+                // The core may insert a Ukrainian stress mark or blank a classified note number.
+                if (original.TrimEnd('\u0301').SequenceEqual(pronounced.TrimEnd('\u0301')) ||
+                    char.IsWhiteSpace(pronounced[0]) &&
+                    (char.IsWhiteSpace(original[0]) || char.IsNumber(original[0])))
+                {
+                    starts[matched] = start;
+                    ends[matched++] = end;
+                    continue;
+                }
+            }
+
+            if (char.IsWhiteSpace(original[0]) || char.IsNumber(original[0])) continue;
+            if (original is "-" or "\u00ad" or "\u2010")
+            {
+                var tail = source.AsSpan(end);
+                if (tail[..(tail.Length - tail.TrimStart().Length)].Contains('\n')) continue;
+            }
+            return null;
+        }
+        return matched == spokenStarts.Length ? (starts, ends) : null;
+    }
+
     private static Action<int, int> MapSpeechBoundary(int originalLength, int spokenLength,
-        int[] originalStarts, int[] spokenStarts, int spokenOffset, Action<int, int> boundary) =>
+        int[] originalStarts, int[] spokenStarts, int spokenOffset, Action<int, int> boundary,
+        int[]? originalEnds = null) =>
         (start, length) =>
         {
             if (start < 0 || length <= 0 || start > spokenLength - spokenOffset - length) return;
             var first = FloorIndex(spokenStarts, spokenOffset + start);
             var after = CeilingIndex(spokenStarts, spokenOffset + start + length);
             var originalStart = originalStarts[first];
-            var originalEnd = after < originalStarts.Length ? originalStarts[after] : originalLength;
+            var originalEnd = originalEnds is not null ? originalEnds[after - 1]
+                : after < originalStarts.Length ? originalStarts[after] : originalLength;
             boundary(originalStart, originalEnd - originalStart);
         };
 

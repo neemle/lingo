@@ -208,7 +208,7 @@ impl Store {
         let layout = self.detached_speech_layout(id, page, text, &language)?;
         let footnote = crate::document_layout::sentence_in_footnote(&layout.blocks, &sentence);
         let pronunciation_text = if !footnote && speech_text.is_none() {
-            crate::speech::without_pdf_note_markers(&layout, &sentence, narration_text.as_deref().unwrap_or(&sentence.text))
+            crate::speech::pdf_narration(&layout, &sentence, narration_text.as_deref().unwrap_or(&sentence.text))
         } else { None };
         let (bookmarked, note) = annotations::read(&self.connection, id, page, sentence.start_utf16)?;
         let reviewed_translations = annotations::reviewed(&self.connection, id, page, sentence.start_utf16)?;
@@ -258,7 +258,7 @@ impl Store {
             let (speech, narration) = narration_text(&self.connection, id, page, sentences, position)?;
             let text = speech.unwrap_or_else(|| {
                 let text = narration.unwrap_or_else(|| sentence.text.clone());
-                crate::speech::model_pdf_narration(layout, sentence, text)
+                crate::speech::pdf_narration(layout, sentence, &text).unwrap_or(text)
             });
             if !text.is_empty() {
                 return Ok(Some((sentence.id.clone(), crate::speech::SpeechSource { language, text })));
