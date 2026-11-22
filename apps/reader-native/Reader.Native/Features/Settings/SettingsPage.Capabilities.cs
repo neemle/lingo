@@ -7,6 +7,7 @@ namespace Reader.Native.Features.Settings;
 public partial class SettingsPage
 {
     private TranslationPackageStatus[]? translationInventory;
+    private TranslationRouteStatus[]? translationRoutes;
     private KnowledgePackage[]? knowledgeInventory;
     private bool lexicalInventoryRead;
     private bool optionalInventoryRead;
@@ -16,7 +17,7 @@ public partial class SettingsPage
     private void UpdateCapabilityMatrix()
     {
         if (nativeCapabilities is not { } native) return;
-        var profiles = LanguageCapabilities.Build(translationInventory, knowledgeInventory,
+        var profiles = LanguageCapabilities.Build(translationInventory, translationRoutes, knowledgeInventory,
             lexicalInventoryRead ? lexicalPackages : null,
             optionalInventoryRead ? optionalModels : null,
             native.Voices, native.VoiceError, native.Recognition);

@@ -41,27 +41,21 @@ public sealed record LanguageCapabilityReport(int Version, string Platform, Lang
 public static class LanguageCapabilities
 {
     public static LanguageCapabilityProfile[] Build(
-        TranslationPackageStatus[]? translation, KnowledgePackage[]? knowledge, LexicalPackage[]? lexical,
+        TranslationPackageStatus[]? translation, TranslationRouteStatus[]? translationRoutes,
+        KnowledgePackage[]? knowledge, LexicalPackage[]? lexical,
         OptionalModel[]? models, SpeechVoice[] systemVoices, string? voiceError,
         NativeRecognitionInventory recognition)
     {
-        var catalog = translation?.Select(item => (item.Source, item.Target)).ToHashSet() ?? [];
-        var installed = translation?.Where(item => item.FilesPresent).Select(item => (item.Source, item.Target))
-            .ToHashSet() ?? [];
         var verified = (translation ?? []).Where(package => package.HasValidatedTranslation)
             .ToLookup(package => (package.Source, package.Target));
-        var routes = new List<CapabilityRoute>();
-        foreach (var (from, _) in DocumentLanguages.All)
-        foreach (var (to, _) in DocumentLanguages.All)
+        var routes = (translationRoutes ?? []).Select(route =>
         {
-            if (from == to) continue;
-            var present = FindRoute(installed, from, to, CapabilityLevel.Installed);
-            var route = present ?? FindRoute(catalog, from, to, CapabilityLevel.Available);
-            if (route is null) continue;
-            if (route.PivotLanguage is null && verified[(from, to)].FirstOrDefault()?.Validation is { } evidence)
-                route = route with { Level = CapabilityLevel.Validated, Validation = evidence };
-            routes.Add(route);
-        }
+            var evidence = route.Ready && route.PivotLanguage is null
+                ? verified[(route.Source, route.Target)].FirstOrDefault()?.Validation : null;
+            var level = evidence is not null ? CapabilityLevel.Validated
+                : route.Ready ? CapabilityLevel.Installed : CapabilityLevel.Available;
+            return new CapabilityRoute(route.Source, route.Target, route.PivotLanguage, level, evidence);
+        }).ToArray();
 
         return DocumentLanguages.All.Select(language =>
         {
@@ -74,8 +68,8 @@ public static class LanguageCapabilities
             var dictionary = lexical?.FirstOrDefault(item => item.Language == code);
 
             return new LanguageCapabilityProfile(code, language.Name, ocr, voice,
-                RouteCapability(outgoing, translation is not null, outgoing: true),
-                RouteCapability(incoming, translation is not null, outgoing: false),
+                RouteCapability(outgoing, translationRoutes is not null, outgoing: true),
+                RouteCapability(incoming, translationRoutes is not null, outgoing: false),
                 PackageCapability(grammar?.Name, grammar?.Installed == true, knowledge is not null,
                     grammar?.Revision, "Пакет містить словоформи, леми й граматичні ознаки."),
                 PackageCapability(grammar?.Name, grammar?.SyntaxAvailable == true, knowledge is not null,
@@ -86,18 +80,6 @@ public static class LanguageCapabilities
                     dictionary?.Revision, "Приклади відображаються для тих значень Wiktionary, де їх наведено."),
                 outgoing, incoming);
         }).ToArray();
-    }
-
-    private static CapabilityRoute? FindRoute(HashSet<(string Source, string Target)> edges,
-        string source, string target, CapabilityLevel level)
-    {
-        if (edges.Contains((source, target))) return new CapabilityRoute(source, target, null, level);
-        var pivot = DocumentLanguages.All.Select(item => item.Code)
-            .Where(code => code != source && code != target)
-            .OrderBy(code => code != "en")
-            .ThenBy(code => code, StringComparer.Ordinal)
-            .FirstOrDefault(code => edges.Contains((source, code)) && edges.Contains((code, target)));
-        return pivot is null ? null : new CapabilityRoute(source, target, pivot, level);
     }
 
     private static LanguageCapability RouteCapability(CapabilityRoute[] routes, bool catalogKnown, bool outgoing)

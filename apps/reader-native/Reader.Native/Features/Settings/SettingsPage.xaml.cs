@@ -233,6 +233,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         try
         {
             var packages = await AppState.Session.TranslationPackagesAsync();
+            translationRoutes = await AppState.Session.TranslationRoutesAsync();
             translationInventory = packages;
             TranslationPackages.Text = string.Join(Environment.NewLine, packages.Select(package =>
                 $"{DocumentLanguages.Name(package.Source)} → {DocumentLanguages.Name(package.Target)}: " +
@@ -257,6 +258,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         catch (Exception error)
         {
             translationInventory = null;
+            translationRoutes = null;
             TranslationPackages.Text = error.Message;
             UpdateTranslationControls();
             UpdateCapabilityMatrix();

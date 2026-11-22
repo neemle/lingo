@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     fs::{self, File},
     io,
     path::{Path, PathBuf},
@@ -24,7 +24,7 @@ use crate::{
         cached_translation, route_readiness, search_cached_translation, sentence_translation_input,
         translate_paragraph, AlignedTranslation, CachedTranslation, ModelEdge,
         ParagraphTranslation, TranslationProvider, TranslationReadiness, TranslationRequest,
-        TranslationSearchPage, TranslationSettings,
+        TranslationRouteStatus, TranslationSearchPage, TranslationSettings,
     },
     Result, Store,
 };
@@ -782,6 +782,34 @@ impl Store {
         let provider = MarianProvider::interactive(&self.model_directory);
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
         route_readiness(&catalog, &provider.installed_models()?, source, target)
+    }
+
+    pub fn translation_routes(&self) -> Result<Vec<TranslationRouteStatus>> {
+        let provider = MarianProvider::interactive(&self.model_directory);
+        let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
+        let installed = provider.installed_models()?;
+        let languages: BTreeSet<_> = catalog
+            .iter()
+            .flat_map(|edge| [edge.source.as_str(), edge.target.as_str()])
+            .collect();
+        let mut routes = Vec::new();
+        for &source in &languages {
+            for &target in &languages {
+                if source == target {
+                    continue;
+                }
+                let readiness = route_readiness(&catalog, &installed, source, target)?;
+                if readiness.ready || !readiness.missing.is_empty() {
+                    routes.push(TranslationRouteStatus {
+                        source: source.to_owned(),
+                        target: target.to_owned(),
+                        ready: readiness.ready,
+                        pivot_language: readiness.pivot_language,
+                    });
+                }
+            }
+        }
+        Ok(routes)
     }
 
     fn translate_machine_sentence(

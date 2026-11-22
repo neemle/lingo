@@ -354,6 +354,8 @@ public sealed class CoreClient : IDisposable
 
     public TranslationPackageStatus[] TranslationPackages() =>
         Call<TranslationPackageStatus[]>(new { version = 1, operation = "translation_packages" });
+    public TranslationRouteStatus[] TranslationRoutes() =>
+        Call<TranslationRouteStatus[]>(new { version = 1, operation = "translation_routes" });
     public TranslationReadiness GetTranslationReadiness(string source, string target) =>
         Call<TranslationReadiness>(new { version = 1, operation = "translation_readiness", source, target });
     public KnowledgePackage[] KnowledgePackages() =>

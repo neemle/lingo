@@ -237,6 +237,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::VerifyOptionalModel { id } => value(store.verify_optional_model(&id)),
         Command::RemoveOptionalModel { id } => value(store.remove_optional_model(&id)),
         Command::TranslationPackages => value(Ok(store.translation_packages())),
+        Command::TranslationRoutes => value(store.translation_routes()),
         Command::TranslationReadiness { source, target } => {
             value(store.translation_readiness(&source, &target))
         }

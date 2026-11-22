@@ -412,6 +412,7 @@ pub enum Command {
         id: String,
     },
     TranslationPackages,
+    TranslationRoutes,
     TranslationReadiness {
         source: String,
         target: String,

@@ -4,6 +4,8 @@ public sealed record TranslationPair(string Source, string Target);
 
 public sealed record TranslationReadiness(bool Ready, string? PivotLanguage, TranslationPair[] Missing);
 
+public sealed record TranslationRouteStatus(string Source, string Target, bool Ready, string? PivotLanguage);
+
 public sealed record TranslationPackageStatus(
     string Source, string Target, bool FilesPresent, string Revision, TranslationAsset[] Assets,
     bool HasLocalFiles = false, string? Repository = null, string? License = null,

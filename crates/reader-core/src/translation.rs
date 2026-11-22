@@ -212,6 +212,15 @@ pub struct TranslationReadiness {
     pub missing: Vec<TranslationPair>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationRouteStatus {
+    pub source: String,
+    pub target: String,
+    pub ready: bool,
+    pub pivot_language: Option<String>,
+}
+
 pub(crate) fn route_readiness(
     catalog: &[ModelEdge],
     installed: &[ModelEdge],
