@@ -44,7 +44,6 @@
      Clicked="ResumePdfClicked" IsVisible="False" IsEnabled="{Binding CanInteract}" />
     <Button x:Name="PausePdf" Text="Призупинити OCR" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
      Clicked="PausePdfClicked" IsVisible="False" />
-     Clicked="PasteImageClicked" IsEnabled="{Binding CanInteract}" />
    </FlexLayout>
    <Label Text="{Binding Error}" TextColor="{StaticResource Accent}" SemanticProperties.Description="Помилка операції" />
    <Label x:Name="ImportStatus" TextColor="{StaticResource Sage}" />

@@ -10,6 +10,7 @@ public partial class LibraryPage : ContentPage
 {
     private const int MaxDocumentTitleLength = 240;
     private bool importing;
+    private bool choosingImportSource;
     private bool changingLanguage;
     private bool editingDocument;
     private Task loading = Task.CompletedTask;
@@ -112,7 +113,7 @@ public partial class LibraryPage : ContentPage
     private async void ImportClicked(object? sender, EventArgs args) => await ImportAsync(scanPdf: false);
     private async void ChooseImportSourceClicked(object? sender, EventArgs args)
     {
-        if (importing || changingLanguage || !AppState.Session.CanInteract) return;
+        if (choosingImportSource || importing || changingLanguage || !AppState.Session.CanInteract) return;
 
         const string files = "Вибрати файли або фотографії";
         const string scan = "Розпізнати сканований PDF";
@@ -120,7 +121,17 @@ public partial class LibraryPage : ContentPage
         const string image = "Вставити зображення";
         const string article = "Додати статтю за посиланням";
 
-        var choice = await DisplayActionSheetAsync("Додати документ", "Скасувати", null, files, scan, text, image, article);
+        string? choice;
+        choosingImportSource = true;
+        try
+        {
+            choice = await DisplayActionSheetAsync("Додати документ", "Скасувати", null, files, scan, text, image, article);
+        }
+        finally
+        {
+            choosingImportSource = false;
+        }
+
         switch (choice)
         {
             case files:
