@@ -64,20 +64,20 @@ public partial class LibraryPage
 #if MACCATALYST
             case "readPdfPages":
             {
-                var original = await session.IntakeFileAsync(item.Id);
-                ImportStatus.Text = "Читаємо текстовий шар PDF…";
-                var (pageTexts, deferredFrom) = await PdfScan.ReadTextForIntakeAsync(original.Path);
-                var language = await ChooseAsync(() =>
+                var excerpt = await session.IntakePdfTextSampleAsync(item.Id);
+                if (excerpt is null)
                 {
-                    if (source?.ScanPdf == true) return Task.FromResult<string?>(null);
-                    var excerpt = string.Join('\n', pageTexts.Where(text => !string.IsNullOrWhiteSpace(text)).Take(4)
-                        .Select(text => text[..Math.Min(text.Length, 2000)]));
-                    return session.DetectLanguageAsync(excerpt);
-                });
+                    var original = await session.IntakeFileAsync(item.Id);
+                    ImportStatus.Text = "Читаємо текстовий шар PDF…";
+                    var (pageTexts, deferredFrom) = await PdfScan.ReadTextForIntakeAsync(original.Path);
+                    excerpt = await session.SaveIntakePdfTextAsync(item.Id, pageTexts, deferredFrom);
+                }
+                var language = await ChooseAsync(() => source?.ScanPdf == true || excerpt.Length == 0
+                    ? Task.FromResult<string?>(null) : session.DetectLanguageAsync(excerpt));
                 if (language is null) return null;
                 ImportStatus.Text = "Зберігаємо документ…";
                 await session.WaitUntilIdleAsync();
-                await session.CompletePdfIntakeAsync(item.Id, language, pageTexts, deferredFrom);
+                await session.CompleteStagedPdfIntakeAsync(item.Id, language);
                 break;
             }
 #endif

@@ -1,6 +1,6 @@
 use super::{
     application::{validate_article_draft, validate_input, IntakeRepository, StoredIntake, ValidatedAsset},
-    ArticleDraft, IntakeInput, IntakeItem, IntakeKind, IntakePayload, Metadata,
+    ArticleDraft, IntakeInput, IntakeItem, IntakeKind, IntakePayload, Metadata, PdfTextDraft,
 };
 use crate::{file_originals, ocr, Result, Store};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
@@ -100,6 +100,11 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
             intake_id TEXT PRIMARY KEY REFERENCES intake(id) ON DELETE CASCADE,
             language TEXT NOT NULL,
             lines BLOB NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS intake_pdf_text (
+            intake_id TEXT PRIMARY KEY REFERENCES intake(id) ON DELETE CASCADE,
+            sample TEXT NOT NULL,
+            body BLOB NOT NULL
         );",
     ).map_err(intake_error)
 }
@@ -174,6 +179,37 @@ impl Store {
 
     pub fn intake_payload(&self, id: &str) -> Result<IntakePayload> {
         self.load_for_import(id)?.payload.ok_or_else(|| "Матеріал уже імпортовано.".into())
+    }
+
+    pub fn intake_pdf_text_sample(&self, id: &str) -> Result<Option<String>> {
+        pdf_text_sample(&self.connection, id)
+    }
+
+    pub fn save_intake_pdf_text(&mut self, id: &str, draft: PdfTextDraft) -> Result<String> {
+        file_originals::validate_pdf_page_text(&draft.page_texts)?;
+        if let Some(from) = draft.deferred_from {
+            file_originals::validate_deferred_text_layers(&draft.page_texts, from)?;
+        }
+        let sample = draft.page_texts.iter().map(|page| page.trim())
+            .filter(|page| !page.is_empty()).take(4)
+            .map(|page| page.chars().take(2000).collect::<String>())
+            .collect::<Vec<_>>().join("\n");
+        let body = serde_json::to_vec(&draft).map_err(intake_error)?;
+        let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(intake_error)?;
+        let item = intake_item(&tx, id)?.ok_or("Вхідний матеріал не знайдено.")?;
+        if !matches!(item.metadata.kind, IntakeKind::Pdf) || item.document_id.is_some() {
+            return Err("Текстовий шар можна зберегти лише для PDF у черзі імпорту.".into());
+        }
+        if let Some(existing) = pdf_text_sample(&tx, id)? {
+            return Ok(existing);
+        }
+        tx.execute(
+            "INSERT INTO intake_pdf_text (intake_id,sample,body) VALUES (?1,?2,?3)",
+            params![id, sample, body],
+        ).map_err(intake_error)?;
+        tx.commit().map_err(intake_error)?;
+        Ok(sample)
     }
 
     pub fn intake_photo_ocr_language(&self, id: &str) -> Result<Option<String>> {
@@ -265,6 +301,14 @@ fn load_article(db: &Connection, id: &str) -> Result<Option<ArticleDraft>> {
     decode_article(body.as_deref())
 }
 
+fn pdf_text_sample(db: &Connection, id: &str) -> Result<Option<String>> {
+    db.query_row(
+        "SELECT sample FROM intake_pdf_text WHERE intake_id=?1",
+        [id],
+        |row| row.get(0),
+    ).optional().map_err(intake_error)
+}
+
 fn decode_article(body: Option<&[u8]>) -> Result<Option<ArticleDraft>> {
     body.map(|body| serde_json::from_slice(body).map_err(intake_error)).transpose()
 }
@@ -313,6 +357,16 @@ impl IntakeRepository for Store {
         serde_json::from_slice(&body).map_err(intake_error)
     }
 
+    fn load_pdf_text(&self, id: &str) -> Result<PdfTextDraft> {
+        let body: Vec<u8> = self.connection.query_row(
+            "SELECT body FROM intake_pdf_text WHERE intake_id=?1",
+            [id],
+            |row| row.get(0),
+        ).optional().map_err(intake_error)?
+            .ok_or("Збережений текстовий шар PDF відсутній.")?;
+        serde_json::from_slice(&body).map_err(intake_error)
+    }
+
     fn record_imported(&mut self, item: &IntakeItem) -> Result<()> {
         let metadata = serde_json::to_string(&item.metadata).map_err(intake_error)?;
         let tx = self.connection.transaction().map_err(intake_error)?;
@@ -324,8 +378,13 @@ impl IntakeRepository for Store {
             tx.execute("DELETE FROM intake_photo_ocr WHERE intake_id=?1", [&item.id])
                 .map_err(intake_error)?;
         }
+        let is_pdf = matches!(item.metadata.kind, IntakeKind::Pdf | IntakeKind::TextPdf | IntakeKind::ScannedPdf | IntakeKind::MixedPdf);
+        if is_pdf {
+            tx.execute("DELETE FROM intake_pdf_text WHERE intake_id=?1", [&item.id])
+                .map_err(intake_error)?;
+        }
         tx.commit().map_err(intake_error)?;
-        if matches!(item.metadata.kind, IntakeKind::Pdf | IntakeKind::TextPdf | IntakeKind::ScannedPdf | IntakeKind::MixedPdf) {
+        if is_pdf {
             let uuid = Uuid::parse_str(&item.id).map_err(intake_error)?;
             let _ = fs::remove_file(pdf_path(&self.file_original_directory, uuid));
         }

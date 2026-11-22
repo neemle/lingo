@@ -50,6 +50,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::IntakePhotoOcrLanguage { id } => value(store.intake_photo_ocr_language(&id)),
         Command::SaveIntakePhotoOcr { id, language, lines } =>
             value(store.save_intake_photo_ocr(&id, &language, &lines)),
+        Command::IntakePdfTextSample { id } => value(store.intake_pdf_text_sample(&id)),
+        Command::SaveIntakePdfText { id, draft } => value(store.save_intake_pdf_text(&id, draft)),
         Command::CompleteIntake { id, result } => value(store.complete_intake(&id, result)),
         Command::DiscardIntake { id } => value(store.discard_intake(&id)),
         Command::ReaderPreferences => value(store.reader_preferences()),

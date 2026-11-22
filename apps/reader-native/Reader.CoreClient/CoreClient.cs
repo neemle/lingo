@@ -111,6 +111,15 @@ public sealed class CoreClient : IDisposable
     public IntakeItem CompletePdfIntake(string id, string language, string[] pageTexts, int? deferredFrom = null) =>
         CompleteIntake(id, new { kind = "pdf", language, pageTexts, deferredFrom });
 
+    public string? IntakePdfTextSample(string id) =>
+        Call<string?>(new { version = 1, operation = "intake_pdf_text_sample", id });
+
+    public string SaveIntakePdfText(string id, string[] pageTexts, int? deferredFrom) =>
+        Call<string>(new { version = 1, operation = "save_intake_pdf_text", id, draft = new { pageTexts, deferredFrom } });
+
+    public IntakeItem CompleteStagedPdfIntake(string id, string language) =>
+        CompleteIntake(id, new { kind = "stagedPdf", language });
+
     public IntakeItem CompleteDocumentIntake(string id, string language) =>
         CompleteIntake(id, new { kind = "document", language });
 

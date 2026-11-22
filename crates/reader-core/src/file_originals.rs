@@ -115,13 +115,7 @@ fn prepare_pdf(
 ) -> Result<PreparedPdfImport> {
     valid_language(language)?;
     let name = pdf_name(name)?;
-    let page_count = u16::try_from(page_text.len()).map_err(|_| "PDF містить забагато сторінок")?;
-    let text_bytes = page_text
-        .iter()
-        .fold(0usize, |total, page| total.saturating_add(page.len()));
-    if text_bytes > crate::MAX_IMPORT {
-        return Err("Текст PDF завеликий".into());
-    }
+    let page_count = validate_pdf_page_text(&page_text)?;
     if empty_pages.iter().any(|&page| page >= page_count) {
         return Err("Збережений результат OCR має некоректний номер сторінки.".into());
     }
@@ -175,12 +169,7 @@ fn verify_pdf_size(size: u64, expected_size: u64) -> Result<()> {
 impl PreparedPdfImport {
     pub(crate) fn defer_text_layers_from(&mut self, first_page: u16) -> Result<()> {
         let pages: Vec<String> = serde_json::from_str(&self.page_text).map_err(storage_error)?;
-        let tail = pages.get(usize::from(first_page)..)
-            .filter(|tail| !tail.is_empty())
-            .ok_or("Немає сторінок PDF для відкладеного читання.")?;
-        if tail.iter().any(|text| !text.is_empty()) {
-            return Err("Відкладені сторінки PDF мають бути без витягнутого тексту.".into());
-        }
+        validate_deferred_text_layers(&pages, first_page)?;
         self.deferred_from = Some(first_page);
         Ok(())
     }
@@ -193,6 +182,28 @@ impl PreparedPdfImport {
             Err("Збережений оригінал PDF змінився під час перенесення.".into())
         }
     }
+}
+
+pub(crate) fn validate_pdf_page_text(pages: &[String]) -> Result<u16> {
+    let count = u16::try_from(pages.len()).map_err(|_| "PDF містить забагато сторінок")?;
+    if count == 0 {
+        return Err("У PDF немає сторінок.".into());
+    }
+    let bytes = pages.iter().fold(0usize, |total, page| total.saturating_add(page.len()));
+    if bytes > crate::MAX_IMPORT {
+        return Err("Текст PDF завеликий".into());
+    }
+    Ok(count)
+}
+
+pub(crate) fn validate_deferred_text_layers(pages: &[String], from: u16) -> Result<()> {
+    let tail = pages.get(usize::from(from)..)
+        .filter(|tail| !tail.is_empty())
+        .ok_or("Немає сторінок PDF для відкладеного читання.")?;
+    if tail.iter().any(|text| !text.is_empty()) {
+        return Err("Відкладені сторінки PDF мають бути без витягнутого тексту.".into());
+    }
+    Ok(())
 }
 
 pub(crate) fn open_pdf_source(path: &Path) -> Result<(File, u64)> {

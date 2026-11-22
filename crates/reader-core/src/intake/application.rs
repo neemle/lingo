@@ -1,10 +1,11 @@
-use super::{ArticleDraft, IntakeImport, IntakeInput, IntakeItem, IntakeKind, IntakePayload};
+use super::{ArticleDraft, IntakeImport, IntakeInput, IntakeItem, IntakeKind, IntakePayload, PdfTextDraft};
 use crate::{ocr, Result, MAX_IMPORT};
 use std::path::{Path, PathBuf};
 
 pub(super) trait IntakeRepository {
     fn load_for_import(&self, id: &str) -> Result<StoredIntake>;
     fn load_photo_lines(&self, id: &str, language: &str) -> Result<Vec<ocr::OcrLine>>;
+    fn load_pdf_text(&self, id: &str) -> Result<PdfTextDraft>;
     fn record_imported(&mut self, item: &IntakeItem) -> Result<()>;
 }
 
@@ -35,6 +36,13 @@ pub(super) fn complete(
         return Ok(item);
     }
     let payload = payload.ok_or("Відсутній вміст матеріалу.")?;
+    let result = match result {
+        IntakeImport::StagedPdf { language } if matches!(item.metadata.kind, IntakeKind::Pdf) => {
+            let PdfTextDraft { page_texts, deferred_from } = ports.load_pdf_text(id)?;
+            IntakeImport::Pdf { page_texts, deferred_from, language }
+        }
+        result => result,
+    };
     let material = match (item.metadata.kind, payload, result) {
         (
             IntakeKind::Text | IntakeKind::Txt | IntakeKind::Docx,

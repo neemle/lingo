@@ -51,6 +51,13 @@ pub enum Command {
         language: String,
         lines: Vec<reader_core::ocr::OcrLine>,
     },
+    IntakePdfTextSample {
+        id: String,
+    },
+    SaveIntakePdfText {
+        id: String,
+        draft: reader_core::intake::PdfTextDraft,
+    },
     CompleteIntake {
         id: String,
         result: reader_core::intake::IntakeImport,

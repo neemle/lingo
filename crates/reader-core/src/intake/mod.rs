@@ -32,6 +32,7 @@ pub enum IntakeImport {
     StagedArticle { language: Option<String> },
     Photo { lines: Vec<ocr::OcrLine>, language: Option<String> },
     StagedPhoto { language: String },
+    StagedPdf { language: String },
     Pdf {
         #[serde(rename = "pageTexts")]
         page_texts: Vec<String>,
@@ -39,6 +40,13 @@ pub enum IntakeImport {
         deferred_from: Option<u16>,
         language: String,
     },
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PdfTextDraft {
+    pub page_texts: Vec<String>,
+    pub deferred_from: Option<u16>,
 }
 
 #[derive(Deserialize, Serialize)]

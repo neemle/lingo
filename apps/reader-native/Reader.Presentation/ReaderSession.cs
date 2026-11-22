@@ -162,6 +162,15 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task CompletePdfIntakeAsync(string id, string language, string[] pageTexts, int? deferredFrom = null) =>
         CompleteIntakeAsync(() => client.CompletePdfIntake(id, language, pageTexts, deferredFrom));
 
+    public Task<string?> IntakePdfTextSampleAsync(string id) =>
+        Task.Run(() => client.IntakePdfTextSample(id));
+
+    public Task<string> SaveIntakePdfTextAsync(string id, string[] pageTexts, int? deferredFrom) =>
+        Task.Run(() => client.SaveIntakePdfText(id, pageTexts, deferredFrom));
+
+    public Task CompleteStagedPdfIntakeAsync(string id, string language) =>
+        CompleteIntakeAsync(() => client.CompleteStagedPdfIntake(id, language));
+
     public Task CompleteDocumentIntakeAsync(string id, string language) =>
         CompleteIntakeAsync(() => client.CompleteDocumentIntake(id, language));
 
