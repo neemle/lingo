@@ -26,5 +26,6 @@ public sealed record DetachedPdfAnnotationItem(int Position, string Text, bool B
 
 public sealed record DetachedPdfFindCursor(int Page, int Position);
 public sealed record DetachedPdfFindHit(int Page, int Position, string SentenceId, string Text,
-    string? PivotLanguage = null, bool? Reviewed = null);
+    string? PivotLanguage = null, bool? Reviewed = null, string? SourceText = null);
+public sealed record DetachedPdfTranslation(string Text, string? PivotLanguage, string? SourceText, int StartPosition);
 public sealed record DetachedPdfFindPage(DetachedPdfFindHit[] Matches, DetachedPdfFindCursor? Next);

@@ -8,7 +8,7 @@ public partial class ReadingPage
 {
     private bool findingInDocument;
     private sealed record DocumentFindSelection(int Position, bool Translation,
-        int? PhysicalPage = null, string? SentenceId = null, MachineTranslation? CachedMachine = null);
+        int? PhysicalPage = null, string? SentenceId = null, DetachedPdfTranslation? CachedMachine = null);
     private sealed record DocumentFindCursor(int Position, int? PhysicalPage = null);
     private sealed record DocumentFindHit(string Text, DocumentFindSelection Selection);
     private sealed record DocumentFindPage(DocumentFindHit[] Matches, DocumentFindCursor? Next);
@@ -244,7 +244,7 @@ public partial class ReadingPage
                 matches.AddRange(found.Matches.Select(hit => new DocumentFindHit(hit.Text,
                     new DocumentFindSelection(hit.Position, Translation: language is not null,
                         PhysicalPage: hit.Page, SentenceId: hit.SentenceId,
-                        CachedMachine: hit.Reviewed == false ? new MachineTranslation(hit.Text, hit.PivotLanguage) : null))));
+                        CachedMachine: hit.Reviewed == false ? new DetachedPdfTranslation(hit.Text, hit.PivotLanguage, hit.SourceText, hit.Position) : null))));
                 if (found.Next is not { } next || next == cursor) return new(matches.ToArray(), null);
                 space = DocumentFind.PageSize - matches.Count;
                 cursor = next;

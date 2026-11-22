@@ -70,7 +70,7 @@ public partial class ReadingPage
 
     private void UpdateAutoTranslateButton()
     {
-        AutoTranslate.Text = autoTranslate ? "Автопереклад ✓" : "Автопереклад";
+        AutoTranslate.Text = DetachedAutoTranslate.Text = autoTranslate ? "Автопереклад ✓" : "Автопереклад";
         SemanticProperties.SetDescription(AutoTranslate, autoTranslate
             ? "Вимкнути автоматичний офлайн-переклад абзаців"
             : "Увімкнути автоматичний офлайн-переклад абзаців");
@@ -83,6 +83,7 @@ public partial class ReadingPage
         SaveReaderPreference(ReaderPreferenceChange.AutoTranslate(autoTranslate));
         UpdateAutoTranslateButton();
         ScheduleAutoTranslation();
+        if (autoTranslate) _ = RestoreDetachedTranslationAsync();
     }
 
     private async Task RestoreCachedTranslationAsync()

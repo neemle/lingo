@@ -153,6 +153,13 @@ public sealed class CoreClient : IDisposable
             version = 1, operation = "update_detached_pdf_annotation", id, page, sentenceId, change,
         });
 
+    public DetachedPdfTranslation? GetDetachedPdfTranslation(string id, int page, string sentenceId, string target,
+        bool cachedOnly, bool background) =>
+        CallIndependent<DetachedPdfTranslation?>(new
+        {
+            version = 1, operation = "detached_pdf_translation", id, page, sentenceId, target, cachedOnly, background,
+        });
+
     public MachineTranslation? TranslateDetachedPdfSentence(string id, int page, string sentenceId, string target) =>
         CallIndependent<MachineTranslation?>(new
         {

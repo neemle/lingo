@@ -1,4 +1,4 @@
-use super::database_error;
+use super::{database_error, translation};
 use crate::{Result, Store};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,8 @@ pub struct DetachedPdfFindHit {
     pivot_language: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reviewed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_text: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -55,7 +57,8 @@ impl Store {
             ).optional().map_err(database_error)?;
             let Some(source) = source else { return Ok(result); };
             if source == target { return Ok(result); }
-            Some((target, self.detached_translation_routes(&source, target)?))
+            let resolved = self.detached_translation_routes(&source, target)?;
+            Some((target, source, resolved))
         } else {
             None
         };
@@ -76,26 +79,31 @@ impl Store {
 
             let text: String = row.get(1).map_err(database_error)?;
             let prefix = super::sentence_prefix(id, page, &super::page_revision(&text));
-            let mut reviewed_for_page = match &routes {
-                Some((target, _)) => super::annotations::reviewed_for_page(&self.connection, id, page, target)?,
-                None => Default::default(),
+            let sentences = crate::segment(&text, &prefix);
+            let document = if let Some((target, source, _)) = &routes {
+                let reviewed = super::annotations::reviewed_for_page(&self.connection, id, page, target)?;
+                translation::page_document(text, sentences, source.clone(), target, reviewed)
+            } else {
+                crate::Document { sentences, ..crate::Document::default() }
             };
-            for (position, sentence) in crate::segment(&text, &prefix).into_iter().enumerate().skip(first_position) {
-                let (text, pivot_language, reviewed) = if let Some((target, routes)) = &routes {
+            let reviews = target.and_then(|target| document.reviewed_translations.get(target));
+            for (position, sentence) in document.sentences.iter().enumerate().skip(first_position) {
+                let (text, pivot_language, reviewed, source_text) = if let Some((target, _, routes)) = &routes {
                     if scanned_sentences == MAX_TRANSLATION_SCAN_SENTENCES {
                         result.next = Some(DetachedPdfFindCursor { page, position });
                         return Ok(result);
                     }
                     scanned_sentences += 1;
-                    if let Some(text) = reviewed_for_page.remove(&sentence.start_utf16) {
-                        (text, None, Some(true))
-                    } else if let Some((text, pivot)) = routes.cached_standalone(self, &sentence.text, target)? {
-                        (text, pivot, Some(false))
+                    if let Some(text) = reviews.and_then(|items| items.get(&sentence.id)) {
+                        (text.clone(), None, Some(true), None)
+                    } else if let Some(hit) = translation::cached_page_translation(self, routes, &document, position, target)? {
+                        if hit.start_position != position { continue; }
+                        (hit.text, hit.pivot_language, Some(false), hit.source_text)
                     } else {
                         continue;
                     }
                 } else {
-                    (sentence.text, None, None)
+                    (sentence.text.clone(), None, None, None)
                 };
                 let normalized = search_text(&text);
                 let Some(offset) = normalized.find(&needle) else { continue; };
@@ -110,7 +118,7 @@ impl Store {
                     if offset == 0 { excerpt } else { format!("…{excerpt}") }
                 };
                 result.matches.push(DetachedPdfFindHit {
-                    page, position, sentence_id: sentence.id, text, pivot_language, reviewed,
+                    page, position, sentence_id: sentence.id.clone(), text, pivot_language, reviewed, source_text,
                 });
             }
         }

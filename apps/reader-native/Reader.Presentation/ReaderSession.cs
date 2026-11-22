@@ -220,6 +220,10 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<DetachedPdfSentence> UpdateDetachedPdfAnnotationAsync(string id, int page, string sentenceId, object change) =>
         Task.Run(() => client.UpdateDetachedPdfAnnotation(id, page, sentenceId, change));
 
+    public Task<DetachedPdfTranslation?> DetachedPdfTranslationAsync(string id, int page, string sentenceId, string target,
+        bool cachedOnly, bool background = false) =>
+        Task.Run(() => client.GetDetachedPdfTranslation(id, page, sentenceId, target, cachedOnly, background));
+
     public Task<MachineTranslation?> TranslateDetachedPdfSentenceAsync(string id, int page, string sentenceId, string target) =>
         Task.Run(() => client.TranslateDetachedPdfSentence(id, page, sentenceId, target));
 

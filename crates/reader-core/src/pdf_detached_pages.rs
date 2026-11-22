@@ -8,6 +8,8 @@ mod annotations;
 mod find;
 mod ocr_edit;
 mod speech_resume;
+mod translation;
+pub use translation::DetachedPdfTranslation;
 pub use ocr_edit::DetachedPdfOcrPage;
 pub use find::{DetachedPdfFindCursor, DetachedPdfFindPage};
 pub use annotations::{DetachedPdfAnnotationChange, DetachedPdfAnnotationItem};
@@ -58,6 +60,7 @@ pub struct DetachedPdfSentence {
 
 pub(crate) struct CachedSentences {
     pub(crate) language: String,
+    text: String,
     saved: usize,
     pub(crate) sentences: Vec<Sentence>,
     pub(crate) revision: String,
@@ -125,7 +128,7 @@ impl Store {
         let Some((text, language, saved)) = result else { return Ok(None); };
         let revision = page_revision(&text);
         let sentences = crate::segment(&text, &sentence_prefix(id, page, &revision));
-        Ok((!sentences.is_empty()).then_some(CachedSentences { language, saved, sentences, revision }))
+        Ok((!sentences.is_empty()).then_some(CachedSentences { language, text, saved, sentences, revision }))
     }
 }
 

@@ -16,7 +16,8 @@ public partial class ReadingPage
     private bool changingDetachedAnnotation;
     private bool savingDetachedWord;
     private bool translatingDetachedSentence;
-    private string? detachedMachineTranslation;
+    private DetachedPdfTranslation? detachedMachineTranslation;
+    private int? detachedCacheLookupRun;
     private bool speakingDetachedSentence;
     private bool detachedPaused;
     private int detachedAudioRun;
@@ -81,6 +82,7 @@ public partial class ReadingPage
                 loadingDetachedSentence = false;
                 ShowDetachedReviewedTranslation();
                 UpdateDetachedControls();
+                _ = RestoreDetachedTranslationAsync();
             }
         }
     }
@@ -249,7 +251,7 @@ public partial class ReadingPage
     private string? ReviewedDetachedTranslation() =>
         TargetCode is { } target ? detachedSentence?.ReviewedTranslations.GetValueOrDefault(target) : null;
 
-    private string? CurrentDetachedTranslation() => ReviewedDetachedTranslation() ?? detachedMachineTranslation;
+    private string? CurrentDetachedTranslation() => ReviewedDetachedTranslation() ?? detachedMachineTranslation?.Text;
 
     private async void DetachedEditTranslationClicked(object? sender, EventArgs args)
     {
@@ -264,7 +266,8 @@ public partial class ReadingPage
                 : current.Sentence.Text + Environment.NewLine + Environment.NewLine
                     + "Щоб видалити переклад, збережіть порожнє поле.";
             var text = await DisplayPromptAsync("Переклад речення", message, accept: "Зберегти",
-                cancel: "Скасувати", initialValue: CurrentDetachedTranslation() ?? "", maxLength: 4000);
+                cancel: "Скасувати", initialValue: own ?? (detachedMachineTranslation is { SourceText: null } result ? result.Text : ""),
+                maxLength: 4000);
             if (text is null || !ReferenceEquals(detachedAddress, address) ||
                 detachedSentence?.Sentence.Id != current.Sentence.Id || TargetCode != target) return;
             var updated = await AppState.Session.UpdateDetachedPdfAnnotationAsync(
@@ -287,10 +290,14 @@ public partial class ReadingPage
     {
         if (sharingReaderText || detachedSentence is not { } current || TargetCode is not { } target
             || CurrentDetachedTranslation() is not { } translated) return;
-        await ShareTranslationPairAsync(new TranslationPair(current.Sentence.Text, current.Language, translated, target));
+        var source = ReviewedDetachedTranslation() is null ? detachedMachineTranslation?.SourceText : null;
+        await ShareTranslationPairAsync(new TranslationPair(source ?? current.Sentence.Text, current.Language, translated, target));
     }
 
-    private async void DetachedTranslateClicked(object? sender, EventArgs args)
+    private async void DetachedTranslateClicked(object? sender, EventArgs args) =>
+        await TranslateDetachedAsync(background: false);
+
+    private async Task TranslateDetachedAsync(bool background)
     {
         if (!DetachedTranslate.IsEnabled || detachedAddress is not { } address ||
             detachedSentence is not { } current || TargetCode is not { } target) return;
@@ -300,13 +307,17 @@ public partial class ReadingPage
         ShowDetachedTranslation("Перекладаємо офлайн…");
         try
         {
-            var translated = await AppState.Session.TranslateDetachedPdfSentenceAsync(
-                address.Document, address.Page, current.Sentence.Id, target);
+            var translated = await AppState.Session.DetachedPdfTranslationAsync(
+                address.Document, address.Page, current.Sentence.Id, target, cachedOnly: false, background: background);
             if (run != detachedTranslationRun) return;
             if (translated is null)
             {
-                ShowDetachedTranslation("");
-                RefreshReadiness((current.Language, target));
+                if (!background)
+                {
+                    ShowDetachedTranslation("Для цього речення переклад недоступний.");
+                    RefreshReadiness((current.Language, target));
+                }
+                else ShowDetachedTranslation("");
             }
             else
                 ShowDetachedMachineTranslation(translated, current.Language, target);
@@ -325,6 +336,42 @@ public partial class ReadingPage
         }
     }
 
+    private async Task RestoreDetachedTranslationAsync()
+    {
+        if (!readingPageActive || loadingDetachedSentence || translatingDetachedSentence ||
+            detachedAddress is not { } address || detachedSentence is not { } current || TargetCode is not { } target ||
+            CurrentDetachedTranslation() is not null || detachedCacheLookupRun == detachedTranslationRun) return;
+        var run = detachedTranslationRun;
+        detachedCacheLookupRun = run;
+        try
+        {
+            var cached = await AppState.Session.DetachedPdfTranslationAsync(
+                address.Document, address.Page, current.Sentence.Id, target, cachedOnly: true);
+            if (run != detachedTranslationRun || CurrentDetachedTranslation() is not null) return;
+            if (cached is not null)
+            {
+                ShowDetachedMachineTranslation(cached, current.Language, target);
+                UpdateDetachedControls();
+            }
+            else if (autoTranslate && !speakingDetachedSentence && !AppState.Session.Busy)
+            {
+                await Task.Delay(250);
+                if (run == detachedTranslationRun && readingPageActive && autoTranslate && !speakingDetachedSentence &&
+                    !AppState.Session.Busy && CurrentDetachedTranslation() is null)
+                    await TranslateDetachedAsync(background: true);
+            }
+        }
+        catch (Exception error)
+        {
+            if (run == detachedTranslationRun && AppState.Session.Document?.Id == address.Document)
+                System.Diagnostics.Debug.WriteLine(error.Message);
+        }
+        finally
+        {
+            if (detachedCacheLookupRun == run) detachedCacheLookupRun = null;
+        }
+    }
+
     private void ResetDetachedTranslation()
     {
         detachedTranslationRun++;
@@ -332,6 +379,7 @@ public partial class ReadingPage
         detachedMachineTranslation = null;
         ShowDetachedReviewedTranslation();
         UpdateDetachedControls();
+        _ = RestoreDetachedTranslationAsync();
     }
 
     private void ShowDetachedReviewedTranslation()
@@ -340,13 +388,13 @@ public partial class ReadingPage
         ShowDetachedTranslation(reviewed is null ? "" : $"Ваш переклад{Environment.NewLine}{reviewed}");
     }
 
-    private void ShowDetachedMachineTranslation(MachineTranslation translation, string source, string target)
+    private void ShowDetachedMachineTranslation(DetachedPdfTranslation translation, string source, string target)
     {
-        detachedMachineTranslation = translation.Text;
-        var text = translation.PivotLanguage is { } pivot
-            ? $"{DocumentLanguages.PivotRoute(source, pivot, target)}{Environment.NewLine}{translation.Text}"
-            : translation.Text;
-        ShowDetachedTranslation(text);
+        detachedMachineTranslation = translation;
+        var label = translation.SourceText is null ? "Машинний переклад" : "Машинний переклад групи речень";
+        if (translation.PivotLanguage is { } pivot)
+            label += $" · {DocumentLanguages.PivotRoute(source, pivot, target)}";
+        ShowDetachedTranslation($"{label}{Environment.NewLine}{translation.Text}");
     }
 
     private void ShowDetachedTranslation(string value)

@@ -37,7 +37,7 @@ pub mod optional_models;
 pub mod pdf_layers;
 mod pdf_page_ocr;
 mod pdf_detached_pages;
-pub use pdf_detached_pages::{DetachedPdfAnnotationChange, DetachedPdfAnnotationItem, DetachedPdfFindCursor, DetachedPdfFindPage, DetachedPdfOcrPage, DetachedPdfSentence};
+pub use pdf_detached_pages::{DetachedPdfAnnotationChange, DetachedPdfAnnotationItem, DetachedPdfFindCursor, DetachedPdfFindPage, DetachedPdfOcrPage, DetachedPdfSentence, DetachedPdfTranslation};
 mod pdf_reading_position;
 pub use pdf_page_ocr::{PdfReadPage, PdfReadPageState, PdfReadWindow};
 pub mod practice;
@@ -66,7 +66,7 @@ pub struct Sentence {
     pub start_utf16: usize,
     pub end_utf16: usize,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Document {
     pub id: String,

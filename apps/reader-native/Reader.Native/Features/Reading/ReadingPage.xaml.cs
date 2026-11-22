@@ -349,6 +349,7 @@ public partial class ReadingPage : ContentPage
             readinessError = error.Message;
         }
         UpdateTranslation();
+        if (DetachedPdfReader.IsVisible) _ = RestoreDetachedTranslationAsync();
     }
 
     private async void OpenTranslationPackagesClicked(object? sender, EventArgs args)

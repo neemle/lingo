@@ -148,6 +148,17 @@ pub enum Command {
         sentence_id: String,
         change: reader_core::DetachedPdfAnnotationChange,
     },
+    DetachedPdfTranslation {
+        id: String,
+        page: u16,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        target: String,
+        #[serde(rename = "cachedOnly")]
+        cached_only: bool,
+        #[serde(default)]
+        background: bool,
+    },
     TranslateDetachedPdfSentence {
         id: String,
         page: u16,

@@ -371,6 +371,12 @@ impl CacheRoutes {
         })
     }
 
+    pub(crate) fn cached_active(
+        &self, store: &Store, document: &crate::Document, position: usize, target: &str,
+    ) -> Result<CachedTranslation> {
+        cached_translation_with_routes(store, self, document, position, target, CacheScope::Active)
+    }
+
     pub(crate) fn cached_standalone(
         &self, store: &Store, text: &str, target: &str,
     ) -> Result<Option<(String, Option<String>)>> {
