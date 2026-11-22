@@ -315,17 +315,20 @@ impl Store {
     }
 
     pub(crate) fn native_pdf_page_text(&self, id: &str) -> Result<Option<Vec<String>>> {
-        self.connection
-            .query_row(
-                "SELECT pdf_page_text FROM file_originals WHERE document_id=?1",
-                [id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(storage_error)?
-            .map(|json| serde_json::from_str(&json).map_err(storage_error))
-            .transpose()
+        native_pdf_page_text(&self.connection, id)
     }
+}
+
+pub(crate) fn native_pdf_page_text(db: &Connection, id: &str) -> Result<Option<Vec<String>>> {
+    db.query_row(
+        "SELECT pdf_page_text FROM file_originals WHERE document_id=?1",
+        [id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(storage_error)?
+    .map(|json| serde_json::from_str(&json).map_err(storage_error))
+    .transpose()
 }
 
 pub(crate) fn remove(root: &Path, id: &str) {

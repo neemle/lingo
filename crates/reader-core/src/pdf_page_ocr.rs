@@ -1,8 +1,13 @@
 //! On-demand OCR for PDFs whose original file was already imported.
 
-use crate::{document_layout, document_revisions, ocr, pdf_layers, Document, Result, Store};
-use rusqlite::{params, Connection, OptionalExtension};
+use crate::{
+    document_layout, document_revisions, file_originals, ocr, pdf_layers, Document, Result, Store,
+};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
+
+const OCR_LEASE_SECONDS: i64 = 120;
+const OCR_RETRY_DELAY_SECONDS: i64 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,15 +39,82 @@ pub struct PdfReadWindow {
     pub context_span: Option<ocr::OcrSpan>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfOcrRequest {
+    pub page: u16,
+    pub token: String,
+    pub expires_at: i64,
+}
+
 pub(crate) fn initialize(db: &Connection) -> Result<()> {
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS pdf_ocr_completed_pages (
             document_id TEXT NOT NULL REFERENCES file_originals(document_id) ON DELETE CASCADE,
             page INTEGER NOT NULL CHECK(page >= 0 AND page < 65535),
             PRIMARY KEY(document_id, page)
+        );
+        CREATE TABLE IF NOT EXISTS pdf_ocr_requests (
+            document_id TEXT NOT NULL REFERENCES file_originals(document_id) ON DELETE CASCADE,
+            page INTEGER NOT NULL CHECK(page >= 0 AND page < 65535),
+            priority INTEGER NOT NULL,
+            token TEXT,
+            available_at INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(document_id, page)
         );",
     )
     .map_err(database_error)
+}
+
+fn needed_pages(
+    db: &Connection,
+    document: &Document,
+    pages: &[String],
+    center: u16,
+) -> Result<Vec<u16>> {
+    if usize::from(center) >= pages.len() {
+        return Err("Сторінку PDF не знайдено".into());
+    }
+    let completed = completed_pages_between(
+        db, &document.id, center.saturating_sub(1), center.saturating_add(1),
+    )?;
+    let window = [Some(center), center.checked_sub(1), center.checked_add(1)];
+    Ok(window
+        .into_iter()
+        .flatten()
+        .filter(|&page| {
+            pages
+                .get(usize::from(page))
+                .is_some_and(|text| text.trim().is_empty())
+                && completed.binary_search(&page).is_err()
+                && !has_ocr_lines(document, page)
+        })
+        .collect())
+}
+
+pub(crate) fn schedule_window(db: &Connection, document: &Document, center: u16) -> Result<()> {
+    let Some(pages) = file_originals::native_pdf_page_text(db, &document.id)? else {
+        return Ok(());
+    };
+    let pending = needed_pages(db, document, &pages, center)?;
+    let mut retained = [-1; 3];
+    for (slot, &page) in retained.iter_mut().zip(&pending) {
+        *slot = i64::from(page);
+    }
+    db.execute(
+        "DELETE FROM pdf_ocr_requests WHERE document_id=?1 AND page NOT IN (?2,?3,?4)",
+        params![document.id, retained[0], retained[1], retained[2]],
+    )
+    .map_err(database_error)?;
+    for (priority, page) in pending.into_iter().enumerate() {
+        db.execute(
+            "INSERT INTO pdf_ocr_requests (document_id,page,priority) VALUES (?1,?2,?3)
+             ON CONFLICT(document_id,page) DO UPDATE SET priority=excluded.priority",
+            params![document.id, page, priority as i64],
+        )
+        .map_err(database_error)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn completed_pages(db: &Connection, id: &str) -> Result<Vec<u16>> {
@@ -65,6 +137,15 @@ fn completed_pages_between(db: &Connection, id: &str, first: u16, last: u16) -> 
 pub(crate) fn mark_completed(db: &Connection, id: &str, page: u16) -> Result<()> {
     db.execute(
         "INSERT OR IGNORE INTO pdf_ocr_completed_pages (document_id,page) VALUES (?1,?2)",
+        params![id, page],
+    )
+    .map_err(database_error)?;
+    remove_request(db, id, page)
+}
+
+fn remove_request(db: &Connection, id: &str, page: u16) -> Result<()> {
+    db.execute(
+        "DELETE FROM pdf_ocr_requests WHERE document_id=?1 AND page=?2",
         params![id, page],
     )
     .map_err(database_error)?;
@@ -125,29 +206,63 @@ impl Store {
         let Some(pages) = self.native_pdf_page_text(id)? else {
             return Ok(Vec::new());
         };
-        if usize::from(center) >= pages.len() {
-            return Err("Сторінку PDF не знайдено".into());
-        }
         let body: String = self
             .connection
             .query_row("SELECT body FROM documents WHERE id=?1", [id], |row| row.get(0))
             .map_err(database_error)?;
         let document: Document = serde_json::from_str(&body).map_err(database_error)?;
-        let completed = completed_pages_between(
-            &self.connection, id, center.saturating_sub(1), center.saturating_add(1),
-        )?;
-        let window = [Some(center), center.checked_sub(1), center.checked_add(1)];
-        Ok(window
-            .into_iter()
-            .flatten()
-            .filter(|&page| {
-                pages
-                    .get(usize::from(page))
-                    .is_some_and(|text| text.trim().is_empty())
-                    && completed.binary_search(&page).is_err()
-                    && !has_ocr_lines(&document, page)
-            })
-            .collect())
+        needed_pages(&self.connection, &document, &pages, center)
+    }
+
+    /// One worker per document can take the highest-priority available page.
+    pub fn claim_pdf_ocr_page(&mut self, id: &str) -> Result<Option<PdfOcrRequest>> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(database_error)?;
+        let now = crate::now();
+        let page = tx
+            .query_row(
+                "SELECT page FROM pdf_ocr_requests
+                 WHERE document_id=?1 AND available_at<=?2
+                   AND NOT EXISTS (
+                     SELECT 1 FROM pdf_ocr_requests
+                     WHERE document_id=?1 AND token IS NOT NULL AND available_at>?2
+                   )
+                 ORDER BY priority LIMIT 1",
+                params![id, now],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(database_error)?;
+        let Some(page) = page else {
+            return Ok(None);
+        };
+        let request = PdfOcrRequest {
+            page,
+            token: uuid::Uuid::new_v4().to_string(),
+            expires_at: now + OCR_LEASE_SECONDS,
+        };
+        tx.execute(
+            "UPDATE pdf_ocr_requests SET token=?3, available_at=?4 WHERE document_id=?1 AND page=?2",
+            params![id, page, request.token, request.expires_at],
+        )
+        .map_err(database_error)?;
+        tx.commit().map_err(database_error)?;
+        Ok(Some(request))
+    }
+
+    /// Release a failed page for retry while allowing available neighbors to proceed.
+    pub fn retry_pdf_ocr_page(&self, id: &str, page: u16, token: &str) -> Result<bool> {
+        let now = crate::now();
+        self.connection
+            .execute(
+                "UPDATE pdf_ocr_requests SET token=NULL, available_at=?5
+                 WHERE document_id=?1 AND page=?2 AND token=?3 AND available_at>?4",
+                params![id, page, token, now, now + OCR_RETRY_DELAY_SECONDS],
+            )
+            .map(|count| count != 0)
+            .map_err(database_error)
     }
 
     /// Store a page once, including an empty result. Existing corrections survive retries.
@@ -157,14 +272,16 @@ impl Store {
         page: u16,
         lines: Vec<ocr::OcrLine>,
     ) -> Result<Document> {
-        let pages = self
-            .native_pdf_page_text(id)?
-            .ok_or("Оригінал PDF для розпізнавання недоступний")?;
-        let needs_text = pages
-            .get(usize::from(page))
-            .ok_or("Сторінку PDF не знайдено")?
-            .trim()
-            .is_empty();
+        self.complete_pdf_ocr_page(id, page, lines, None)
+    }
+
+    pub fn complete_pdf_ocr_page(
+        &mut self,
+        id: &str,
+        page: u16,
+        lines: Vec<ocr::OcrLine>,
+        token: Option<&str>,
+    ) -> Result<Document> {
         if lines
             .iter()
             .any(|line| line.page != page || line.correction.is_some())
@@ -174,6 +291,26 @@ impl Store {
 
         let mut updated = None;
         self.edit_document(id, |document, tx| {
+            if let Some(token) = token {
+                let current: bool = tx
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM pdf_ocr_requests
+                         WHERE document_id=?1 AND page=?2 AND token=?3 AND available_at>?4)",
+                        params![id, page, token, crate::now()],
+                        |row| row.get(0),
+                    )
+                    .map_err(database_error)?;
+                if !current {
+                    return Err("Запит OCR для цієї сторінки вже неактивний".into());
+                }
+            }
+            let pages = file_originals::native_pdf_page_text(tx, id)?
+                .ok_or("Оригінал PDF для розпізнавання недоступний")?;
+            let needs_text = pages
+                .get(usize::from(page))
+                .ok_or("Сторінку PDF не знайдено")?
+                .trim()
+                .is_empty();
             let cached: bool = tx
                 .query_row(
                     "SELECT EXISTS(SELECT 1 FROM pdf_ocr_completed_pages WHERE document_id=?1 AND page=?2)",
@@ -182,6 +319,7 @@ impl Store {
                 )
                 .map_err(database_error)?;
             if cached || has_ocr_lines(document, page) || !needs_text {
+                remove_request(tx, id, page)?;
                 updated = Some(document.clone());
                 return Ok(false);
             }

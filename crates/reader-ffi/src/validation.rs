@@ -140,11 +140,19 @@ fn validate(command: &Command) -> Result<()> {
         Command::CachePdfOcrPage { lines, .. } if lines.len() > 8192 => {
             Err(Error::new("invalid_argument", "Too many OCR lines for one PDF page"))
         }
+        Command::RetryPdfOcrPage { token, .. }
+        | Command::CachePdfOcrPage { token: Some(token), .. }
+            if token.len() != 36 =>
+        {
+            Err(Error::new("invalid_argument", "Invalid PDF OCR request token"))
+        }
         Command::DeleteDocument { id }
         | Command::PdfReadingPage { id }
         | Command::SetPdfReadingPage { id, .. }
         | Command::PdfReadWindow { id, .. }
         | Command::PdfOcrNeededPages { id, .. }
+        | Command::ClaimPdfOcrPage { id }
+        | Command::RetryPdfOcrPage { id, .. }
         | Command::CachePdfOcrPage { id, .. }
             if id.is_empty() || id.len() > 256 || id.contains('\0') =>
         {

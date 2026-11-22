@@ -73,10 +73,19 @@ pub enum Command {
         id: String,
         center: u16,
     },
+    ClaimPdfOcrPage {
+        id: String,
+    },
+    RetryPdfOcrPage {
+        id: String,
+        page: u16,
+        token: String,
+    },
     CachePdfOcrPage {
         id: String,
         page: u16,
         lines: Vec<reader_core::ocr::OcrLine>,
+        token: Option<String>,
     },
     PdfOcrJob {
         job: reader_core::ocr_jobs::JobRequest,

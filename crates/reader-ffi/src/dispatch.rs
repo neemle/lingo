@@ -83,8 +83,12 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::SetPdfReadingPage { id, page } => value(store.set_pdf_reading_page(&id, page)),
         Command::PdfReadWindow { id, center } => value(store.pdf_read_window(&id, center)),
         Command::PdfOcrNeededPages { id, center } => value(store.pdf_ocr_needed_pages(&id, center)),
-        Command::CachePdfOcrPage { id, page, lines } => {
-            value(store.cache_pdf_ocr_page(&id, page, lines))
+        Command::ClaimPdfOcrPage { id } => value(store.claim_pdf_ocr_page(&id)),
+        Command::RetryPdfOcrPage { id, page, token } => {
+            value(store.retry_pdf_ocr_page(&id, page, &token))
+        }
+        Command::CachePdfOcrPage { id, page, lines, token } => {
+            value(store.complete_pdf_ocr_page(&id, page, lines, token.as_deref()))
         }
         Command::PdfOcrJob { job } => value(store.pdf_ocr_job(job)),
         Command::ImportMixedPdf {

@@ -1,6 +1,6 @@
 //! Physical reading position for PDFs, independent of sentence and OCR state.
 
-use crate::{Document, Result, Store};
+use crate::{pdf_page_ocr, Document, Result, Store};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{BTreeMap, HashMap};
 
@@ -38,6 +38,7 @@ impl Store {
                 params![id, page],
             )
             .map_err(database_error)?;
+            pdf_page_ocr::schedule_window(tx, document, page)?;
             Ok(false)
         })
     }
