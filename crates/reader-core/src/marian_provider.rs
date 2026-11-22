@@ -16,7 +16,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::{
     model_storage::{
         activate_verified_package, copy_and_hash, copy_and_hash_checked, lock_package, model_error,
-        package_directory, remove_package_directory, write_verified_package_zip,
+        package_directory, remove_package_directory, restore_verified_package, write_verified_package_zip,
     },
     resources::RESOURCES,
     space::{ensure_capacity, PACKAGE_OVERHEAD},
@@ -97,6 +97,7 @@ pub struct TranslationPackageStatus {
     pub license: &'static str,
     pub files_present: bool,
     pub has_local_files: bool,
+    pub has_recovery_copy: bool,
     pub revision: &'static str,
     pub assets: Vec<TranslationAsset>,
     pub validation: Option<TranslationPackageValidationResult>,
@@ -244,9 +245,7 @@ impl TranslationPackageFiles {
         let provider = MarianProvider::interactive(&self.directory);
         fs::create_dir_all(&self.directory).map_err(model_error)?;
         let _staging = lock_package(&self.directory.join(".install.lock"), true)?;
-        let _lock = provider.lock(package, true)?;
-        let active = provider.path(package);
-        if package_directory(&active)? && verify_files(&active, package, &ASSETS, &|| Ok(())).is_ok() {
+        if provider.active_package_verified(package)? {
             return Ok(());
         }
         let total = package.sizes.iter().sum::<u64>() + PACKAGE_OVERHEAD;
@@ -257,9 +256,7 @@ impl TranslationPackageFiles {
             copy_verified_asset(downloaded, package, index, asset, &mut output, &|| Ok(()))?;
             output.sync_all().map_err(model_error)?;
         }
-        activate_verified_package(
-            stage.path(), &active, &provider.previous_path(package), &provider.removed_path(package),
-        )
+        provider.activate_staged(package, stage.path())
     }
 
     pub fn remove(&self, source: &str, target: &str) -> Result<bool> {
@@ -287,6 +284,25 @@ impl TranslationPackageFiles {
         remove_package_directory(&removed)
             .map_err(|error| format!("Пакет відключено. Не вдалося прибрати всі файли. {error}"))?;
         Ok(true)
+    }
+
+    pub fn rollback(&self, source: &str, target: &str) -> Result<()> {
+        let package = catalog::PACKAGES.iter()
+            .find(|entry| entry.source == source && entry.target == target)
+            .ok_or("Для цієї мовної пари немає пакета.")?;
+        let provider = MarianProvider::interactive(&self.directory);
+        if !package_directory(&self.directory)? {
+            return Err("Збережена копія пакета відсутня.".into());
+        }
+        let _lock = provider.lock(package, true)?;
+        for candidate in provider.recovery_paths(package) {
+            if package_directory(&candidate)?
+                && verify_files(&candidate, package, &ASSETS, &|| Ok(())).is_ok()
+            {
+                return restore_verified_package(&candidate, &provider.path(package));
+            }
+        }
+        Err("Немає збереженої копії, що відповідає контрольним сумам каталогу.".into())
     }
 
     pub fn export(&self, source: &str, target: &str, archive_path: &Path) -> Result<()> {
@@ -357,25 +373,9 @@ impl TranslationPackageFiles {
             output.sync_all().map_err(model_error)?;
         }
         let package = candidates[0];
-        let _lock = provider.lock(package, true)?;
-        let active = provider.path(package);
-        let previous = provider.previous_path(package);
-        if !package_directory(&active)?
-            || verify_files(&active, package, &ASSETS, &|| Ok(())).is_err()
-        {
-            activate_verified_package(
-                stage.path(),
-                &active,
-                &previous,
-                &provider.removed_path(package),
-            )?;
+        if !provider.active_package_verified(package)? {
+            provider.activate_staged(package, stage.path())?;
         }
-        remove_package_directory(&previous).map_err(|error| {
-            format!("Пакет готовий. Не вдалося прибрати попередні файли. {error}")
-        })?;
-        remove_package_directory(&provider.removed_path(package)).map_err(|error| {
-            format!("Пакет готовий. Не вдалося прибрати попередні файли. {error}")
-        })?;
         Ok(candidates
             .iter()
             .map(|entry| format!("{} → {}", entry.source, entry.target))
@@ -553,6 +553,8 @@ impl Store {
                 has_local_files: provider.path(package).symlink_metadata().is_ok()
                     || provider.removed_path(package).symlink_metadata().is_ok()
                     || provider.previous_path(package).symlink_metadata().is_ok(),
+                has_recovery_copy: provider.recovery_paths(package).iter()
+                    .any(|path| package_directory(path).unwrap_or(false) && package_files_present(path, package)),
                 revision: package.revision,
                 validation: provider.validation_result(package),
                 assets: ASSETS
@@ -768,12 +770,45 @@ impl<'a> MarianProvider<'a> {
         }
     }
 
+    fn active_package_verified(&self, package: &Package) -> Result<bool> {
+        let _lock = self.lock(package, false)?;
+        let active = self.path(package);
+        Ok(package_directory(&active)?
+            && verify_files(&active, package, &ASSETS, &|| Ok(())).is_ok())
+    }
+
+    // Install operations hold the root staging lock. They leave the current
+    // package available while proving the candidate can run offline.
+    fn activate_staged(&self, package: &Package, stage: &Path) -> Result<()> {
+        {
+            let job = RESOURCES.optional()?;
+            let checkpoint = || {
+                if job.should_yield() {
+                    return Err("Перевірку нового пакета перервано активним запитом. Спробуйте ще раз.".into());
+                }
+                Ok(())
+            };
+            let [sample, ..] = probe_evidence::samples(package.source)
+                .ok_or("Для цього пакета немає контрольного речення.")?;
+            let result = Self::translate_package(
+                stage, package, &[sample.to_owned()], TranslationSettings { beam_size: 1 }, checkpoint,
+            ).map_err(|error| format!("Новий пакет не пройшов пробний переклад. {error}"))?;
+            if !matches!(result.as_slice(), [output] if output.chars().any(char::is_alphanumeric)) {
+                return Err("Новий пакет не повернув текст пробного перекладу.".into());
+            }
+        }
+        let _lock = self.lock(package, true)?;
+        activate_verified_package(
+            stage, &self.path(package), &self.previous_path(package), &self.removed_path(package),
+        )
+    }
+
     fn files_present(&self, model: &Package) -> bool {
-        let path = self.read_path(model);
-        ASSETS.iter().zip(model.sizes).all(|(asset, expected)| {
-            fs::metadata(path.join(asset))
-                .is_ok_and(|metadata| metadata.is_file() && metadata.len() == expected)
-        })
+        package_files_present(&self.read_path(model), model)
+    }
+
+    fn recovery_paths(&self, model: &Package) -> [PathBuf; 2] {
+        [self.previous_path(model), self.removed_path(model)]
     }
 
     fn validation_result(&self, model: &Package) -> Option<TranslationPackageValidationResult> {
@@ -859,8 +894,19 @@ impl TranslationProvider for MarianProvider<'_> {
             }
             Ok(())
         };
-        let directory = self.read_path(package);
-        verify_files(&directory, package, &ASSETS[..4], &checkpoint)?;
+        Self::translate_package(&self.read_path(package), package, segments, settings, checkpoint)
+    }
+}
+
+impl MarianProvider<'_> {
+    fn translate_package(
+        directory: &Path,
+        package: &Package,
+        segments: &[String],
+        settings: TranslationSettings,
+        checkpoint: impl Fn() -> Result<()>,
+    ) -> Result<Vec<String>> {
+        verify_files(directory, package, &ASSETS[..4], &checkpoint)?;
         let mut configuration: serde_json::Value =
             serde_json::from_slice(&fs::read(directory.join("config.json")).map_err(model_error)?)
                 .map_err(model_error)?;
@@ -1171,6 +1217,13 @@ fn normalized_input<'a>(source: &str, text: &'a str) -> Cow<'a, str> {
     } else {
         Cow::Borrowed(text)
     }
+}
+
+fn package_files_present(path: &Path, package: &Package) -> bool {
+    ASSETS.iter().zip(package.sizes).all(|(asset, expected)| {
+        fs::symlink_metadata(path.join(asset))
+            .is_ok_and(|metadata| metadata.is_file() && metadata.len() == expected)
+    })
 }
 
 fn asset_limit(asset: &str) -> u64 {

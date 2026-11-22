@@ -277,6 +277,8 @@ public sealed class CoreClient : IDisposable
         CallIndependent<JsonElement>(new { version = 1, operation = "export_translation_package", source, target, path });
     public string InstallTranslationPackage(string path) =>
         CallIndependent<string>(new { version = 1, operation = "install_translation_package", path });
+    public void RollbackTranslationPackage(string source, string target) =>
+        CallIndependent<JsonElement>(new { version = 1, operation = "rollback_translation_package", source, target });
     public void VerifyTranslationPackage(string source, string target) =>
         CallIndependent<JsonElement>(new { version = 1, operation = "verify_translation_package", source, target });
     public TranslationPackageValidation ValidateTranslationPackage(string source, string target) =>

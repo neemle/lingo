@@ -9,6 +9,7 @@ public sealed record TranslationPackageStatus(
     bool HasLocalFiles = false, string? Repository = null, string? License = null,
     TranslationPackageValidation? Validation = null)
 {
+    public bool HasRecoveryCopy { get; init; }
     public bool HasValidatedTranslation => FilesPresent && Validation?.Matches(this) == true;
 }
 

@@ -239,6 +239,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::InstallTranslationPackage { .. }
         | Command::ExportTranslationPackage { .. }
         | Command::RemoveTranslationPackage { .. }
+        | Command::RollbackTranslationPackage { .. }
         | Command::VerifyTranslationPackage { .. }
         | Command::ValidateTranslationPackage { .. } => Err(Error::new(
             "internal_error",

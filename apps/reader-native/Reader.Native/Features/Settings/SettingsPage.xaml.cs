@@ -273,6 +273,8 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         DownloadRequested.IsEnabled = !busy && DownloadRequested.IsVisible;
         ModelChoice.IsEnabled = InstallTranslation.IsEnabled = !busy;
         DownloadTranslation.IsEnabled = !busy && downloadChoices.Length > 0;
+        RollbackTranslation.IsVisible = translationInventory?.Any(package => package.HasRecoveryCopy) == true;
+        RollbackTranslation.IsEnabled = !busy && RollbackTranslation.IsVisible;
         RemoveTranslation.IsVisible = removablePackages.Length > 0;
         RemoveTranslation.IsEnabled = !busy && RemoveTranslation.IsVisible;
         ExportTranslation.IsVisible = translationInventory?.Any(package => package.FilesPresent) == true;
@@ -466,6 +468,32 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
     private static string DescribeRoutes(IEnumerable<TranslationPackageStatus> packages) =>
         string.Join(", ", packages.Select(package =>
             $"{DocumentLanguages.Name(package.Source)} → {DocumentLanguages.Name(package.Target)}"));
+
+    private async void RollbackTranslationClicked(object? sender, EventArgs args)
+    {
+        if (changingTranslationFiles || activeDownload is not null || translationInventory is not { } packages) return;
+        var choices = packages.Where(package => package.HasRecoveryCopy).GroupBy(PackageKey)
+            .ToDictionary(group => DescribeRoutes(group), group => group.First());
+        if (choices.Count == 0) return;
+
+        changingTranslationFiles = true;
+        UpdateTranslationControls();
+        try
+        {
+            var choice = await DisplayActionSheetAsync("Відновити збережену копію перекладача", "Скасувати", null,
+                choices.Keys.ToArray());
+            if (choice is null || !choices.TryGetValue(choice, out var package)) return;
+            ModelStatus.Text = "Перевіряємо збережену копію пакета…";
+            await AppState.Session.RollbackTranslationPackageAsync(package.Source, package.Target);
+            ModelStatus.Text = $"Збережену копію пакета відновлено ({choice}).";
+        }
+        catch (Exception error) { ModelStatus.Text = error.Message; }
+        finally
+        {
+            changingTranslationFiles = false;
+            await RefreshTranslationPackagesAsync();
+        }
+    }
 
     private async void RemoveTranslationClicked(object? sender, EventArgs args)
     {

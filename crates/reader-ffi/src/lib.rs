@@ -240,6 +240,10 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             let files = registry::lock()?.store(handle)?.translation_package_files();
             return encode_job(files.remove(source, target));
         }
+        Command::RollbackTranslationPackage { source, target } => {
+            let files = registry::lock()?.store(handle)?.translation_package_files();
+            return encode_job(files.rollback(source, target));
+        }
         Command::VerifyTranslationPackage { source, target } => {
             let job = registry::lock()?
                 .store(handle)?

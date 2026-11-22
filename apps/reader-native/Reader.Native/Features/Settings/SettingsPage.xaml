@@ -131,6 +131,8 @@
        Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
       <Button x:Name="RepairTranslation" Text="Завантажити пакет повторно" IsVisible="False" Clicked="RepairTranslationClicked"
        Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
+      <Button x:Name="RollbackTranslation" Text="Відновити збережену копію перекладача" IsVisible="False"
+       Clicked="RollbackTranslationClicked" Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
       <Button x:Name="RemoveTranslation" Text="Видалити пакет перекладу" IsVisible="False" Clicked="RemoveTranslationClicked"
        Style="{StaticResource OutlineButton}" Margin="0,0,0,8" />
      </FlexLayout>

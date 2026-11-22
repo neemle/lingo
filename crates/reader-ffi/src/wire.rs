@@ -344,6 +344,10 @@ pub enum Command {
         target: String,
         path: String,
     },
+    RollbackTranslationPackage {
+        source: String,
+        target: String,
+    },
     VerifyTranslationPackage {
         source: String,
         target: String,

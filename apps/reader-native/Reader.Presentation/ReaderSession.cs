@@ -379,6 +379,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         Task.Run(() => client.ExportTranslationPackage(source, target, path));
     public Task<string> InstallTranslationPackageAsync(string path) =>
         Task.Run(() => client.InstallTranslationPackage(path));
+    public Task RollbackTranslationPackageAsync(string source, string target) =>
+        Task.Run(() => client.RollbackTranslationPackage(source, target));
     public Task VerifyTranslationPackageAsync(string source, string target) =>
         Task.Run(() => client.VerifyTranslationPackage(source, target));
     public Task<TranslationPackageValidation> ValidateTranslationPackageAsync(string source, string target) =>
