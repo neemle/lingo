@@ -163,6 +163,8 @@ public partial class ReadingPage
         private readonly Func<string, bool, Task<SentenceReview?>>? review;
         private readonly Button check = new() { Text = "Перевірити з Qwen", HorizontalOptions = LayoutOptions.Start };
         private readonly Label hints = new() { IsVisible = false };
+        private readonly ActivityIndicator reviewBusy = new() { IsVisible = false, WidthRequest = 20, HeightRequest = 20,
+            VerticalOptions = LayoutOptions.Start };
         private readonly VerticalStackLayout results = new() { Spacing = 9 };
         private readonly Button more = new() { Text = "Наступні слова", IsVisible = false };
         private readonly HashSet<(string Dependent, string Head, string Relation)> displayedLinks = [];
@@ -188,7 +190,14 @@ public partial class ReadingPage
             {
                 check.Clicked += async (_, _) => await ReviewLocallyAsync(cachedOnly: false);
                 stack.Children.Add(check);
-                stack.Children.Add(hints);
+                var hintArea = new Grid
+                {
+                    ColumnSpacing = 8,
+                    ColumnDefinitions = { new ColumnDefinition(GridLength.Auto), new ColumnDefinition(GridLength.Star) },
+                };
+                hintArea.Add(reviewBusy, 0, 0);
+                hintArea.Add(hints, 1, 0);
+                stack.Children.Add(hintArea);
             }
             stack.Children.Add(status);
             stack.Children.Add(results);
@@ -221,6 +230,7 @@ public partial class ReadingPage
                     hints.Text = "Установіть Qwen 2B у налаштуваннях. Підказки мовного пакета залишаються доступними.";
                     return;
                 }
+                reviewBusy.IsVisible = reviewBusy.IsRunning = true;
                 hints.Text = $"{available.Name} перевіряє текст…";
                 if (await review(available.Id, false) is { } result) ShowReview(available.Name, result);
             }
@@ -228,7 +238,11 @@ public partial class ReadingPage
             {
                 if (!cachedOnly) hints.Text = error.Message;
             }
-            finally { check.IsEnabled = true; }
+            finally
+            {
+                reviewBusy.IsRunning = reviewBusy.IsVisible = false;
+                check.IsEnabled = true;
+            }
         }
 
         private void ShowReview(string name, SentenceReview result)
