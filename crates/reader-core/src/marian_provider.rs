@@ -1189,7 +1189,7 @@ impl MarianProvider<'_> {
         for segment in segments {
             checkpoint()?;
             let source_pieces = input
-                .encode(normalized_input(package.source, segment).as_ref())
+                .encode(normalized_translation_input(package, segment).as_ref())
                 .map_err(model_error)?;
             let mut start = 0;
             let mut translated_parts = Vec::new();
@@ -1251,7 +1251,7 @@ impl MarianProvider<'_> {
                 let mut reference = |text: &str, width| -> Result<String> {
                     checkpoint()?;
                     let pieces = input
-                        .encode(normalized_input(package.source, text).as_ref())
+                        .encode(normalized_translation_input(package, text).as_ref())
                         .map_err(model_error)?;
                     if pieces.len() > capacity {
                         return Err("Речення завелике для перевірки контексту".into());
@@ -1427,6 +1427,17 @@ impl MarianProvider<'_> {
         }
         Ok(results)
     }
+}
+
+fn normalized_translation_input<'a>(package: &Package, text: &'a str) -> Cow<'a, str> {
+    let input = normalized_input(package.source, text);
+    if package.source == "fr" && package.target == "uk" {
+        // The direct Marian model can read "pas" as a path here. Make the gait explicit.
+        if let Some(clarified) = crate::marian_target_uk::clarify_french_manner_of_walking(&input) {
+            return Cow::Owned(clarified);
+        }
+    }
+    input
 }
 
 fn normalized_input<'a>(source: &str, text: &'a str) -> Cow<'a, str> {

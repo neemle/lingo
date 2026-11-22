@@ -155,12 +155,12 @@ public partial class ReadingPage
         return voices.FirstOrDefault(voice => voice.Id == saved) ?? AutomaticVoice(voices, language);
     }
 
-    private static string ModelTimelineRevision(VoiceChoice voice, int ratePercent) =>
-        ratePercent < 80 ? $"{voice.Revision}:player-speed-v1" : voice.Revision!;
+    private static string ModelTimelineRevision(VoiceChoice voice) =>
+        $"{voice.Revision}:narration-v2";
 
     private static int? ModelResumePosition(SpeechResume? resume, VoiceChoice? voice, string language, int ratePercent) =>
         resume?.Model is { } model && voice?.Revision is not null &&
-        model.Revision == ModelTimelineRevision(voice, ratePercent) &&
+        model.Revision == ModelTimelineRevision(voice) &&
         model.VoiceId == voice.Id && model.Language == language && model.RatePercent == ratePercent &&
         model.PositionMs is > 0 and < LocalSpeech.MaxModelAudioSeconds * 1000
             ? model.PositionMs : null;
@@ -188,7 +188,7 @@ public partial class ReadingPage
             var millis = playbackStartMs + (int)position.TotalMilliseconds;
             if (millis <= lastCheckpointMs || millis >= LocalSpeech.MaxModelAudioSeconds * 1000) return;
             lastCheckpointMs = millis;
-            var model = new ModelSpeechResume(voice.Id, ModelTimelineRevision(voice, ratePercent), document.Language, ratePercent, millis);
+            var model = new ModelSpeechResume(voice.Id, ModelTimelineRevision(voice), document.Language, ratePercent, millis);
             pendingSpeechResume = (document.Id, new(sentence.Id, textHash, 0, model));
         }
         Action capture = CapturePosition;

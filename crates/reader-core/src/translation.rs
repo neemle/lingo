@@ -1063,7 +1063,10 @@ pub(crate) fn normalize_ocr_input(
             && tail.starts_with(char::is_alphabetic)
             && split_ocr_drop_cap(document, offset, word_end_utf16, tail_start_utf16);
         if let Some(prefix) = continued {
-            normalized.push_str(prefix);
+            let next = tail.split(|ch: char| !ch.is_alphabetic()).next().unwrap_or("");
+            let inversion = document.language == "fr" &&
+                matches!(next, "il" | "ils" | "elle" | "elles" | "on" | "ce" | "tu" | "vous" | "nous" | "je");
+            normalized.push_str(if inversion { word } else { prefix });
         } else if drop_cap {
             normalized.push_str(word);
         } else {
@@ -1693,6 +1696,10 @@ fn cache_key(
             .unwrap_or(4)
     };
     let version = match route {
+        Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" &&
+            segments.iter().any(|text| {
+                crate::marian_target_uk::french_manner_of_walking(text.as_ref()).is_some()
+            }) => 8,
         Route::Direct(edge) if from_uk_to_fr(edge) => deadline_revision(),
         Route::Pivot { second, .. } if from_uk_to_fr(second) => 7,
         Route::Pivot { first, .. } if from_uk_to_fr(first) => deadline_revision(),

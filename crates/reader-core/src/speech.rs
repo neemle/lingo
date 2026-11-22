@@ -230,13 +230,22 @@ impl Store {
             if document.speech_text_overrides.contains_key(&sentence.id) {
                 narration
             } else {
-                without_pdf_note_markers(document, sentence, &narration).unwrap_or(narration)
+                model_pdf_narration(document, sentence, narration)
             }
         };
         Ok((sentence.id.clone(), SpeechSource { language: document.language.clone(), text }))
     }
 }
 
+
+pub(crate) fn model_pdf_narration(document: &Document, sentence: &Sentence, text: String) -> String {
+    let text = without_pdf_note_markers(document, sentence, &text).unwrap_or(text);
+    if document.format == "pdf" && text.contains('\n') {
+        crate::translation::normalize_ocr_input(document, &text, sentence.start_utf16)
+    } else {
+        text
+    }
+}
 
 /// Blanks confirmed references in the reading input while preserving UTF-16 offsets.
 pub(crate) fn without_pdf_note_markers(document: &Document, sentence: &Sentence, text: &str) -> Option<String> {
@@ -250,6 +259,17 @@ pub(crate) fn without_pdf_note_markers(document: &Document, sentence: &Sentence,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_narration_joins_pdf_wraps_but_keeps_french_inversion() {
+        let input = "Les marchan-\ndises sont ici. Est-\nelle au port ?";
+        let mut document = crate::document_layout::detached_pdf_document(input.into(), None);
+        document.language = "fr".into();
+        let sentences = crate::segment_pdf_with_titles(input, "pdf");
+        let narrate = |sentence: &Sentence| model_pdf_narration(&document, sentence, sentence.text.clone());
+        assert_eq!(narrate(&sentences[0]), "Les marchandises sont ici.");
+        assert_eq!(narrate(&sentences[1]), "Est-elle au port ?");
+    }
 
     #[test]
     fn only_same_page_footnote_markers_are_silent_with_original_offsets() {

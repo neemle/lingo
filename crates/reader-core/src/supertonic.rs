@@ -92,7 +92,7 @@ impl MultilingualSpeechJob {
         };
         let synthesis_rate = crate::tts::model_synthesis_rate(self.rate);
         let cache = SpeechCacheKey::new(
-            MODEL,
+            "supertonic-3-normalization-v2",
             self.model.revision(),
             &self.language,
             self.voice,
@@ -390,8 +390,7 @@ fn index(indexer: &[i64], c: char) -> i64 {
 }
 
 fn text_chunks(text: &str, indexer: &[i64]) -> Result<Vec<String>> {
-    let normalized: String = text
-        .nfkd()
+    let characters = text.nfkd()
         .map(|c| match c {
             '–' | '—' | '‑' | '‐' => '-',
             '„' | '«' | '»' | '“' | '”' => '"',
@@ -399,16 +398,37 @@ fn text_chunks(text: &str, indexer: &[i64]) -> Result<Vec<String>> {
             '[' | ']' | '<' | '>' | '_' | '|' | '/' | '#' | '\\' => ' ',
             c if c.is_whitespace() || index(indexer, c) < 0 => ' ',
             c => c,
-        })
-        .collect();
+        });
+    let mut normalized = String::with_capacity(text.len());
+    for ch in characters {
+        if matches!(ch, ',' | '.' | '!' | '?' | ';' | ':') {
+            normalized.truncate(normalized.trim_end().len());
+        }
+        if ch == ' ' && normalized.ends_with(' ') { continue; }
+        normalized.push(ch);
+    }
+    let normalized = normalized.trim();
+    let normalized = normalized.strip_prefix("- ").unwrap_or(normalized);
 
     let mut chunks = Vec::new();
     let mut chunk = String::new();
     let mut width = 0;
     for word in normalized.split_whitespace() {
         if !chunk.is_empty() && width + 1 + word.chars().count() > TEXT_WINDOW {
-            chunks.push(std::mem::take(&mut chunk));
-            width = 0;
+            if let Some((pause, ch)) = chunk.rmatch_indices([',', ';', ':', '!', '?']).find(|(pause, _)| {
+                chunk[..*pause].chars().count() >= TEXT_WINDOW / 2
+            }) {
+                let next = chunk.split_off(pause + ch.len());
+                chunks.push(std::mem::replace(&mut chunk, next.trim_start().to_owned()));
+                width = chunk.chars().count();
+                if width + 1 + word.chars().count() > TEXT_WINDOW {
+                    chunks.push(std::mem::take(&mut chunk));
+                    width = 0;
+                }
+            } else {
+                chunks.push(std::mem::take(&mut chunk));
+                width = 0;
+            }
         }
         if !chunk.is_empty() {
             chunk.push(' ');
@@ -472,4 +492,23 @@ fn initial_noise(seed: &[u8], count: usize) -> Vec<f32> {
 
 fn supertonic_error(error: impl std::fmt::Display) -> String {
     format!("Локальне озвучення Supertonic: {error}")
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn french_speech_drops_dialogue_marks_and_splits_long_input_at_a_pause() {
+        let indexer = vec![1; 0x0400];
+        assert_eq!(text_chunks("– Il répond : est-elle là ?", &indexer).unwrap(),
+            ["Il re\u{301}pond: est-elle la\u{300}?"]);
+        let opening = "Le capitaine regarde le bateau et attend la prochaine chaloupe au loin,";
+        let end = "puis le marin descend sur les marches du quai pour retrouver son équipe.";
+        let chunks = text_chunks(&format!("{opening} {end}"), &indexer).unwrap();
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0], opening);
+        assert!(chunks[1].starts_with("puis le marin"));
+    }
 }

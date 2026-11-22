@@ -1,6 +1,26 @@
 use unicode_segmentation::UnicodeSegmentation;
 use whatlang::Lang;
 
+const FRENCH_MANNER_OF_WALKING: &str = " de son pas souple et fort";
+
+pub(super) fn french_manner_of_walking(text: &str) -> Option<usize> {
+    text.match_indices(FRENCH_MANNER_OF_WALKING)
+        .find(|(start, phrase)| {
+            !text[start + phrase.len()..].starts_with(char::is_alphabetic)
+        })
+        .map(|(start, _)| start)
+}
+
+pub(super) fn clarify_french_manner_of_walking(text: &str) -> Option<String> {
+    let start = french_manner_of_walking(text)?;
+    let mut clarified = text.to_owned();
+    clarified.replace_range(
+        start..start + FRENCH_MANNER_OF_WALKING.len(),
+        " d'une démarche souple et forte",
+    );
+    Some(clarified)
+}
+
 pub(super) fn clearly_russian(text: &str) -> bool {
     distinguish(text) == Some(Lang::Rus)
 }
@@ -94,6 +114,14 @@ fn outside_quotes(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clarifies_french_walking_manner_without_changing_the_action() {
+        let input = "Le jeune homme part de son pas souple et fort donner ses ordres aux marins.";
+        let expected = "Le jeune homme part d'une démarche souple et forte donner ses ordres aux marins.";
+        assert_eq!(clarify_french_manner_of_walking(input).as_deref(), Some(expected));
+        assert!(clarify_french_manner_of_walking("Il parle de son pas souple et fortuit.").is_none());
+    }
 
     #[test]
     fn distinguishes_observed_wrong_language_from_ukrainian_candidate() {
