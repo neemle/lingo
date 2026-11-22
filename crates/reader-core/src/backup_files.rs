@@ -186,6 +186,7 @@ pub(crate) fn restore_document(
 }
 
 pub(crate) fn restore_library_data<O>(db: &Connection, backup: Backup<O>) -> Result<()> {
+    crate::translation::validate_cache(&backup.translation_cache, &backup.snapshot.documents)?;
     let review_cards = dictionary_transfer::restore_backup_dictionary(
         db,
         backup.snapshot.vocabulary,
@@ -197,6 +198,7 @@ pub(crate) fn restore_library_data<O>(db: &Connection, backup: Backup<O>) -> Res
     reading_history::restore(db, backup.reading_sessions, &backup.snapshot.documents)?;
     pdf_reading_position::restore(db, backup.pdf_reading_positions, &backup.snapshot.documents)?;
     crate::reader_preferences::restore(db, backup.reader_preferences)?;
+    crate::translation::restore_cache(db, backup.translation_cache)?;
     if let Some(progress) = backup.practice {
         practice::restore_if_fresh(db, progress, &review_cards)?;
     }
@@ -242,6 +244,7 @@ pub(crate) fn assemble<O>(
         pdf_reading_positions: pdf_reading_position::export(tx)?,
         reader_preferences: crate::reader_preferences::read(tx)?,
         model_hints: None,
+        translation_cache: Vec::new(),
     })
 }
 

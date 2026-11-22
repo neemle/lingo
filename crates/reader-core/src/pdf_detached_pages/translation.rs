@@ -125,6 +125,7 @@ impl Store {
         };
         let layout = document_layout::from_transcript(text, page_starts);
         let document = Document {
+            id: id.to_owned(),
             text: layout.text,
             blocks: layout.blocks,
             pdf_page_starts: layout.pdf_page_starts,

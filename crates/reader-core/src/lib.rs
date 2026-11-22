@@ -361,6 +361,8 @@ pub struct Backup<Originals = Vec<Original>> {
     pub reader_preferences: reader_preferences::ReaderPreferences,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_hints: Option<BackupHintManifest>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub translation_cache: Vec<translation::TranslationCacheEntry>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -469,6 +471,7 @@ impl Store {
         pdf_reading_position::initialize(&connection)?;
         reader_preferences::initialize(&connection)?;
         translation_queue::initialize(&connection)?;
+        translation::initialize_cache_ownership(&connection)?;
         knowledge::annotation_cache::initialize(&connection)?;
         let file_original_directory = file_originals::directory(path);
         file_originals::cleanup_orphans(&mut connection, &file_original_directory);

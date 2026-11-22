@@ -1,14 +1,108 @@
 //! Routes translations through models already installed on the device.
 
 use crate::{valid_language, Result, Store};
-use rusqlite::{params, OptionalExtension};
-use serde::Serialize;
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::cmp::Ordering;
+use std::{cmp::Ordering, collections::HashSet};
 use unicode_normalization::UnicodeNormalization;
 
 const MAX_BATCH_BYTES: usize = 64 * 1024;
 const CACHE_ROWS: i64 = 128;
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TranslationCacheEntry {
+    key: String,
+    source_hash: String,
+    segments: Vec<String>,
+}
+
+impl TranslationCacheEntry {
+    fn valid(&self) -> bool {
+        let digest = |text: &str| {
+            text.len() == 64 && text.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        };
+        digest(&self.key) && digest(&self.source_hash) && valid_segments(&self.segments)
+    }
+}
+
+pub(crate) fn initialize_cache_ownership(db: &Connection) -> Result<()> {
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS translation_cache_owners (
+            cache_key TEXT PRIMARY KEY REFERENCES translation_cache(key) ON DELETE CASCADE,
+            document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE
+        )",
+    ).map_err(|error| error.to_string())
+}
+
+pub(crate) fn export_cache(db: &Connection) -> Result<Vec<TranslationCacheEntry>> {
+    let mut query = db.prepare(
+        "SELECT cache.key, docs.source_hash, cache.body FROM translation_cache cache
+         JOIN translation_cache_owners owner ON owner.cache_key=cache.key
+         JOIN documents docs ON docs.id=owner.document_id
+         ORDER BY cache.rowid DESC LIMIT ?1",
+    ).map_err(|error| error.to_string())?;
+    let rows = query.query_map([CACHE_ROWS], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+    }).map_err(|error| error.to_string())?;
+    let mut entries = Vec::new();
+    for row in rows {
+        let (key, source_hash, body) = row.map_err(|error| error.to_string())?;
+        if let Ok(segments) = serde_json::from_str(&body) {
+            let entry = TranslationCacheEntry { key, source_hash, segments };
+            if entry.valid() {
+                entries.push(entry);
+            }
+        }
+    }
+    Ok(entries)
+}
+
+pub(crate) fn validate_cache(entries: &[TranslationCacheEntry], documents: &[crate::Document]) -> Result<()> {
+    let mut seen = HashSet::with_capacity(entries.len().min(CACHE_ROWS as usize));
+    if entries.len() > CACHE_ROWS as usize
+        || entries.iter().any(|entry| {
+            !entry.valid() || !seen.insert(entry.key.as_str())
+                || !documents.iter().any(|doc| doc.source_hash == entry.source_hash)
+        })
+    {
+        return Err("Некоректний кеш перекладу в резервній копії.".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn restore_cache(db: &Connection, entries: Vec<TranslationCacheEntry>) -> Result<()> {
+    if entries.is_empty() {
+        return Ok(());
+    }
+    let mut query = db.prepare("SELECT key FROM translation_cache").map_err(|error| error.to_string())?;
+    let existing = query.query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<rusqlite::Result<HashSet<_>>>()
+        .map_err(|error| error.to_string())?;
+    let available = (CACHE_ROWS as usize).saturating_sub(existing.len());
+    let chosen: Vec<_> = entries.iter()
+        .filter(|entry| !existing.contains(&entry.key))
+        .take(available)
+        .collect();
+    let mut insert = db.prepare("INSERT INTO translation_cache(key,body) VALUES (?1,?2)")
+        .map_err(|error| error.to_string())?;
+    // Restore the selected archive entries in their original recency order.
+    for entry in chosen.into_iter().rev() {
+        let body = serde_json::to_string(&entry.segments).map_err(|error| error.to_string())?;
+        insert.execute(params![entry.key, body]).map_err(|error| error.to_string())?;
+    }
+    let mut owner = db.prepare(
+        "INSERT OR IGNORE INTO translation_cache_owners(cache_key,document_id)
+         SELECT cache.key, docs.id FROM translation_cache cache, documents docs
+         WHERE cache.key=?1 AND docs.source_hash=?2",
+    ).map_err(|error| error.to_string())?;
+    for entry in entries {
+        owner.execute(params![entry.key, entry.source_hash]).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ModelEdge {
@@ -318,6 +412,7 @@ pub(crate) fn translate_paragraph(
         if let Some(aligned) =
             store.translate_units(provider, &document.language, target, &input)?
         {
+            store.record_translation_cache_use(&document.id, &aligned.route, &input)?;
             result.pivot_language = aligned.route.pivot_language().map(str::to_owned);
             for (index, text) in indices.into_iter().zip(aligned.segments) {
                 result.units[index].set_translation(text);
@@ -1198,6 +1293,25 @@ impl From<String> for RouteAttemptError {
 }
 
 impl Store {
+    pub(crate) fn record_translation_cache_use(
+        &self, document: &str, route: &Route, input: &[String],
+    ) -> Result<()> {
+        let tx = self.connection.unchecked_transaction().map_err(|error| error.to_string())?;
+        {
+            let mut link = tx.prepare_cached(
+                "INSERT INTO translation_cache_owners(cache_key,document_id)
+                 SELECT cache.key, docs.id FROM translation_cache cache, documents docs
+                 WHERE cache.key=?1 AND docs.id=?2
+                 ON CONFLICT(cache_key) DO UPDATE SET document_id=excluded.document_id",
+            ).map_err(|error| error.to_string())?;
+            for text in input {
+                let key = unit_cache_key(route, text)?;
+                link.execute(params![key, document]).map_err(|error| error.to_string())?;
+            }
+        }
+        tx.commit().map_err(|error| error.to_string())
+    }
+
     pub fn translate_aligned(
         &mut self,
         provider: &mut impl TranslationProvider,

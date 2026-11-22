@@ -107,6 +107,7 @@ pub(crate) fn write(store: &Store, output: &mut File) -> Result<()> {
     }
     let mut backup = assemble(store, &tx, snapshot, sources)?;
     backup.version = VERSION;
+    backup.translation_cache = crate::translation::export_cache(&tx)?;
     let mut zip = ZipWriter::new(BufWriter::with_capacity(64 * 1024, output));
     let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
     for (index, (entry, document)) in backup.originals.iter_mut().zip(&backup.snapshot.documents).enumerate() {
@@ -353,6 +354,7 @@ fn validate_manifest(backup: &Manifest) -> Result<()> {
     {
         return Err("Некоректний опис архіву збережених підказок.".into());
     }
+    crate::translation::validate_cache(&backup.translation_cache, &backup.snapshot.documents)?;
     validate_resources(&backup.resources)?;
     backup.reader_preferences.validate()?;
     crate::pdf_reading_position::validate(&backup.pdf_reading_positions, &backup.snapshot.documents)?;

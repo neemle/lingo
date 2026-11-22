@@ -661,7 +661,7 @@ impl Store {
     ) -> Result<Option<AlignedTranslation>> {
         let (document, selected) = self.translation_selection(document_id, sentence_id)?;
         let (text, sentence_ids) = sentence_translation_input(&document, selected);
-        self.translate_machine_sentence(&document.language, target, text, sentence_ids)
+        self.translate_machine_sentence(document_id, &document.language, target, text, sentence_ids)
     }
 
     pub fn translate_detached_pdf_sentence(
@@ -671,7 +671,7 @@ impl Store {
             .filter(|current| current.sentence.id == sentence_id)
             .ok_or("Позиція читання сторінки PDF змінилася.")?;
         self.translate_machine_sentence(
-            &current.language, target, current.sentence.text, vec![current.sentence.id],
+            id, &current.language, target, current.sentence.text, vec![current.sentence.id],
         )
     }
 
@@ -786,6 +786,7 @@ impl Store {
 
     fn translate_machine_sentence(
         &mut self,
+        document_id: &str,
         source: &str,
         target: &str,
         text: String,
@@ -806,10 +807,11 @@ impl Store {
             Some(translated) => Some(translated),
             None => self.translation_cache_routes(source, target)?.cached_sentence(self, &text, target)?,
         };
-        Ok(result.map(|mut translation| {
+        result.map(|mut translation| {
+            self.record_translation_cache_use(document_id, &translation.route, std::slice::from_ref(&text))?;
             translation.attach_source_sentences(sentence_ids);
-            translation
-        }))
+            Ok(translation)
+        }).transpose()
     }
 }
 
