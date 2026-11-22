@@ -51,7 +51,11 @@ public partial class ReadingPage
 
         var origin = new Point();
         for (Element? element = popup.View; element is not null && element != ReaderRoot; element = element.Parent)
-            if (element is VisualElement visual) origin = new Point(origin.X + visual.X, origin.Y + visual.Y);
+            if (element is VisualElement visual)
+            {
+                origin = new Point(origin.X + visual.X, origin.Y + visual.Y);
+                if (visual is ScrollView scroll) origin = new Point(origin.X - scroll.ScrollX, origin.Y - scroll.ScrollY);
+            }
 
         var word = popup.PdfPoint is { } tap ? new Rect(tap.X, tap.Y - 16, 1, 32) :
             (popup.View as NativeReaderView)?.SelectionAnchor?.Invoke(popup.Selection.StartUtf16, popup.Selection.LengthUtf16);
@@ -66,7 +70,9 @@ public partial class ReadingPage
         var belowEdge = Math.Clamp(wordBottom + clearance, margin, Math.Max(margin, ReaderRoot.Height - margin));
         var roomAbove = aboveEdge - margin - arrow;
         var roomBelow = ReaderRoot.Height - margin - (belowEdge + arrow);
-        var expanded = popup.Card == DetachedWordCard ? DetachedWordDetails.IsVisible : WordDetails.IsVisible;
+        var expanded = popup.Card == DetachedWordCard
+            ? DetachedWordDetails.IsVisible || DetachedMeanings.IsVisible
+            : WordDetails.IsVisible || WordMeanings.IsVisible;
         var preferredHeight = expanded ? 430 : 278;
         var above = roomBelow < preferredHeight && roomAbove > roomBelow;
         var height = Math.Max(1, Math.Min(preferredHeight, above ? roomAbove : roomBelow));
@@ -99,7 +105,7 @@ public partial class ReadingPage
     private async void SpeakPopupTranslationClicked(object? sender, EventArgs args)
     {
         if (TargetCode is not { } target) return;
-        var text = DetachedWordCard.IsVisible ? detachedWordTranslation?.Text : wordTranslation?.Text;
+        var text = DetachedWordCard.IsVisible ? detachedSense?.Translation ?? detachedWordTranslation?.Text : wordTranslation?.Text;
         if (text is not null) await SpeakWordDetailAsync(text, target);
     }
 
@@ -183,7 +189,7 @@ public partial class ReadingPage
         row.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Star));
         row.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
         row.Add(new Label { Text = text, FontSize = fontSize, VerticalOptions = LayoutOptions.Center }, 0);
-        var listen = new Button { Text = "Слухати", VerticalOptions = LayoutOptions.Start };
+        var listen = new Button { Text = "Слухати", VerticalOptions = LayoutOptions.Start, Style = (Style)Resources["PlayerButton"] };
         listen.Clicked += async (_, _) => await SpeakWordDetailAsync(text, language);
         row.Add(listen, 1);
         return row;

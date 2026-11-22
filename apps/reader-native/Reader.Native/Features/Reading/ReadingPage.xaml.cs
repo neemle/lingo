@@ -54,6 +54,7 @@ public partial class ReadingPage : ContentPage
         WordCard.PropertyChanged += WordPopupVisibilityChanged;
         DetachedWordCard.PropertyChanged += WordPopupVisibilityChanged;
         SourceText.PropertyChanged += InlinePdfWordChanged;
+        SourceText.ViewportMoved += (_, _) => ScheduleSourceViewportSync();
         DetachedPdfText.PropertyChanged += InlinePdfWordChanged;
         SegmentTranslation.PropertyChanged += PopupTranslationTextChanged;
         ModelTranslationText.PropertyChanged += PopupTranslationTextChanged;
@@ -101,18 +102,15 @@ public partial class ReadingPage : ContentPage
         StopReaderPdf();
         StopAnalysisPrefetch();
         CancelScheduledTranslation();
-        EndReadingHistory(keepVisit: showingMeanings);
+        EndReadingHistory(keepVisit: false);
         StopSpeech();
         StopWordDetail();
         voiceCatalogRevision++;
         readinessRequest++;
-        if (!showingMeanings)
-        {
-            selection = null;
-            SetSelectedSense(null);
-            WordCard.IsVisible = false;
-            Translation.Text = "";
-        }
+        selection = null;
+        SetSelectedSense(null);
+        WordCard.IsVisible = false;
+        Translation.Text = "";
         AppState.Session.PropertyChanged -= SessionChanged;
         base.OnDisappearing();
     }
@@ -310,7 +308,9 @@ public partial class ReadingPage : ContentPage
             : text is not null ? "Ваш переклад активного речення"
             : machine is not null ? machineLabel
             : currentStatus ?? ReadinessMessage();
-        SegmentTranslation.Text = text ?? machine?.Text ?? "";
+        var newTranslation = text ?? machine?.Text ?? "";
+        var hasNewActiveTranslation = newTranslation.Length > 0 && SegmentTranslation.Text != newTranslation;
+        SegmentTranslation.Text = newTranslation;
         ActiveTranslationCard.IsVisible = SegmentTranslation.Text.Length > 0;
         ShareTranslationPair.IsVisible = DisplayedTranslationPair() is not null;
         EditTranslation.Text = text is null ? "Додати свій переклад" : "Змінити переклад";
@@ -328,6 +328,7 @@ public partial class ReadingPage : ContentPage
         UpdateModelTranslation();
         UpdateSourceLocation(document, session.Sentence);
         UpdateParagraphPreview(document, window, unit);
+        if (hasNewActiveTranslation) RequestTranslationScroll();
         TrackTranslationScroll(key);
         _ = RestoreCachedTranslationAsync();
         ScheduleAutoTranslation();
@@ -403,6 +404,12 @@ public partial class ReadingPage : ContentPage
                 current.Id != document.Id || current.Language != document.Language) return;
 
             TargetCode = target;
+            SetSelectedSense(null);
+            WordMeanings.Children.Clear();
+            WordMeanings.IsVisible = false;
+            OpenMeanings.Text = $"Значення · {meanings.Length}";
+            ResetDetachedMeanings();
+            PositionWordPopup();
             Translation.Text = "";
             if (WordCard.IsVisible || DetachedWordCard.IsVisible)
                 _ = LoadPopupTranslationAsync(DetachedWordCard.IsVisible);
@@ -511,7 +518,7 @@ public partial class ReadingPage : ContentPage
                 $" · {(double)analysis.Observations / lookup.TotalObservations:P0}" +
                 (analysis.ContextObservations == 0 ? "" : $" · збігів із сусідніми словами: {analysis.ContextObservations}"));
             KnowledgeAnalysis.Text = lookup.Analyses.Length == 0
-                ? $"Словоформи немає в корпусі {source}."
+                ? lookup.SyntaxHint is null ? $"Словоформи немає в корпусі {source}." : ""
                 : $"{string.Join(Environment.NewLine, readings)}{Environment.NewLine}Частота в корпусі · {source}";
             if (lookup.Expressions.Length > 0)
                 KnowledgeAnalysis.Text += Environment.NewLine + string.Join(Environment.NewLine, lookup.Expressions.Select(expression =>

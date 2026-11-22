@@ -42,6 +42,8 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
     {
         base.ConnectHandler(platformView);
         platformView.SelectionChanged += Selected;
+        platformView.Scrolled += Scrolled;
+        VirtualView.VisibleOffsets = VisibleOffsets;
         VirtualView.OffsetRevealRequested += RevealOffset;
         VirtualView.SelectionAnchor = SelectionAnchor;
         tap = new UITapGestureRecognizer(Tapped) { CancelsTouchesInView = false };
@@ -52,6 +54,8 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
     protected override void DisconnectHandler(UITextView platformView)
     {
         platformView.SelectionChanged -= Selected;
+        platformView.Scrolled -= Scrolled;
+        VirtualView.VisibleOffsets = null;
         VirtualView.OffsetRevealRequested -= RevealOffset;
         VirtualView.SelectionAnchor = null;
         if (tap is not null) { platformView.RemoveGestureRecognizer(tap); tap.Dispose(); }
@@ -61,6 +65,27 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
         renderedBlocks = [];
         highlightedSentence = spokenWord = null;
         base.DisconnectHandler(platformView);
+    }
+
+    private void Scrolled(object? sender, EventArgs args)
+    {
+        if (!updating) VirtualView.NotifyViewportMoved();
+    }
+
+    private (int Start, int End)? VisibleOffsets()
+    {
+        if (projection is null || renderedText is not { Length: > 0 }) return null;
+        var bounds = PlatformView.Bounds;
+        if (bounds.Height < 24 || bounds.Width < 48) return null;
+        var x = (double)bounds.X + 22;
+        var first = PlatformView.GetClosestPositionToPoint(new CoreGraphics.CGPoint(x, (double)bounds.Y + 10));
+        var last = PlatformView.GetClosestPositionToPoint(new CoreGraphics.CGPoint(x, (double)(bounds.Y + bounds.Height) - 10));
+        if (first is null || last is null) return null;
+        var beginning = PlatformView.BeginningOfDocument;
+        var start = (int)PlatformView.GetOffsetFromPosition(beginning, first);
+        var end = (int)PlatformView.GetOffsetFromPosition(beginning, last);
+        if (end <= start || projection.ToSource(start, end - start) is not { } range) return null;
+        return (range.Start, range.Start + range.Length);
     }
 
     private void RevealOffset(object? sender, int offset)

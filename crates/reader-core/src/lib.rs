@@ -109,6 +109,8 @@ pub struct Document {
     pub(crate) pdf_soft_lines: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) pdf_structured_sentences: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) pdf_abbreviation_boundaries: bool,
     pub created_at: i64,
     pub source_hash: String,
     pub format: String,
@@ -412,14 +414,18 @@ pub fn segment(text: &str, id: &str) -> Vec<Sentence> {
 }
 
 pub(crate) fn segment_pdf(text: &str, id: &str) -> Vec<Sentence> {
-    segment_pdf_lines(text, id, false)
+    segment_pdf_lines(text, id, false, false)
 }
 
 pub(crate) fn segment_pdf_structured(text: &str, id: &str) -> Vec<Sentence> {
-    segment_pdf_lines(text, id, true)
+    segment_pdf_lines(text, id, true, false)
 }
 
-fn segment_pdf_lines(text: &str, id: &str, structured: bool) -> Vec<Sentence> {
+pub(crate) fn segment_pdf_with_titles(text: &str, id: &str) -> Vec<Sentence> {
+    segment_pdf_lines(text, id, true, true)
+}
+
+fn segment_pdf_lines(text: &str, id: &str, structured: bool, titles: bool) -> Vec<Sentence> {
     let mut softened = text.as_bytes().to_vec();
     let mut start = 0;
     let mut lines = text.split_inclusive('\n').peekable();
@@ -435,6 +441,9 @@ fn segment_pdf_lines(text: &str, id: &str, structured: bool) -> Vec<Sentence> {
             softened[end - ending..end].fill(b' ');
         }
         start = end;
+    }
+    if titles {
+        pdf_sentences::mask_title_periods(&mut softened);
     }
     let boundaries = String::from_utf8(softened).expect("Replacing line breaks with spaces preserves UTF-8");
     segment_with_boundaries(text, &boundaries, id)
@@ -818,7 +827,7 @@ impl Store {
             .and_then(|extension| extension.to_str())
             .unwrap_or("txt")
             .to_lowercase();
-        let sentences = if format == "pdf" { segment_pdf_structured(&text, &id) } else { segment(&text, &id) };
+        let sentences = if format == "pdf" { segment_pdf_with_titles(&text, &id) } else { segment(&text, &id) };
         let mut document = Document {
             sentences,
             id,
@@ -847,6 +856,7 @@ impl Store {
             pdf_page_starts,
             pdf_soft_lines: format == "pdf",
             pdf_structured_sentences: format == "pdf",
+            pdf_abbreviation_boundaries: format == "pdf",
             created_at: now(),
             source_hash: hash,
             source_url: source_url.map(str::to_owned),

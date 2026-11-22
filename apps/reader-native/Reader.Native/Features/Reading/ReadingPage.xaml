@@ -77,21 +77,23 @@
       </DataTrigger>
      </Button.Triggers>
     </Button>
+    <Button x:Name="InlinePdfFitToggle" Text="Ціла сторінка" Style="{StaticResource OutlineButton}"
+     IsVisible="False" Clicked="ToggleInlinePdfFitClicked" />
     <Button Text="Оригінал" Style="{StaticResource OutlineButton}" IsVisible="{Binding CanViewOriginal}"
      Clicked="ViewOriginalClicked" SemanticProperties.Description="Переглянути оригінал документа" />
    </HorizontalStackLayout>
    <Grid Grid.Row="1" Grid.ColumnSpan="2" x:Name="PdfPageControls" IsVisible="False" Margin="0,8,0,0"
-    ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
-    <Button x:Name="PreviousPdfPage" Text="‹" Style="{StaticResource PlayerButton}" Clicked="PreviousPdfPageClicked"
+    ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
+    <Button x:Name="PreviousPdfPage" Text="‹" FontSize="23" MinimumWidthRequest="42" Style="{StaticResource PlayerButton}" Clicked="PreviousPdfPageClicked"
      IsEnabled="False" SemanticProperties.Description="Попередня сторінка PDF" />
-    <Label Grid.Column="1" x:Name="PdfPageStatus" Style="{StaticResource ReaderMeta}" HorizontalTextAlignment="Center" />
-    <Button Grid.Column="2" x:Name="NextPdfPage" Text="›" Style="{StaticResource PlayerButton}" Clicked="NextPdfPageClicked"
+    <Button Grid.Column="1" x:Name="JumpPdfPage" Text="Сторінка" Style="{StaticResource PlayerButton}"
+     Clicked="JumpPdfPageClicked" IsEnabled="False" SemanticProperties.Description="Перейти за номером сторінки PDF" />
+    <Button Grid.Column="2" x:Name="NextPdfPage" Text="›" FontSize="23" MinimumWidthRequest="42" Style="{StaticResource PlayerButton}" Clicked="NextPdfPageClicked"
      IsEnabled="False" SemanticProperties.Description="Наступна сторінка PDF" />
-    <Button Grid.Column="3" x:Name="JumpPdfPage" Text="До сторінки…" Style="{StaticResource PlayerButton}"
-     Clicked="JumpPdfPageClicked" IsEnabled="False" IsVisible="False" SemanticProperties.Description="Перейти за номером сторінки PDF" />
-    <Button Grid.Column="4" x:Name="RetryPdfOcr" Text="Повторити OCR" Style="{StaticResource PlayerButton}"
+    <Label Grid.Column="5" x:Name="PdfPageStatus" Style="{StaticResource ReaderMeta}" />
+    <Button Grid.Column="3" x:Name="RetryPdfOcr" Text="Повторити OCR" Style="{StaticResource PlayerButton}"
      Clicked="RetryPdfOcrClicked" IsVisible="False" />
-    <Button Grid.Column="5" x:Name="RepairPdfText" Text="Розпізнати зі скану" Style="{StaticResource PlayerButton}"
+    <Button Grid.Column="4" x:Name="RepairPdfText" Text="Розпізнати зі скану" Style="{StaticResource PlayerButton}"
      Clicked="RepairPdfTextClicked" IsVisible="False"
      SemanticProperties.Description="Замінити текст цієї сторінки розпізнаванням із зображення" />
    </Grid>
@@ -151,13 +153,17 @@
         </DataTrigger>
        </controls:NativeReaderView.Triggers>
       </controls:NativeReaderView>
-      <Image Grid.Row="1" x:Name="InlinePdfImage" IsVisible="False" Aspect="AspectFit"
+      <ScrollView Grid.Row="1" x:Name="InlinePdfViewport" IsVisible="False" SizeChanged="InlinePdfViewportChanged" Scrolled="InlinePdfViewportScrolled">
+       <Grid x:Name="InlinePdfSurface" HorizontalOptions="Center" VerticalOptions="Start" SizeChanged="InlinePdfSurfaceChanged">
+        <Image x:Name="InlinePdfImage" Aspect="AspectFit"
        SemanticProperties.Description="Оригінальна сторінка PDF">
        <Image.GestureRecognizers>
         <TapGestureRecognizer Tapped="InlinePdfTapped" />
        </Image.GestureRecognizers>
       </Image>
-      <GraphicsView Grid.Row="1" x:Name="InlinePdfHighlight" IsVisible="False" InputTransparent="True" />
+      <GraphicsView x:Name="InlinePdfHighlight" IsVisible="False" InputTransparent="True" />
+       </Grid>
+      </ScrollView>
      </Grid>
 
      <Grid Grid.Column="1" x:Name="TranslationPane" RowDefinitions="Auto,*,Auto" BackgroundColor="{StaticResource Panel}">
@@ -170,6 +176,7 @@
        Loaded="TranslationViewportReady">
        <VerticalStackLayout Spacing="10" Padding="16,12">
         <Label x:Name="TranslationNotice" Style="{StaticResource ReaderMeta}" />
+        <VerticalStackLayout x:Name="ParagraphBefore" Spacing="8" IsVisible="False" />
         <Border x:Name="ActiveTranslationCard" AutomationId="ActiveTranslationCard" BackgroundColor="#F6F4EB" StrokeThickness="0"
          StrokeShape="RoundRectangle 7" IsVisible="False">
          <Grid ColumnDefinitions="3,*">
@@ -180,6 +187,7 @@
            FontSize="20" LineHeight="1.4" TextColor="#655F4D" />
          </Grid>
         </Border>
+        <VerticalStackLayout x:Name="ParagraphAfter" Spacing="8" IsVisible="False" />
         <Grid x:Name="ModelTranslationResult" ColumnDefinitions="Auto,*" ColumnSpacing="9" IsVisible="False">
          <ActivityIndicator x:Name="ModelTranslationBusy" IsVisible="False" Color="{StaticResource Sage}"
           WidthRequest="20" HeightRequest="20" VerticalOptions="Start" />
@@ -196,7 +204,6 @@
          BackgroundColor="#F6F4EB" StrokeThickness="0" StrokeShape="RoundRectangle 7">
          <Label x:Name="ModelSourceText" FontFamily="Georgia" FontSize="16" LineBreakMode="WordWrap" />
         </Border>
-        <VerticalStackLayout x:Name="ParagraphPreview" Spacing="8" IsVisible="False" />
        </VerticalStackLayout>
       </ScrollView>
       <FlexLayout Grid.Row="2" Padding="10,2,10,8" Wrap="Wrap" JustifyContent="Start">
@@ -217,20 +224,28 @@
      </Grid>
     </Grid>
     <Grid Grid.Row="2" x:Name="PdfPageNotice" IsVisible="False">
-     <Image x:Name="PendingInlinePdfImage" IsVisible="False" Aspect="AspectFit"
+     <ScrollView x:Name="PendingInlinePdfViewport" IsVisible="False" SizeChanged="InlinePdfViewportChanged">
+       <Grid x:Name="PendingInlinePdfSurface" HorizontalOptions="Center" VerticalOptions="Start" SizeChanged="InlinePdfSurfaceChanged">
+        <Image x:Name="PendingInlinePdfImage" Aspect="AspectFit"
       SemanticProperties.Description="Оригінальна сторінка PDF" />
+       </Grid>
+      </ScrollView>
      <Label x:Name="PdfPageMessage" Margin="18" Style="{StaticResource ReaderMeta}"
       HorizontalTextAlignment="Center" VerticalOptions="Center" />
      <Grid x:Name="DetachedPdfReader" IsVisible="False" RowDefinitions="*,Auto,Auto,Auto" RowSpacing="4">
       <controls:NativeReaderView x:Name="DetachedPdfText" ReflowPdf="True" BackgroundColor="{StaticResource Panel}"
        SourceSelected="DetachedPdfSelected" SemanticProperties.Description="Текст поточної сторінки PDF" />
-      <Image x:Name="DetachedInlinePdfImage" IsVisible="False" Aspect="AspectFit"
+      <ScrollView x:Name="DetachedInlinePdfViewport" IsVisible="False" SizeChanged="InlinePdfViewportChanged">
+       <Grid x:Name="DetachedInlinePdfSurface" HorizontalOptions="Center" VerticalOptions="Start" SizeChanged="InlinePdfSurfaceChanged">
+        <Image x:Name="DetachedInlinePdfImage" Aspect="AspectFit"
        SemanticProperties.Description="Оригінальна сторінка PDF">
        <Image.GestureRecognizers>
         <TapGestureRecognizer Tapped="InlinePdfTapped" />
        </Image.GestureRecognizers>
       </Image>
       <GraphicsView x:Name="DetachedInlinePdfHighlight" IsVisible="False" InputTransparent="True" />
+       </Grid>
+      </ScrollView>
       <ScrollView Grid.Row="1" MaximumHeightRequest="120" Margin="14,0" x:Name="DetachedTranslationPane" IsVisible="False">
        <Grid>
         <Label x:Name="DetachedTranslation" FontFamily="Georgia" FontSize="19" LineHeight="1.4" />
@@ -416,6 +431,8 @@
       <Button x:Name="WordDetailsToggle" Text="Більше" Style="{StaticResource PlayerButton}"
        Clicked="ToggleWordDetailsClicked" />
      </FlexLayout>
+     <Label x:Name="WordSyntaxHint" Style="{StaticResource ReaderMeta}" IsVisible="False" />
+     <VerticalStackLayout x:Name="WordMeanings" IsVisible="False" Spacing="7" />
      <VerticalStackLayout x:Name="WordDetails" IsVisible="False" Spacing="8">
       <Label x:Name="KnowledgeAnalysis" Style="{StaticResource ReaderMeta}" />
      <FlexLayout Wrap="Wrap" AlignItems="Center">
@@ -430,6 +447,7 @@
       <Button x:Name="ExplainWord" Text="Пояснити з Qwen" Style="{StaticResource PlayerButton}" Clicked="ExplainWordClicked" />
       <Button Text="Перекласти виділення…" Style="{StaticResource PlayerButton}" Clicked="TranslateSelectionClicked" />
      </FlexLayout>
+     <Label x:Name="WordSyntaxDetails" Style="{StaticResource ReaderMeta}" IsVisible="False" />
      <Grid x:Name="SelectedSenseRow" ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="False">
       <Label x:Name="SelectedSense" Style="{StaticResource ReaderMeta}" LineBreakMode="WordWrap"
        VerticalOptions="Center" />
@@ -473,9 +491,13 @@
      <FlexLayout Wrap="Wrap" AlignItems="Center">
       <Button Text="Слухати в реченні" Style="{StaticResource PlayerButton}" Clicked="SpeakPopupContextClicked"
        Margin="0,0,6,0" />
+      <Button x:Name="DetachedMeaningsButton" Text="Значення" Style="{StaticResource PlayerButton}"
+       Clicked="OpenDetachedMeaningsClicked" Margin="0,0,6,0" />
       <Button x:Name="DetachedWordDetailsToggle" Text="Більше" Style="{StaticResource PlayerButton}"
        Clicked="ToggleWordDetailsClicked" />
      </FlexLayout>
+     <Label x:Name="DetachedSyntaxHint" Style="{StaticResource ReaderMeta}" IsVisible="False" />
+     <VerticalStackLayout x:Name="DetachedMeanings" IsVisible="False" Spacing="7" />
      <VerticalStackLayout x:Name="DetachedWordDetails" IsVisible="False" Spacing="8">
      <FlexLayout Wrap="Wrap" AlignItems="Center">
        <Button x:Name="DetachedAnalyzeSelection" Text="Аналіз виділення" IsVisible="False"

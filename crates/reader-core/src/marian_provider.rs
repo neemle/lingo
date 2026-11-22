@@ -450,10 +450,10 @@ impl StoreWorker {
             .translate_installed_sentence(document_id, sentence_id, target)
     }
 
-    pub fn translate_dictionary_gloss(
-        self, id: &str, source: &str, gloss: &str,
+    pub fn translate_dictionary_gloss_to(
+        self, id: &str, source: &str, gloss: &str, target: &str,
     ) -> Result<Option<AlignedTranslation>> {
-        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?.translate_dictionary_gloss(id, source, gloss)
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?.translate_dictionary_gloss_to(id, source, gloss, target)
     }
 
     pub fn translate_selection(
@@ -802,6 +802,13 @@ impl Store {
     pub fn translate_dictionary_gloss(
         &mut self, id: &str, source: &str, gloss: &str,
     ) -> Result<Option<AlignedTranslation>> {
+        self.translate_dictionary_gloss_to(id, source, gloss, "uk")
+    }
+
+    pub fn translate_dictionary_gloss_to(
+        &mut self, id: &str, source: &str, gloss: &str, target: &str,
+    ) -> Result<Option<AlignedTranslation>> {
+        crate::valid_language(target)?;
         crate::valid_language(source)?;
         let gloss = gloss.trim();
         if gloss.is_empty() || gloss.len() > 4096 || gloss.contains('\0') {
@@ -812,7 +819,7 @@ impl Store {
         {
             return Err("Документ не знайдено.".into());
         }
-        self.translate_machine_sentence(id, source, "uk", gloss.to_owned(), Vec::new())
+        self.translate_machine_sentence(id, source, target, gloss.to_owned(), Vec::new())
     }
 
     pub fn translate_selected_text(

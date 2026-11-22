@@ -33,6 +33,7 @@ public sealed record WordLookup(KnowledgePackage Package, int TotalObservations,
 {
     public LexicalPackage? LexicalPackage { get; init; }
     public WordMeaning[] Meanings { get; init; } = [];
+    public string? SyntaxHint { get; init; }
     public SyntaxEvidence[] SyntaxEvidence { get; init; } = [];
     public SpellingSuggestion[] SpellingSuggestions { get; init; } = [];
 }

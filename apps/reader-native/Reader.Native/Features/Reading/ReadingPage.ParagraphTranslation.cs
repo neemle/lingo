@@ -19,6 +19,8 @@ public partial class ReadingPage
     private TranslationKey? translationScrollKey;
     private bool translationScrollPending;
     private bool translationScrollQueued;
+    private bool sourceViewportSyncQueued;
+    private long lastSourceViewportMovement;
     private bool selectingPreviewRow;
     private bool restoringTranslationCache;
     private CachedWindowRequest? lastCacheRestore;
@@ -29,6 +31,37 @@ public partial class ReadingPage
     private sealed record PrefetchCandidate(int Position, TranslationKey Key, string? Pivot);
     private sealed record AutoTranslationRequest(TranslationKey Active, PrefetchCandidate? Lookahead = null);
     private sealed record PendingTranslation(AutoTranslationRequest Request, CancellationTokenSource Cancellation);
+
+    private void InlinePdfViewportScrolled(object? sender, ScrolledEventArgs args)
+    {
+        if (inlinePdf) ScheduleSourceViewportSync();
+    }
+
+    private async void ScheduleSourceViewportSync()
+    {
+        if (!CanSyncSourceViewport()) return;
+        lastSourceViewportMovement = Environment.TickCount64;
+        if (sourceViewportSyncQueued) return;
+        sourceViewportSyncQueued = true;
+        try
+        {
+            while (Environment.TickCount64 - lastSourceViewportMovement < 220)
+                await Task.Delay(220);
+            var session = AppState.Session;
+            if (!CanSyncSourceViewport() || session.Document is not { } document ||
+                session.Sentence is not { } active) return;
+
+            var visible = inlinePdf ? VisibleInlinePdfOffsets() : SourceText.VisibleOffsets?.Invoke();
+            if (visible is not { } range || (range.Start < active.EndUtf16 && range.End > active.StartUtf16)) return;
+            var position = Array.FindIndex(document.Sentences,
+                sentence => sentence.EndUtf16 > range.Start && sentence.StartUtf16 < range.End);
+            if (position >= 0) await session.SelectSentenceAsync(position);
+        }
+        finally { sourceViewportSyncQueued = false; }
+    }
+
+    private bool CanSyncSourceViewport() => readingPageActive && TranslationVisible && SourcePane.IsVisible &&
+        !PdfPageNotice.IsVisible && !WordOverlay.IsVisible && !utteranceActive && !AppState.Session.Busy;
 
     private void TrackTranslationScroll(TranslationKey? key)
     {
@@ -55,16 +88,25 @@ public partial class ReadingPage
     {
         if (!translationScrollPending || translationScrollQueued || !CanScrollTranslation()) return;
         translationScrollQueued = true;
-        if (!Dispatcher.Dispatch(ScrollTranslationToTop)) translationScrollQueued = false;
+        if (!Dispatcher.Dispatch(ScrollToActiveTranslation)) translationScrollQueued = false;
     }
 
-    private async void ScrollTranslationToTop()
+    private async void ScrollToActiveTranslation()
     {
         translationScrollQueued = false;
         if (!translationScrollPending || !CanScrollTranslation()) return;
         translationScrollPending = false;
-        if (TranslationViewport.ScrollY <= 0) return;
-        try { await TranslationViewport.ScrollToAsync(0, 0, animated: false); }
+        try
+        {
+            var top = TranslationViewport.ScrollY;
+            var bottom = top + TranslationViewport.Height;
+            if (!ActiveTranslationCard.IsVisible)
+            {
+                if (top > 0) await TranslationViewport.ScrollToAsync(0, 0, animated: false);
+            }
+            else if (ActiveTranslationCard.Y < top || ActiveTranslationCard.Y + ActiveTranslationCard.Height > bottom)
+                await TranslationViewport.ScrollToAsync(ActiveTranslationCard, ScrollToPosition.MakeVisible, animated: false);
+        }
         catch (Exception error) when (error is InvalidOperationException or OperationCanceledException) { }
     }
 
@@ -439,53 +481,43 @@ public partial class ReadingPage
 
     private void UpdateParagraphPreview(Document? document, TranslationWindow? window, AlignedUnit? active)
     {
-        ParagraphPreview.Children.Clear();
-        ParagraphPreview.IsVisible = false;
+        ParagraphBefore.Children.Clear();
+        ParagraphAfter.Children.Clear();
+        ParagraphBefore.IsVisible = ParagraphAfter.IsVisible = false;
         if (document is null || window is not { IsParagraph: true }) return;
 
-        var hasMachinePreview = false;
-        foreach (var unit in window.Units)
+        foreach (var unit in window.Units.OrderBy(unit => unit.First))
         {
-            if (unit == active || !unit.Matches(document)) continue;
-            if (MachineFor(document, window, unit) is { } translated)
-            {
-                hasMachinePreview = true;
-                AddPreviewRow(document.Id, unit.First, unit.Sources[0].Id, unit.Sources.Length, translated.Text, reviewed: false);
-            }
+            if (!unit.Matches(document)) continue;
+            if (unit != active && MachineFor(document, window, unit) is { } translated)
+                AddPreviewRow(document, unit.First, unit.Sources.Length, translated.Text);
             else
                 for (var i = 0; i < unit.Sources.Length; i++)
-                    if (ReviewedFor(document, window.Scope.Target, unit.Sources[i].Id) is { } review)
-                        AddPreviewRow(document.Id, unit.First + i, unit.Sources[i].Id, 1, review, reviewed: true);
+                    if (unit.First + i != document.Position &&
+                        ReviewedFor(document, window.Scope.Target, unit.Sources[i].Id) is { } review)
+                        AddPreviewRow(document, unit.First + i, 1, review);
         }
-        if (ParagraphPreview.Children.Count == 0) return;
-        var caption = IsPreferredRoute(window) ? "Переклади поруч" : "Збережені переклади поруч";
-        if (hasMachinePreview && window.Pivot is { } pivot)
-            caption += $" · {DocumentLanguages.PivotRoute(window.Scope.Source, pivot, window.Scope.Target)}";
-        caption += ".";
-        if (IsPreferredRoute(window) && (window.MoreBefore || window.MoreAfter))
-            caption += " Виберіть інше речення, щоб перекласти ще частину абзацу.";
-        ParagraphPreview.Children.Insert(0, new Label { Text = caption, FontSize = 13 });
-        ParagraphPreview.IsVisible = true;
     }
 
-    private void AddPreviewRow(string documentId, int position, string sentenceId, int count, string text, bool reviewed)
+    private void AddPreviewRow(Document document, int position, int count, string text)
     {
-        var positionLabel = count == 1 ? $"Речення {position + 1}" : $"Речення {position + 1}–{position + count}";
-        if (reviewed) positionLabel += " · ваш переклад";
-        var button = new Button { Text = positionLabel, FontSize = 13, HorizontalOptions = LayoutOptions.Start };
+        var sentenceId = document.Sentences[position].Id;
         var label = new Label { Text = text, FontFamily = "Georgia", FontSize = Math.Max(16, SourceText.ReadingFontSize - 4),
-            LineHeight = 1.4, TextColor = Color.FromArgb("#655F4D") };
+            LineHeight = 1.4, TextColor = Color.FromArgb("#655F4D"), Margin = new Thickness(12, 0) };
+        SemanticProperties.SetDescription(label, count == 1 ? $"Речення {position + 1}: {text}"
+            : $"Речення {position + 1}–{position + count}: {text}");
         var tap = new TapGestureRecognizer();
-        button.Clicked += SelectRow;
         tap.Tapped += SelectRow;
         label.GestureRecognizers.Add(tap);
-        ParagraphPreview.Children.Add(new VerticalStackLayout { Spacing = 3, Children = { button, label } });
+        var column = position < document.Position ? ParagraphBefore : ParagraphAfter;
+        column.Children.Add(label);
+        column.IsVisible = true;
 
         async void SelectRow(object? sender, EventArgs args)
         {
             if (selectingPreviewRow || !readingPageActive || !TranslationVisible) return;
             var session = AppState.Session;
-            if (session.Busy || session.Document is not { } current || current.Id != documentId
+            if (session.Busy || session.Document is not { } current || current.Id != document.Id
                 || current.Position == position || current.Sentences.ElementAtOrDefault(position)?.Id != sentenceId) return;
             selectingPreviewRow = true;
             try

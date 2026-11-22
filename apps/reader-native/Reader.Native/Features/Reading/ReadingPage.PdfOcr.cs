@@ -355,13 +355,14 @@ public partial class ReadingPage
             "empty" => "На цій сторінці не знайдено тексту.",
             _ => "Для цієї сторінки немає тексту. Відкрийте оригінал.",
         };
-        PdfPageStatus.Text = $"Сторінка {window.Center + 1} із {window.PageCount}";
+        JumpPdfPage.Text = $"Сторінка {window.Center + 1} / {window.PageCount}";
+        PdfPageStatus.Text = "";
         if (page is { State: "recognized" or "detached" or "textLayer", RefreshPending: true })
-            PdfPageStatus.Text += pdfOcrError is not null ? " · помилка оновлення OCR"
-                : readerPdfOcr is not null ? " · оновлюємо OCR" : " · OCR потребує оновлення";
+            PdfPageStatus.Text += pdfOcrError is not null ? "Помилка оновлення OCR"
+                : readerPdfOcr is not null ? "Оновлюємо OCR" : "OCR потребує оновлення";
         else if (pdfOcrError is not null && message is null)
-            PdfPageStatus.Text += " · помилка OCR сусідньої сторінки";
-        if (repairingPdfText is not null) PdfPageStatus.Text += " · розпізнаємо зображення";
+            PdfPageStatus.Text += "Помилка OCR сусідньої сторінки";
+        if (repairingPdfText is not null) PdfPageStatus.Text = "Розпізнаємо зображення";
         ShowPdfPageNotice(message, page is { State: "detached" } ? page.Text : null);
         if (page is { State: "detached" } && pdfSnapshot is { } document)
             ShowDetachedPdfPage(document, page);
@@ -397,8 +398,7 @@ public partial class ReadingPage
     private void UpdatePdfPageButtons()
     {
         var enabled = !movingPdfPage && !pdfWindowLoading && !pdfPagePromptOpen && !AppState.Session.Busy;
-        JumpPdfPage.IsVisible = pdfWindow is { PageCount: > 1 };
-        JumpPdfPage.IsEnabled = enabled && JumpPdfPage.IsVisible;
+        JumpPdfPage.IsEnabled = enabled && pdfWindow is { PageCount: > 1 };
         PreviousPdfPage.IsEnabled = enabled && pdfWindow is { Center: > 0 };
         NextPdfPage.IsEnabled = enabled && pdfWindow is { } window && window.Center + 1 < window.PageCount;
         RetryPdfOcr.IsVisible = enabled && readerPdfOcr is null

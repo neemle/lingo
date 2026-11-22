@@ -555,8 +555,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         Task.Run(() => client.TranslateSentence(id, sentenceId, target));
     public Task<ModelPassageTranslation> TranslateWithModelAsync(string id, int? page, string sentenceId, string target, bool regenerate) =>
         Task.Run(() => client.TranslateWithModel(id, page, sentenceId, target, regenerate));
-    public Task<MachineTranslation?> TranslateDictionaryGlossAsync(string id, string source, string gloss) =>
-        Task.Run(() => client.TranslateDictionaryGloss(id, source, gloss));
+    public Task<MachineTranslation?> TranslateDictionaryGlossAsync(string id, string source, string gloss, string target = "uk") =>
+        Task.Run(() => client.TranslateDictionaryGloss(id, source, gloss, target));
     public Task<MachineTranslation?> TranslateSelectionAsync(string id, string target, string revisionId,
         TextSelection selection, int? page = null) =>
         Task.Run(() => client.TranslateSelection(id, target, revisionId, selection.StartUtf16, selection.Text, page));

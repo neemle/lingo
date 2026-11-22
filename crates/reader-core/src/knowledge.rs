@@ -200,6 +200,8 @@ pub struct WordLookup {
     analyses: Vec<WordAnalysis>,
     expressions: Vec<expressions::ExpressionMatch>,
     syntax_evidence: Vec<syntax::SyntaxEvidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    syntax_hint: Option<&'static str>,
     spelling_suggestions: Vec<ocr_suggestions::SpellingSuggestion>,
     lexical_package: Option<LexicalPackage>,
     meanings: Vec<WordMeaning>,
@@ -398,11 +400,12 @@ impl Store {
         index: Option<(&Pack, &Connection, u32)>,
     ) -> Result<Option<WordLookup>> {
         let key = word_key(word);
+        let syntax_hint = context.and_then(|context| context.french_partitive_hint(language, &key));
         let Some((pack, db, index_version)) = index else {
             let Some(pack) = PACKS.iter().find(|pack| pack.language == language) else {
                 return Ok(None);
             };
-            if !lexicon::available(&self.knowledge_directory, language) {
+            if syntax_hint.is_none() && !lexicon::available(&self.knowledge_directory, language) {
                 return Ok(None);
             }
             let (lexical_package, meanings) = lexicon::lookup(
@@ -420,6 +423,7 @@ impl Store {
                 analyses: Vec::new(),
                 expressions: Vec::new(),
                 syntax_evidence: Vec::new(),
+                syntax_hint,
                 spelling_suggestions: Vec::new(),
                 lexical_package,
                 meanings,
@@ -504,6 +508,7 @@ impl Store {
             analyses,
             expressions,
             syntax_evidence,
+            syntax_hint,
             spelling_suggestions,
             lexical_package,
             meanings,
@@ -540,6 +545,22 @@ impl WordContext {
                 Some((start, part))
             })
             .filter(|(_, part)| !part.trim().is_empty())
+    }
+
+    fn french_partitive_hint(&self, language: &str, selected: &str) -> Option<&'static str> {
+        if language != "fr" {
+            return None;
+        }
+        let (_, next) = self.neighbors(selected)?;
+        match (selected, next.map(word_key).as_deref()) {
+            ("l'un", Some("des")) => Some(
+                "« l’un des … » означає «один із …». « L’un » виділяє одного з групи, яку названо після « des ». Наприклад, « l’un des plus riches » — «один із найбагатших»."
+            ),
+            ("l'une", Some("des")) => Some(
+                "« l’une des … » означає «одна з …». « L’une » — форма жіночого роду. Після « des » названо групу, з якої виділяють одну."
+            ),
+            _ => None,
+        }
     }
 
     fn neighbors(&self, selected: &str) -> Option<(Option<&str>, Option<&str>)> {

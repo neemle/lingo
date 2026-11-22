@@ -123,7 +123,11 @@ public partial class ReadingPage
 
     private void SetDetachedSelection(TextSelection? selected)
     {
-        if (detachedSelection != selected) detachedWordTranslation = null;
+        if (detachedSelection != selected)
+        {
+            detachedWordTranslation = null;
+            ResetDetachedMeanings();
+        }
         detachedSelection = selected;
         DetachedWordExplanationText.IsVisible = false;
         if (selected is null) DetachedWordCard.IsVisible = false;
@@ -170,28 +174,13 @@ public partial class ReadingPage
         var reconstructed = draft is { } result && result.Source != selected.Text.Trim() ? result.Source : null;
         try
         {
-            WordLookup? lookup = null;
-            if (reconstructed is null)
-            {
-                try { lookup = await session.LookupDetachedPdfWordAsync(address.Document, address.Page, selected); }
-                catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
-            }
-            if (detachedAddress != address || detachedSelection != selected || TargetCode != target) return;
-
-            SenseSnapshot? sense = null;
-            if (lookup?.Meanings is { Length: > 0 } meanings)
-            {
-                var choice = await ChooseDetachedMeaningAsync(selected.Text, meanings);
-                if (choice is null || !SelectionDocumentCurrent()) return;
-                sense = choice.Sense;
-            }
-
-            var description = sense is null ? $"«{reconstructed ?? selected.Text}» · {DocumentLanguages.Name(target)}"
-                : $"«{selected.Text}» · {sense.Gloss}{Environment.NewLine}Переклад · {DocumentLanguages.Name(target)}";
+            var meaning = detachedSense;
+            var sense = meaning?.Sense;
+            if (sense is not null) reconstructed = null;
+            var description = $"«{reconstructed ?? selected.Text}» · {DocumentLanguages.Name(target)}";
             var translation = await DisplayPromptAsync("Додати до словника", description,
                 accept: "Далі", cancel: "Скасувати", placeholder: "Переклад",
-                initialValue: sense is { } chosenSense && chosenSense.GlossLanguage == target ? chosenSense.Gloss
-                    : draft?.Text,
+                initialValue: meaning?.Translation ?? draft?.Text,
                 maxLength: 2000);
             if (string.IsNullOrWhiteSpace(translation) || !SelectionDocumentCurrent()) return;
 

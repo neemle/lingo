@@ -602,6 +602,7 @@ pub enum Command {
         id: String,
         source: String,
         gloss: String,
+        target: Option<String>,
     },
     TranslateSelection {
         id: String,

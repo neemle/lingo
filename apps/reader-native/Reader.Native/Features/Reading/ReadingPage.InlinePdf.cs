@@ -8,6 +8,8 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage
 {
     private bool inlinePdf;
+    private bool inlinePdfFitWidth = true;
+    private (string Document, int Page, int Start, int End, double SurfaceHeight, double ViewportHeight)? lastInlinePdfFollow;
     private int inlinePdfRequest;
     private (string Document, int Page, string? DetachedText)? inlinePdfAddress;
     private (string Document, int Page, string? DetachedText)? inlinePdfLoading;
@@ -39,7 +41,9 @@ public partial class ReadingPage
         InlinePdfHighlight.IsVisible = DetachedInlinePdfHighlight.IsVisible = false;
         InlinePdfHighlight.Drawable = DetachedInlinePdfHighlight.Drawable = null;
         SourceText.IsVisible = DetachedPdfText.IsVisible = true;
-        InlinePdfImage.IsVisible = DetachedInlinePdfImage.IsVisible = PendingInlinePdfImage.IsVisible = false;
+        InlinePdfViewport.IsVisible = DetachedInlinePdfViewport.IsVisible = PendingInlinePdfViewport.IsVisible = false;
+        InlinePdfFitToggle.IsVisible = false;
+        lastInlinePdfFollow = null;
         InlinePdfImage.Source = DetachedInlinePdfImage.Source = PendingInlinePdfImage.Source = null;
         InlinePdfToggle.Text = "Сторінка PDF";
     }
@@ -72,7 +76,8 @@ public partial class ReadingPage
                     inlinePdfLoading = null;
                 }
                 InlinePdfToggle.Text = "Розпізнаний текст";
-                PendingInlinePdfImage.IsVisible = PdfPageNotice.IsVisible && !DetachedPdfReader.IsVisible;
+                PendingInlinePdfViewport.IsVisible = PdfPageNotice.IsVisible && !DetachedPdfReader.IsVisible;
+                ResizeInlinePdf();
                 UpdateInlinePdfHighlight();
                 return;
             }
@@ -106,8 +111,8 @@ public partial class ReadingPage
                 session.Document?.Id != document.Id) return;
             var source = ImageSource.FromStream(() => new MemoryStream(preview.Bytes, writable: false));
             InlinePdfImage.Source = DetachedInlinePdfImage.Source = PendingInlinePdfImage.Source = source;
-            InlinePdfImage.IsVisible = DetachedInlinePdfImage.IsVisible = true;
-            PendingInlinePdfImage.IsVisible = PdfPageNotice.IsVisible && !DetachedPdfReader.IsVisible;
+            InlinePdfViewport.IsVisible = DetachedInlinePdfViewport.IsVisible = true;
+            PendingInlinePdfViewport.IsVisible = PdfPageNotice.IsVisible && !DetachedPdfReader.IsVisible;
             SourceText.IsVisible = DetachedPdfText.IsVisible = false;
             inlinePdfAddress = address;
             inlinePdfLoading = null;
@@ -115,6 +120,12 @@ public partial class ReadingPage
             inlineDetachedLines = detachedLines;
             inlineNativeBoxes = nativeBoxes;
             inlineNativeText = nativeText;
+            lastInlinePdfFollow = null;
+            InlinePdfFitToggle.IsVisible = true;
+            ResizeInlinePdf();
+            await ActiveInlinePdf().Viewport.ScrollToAsync(0, 0, animated: false);
+            if (request != inlinePdfRequest) return;
+            lastInlinePdfFollow = null;
             UpdateInlinePdfHighlight();
             InlinePdfToggle.Text = "Розпізнаний текст";
         }
@@ -124,6 +135,55 @@ public partial class ReadingPage
             ClearInlinePdf();
             await DisplayAlertAsync("Сторінка PDF", error.Message, "Гаразд");
         }
+    }
+
+    private void ToggleInlinePdfFitClicked(object? sender, EventArgs args)
+    {
+        inlinePdfFitWidth = !inlinePdfFitWidth;
+        InlinePdfFitToggle.Text = inlinePdfFitWidth ? "Ціла сторінка" : "За шириною";
+        lastInlinePdfFollow = null;
+        ResizeInlinePdf();
+        UpdateInlinePdfHighlight();
+    }
+
+    private (ScrollView Viewport, Grid Surface) ActiveInlinePdf() =>
+        DetachedPdfReader.IsVisible ? (DetachedInlinePdfViewport, DetachedInlinePdfSurface) :
+        PdfPageNotice.IsVisible ? (PendingInlinePdfViewport, PendingInlinePdfSurface) :
+        (InlinePdfViewport, InlinePdfSurface);
+
+    private void InlinePdfViewportChanged(object? sender, EventArgs args) => ResizeInlinePdf();
+
+    private void InlinePdfSurfaceChanged(object? sender, EventArgs args) => UpdateInlinePdfHighlight();
+
+    private void ResizeInlinePdf()
+    {
+        if (!inlinePdf || inlinePdfPreview is not { Width: > 0, Height: > 0 } preview) return;
+        var (viewport, surface) = ActiveInlinePdf();
+        if (viewport.Width <= 0 || viewport.Height <= 0) return;
+        var widthScale = viewport.Width / preview.Width;
+        var scale = inlinePdfFitWidth ? widthScale : Math.Min(widthScale, viewport.Height / preview.Height);
+        surface.WidthRequest = Math.Floor(preview.Width * scale);
+        surface.HeightRequest = Math.Floor(preview.Height * scale);
+    }
+
+    private void FollowInlinePdf(PdfReadingHighlight drawing, string document, int page, int start, int end)
+    {
+        if (!inlinePdfFitWidth || drawing.FocusBounds() is not { } bounds) return;
+        var (viewport, surface) = ActiveInlinePdf();
+        if (surface.Height <= 0 || viewport.Height <= 0) return;
+        var key = (document, page, start, end, surface.Height, viewport.Height);
+        if (lastInlinePdfFollow == key) return;
+        lastInlinePdfFollow = key;
+        var top = bounds.Top * surface.Height;
+        var bottom = bounds.Bottom * surface.Height;
+        var margin = Math.Min(viewport.Height * 0.12, 44);
+        if (top >= viewport.ScrollY + margin && bottom <= viewport.ScrollY + viewport.Height - margin) return;
+        var target = Math.Clamp(top - margin, 0, Math.Max(0, surface.Height - viewport.Height));
+        Dispatcher.Dispatch(async () =>
+        {
+            if (lastInlinePdfFollow == key && inlinePdf && inlinePdfFitWidth)
+                await viewport.ScrollToAsync(0, target, animated: false);
+        });
     }
 
     private async void InlinePdfTapped(object? sender, TappedEventArgs args)
@@ -147,6 +207,14 @@ public partial class ReadingPage
         {
             await ShowWordAsync(selected, (view, point));
         }
+    }
+
+    private (int Start, int End)? VisibleInlinePdfOffsets()
+    {
+        if (!inlinePdfFitWidth || !InlinePdfViewport.IsVisible || InlinePdfSurface.Height <= 0 ||
+            InlinePdfHighlight.Drawable is not PdfReadingHighlight drawing) return null;
+        var top = InlinePdfViewport.ScrollY / InlinePdfSurface.Height;
+        return drawing.VisibleOffsets(top, top + InlinePdfViewport.Height / InlinePdfSurface.Height);
     }
 
     private void InlinePdfWordChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
@@ -200,10 +268,13 @@ public partial class ReadingPage
             detached ? detachedSentence?.RevisionId : document.CurrentRevisionId,
             sentence, detached ? address.Page : null);
         var focus = selected ?? view.SpokenWord ?? dictionarySelection;
-        overlay.Drawable = new PdfReadingHighlight(preview.Width, preview.Height, lines, offset,
+        var drawing = new PdfReadingHighlight(preview.Width, preview.Height, lines, offset,
             sentence.StartUtf16, sentence.EndUtf16, focus?.StartUtf16, focus?.LengthUtf16 ?? 0,
             ReferenceEquals(lines, inlineNativeBoxes));
+        overlay.Drawable = drawing;
         overlay.Invalidate();
+        FollowInlinePdf(drawing, document.Id, address.Page, focus?.StartUtf16 ?? sentence.StartUtf16,
+            focus is null ? sentence.EndUtf16 : focus.StartUtf16 + focus.LengthUtf16);
     }
 
     private sealed class PdfReadingHighlight(int width, int height, OcrLine[] lines, int offset,
@@ -234,6 +305,46 @@ public partial class ReadingPage
                 canvas.FillRoundedRectangle(fitted.X + (float)x * fitted.Width,
                     fitted.Y + (float)y * fitted.Height, (float)w * fitted.Width, (float)h * fitted.Height, 2);
             }
+        }
+
+        internal (int Start, int End)? VisibleOffsets(double top, double bottom)
+        {
+            int first = int.MaxValue, last = 0;
+            foreach (var line in lines)
+            {
+                if (line.Y + line.Height <= top || line.Y >= bottom || line.SourceSpan is not { } span) continue;
+                first = Math.Min(first, offset + span.StartUtf16);
+                last = Math.Max(last, offset + span.EndUtf16);
+            }
+            return first < last ? (first, last) : null;
+        }
+
+        internal (double Top, double Bottom)? FocusBounds()
+        {
+            if (spokenStart is int wordStart && RangeBounds(wordStart, wordStart + spokenLength) is { } word)
+                return word;
+            return RangeBounds(start, end);
+        }
+
+        private (double Top, double Bottom)? RangeBounds(int first, int last)
+        {
+            double top = 1, bottom = 0;
+            foreach (var line in lines)
+            {
+                if (!Overlaps(line.SourceSpan, first, last)) continue;
+                var matched = false;
+                foreach (var word in line.Words ?? [])
+                {
+                    if (!Overlaps(word.SourceSpan, first, last)) continue;
+                    top = Math.Min(top, word.Y);
+                    bottom = Math.Max(bottom, word.Y + word.Height);
+                    matched = true;
+                }
+                if (matched) continue;
+                top = Math.Min(top, line.Y);
+                bottom = Math.Max(bottom, line.Y + line.Height);
+            }
+            return top < bottom ? (top, bottom) : null;
         }
 
         internal TextSelection? SelectionAt(string source, Point point, float viewWidth, float viewHeight)

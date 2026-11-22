@@ -8,27 +8,30 @@ public partial class ReadingPage
 
     private void ShowLocalSyntax(WordLookup? lookup)
     {
-        syntaxLookup = lookup?.Package.SyntaxAvailable == true ? lookup : null;
-        OpenSyntax.IsVisible = syntaxLookup is not null;
+        syntaxLookup = lookup;
+        WordSyntaxHint.Text = lookup?.SyntaxHint;
+        WordSyntaxHint.IsVisible = lookup?.SyntaxHint is not null;
+        WordSyntaxDetails.IsVisible = false;
+        OpenSyntax.Text = "Синтаксис";
+        OpenSyntax.IsVisible = lookup is { SyntaxEvidence.Length: > 0 };
     }
 
-    private async void OpenSyntaxClicked(object? sender, EventArgs args)
+    private void OpenSyntaxClicked(object? sender, EventArgs args)
     {
         if (syntaxLookup is not { } lookup || selection is not { } selected)
             return;
+        WordSyntaxDetails.IsVisible = !WordSyntaxDetails.IsVisible;
+        OpenSyntax.Text = WordSyntaxDetails.IsVisible ? "Згорнути синтаксис" : "Синтаксис";
+        if (!WordSyntaxDetails.IsVisible) return;
 
         var lines = lookup.SyntaxEvidence.Select(hint =>
         {
             var dependent = hint.SelectedIsHead ? hint.OtherWord : selected.Text;
             var head = hint.SelectedIsHead ? selected.Text : hint.OtherWord;
-            return $"«{dependent}» → «{head}» · {RelationName(hint.Relation)} ({hint.Relation}) · збігів у корпусі {hint.Observations}";
+            return $"«{dependent}» → «{head}» · {RelationName(hint.Relation)}";
         }).ToArray();
         var source = $"{lookup.Package.Name} {lookup.Package.Version}";
-        var details = lines.Length == 0
-            ? "Для виділення та сусідніх слів у корпусі немає збігів."
-            : string.Join("\n\n", lines);
-        await DisplayAlertAsync("Синтаксичні підказки",
-            $"{source}\nЗалежне слово → головне слово\n\n{details}", "Гаразд");
+        WordSyntaxDetails.Text = $"Зв’язки, засвідчені в корпусі {source}\n{string.Join("\n", lines)}";
     }
 
     private static string RelationName(string relation) => relation.Split(':')[0] switch

@@ -15,11 +15,13 @@ pub(crate) enum Layout {
     Literal = 0,
     SoftLines = 1,
     Structured = 2,
+    Titles = 3,
 }
 
 impl Layout {
     pub(crate) fn from_storage(value: u8) -> Self {
         match value {
+            3 => Self::Titles,
             2 => Self::Structured,
             1 => Self::SoftLines,
             _ => Self::Literal,
@@ -28,6 +30,7 @@ impl Layout {
 
     pub(crate) fn segment(self, text: &str, id: &str) -> Vec<Sentence> {
         match self {
+            Self::Titles => crate::segment_pdf_with_titles(text, id),
             Self::Structured => crate::segment_pdf_structured(text, id),
             Self::SoftLines => crate::segment_pdf(text, id),
             Self::Literal => crate::segment(text, id),
@@ -36,7 +39,9 @@ impl Layout {
 }
 
 pub(crate) fn segment_document(document: &Document, text: &str) -> Vec<Sentence> {
-    if document.format == "pdf" && document.pdf_structured_sentences {
+    if document.format == "pdf" && document.pdf_abbreviation_boundaries {
+        crate::segment_pdf_with_titles(text, &document.id)
+    } else if document.format == "pdf" && document.pdf_structured_sentences {
         crate::segment_pdf_structured(text, &document.id)
     } else {
         segment(text, &document.id, document.pdf_soft_lines)
@@ -51,21 +56,17 @@ pub(crate) fn position_at(sentences: &[Sentence], offset: usize) -> usize {
 
 /// The legacy sentence remains intact if changing it would alter a saved translation or annotation.
 pub(crate) fn upgrade_document(document: &mut Document) -> bool {
-    if document.format != "pdf" || document.pdf_structured_sentences {
+    if document.format != "pdf" || document.pdf_abbreviation_boundaries {
         return false;
     }
-    let structured = crate::segment_pdf_structured(&document.text, &document.id);
-    let (sentences, structured) = if preserves_anchors(document, &structured) {
-        (structured, true)
-    } else if !document.pdf_soft_lines {
-        let soft = crate::segment_pdf(&document.text, &document.id);
-        if !preserves_anchors(document, &soft) {
-            return false;
-        }
-        (soft, false)
-    } else {
-        return false;
-    };
+    let candidates = [Layout::Titles, Layout::Structured, Layout::SoftLines];
+    let previous = if document.pdf_structured_sentences { Layout::Structured }
+        else if document.pdf_soft_lines { Layout::SoftLines } else { Layout::Literal };
+    let Some((layout, sentences)) = candidates.into_iter()
+        .take_while(|layout| *layout as u8 > previous as u8)
+        .map(|layout| (layout, layout.segment(&document.text, &document.id)))
+        .find(|(_, sentences)| preserves_anchors(document, sentences))
+    else { return false; };
 
     if let Some(previous) = document.sentences.get(document.position) {
         let offset = previous.start_utf16 + document.reading_token_utf16.unwrap_or(0);
@@ -77,7 +78,8 @@ pub(crate) fn upgrade_document(document: &mut Document) -> bool {
     }
     document.sentences = sentences;
     document.pdf_soft_lines = true;
-    document.pdf_structured_sentences = structured;
+    document.pdf_structured_sentences = layout != Layout::SoftLines;
+    document.pdf_abbreviation_boundaries = layout == Layout::Titles;
     true
 }
 
@@ -124,7 +126,7 @@ pub(crate) fn upgrade_documents(connection: &mut Connection) -> Result<()> {
     if connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
         .map_err(storage_error)?
-        >= 3
+        >= 4
     {
         return Ok(());
     }
@@ -135,7 +137,7 @@ pub(crate) fn upgrade_documents(connection: &mut Connection) -> Result<()> {
     if tx
         .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
         .map_err(storage_error)?
-        < 3
+        < 4
     {
         let ids = {
             let mut query = tx
@@ -167,10 +169,29 @@ pub(crate) fn upgrade_documents(connection: &mut Connection) -> Result<()> {
             }
         }
         crate::pdf_detached_pages::upgrade_sentence_layouts(&tx)?;
-        tx.pragma_update(None, "user_version", 3)
+        tx.pragma_update(None, "user_version", 4)
             .map_err(storage_error)?;
     }
     tx.commit().map_err(storage_error)
+}
+
+pub(crate) fn mask_title_periods(boundaries: &mut [u8]) {
+    let text = std::str::from_utf8(boundaries).expect("PDF sentence boundary text is UTF-8");
+    let indices: Vec<_> = text.match_indices('.').filter_map(|(dot, _)| {
+        let title = text[..dot].rsplit(|ch: char| !ch.is_alphabetic()).next()?;
+        if !matches!(title, "M" | "MM" | "Mme" | "Mmes" | "Mlle" | "Mlles" | "Dr" | "Pr" | "Me" | "Mgr" |
+            "Mr" | "Mrs" | "Ms") {
+            return None;
+        }
+        let tail = &text[dot + 1..];
+        let name = tail.trim_start();
+        let gap = &tail[..tail.len() - name.len()];
+        (!gap.is_empty() && !gap.contains(['\r', '\n']) && name.starts_with(char::is_uppercase))
+            .then_some(dot)
+    }).collect();
+    for index in indices {
+        boundaries[index] = b' ';
+    }
 }
 
 fn storage_error(error: impl std::fmt::Display) -> String {
@@ -180,6 +201,17 @@ fn storage_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn french_title_is_not_the_end_of_a_pdf_sentence() {
+        let text = "Son propriétaire, M. Morrel, attend sur le quai. Il regarde le Pharaon.\nM.\nMorrel sourit.";
+        let sentences = Layout::Titles.segment(text, "pdf");
+        let excerpts: Vec<_> = sentences.iter().map(|sentence| sentence.text.as_str()).collect();
+        assert_eq!(excerpts, ["Son propriétaire, M. Morrel, attend sur le quai.", "Il regarde le Pharaon.", "M.\nMorrel sourit."]);
+        for sentence in sentences {
+            assert_eq!(&text[sentence.start_utf8..sentence.end_utf8], sentence.text);
+        }
+    }
 
     #[test]
     fn structured_pdf_splits_headings_and_dialogue_but_keeps_wrapped_lines() {
