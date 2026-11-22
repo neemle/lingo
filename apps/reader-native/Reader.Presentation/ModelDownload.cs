@@ -102,7 +102,7 @@ public sealed class ModelDownload(HttpClient http)
     }
 
     public async Task<string> FetchKnowledgeAsync(KnowledgePackage package, string stagingRoot,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, IProgress<long>? progress = null)
     {
         var url = new Uri(package.DownloadUrl);
         if (url.Scheme != Uri.UriSchemeHttps || url.Host != "raw.githubusercontent.com" ||
@@ -116,7 +116,8 @@ public sealed class ModelDownload(HttpClient http)
         Directory.CreateDirectory(stagingRoot);
         using var gate = OpenGate(stagingRoot, package.Revision);
         await FetchAssetAsync(url, new TranslationAsset(package.Name, package.Bytes, package.Sha256),
-            path, 0, null, cancellationToken);
+            path, 0, progress, cancellationToken);
+        progress?.Report(package.Bytes);
         return path;
     }
 

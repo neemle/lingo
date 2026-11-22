@@ -16,6 +16,8 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
     private CancellationTokenSource? activeDownload;
     private bool changingTranslationFiles;
     private bool changingKnowledgePackage;
+    private CancellationTokenSource? knowledgeDownload;
+    private KnowledgePackage? pausedKnowledgePackage;
     private bool settingsVisible;
     private bool settingsLoaded;
     private bool focusTranslationPending;
@@ -111,28 +113,37 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
     private async void OpenKnowledgeClicked(object? sender, EventArgs args) =>
         await InstallKnowledgeAsync(download: false);
 
-    private async Task InstallKnowledgeAsync(bool download)
+    private async void ResumeKnowledgeClicked(object? sender, EventArgs args)
+    {
+        if (pausedKnowledgePackage is { } package)
+            await InstallKnowledgeAsync(download: true, resume: package);
+    }
+
+    private void PauseKnowledgeClicked(object? sender, EventArgs args)
+    {
+        if (knowledgeDownload is not { } download) return;
+        PauseKnowledge.IsEnabled = false;
+        download.Cancel();
+    }
+
+    private async Task InstallKnowledgeAsync(bool download, KnowledgePackage? resume = null)
     {
         if (changingKnowledgePackage) return;
         changingKnowledgePackage = true;
-        InstallKnowledge.IsEnabled = OpenKnowledge.IsEnabled = false;
+        InstallKnowledge.IsEnabled = OpenKnowledge.IsEnabled = ResumeKnowledge.IsEnabled = false;
         string? cleanupPath = null;
         try
         {
-            var packages = await AppState.Session.KnowledgePackagesAsync();
-            var choices = packages.Where(package => !download || !package.SyntaxAvailable || !package.ExpressionsAvailable)
-                .ToDictionary(package =>
-                    $"{DocumentLanguages.Name(package.Language)} · {package.License} · {package.Bytes / 1_000_000d:F0} МБ");
-            if (choices.Count == 0) return;
-            var choice = await DisplayActionSheetAsync("Пакети Universal Dependencies", "Скасувати", null, choices.Keys.ToArray());
-            if (choice is null || !choices.TryGetValue(choice, out var selected)) return;
+            var selected = resume ?? await ChooseKnowledgePackageAsync(download);
+            if (selected is null) return;
 
             var root = Path.Combine(FileSystem.CacheDirectory, "knowledge-downloads");
             string path;
             if (download)
             {
-                KnowledgeStatus.Text = $"Завантаження {selected.Name}…";
-                path = await Downloader.FetchKnowledgeAsync(selected, root, CancellationToken.None);
+                var downloaded = await DownloadKnowledgeAsync(selected, root);
+                if (downloaded is null) return;
+                path = downloaded;
             }
             else
             {
@@ -151,6 +162,8 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
             KnowledgeStatus.Text = "Створення локального індексу…";
             await AppState.Session.InstallKnowledgePackageAsync(selected.Language, path);
             cleanupPath = path;
+            if (pausedKnowledgePackage?.Revision == selected.Revision)
+                pausedKnowledgePackage = null;
             KnowledgeStatus.Text = $"Встановлено {selected.Name}. Аналіз слів працює офлайн.";
             await RefreshKnowledgePackagesAsync();
         }
@@ -165,6 +178,51 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
             }
             changingKnowledgePackage = false;
             InstallKnowledge.IsEnabled = OpenKnowledge.IsEnabled = true;
+            ResumeKnowledge.IsVisible = ResumeKnowledge.IsEnabled = pausedKnowledgePackage is not null;
+            if (pausedKnowledgePackage is { } paused)
+                ResumeKnowledge.Text = $"Продовжити · {DocumentLanguages.Name(paused.Language)}";
+        }
+    }
+
+    private async Task<KnowledgePackage?> ChooseKnowledgePackageAsync(bool download)
+    {
+        var packages = await AppState.Session.KnowledgePackagesAsync();
+        var choices = packages.Where(package => !download || !package.SyntaxAvailable || !package.ExpressionsAvailable)
+            .ToDictionary(package =>
+                $"{DocumentLanguages.Name(package.Language)} · {package.License} · {package.Bytes / 1_000_000d:F0} МБ");
+        if (choices.Count == 0) return null;
+        var choice = await DisplayActionSheetAsync("Пакети Universal Dependencies", "Скасувати", null, choices.Keys.ToArray());
+        return choice is not null && choices.TryGetValue(choice, out var selected) ? selected : null;
+    }
+
+    private async Task<string?> DownloadKnowledgeAsync(KnowledgePackage package, string root)
+    {
+        using var cancellation = new CancellationTokenSource();
+        knowledgeDownload = cancellation;
+        KnowledgeStatus.Text = $"Завантаження {package.Name}…";
+        KnowledgeProgress.Progress = 0;
+        PauseKnowledge.IsEnabled = PauseKnowledge.IsVisible = KnowledgeProgress.IsVisible = true;
+        var progress = new Progress<long>(bytes =>
+        {
+            if (knowledgeDownload == cancellation)
+                KnowledgeProgress.Progress = Math.Clamp((double)bytes / package.Bytes, 0, 1);
+        });
+        try
+        {
+            var path = await Task.Run(() => Downloader.FetchKnowledgeAsync(package, root, cancellation.Token, progress));
+            cancellation.Token.ThrowIfCancellationRequested();
+            return path;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            pausedKnowledgePackage = package;
+            KnowledgeStatus.Text = $"Завантаження {package.Name} призупинено.";
+            return null;
+        }
+        finally
+        {
+            knowledgeDownload = null;
+            PauseKnowledge.IsVisible = KnowledgeProgress.IsVisible = false;
         }
     }
 

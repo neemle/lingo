@@ -148,6 +148,11 @@
       Style="{StaticResource OutlineButton}" HorizontalOptions="Start" />
      <Button x:Name="OpenKnowledge" Text="Встановити з файлу .conllu" Clicked="OpenKnowledgeClicked"
       Style="{StaticResource OutlineButton}" HorizontalOptions="Start" />
+     <Button x:Name="ResumeKnowledge" Text="Продовжити завантаження пакета аналізу" Clicked="ResumeKnowledgeClicked"
+      Style="{StaticResource OutlineButton}" HorizontalOptions="Start" IsVisible="False" />
+     <ProgressBar x:Name="KnowledgeProgress" IsVisible="False" SemanticProperties.Description="Завантаження граматичного пакета" />
+     <Button x:Name="PauseKnowledge" Text="Призупинити завантаження пакета аналізу" Clicked="PauseKnowledgeClicked"
+      Style="{StaticResource OutlineButton}" HorizontalOptions="Start" IsVisible="False" />
      <Label x:Name="KnowledgeStatus" Style="{StaticResource ResourceDetail}" />
     </VerticalStackLayout>
    </Border>
