@@ -189,6 +189,8 @@
         SemanticProperties.Description="Наступне речення сторінки" />
        <Button x:Name="DetachedTranslate" Text="Перекласти" Clicked="DetachedTranslateClicked"
         Margin="5,0" Style="{StaticResource PlayerButton}" />
+       <Picker x:Name="DetachedVoicePicker" Title="Голос" SelectedIndexChanged="DetachedVoiceChanged"
+        MaximumWidthRequest="148" SemanticProperties.Description="Голос для сторінки PDF" />
        <Label x:Name="DetachedSentenceStatus" Margin="5,0" Style="{StaticResource ReaderMeta}" />
       </FlexLayout>
      </Grid>

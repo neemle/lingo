@@ -15,6 +15,7 @@ public partial class ReadingPage
     private bool speakingDetachedSentence;
     private bool detachedPaused;
     private int detachedAudioRun;
+    private CancellationTokenSource? detachedAudioCancellation;
     private int detachedTranslationRun;
 
     private void ShowDetachedPdfPage(Document document, PdfReadPage page)
@@ -128,7 +129,7 @@ public partial class ReadingPage
 
     private async void DetachedSpeakClicked(object? sender, EventArgs args)
     {
-        if (loadingDetachedSentence || detachedSentence is not { } current) return;
+        if (loadingDetachedSentence || detachedAddress is not { } address || detachedSentence is not { } current) return;
         if (speakingDetachedSentence)
         {
             if (detachedPaused ? detachedSpeech.Resume() : detachedSpeech.Pause())
@@ -136,17 +137,42 @@ public partial class ReadingPage
                 detachedPaused = !detachedPaused;
                 UpdateDetachedControls();
             }
+            else if (!detachedPaused) ClearDetachedSpeech();
             return;
         }
 
+        using var cancellation = new CancellationTokenSource();
+        detachedAudioCancellation = cancellation;
+        var token = cancellation.Token;
         var run = ++detachedAudioRun;
         speakingDetachedSentence = true;
-        detachedSpeech.Rate = SpeechRatePercent / 100f;
-        detachedSpeech.PreferredVoice = speech.PreferredVoice;
+        var rate = SpeechRatePercent / 100f;
+        detachedSpeech.Rate = rate;
         UpdateDetachedControls();
         var sentence = current.Sentence;
         try
         {
+            await loadingVoices.WaitAsync(token);
+            if (run != detachedAudioRun) return;
+            var voice = SelectedVoice();
+            if (voice?.Engine is { } engine)
+            {
+                var session = AppState.Session;
+                var source = new SpeechSource(address.Document, sentence.Id, current.Language, sentence.Text, sentence.Text);
+                var key = new ClipKey(source, engine, voice.Speaker, rate);
+                DetachedSentenceStatus.Text = "Готуємо локальне озвучення…";
+                var audio = await PrepareAudio(session, key, token, address.Page).WaitAsync(token);
+                if (run != detachedAudioRun) return;
+                DetachedSentenceStatus.Text = $"Речення {current.Position + 1} із {current.Total}";
+                await detachedSpeech.PlayWaveAsync(audio, 0, startedAt =>
+                {
+                    if (!token.IsCancellationRequested && ContinueSpeech.IsChecked)
+                        _ = PrefetchNextAudioAsync(session, key, token, address.Page);
+                });
+                return;
+            }
+
+            detachedSpeech.PreferredVoice = voice?.Id == SystemDefaultVoice ? null : voice?.Id;
             await detachedSpeech.SpeakAsync(sentence.Text, current.Language, (start, length) =>
                 MainThread.BeginInvokeOnMainThread(() =>
                 {
@@ -155,6 +181,7 @@ public partial class ReadingPage
                         sentence.StartUtf16 + start, length, sentence.Text.Substring(start, length));
                 }));
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) {}
         catch (Exception error)
         {
             if (run == detachedAudioRun) DetachedSentenceStatus.Text = error.Message;
@@ -168,6 +195,9 @@ public partial class ReadingPage
     private void ClearDetachedSpeech()
     {
         detachedAudioRun++;
+        var running = detachedAudioCancellation;
+        detachedAudioCancellation = null;
+        running?.Cancel();
         detachedSpeech.Stop();
         speakingDetachedSentence = detachedPaused = false;
         DetachedPdfText.SpokenWord = null;

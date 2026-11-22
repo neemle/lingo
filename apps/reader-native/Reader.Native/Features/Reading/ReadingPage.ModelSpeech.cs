@@ -27,7 +27,7 @@ public partial class ReadingPage
         var language = AppState.Session.Document?.Language;
         if (!force && voiceLanguage == language) return;
         voiceLanguage = language;
-        VoicePicker.IsEnabled = false;
+        VoicePicker.IsEnabled = DetachedVoicePicker.IsEnabled = false;
         loadingVoices = LoadVoicesAsync(language, ++voiceCatalogRevision);
     }
 
@@ -71,21 +71,22 @@ public partial class ReadingPage
         {
             availableVoices = voices.ToArray();
             var automaticLabel = language == "uk" ? "Автоматично" : "Системний вибір";
-            VoicePicker.ItemsSource = new[] { automaticLabel }.Concat(voices.Select(voice => voice.Label)).ToArray();
+            VoicePicker.ItemsSource = DetachedVoicePicker.ItemsSource =
+                new[] { automaticLabel }.Concat(voices.Select(voice => voice.Label)).ToArray();
             var saved = language is not null && readerPreferences.SpeechVoices.TryGetValue(language, out var stored)
                 ? stored : null;
             var chosen = Array.FindIndex(availableVoices, voice => voice.Id == saved);
-            VoicePicker.SelectedIndex = chosen + 1;
-            VoicePicker.IsEnabled = voices.Count > 0;
+            VoicePicker.SelectedIndex = DetachedVoicePicker.SelectedIndex = chosen + 1;
+            VoicePicker.IsEnabled = DetachedVoicePicker.IsEnabled = voices.Count > 0;
             SetVoiceStatus(error ?? (language is null ? ""
                 : voices.Count == 0 ? "Голос цієї мови відсутній. Локальні голоси можна завантажити в Налаштуваннях."
-                : chosen < 0 && saved.Length > 0 ? "Збережений голос недоступний. Використано автоматичний вибір."
+                : chosen < 0 && !string.IsNullOrEmpty(saved) ? "Збережений голос недоступний. Використано автоматичний вибір."
                 : ModelVoiceStatus()));
         }
         catch (Exception problem)
         {
             availableVoices = [];
-            VoicePicker.IsEnabled = false;
+            VoicePicker.IsEnabled = DetachedVoicePicker.IsEnabled = false;
             SetVoiceStatus($"Не вдалося налаштувати голоси. {problem.Message}");
         }
         finally { loadingSpeechPreferences = false; }
@@ -102,9 +103,19 @@ public partial class ReadingPage
     {
         if (loadingSpeechPreferences || voiceLanguage is null || VoicePicker.SelectedIndex < 0) return;
         if (utteranceActive) StopSpeech();
+        if (speakingDetachedSentence) ClearDetachedSpeech();
+        if (DetachedVoicePicker.SelectedIndex != VoicePicker.SelectedIndex)
+            DetachedVoicePicker.SelectedIndex = VoicePicker.SelectedIndex;
         SaveReaderPreference(ReaderPreferenceChange.SpeechVoice(voiceLanguage, PickedVoice()?.Id));
         SetVoiceStatus(ModelVoiceStatus());
         RefreshSpeechResume();
+    }
+
+    private void DetachedVoiceChanged(object? sender, EventArgs args)
+    {
+        if (!loadingSpeechPreferences && voiceLanguage is not null && DetachedVoicePicker.SelectedIndex >= 0
+            && VoicePicker.SelectedIndex != DetachedVoicePicker.SelectedIndex)
+            VoicePicker.SelectedIndex = DetachedVoicePicker.SelectedIndex;
     }
 
     private string ModelVoiceStatus()
@@ -181,21 +192,21 @@ public partial class ReadingPage
         }
     }
 
-    private Task<SpeechAudio> PrepareAudio(ReaderSession session, ClipKey key, CancellationToken token)
+    private Task<SpeechAudio> PrepareAudio(ReaderSession session, ClipKey key, CancellationToken token, int? page = null)
     {
-        var task = GenerateAudioAsync(session, key, token);
+        var task = GenerateAudioAsync(session, key, token, page);
         // A stopped or superseded request may leave a native job running to completion.
         _ = task.ContinueWith(failed => { _ = failed.Exception; }, CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         return task;
     }
 
-    private static async Task PrefetchNextAudioAsync(ReaderSession session, ClipKey current, CancellationToken token)
+    private static async Task PrefetchNextAudioAsync(ReaderSession session, ClipKey current, CancellationToken token, int? page = null)
     {
         try
         {
             await session.PrefetchSpeechAsync(current.Source.Document, current.Source.Sentence,
-                current.Speaker, current.Rate, current.Engine, token);
+                current.Speaker, current.Rate, current.Engine, token, page);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) {}
         catch (Exception error)
@@ -204,13 +215,13 @@ public partial class ReadingPage
         }
     }
 
-    private async Task<SpeechAudio> GenerateAudioAsync(ReaderSession session, ClipKey key, CancellationToken token)
+    private async Task<SpeechAudio> GenerateAudioAsync(ReaderSession session, ClipKey key, CancellationToken token, int? page)
     {
         await modelInference.WaitAsync(token);
         try
         {
             token.ThrowIfCancellationRequested();
-            return await session.SynthesizeSpeechAsync(key.Source.Document, key.Source.Sentence, key.Speaker, key.Rate, key.Engine);
+            return await session.SynthesizeSpeechAsync(key.Source.Document, key.Source.Sentence, key.Speaker, key.Rate, key.Engine, page);
         }
         finally { modelInference.Release(); }
     }

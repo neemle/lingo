@@ -392,6 +392,7 @@ pub enum Command {
     },
     SynthesizeSpeech {
         id: String,
+        page: Option<u16>,
         #[serde(rename = "sentenceId")]
         sentence_id: String,
         engine: Option<String>,
@@ -400,6 +401,7 @@ pub enum Command {
     },
     PrefetchSpeech {
         id: String,
+        page: Option<u16>,
         #[serde(rename = "sentenceId")]
         sentence_id: String,
         engine: Option<String>,

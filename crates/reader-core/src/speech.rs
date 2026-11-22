@@ -79,11 +79,28 @@ impl Store {
         let Some((sentence_id, source)) = self.speech_source(document_id, sentence_id, next)? else {
             return Ok(None);
         };
+        self.prepare_speech_source(sentence_id, source, engine, speaker, rate).map(Some)
+    }
+
+    pub fn prepare_detached_pdf_speech(
+        &self, document_id: &str, address: (u16, &str),
+        engine: ModelSpeechEngine, speaker: u32, rate: f32, next: bool,
+    ) -> Result<Option<PreparedSpeech>> {
+        let (page, sentence_id) = address;
+        let Some((sentence_id, source)) = self.detached_pdf_speech_source(document_id, page, sentence_id, next)? else {
+            return Ok(None);
+        };
+        self.prepare_speech_source(sentence_id, source, engine, speaker, rate).map(Some)
+    }
+
+    fn prepare_speech_source(
+        &self, sentence_id: String, source: SpeechSource, engine: ModelSpeechEngine, speaker: u32, rate: f32,
+    ) -> Result<PreparedSpeech> {
         let adapter: Box<dyn SpeechAdapter> = match engine {
             ModelSpeechEngine::PiperUkrainian => Box::new(self.prepare_piper_source(source, speaker, rate)?),
             ModelSpeechEngine::Supertonic => Box::new(self.prepare_supertonic_source(source, speaker, rate)?),
         };
-        Ok(Some(PreparedSpeech { sentence_id, adapter }))
+        Ok(PreparedSpeech { sentence_id, adapter })
     }
 
     pub(crate) fn speech_source(

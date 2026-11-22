@@ -326,10 +326,10 @@ public sealed class CoreClient : IDisposable
         Call<DictionaryImport>(new { version = 1, operation = "import_dictionary", archive });
     public string PrepareUkrainianSpeech(string text) =>
         CallIndependent<string>(new { version = 1, operation = "prepare_ukrainian_speech", text });
-    public SpeechAudio SynthesizeSpeech(string id, string sentenceId, uint speaker, float rate, string engine = "piper-uk") =>
-        CallIndependent<SpeechAudio>(new { version = 1, operation = "synthesize_speech", id, sentenceId, engine, speaker, rate });
-    public void PrefetchSpeech(string id, string sentenceId, uint speaker, float rate, string engine) =>
-        CallIndependent<JsonElement>(new { version = 1, operation = "prefetch_speech", id, sentenceId, engine, speaker, rate });
+    public SpeechAudio SynthesizeSpeech(string id, string sentenceId, uint speaker, float rate, string engine = "piper-uk", int? page = null) =>
+        CallIndependent<SpeechAudio>(new { version = 1, operation = "synthesize_speech", id, page, sentenceId, engine, speaker, rate });
+    public void PrefetchSpeech(string id, string sentenceId, uint speaker, float rate, string engine, int? page = null) =>
+        CallIndependent<JsonElement>(new { version = 1, operation = "prefetch_speech", id, page, sentenceId, engine, speaker, rate });
 
     public void ScheduleTranslationWindow(string id, string sentenceId, string revisionId, string target) =>
         Call<JsonElement>(new { version = 1, operation = "schedule_translation_window", id, sentenceId, revisionId, target });

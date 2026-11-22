@@ -34,12 +34,48 @@ pub struct DetachedPdfSentence {
     pub language: String,
 }
 
+struct CachedSentences {
+    language: String,
+    saved: usize,
+    sentences: Vec<Sentence>,
+}
+
 impl Store {
     pub fn detached_pdf_sentence(
         &self, id: &str, page: u16, requested: Option<usize>,
     ) -> Result<Option<DetachedPdfSentence>> {
-        let db = &self.connection;
-        let result: Option<(String, String, usize)> = db.query_row(
+        let Some(CachedSentences { language, saved, sentences }) = self.detached_pdf_sentences(id, page)? else {
+            return Ok(None);
+        };
+        let total = sentences.len();
+        let position = requested.unwrap_or(saved).min(total - 1);
+        if requested.is_some() {
+            self.connection.execute(
+                "INSERT INTO pdf_detached_positions (document_id,page,sentence)
+                 SELECT document_id,page,?3 FROM pdf_detached_pages WHERE document_id=?1 AND page=?2
+                 ON CONFLICT(document_id,page) DO UPDATE SET sentence=excluded.sentence",
+                params![id, page, position],
+            ).map_err(database_error)?;
+        }
+        let sentence = sentences.into_iter().nth(position).ok_or("Речення PDF не знайдено.")?;
+        Ok(Some(DetachedPdfSentence { sentence, position, total, language }))
+    }
+    pub(crate) fn detached_pdf_speech_source(
+        &self, id: &str, page: u16, sentence_id: &str, next: bool,
+    ) -> Result<Option<(String, crate::speech::SpeechSource)>> {
+        let CachedSentences { language, saved, sentences } = self.detached_pdf_sentences(id, page)?
+            .ok_or("Текст сторінки PDF недоступний.")?;
+        let position = saved.min(sentences.len() - 1);
+        if sentences[position].id != sentence_id {
+            return Err("Позиція читання сторінки PDF змінилася.".into());
+        }
+        Ok(sentences.into_iter().nth(position + usize::from(next)).map(|sentence| {
+            (sentence.id, crate::speech::SpeechSource { language, text: sentence.text })
+        }))
+    }
+
+    fn detached_pdf_sentences(&self, id: &str, page: u16) -> Result<Option<CachedSentences>> {
+        let result: Option<(String, String, usize)> = self.connection.query_row(
             "SELECT p.text, json_extract(d.body, '$.language'), coalesce(c.sentence,0)
              FROM pdf_detached_pages p JOIN documents d ON d.id=p.document_id
              LEFT JOIN pdf_detached_positions c ON c.document_id=p.document_id AND c.page=p.page
@@ -50,19 +86,7 @@ impl Store {
         let Some((text, language, saved)) = result else { return Ok(None); };
         let revision = format!("{id}:{page}:{:x}", Sha256::digest(text.as_bytes()));
         let sentences = crate::segment(&text, &revision);
-        if sentences.is_empty() { return Ok(None); }
-        let total = sentences.len();
-        let position = requested.unwrap_or(saved).min(total - 1);
-        if requested.is_some() {
-            db.execute(
-                "INSERT INTO pdf_detached_positions (document_id,page,sentence)
-                 SELECT document_id,page,?3 FROM pdf_detached_pages WHERE document_id=?1 AND page=?2
-                 ON CONFLICT(document_id,page) DO UPDATE SET sentence=excluded.sentence",
-                params![id, page, position],
-            ).map_err(database_error)?;
-        }
-        let sentence = sentences.into_iter().nth(position).ok_or("Речення PDF не знайдено.")?;
-        Ok(Some(DetachedPdfSentence { sentence, position, total, language }))
+        Ok((!sentences.is_empty()).then_some(CachedSentences { language, saved, sentences }))
     }
 }
 

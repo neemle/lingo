@@ -310,6 +310,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         }
         Command::SynthesizeSpeech {
             id,
+            page,
             sentence_id,
             engine,
             speaker,
@@ -317,6 +318,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         }
         | Command::PrefetchSpeech {
             id,
+            page,
             sentence_id,
             engine,
             speaker,
@@ -326,7 +328,19 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 engine.as_deref().unwrap_or("piper-uk"),
             )
             .ok_or_else(|| Error::new("invalid_argument", "Невідомий рушій озвучення."))?;
-            if matches!(&command, Command::PrefetchSpeech { .. }) {
+            let background = matches!(&command, Command::PrefetchSpeech { .. });
+            if let Some(page) = page {
+                let job = registry::lock()?.store(handle)?
+                    .prepare_detached_pdf_speech(id, (*page, sentence_id), engine, *speaker, *rate, background)
+                    .map_err(gateway::domain)?;
+                return if background {
+                    encode_job(job.map(|job| job.prefetch()).transpose())
+                } else {
+                    encode_job(job.ok_or_else(|| "Речення PDF для озвучення не знайдено.".to_owned())
+                        .and_then(|job| job.run()))
+                };
+            }
+            if background {
                 let job = registry::lock()?
                     .store(handle)?
                     .prepare_speech_prefetch(id, sentence_id, engine, *speaker, *rate)

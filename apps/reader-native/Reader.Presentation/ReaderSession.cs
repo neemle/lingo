@@ -426,12 +426,12 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         return imported;
     }
     public Task<string> PrepareUkrainianSpeechAsync(string text) => Task.Run(() => client.PrepareUkrainianSpeech(text));
-    public Task<SpeechAudio> SynthesizeSpeechAsync(string id, string sentenceId, uint speaker, float rate, string engine) =>
-        Task.Run(() => client.SynthesizeSpeech(id, sentenceId, speaker, rate, engine));
+    public Task<SpeechAudio> SynthesizeSpeechAsync(string id, string sentenceId, uint speaker, float rate, string engine, int? page = null) =>
+        Task.Run(() => client.SynthesizeSpeech(id, sentenceId, speaker, rate, engine, page));
 
     public Task PrefetchSpeechAsync(string id, string sentenceId, uint speaker, float rate, string engine,
-        CancellationToken cancellation) =>
-        Task.Run(() => client.PrefetchSpeech(id, sentenceId, speaker, rate, engine), cancellation);
+        CancellationToken cancellation, int? page = null) =>
+        Task.Run(() => client.PrefetchSpeech(id, sentenceId, speaker, rate, engine, page), cancellation);
 
     public Task<ParagraphTranslation?> PrefetchTranslationWindowAsync(
         string id, string sentenceId, string revisionId, string target) =>
