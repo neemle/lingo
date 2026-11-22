@@ -159,6 +159,14 @@ fn validate(command: &Command) -> Result<()> {
         {
             Err(Error::new("invalid_argument", "Invalid sentence token address"))
         }
+        Command::OpenPdfReadingPage { id, revision_id, .. }
+        | Command::AnchorReadingSelection { id, revision_id, .. }
+            if !valid_token_address(id, revision_id)
+                || revision_id.len() != 64
+                || !revision_id.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+        {
+            Err(Error::new("invalid_argument", "Invalid reading address"))
+        }
         Command::ExplainWord {
             model,
             document,

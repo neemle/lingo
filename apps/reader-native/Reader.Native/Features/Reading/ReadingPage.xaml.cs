@@ -72,6 +72,7 @@ public partial class ReadingPage : ContentPage
         AppState.Session.PropertyChanged += SessionChanged;
         BeginReadingHistory();
         UpdateHighlight();
+        _ = RestoreReadingWordAsync();
         readinessPair = null;
         UpdateTranslation();
         loadingSpeechPreferences = true;
@@ -118,6 +119,7 @@ public partial class ReadingPage : ContentPage
         {
             SyncReadingHistory();
             UpdateHighlight();
+            _ = RestoreReadingWordAsync();
             UpdateTranslation();
             RefreshVoices();
             if (activeSpeechSource is { } source && !IsSpeechSourceCurrent(AppState.Session, source))
@@ -140,7 +142,9 @@ public partial class ReadingPage : ContentPage
         SourceLanguageBadge.IsVisible = document is not null;
         SourceLanguageCode.Text = document?.Language.ToUpperInvariant() ?? "";
         SourceLanguageName.Text = document is null ? "" : DocumentLanguages.Name(document.Language);
-        SourceText.HighlightLength = sentence is null ? 0 : sentence.EndUtf16 - sentence.StartUtf16;
+        var word = document is not null && sentence is not null ? ReadingWord(document, sentence) : null;
+        SourceText.HighlightStart = word?.Start ?? sentence?.StartUtf16 ?? 0;
+        SourceText.HighlightLength = word?.Length ?? (sentence is null ? 0 : sentence.EndUtf16 - sentence.StartUtf16);
         if (documentId == AppState.Session.Document?.Id) return;
         documentId = AppState.Session.Document?.Id;
         selection = null;
@@ -377,14 +381,32 @@ public partial class ReadingPage : ContentPage
         WordCard.IsVisible = true;
         var index = Array.FindIndex(doc.Sentences, sentence => selected.StartUtf16 >= sentence.StartUtf16
             && selected.StartUtf16 < sentence.EndUtf16);
-        if (index >= 0 && index != doc.Position) { StopSpeech(); await session.SelectSentenceAsync(index); }
         try
         {
+            if (index >= 0 && index != doc.Position) StopSpeech();
+            if (doc.CurrentRevisionId is { } revision)
+            {
+                var cursor = await session.AnchorReadingSelectionAsync(doc.Id, revision, selected);
+                if (selection != selected || session.Document is not { } active || active.Id != doc.Id
+                    || active.CurrentRevisionId != revision) return;
+                if (cursor is not null)
+                {
+                    canonicalWord = (doc.Id, cursor);
+                    UpdateHighlight();
+#if MACCATALYST
+                    QueueReaderPdfOcr();
+#endif
+                }
+            }
+            else if (index >= 0 && index != doc.Position)
+                await session.SelectSentenceAsync(index);
+
             var context = index < 0 ? null : new WordContext(doc.Sentences[index].Text,
                 selected.StartUtf16 - doc.Sentences[index].StartUtf16);
             var lookup = await session.LookupWordAsync(doc.Language, selected.Text, context);
             if (selection != selected || session.Document is not { } current || current.Id != doc.Id
-                || current.Language != doc.Language || !WordCard.IsVisible) return;
+                || current.Language != doc.Language || current.CurrentRevisionId != doc.CurrentRevisionId
+                || !WordCard.IsVisible) return;
             ShowMeanings(lookup);
             ShowLocalSyntax(lookup);
             ShowSpelling(lookup);

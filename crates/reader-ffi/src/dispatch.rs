@@ -90,6 +90,9 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         ),
         Command::PdfReadingPage { id } => value(store.pdf_reading_page(&id)),
         Command::SetPdfReadingPage { id, page } => value(store.set_pdf_reading_page(&id, page)),
+        Command::OpenPdfReadingPage { id, revision_id, page } => {
+            value(store.open_pdf_reading_page(&id, &revision_id, page))
+        }
         Command::PdfReadWindow { id, center } => value(store.pdf_read_window(&id, center)),
         Command::SentenceTokens { id, sentence_id, start, limit } => value(store.sentence_tokens(
             &id, &sentence_id, start,
@@ -137,6 +140,9 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::ReadingCursor { id } => value(store.reading_cursor(&id)),
         Command::SetReadingCursor { id, sentence_id, revision_id, start_utf16 } => {
             value(store.set_reading_cursor(&id, &sentence_id, &revision_id, start_utf16))
+        }
+        Command::AnchorReadingSelection { id, revision_id, start_utf16, length_utf16 } => {
+            value(store.anchor_reading_selection(&id, &revision_id, start_utf16, length_utf16))
         }
         Command::SetDocumentLanguage { id, language } => {
             value(store.set_document_language(&id, &language))

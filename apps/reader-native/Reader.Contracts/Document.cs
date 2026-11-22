@@ -13,6 +13,7 @@ public sealed record Document(
 {
     public string? SourceUrl { get; init; }
     public string? CurrentRevisionId { get; init; }
+    public int? ReadingTokenUtf16 { get; init; }
     public DocumentBlock[] Blocks { get; init; } = [];
     public OcrLine[]? OcrLines { get; init; }
     public int? OcrPdfPages { get; init; }

@@ -117,7 +117,7 @@
        <Label Grid.Column="1" x:Name="SourceLocation" Style="{StaticResource ReaderMeta}" IsVisible="False" />
       </Grid>
       <controls:NativeReaderView Grid.Row="1" x:Name="SourceText" Text="{Binding Document.Text}" Blocks="{Binding Document.Blocks}"
-       BackgroundColor="{StaticResource Panel}" HighlightStart="{Binding Sentence.StartUtf16}"
+       BackgroundColor="{StaticResource Panel}"
        SourceSelected="SourceSelected"
        SemanticProperties.Description="Оригінальний текст. Виділіть слово для картки." />
      </Grid>

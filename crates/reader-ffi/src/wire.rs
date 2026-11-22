@@ -94,6 +94,12 @@ pub enum Command {
         id: String,
         page: u16,
     },
+    OpenPdfReadingPage {
+        id: String,
+        #[serde(rename = "revisionId")]
+        revision_id: String,
+        page: u16,
+    },
     PdfReadWindow {
         id: String,
         center: u16,
@@ -191,6 +197,15 @@ pub enum Command {
         revision_id: String,
         #[serde(rename = "startUtf16")]
         start_utf16: Option<usize>,
+    },
+    AnchorReadingSelection {
+        id: String,
+        #[serde(rename = "revisionId")]
+        revision_id: String,
+        #[serde(rename = "startUtf16")]
+        start_utf16: usize,
+        #[serde(rename = "lengthUtf16")]
+        length_utf16: usize,
     },
     SpeechResume {
         id: String,

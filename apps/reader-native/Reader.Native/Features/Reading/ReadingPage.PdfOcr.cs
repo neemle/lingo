@@ -31,7 +31,10 @@ public partial class ReadingPage
         try
         {
             if (await session.OriginalFileAsync(document.Id) is not { } original) return;
-            if (page < 0) page = await session.PdfReadingPageAsync(document.Id) ?? 0;
+            var savedPage = await session.PdfReadingPageAsync(document.Id);
+            if (page < 0 || (savedPage is int saved && document.ReadingTokenUtf16 is null
+                && DocumentPages.SentencePosition(document, saved) == document.Position))
+                page = savedPage ?? 0;
             await PdfPageOcr.RecognizeWindowAsync(session, document, original.Path, page, run.Token, async () =>
             {
                 if (readingPageActive && session.Document?.Id == document.Id && !session.Busy)

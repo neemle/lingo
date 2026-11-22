@@ -1,4 +1,5 @@
-use crate::{knowledge, ocr::OcrSpan, Document, Result, Sentence, Store};
+use crate::{knowledge, ocr::OcrSpan, pdf_reading_position, Document, Result, Sentence, Store};
+use rusqlite::Connection;
 use serde::Serialize;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -50,6 +51,7 @@ pub struct ReadingCursor {
     pub position: usize,
     pub token_id: Option<String>,
     pub sentence_start_utf16: Option<usize>,
+    pub token_length_utf16: Option<usize>,
 }
 
 impl Store {
@@ -75,7 +77,7 @@ impl Store {
         start_utf16: Option<usize>,
     ) -> Result<ReadingCursor> {
         let mut cursor = None;
-        self.edit_document(id, |document, _| {
+        self.edit_document(id, |document, tx| {
             let revision = revision_id(document)?;
             if revision != expected_revision {
                 return Err("Текст документа змінився. Оновіть позицію читання.".into());
@@ -90,12 +92,40 @@ impl Store {
                 return Err("Токен речення не знайдено".into());
             }
             cursor = Some(reading_cursor(revision, sentence, position, start_utf16));
-            let changed = document.position != position || document.reading_token_utf16 != start_utf16;
-            document.position = position;
-            document.reading_token_utf16 = start_utf16;
-            Ok(changed)
+            apply_cursor(document, tx, position, start_utf16)
         })?;
         cursor.ok_or_else(|| "Не вдалося оновити позицію читання".into())
+    }
+
+    pub fn anchor_reading_selection(
+        &mut self, id: &str, expected_revision: &str, start_utf16: usize, length_utf16: usize,
+    ) -> Result<Option<ReadingCursor>> {
+        let end = start_utf16.checked_add(length_utf16)
+            .filter(|&end| end > start_utf16)
+            .ok_or("Некоректне виділення тексту")?;
+        let mut cursor = None;
+        self.edit_document(id, |document, tx| {
+            let revision = revision_id(document)?;
+            if revision != expected_revision {
+                return Err("Текст документа змінився. Оновіть виділення.".into());
+            }
+            if document.sentences.last().is_none_or(|sentence| end > sentence.end_utf16)
+                && end > document.text.encode_utf16().count()
+            {
+                return Err("Некоректне виділення тексту".into());
+            }
+            let position = document.sentences.partition_point(|sentence| sentence.end_utf16 <= start_utf16);
+            let Some(sentence) = document.sentences.get(position).filter(|sentence| sentence.start_utf16 < end) else {
+                return Ok(false);
+            };
+            let start = start_utf16.saturating_sub(sentence.start_utf16);
+            let end = end - sentence.start_utf16;
+            let offset = word_parts(&sentence.text).take_while(|(_, offset, _)| *offset < end)
+                .find_map(|(_, offset, word)| (offset + word.encode_utf16().count() > start).then_some(offset));
+            cursor = Some(reading_cursor(revision, sentence, position, offset));
+            apply_cursor(document, tx, position, offset)
+        })?;
+        Ok(cursor)
     }
 
     pub fn sentence_tokens(
@@ -206,6 +236,15 @@ impl Store {
     }
 }
 
+fn apply_cursor(document: &mut Document, db: &Connection, position: usize, offset: Option<usize>) -> Result<bool> {
+    let absolute = document.sentences[position].start_utf16 + offset.unwrap_or(0);
+    pdf_reading_position::focus_for_offset(db, document, absolute)?;
+    let changed = document.position != position || document.reading_token_utf16 != offset;
+    document.position = position;
+    document.reading_token_utf16 = offset;
+    Ok(changed)
+}
+
 pub(crate) fn revision_id(document: &Document) -> Result<&str> {
     document
         .current_revision_id
@@ -237,6 +276,8 @@ fn reading_cursor(
         position,
         token_id: offset.map(|offset| token_id(revision, &sentence.id, offset)),
         sentence_start_utf16: offset,
+        token_length_utf16: offset.and_then(|offset| word_at(&sentence.text, offset))
+            .map(|word| word.encode_utf16().count()),
     }
 }
 

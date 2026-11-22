@@ -101,6 +101,9 @@ public sealed class CoreClient : IDisposable
     public void SetPdfReadingPage(string id, int page) =>
         Call<JsonElement>(new { version = 1, operation = "set_pdf_reading_page", id, page });
 
+    public int? OpenPdfReadingPage(string id, string revisionId, int page) =>
+        Call<int?>(new { version = 1, operation = "open_pdf_reading_page", id, revisionId, page });
+
     public PdfOcrRequest? ClaimPdfOcrPage(string id) =>
         Call<PdfOcrRequest?>(new { version = 1, operation = "claim_pdf_ocr_page", id });
 
@@ -158,6 +161,18 @@ public sealed class CoreClient : IDisposable
 
     public void Position(string id, int position) =>
         Call<JsonElement>(new { version = 1, operation = "position", id, position });
+
+    public ReadingCursor? ReadingCursor(string id) =>
+        Call<ReadingCursor?>(new { version = 1, operation = "reading_cursor", id });
+
+    public ReadingCursor SetReadingCursor(string id, string sentenceId, string revisionId) =>
+        Call<ReadingCursor>(new { version = 1, operation = "set_reading_cursor", id, sentenceId, revisionId });
+
+    public ReadingCursor? AnchorReadingSelection(string id, string revisionId, int startUtf16, int lengthUtf16) =>
+        Call<ReadingCursor?>(new
+        {
+            version = 1, operation = "anchor_reading_selection", id, revisionId, startUtf16, lengthUtf16,
+        });
     public void SetDocumentLanguage(string id, string language) =>
         Call<JsonElement>(new { version = 1, operation = "set_document_language", id, language });
     public bool DeleteDocument(string id) =>

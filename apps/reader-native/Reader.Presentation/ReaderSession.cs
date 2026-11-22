@@ -56,10 +56,11 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public int OriginalPageIndex()
     {
         if (Document is not { } document || Sentence is not { } sentence) return 0;
+        var cursorOffset = sentence.StartUtf16 + (document.ReadingTokenUtf16 ?? 0);
         if (document.PdfPageStarts is { } starts)
         {
             for (var index = starts.Length - 1; index >= 0; index--)
-                if (starts[index] is int offsetOnPage && offsetOnPage <= sentence.StartUtf16) return index;
+                if (starts[index] is int offsetOnPage && offsetOnPage <= cursorOffset) return index;
             return 0;
         }
         if (document.OcrLines is not { Length: > 0 } lines) return 0;
@@ -70,7 +71,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
             if (offset != 0) offset += line.Page == page ? 1 : 2;
             offset += (line.Correction ?? line.Text).Trim().Length;
             page = line.Page;
-            if (sentence.StartUtf16 < offset) return page;
+            if (cursorOffset < offset) return page;
         }
         return page;
     }
@@ -155,6 +156,17 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
 
     public Task SetPdfReadingPageAsync(string id, int page) => Task.Run(() => client.SetPdfReadingPage(id, page));
 
+    public async Task<bool> OpenPdfReadingPageAsync(string id, string revisionId, int page)
+    {
+        var hasText = false;
+        await RunAsync(() =>
+        {
+            hasText = client.OpenPdfReadingPage(id, revisionId, page).HasValue;
+            return Read();
+        });
+        return hasText && Error.Length == 0;
+    }
+
     public Task<PdfOcrRequest?> ClaimPdfOcrPageAsync(string id) => Task.Run(() => client.ClaimPdfOcrPage(id));
 
     public Task CachePdfOcrPageAsync(string id, PdfOcrRequest claim, OcrLine[] lines) =>
@@ -214,12 +226,34 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         if (position < 0 || position >= doc.Sentences.Length || position == doc.Position)
             return (snapshot, selectedId);
 
-        client.Position(doc.Id, position);
+        if (doc.CurrentRevisionId is { } revision)
+            client.SetReadingCursor(doc.Id, doc.Sentences[position].Id, revision);
+        else
+            client.Position(doc.Id, position);
         var updated = (Document[])documents.Clone();
-        updated[index] = doc with { Position = position };
+        updated[index] = doc with { Position = position, ReadingTokenUtf16 = null };
         return (snapshot with { Documents = updated }, selectedId);
     });
 
+    public Task<ReadingCursor?> ReadingCursorAsync(string id) => Task.Run(() => client.ReadingCursor(id));
+
+    public async Task<ReadingCursor?> AnchorReadingSelectionAsync(string id, string revisionId, TextSelection selection)
+    {
+        ReadingCursor? anchored = null;
+        await RunAsync(() =>
+        {
+            var documents = snapshot.Documents;
+            var index = Array.FindIndex(documents, document => document.Id == id);
+            if (index < 0 || id != selectedId || documents[index].CurrentRevisionId != revisionId)
+                return (snapshot, selectedId);
+            anchored = client.AnchorReadingSelection(id, revisionId, selection.StartUtf16, selection.LengthUtf16);
+            if (anchored is not { } cursor) return (snapshot, selectedId);
+            var updated = (Document[])documents.Clone();
+            updated[index] = documents[index] with { Position = cursor.Position, ReadingTokenUtf16 = cursor.SentenceStartUtf16 };
+            return (snapshot with { Documents = updated }, selectedId);
+        });
+        return Error.Length == 0 ? anchored : null;
+    }
     public Task ToggleBookmarkAsync() => RunAsync(() =>
     {
         if (Document is { } document && Sentence is { } sentence)

@@ -28,20 +28,95 @@ impl Store {
 
     pub fn set_pdf_reading_page(&mut self, id: &str, page: u16) -> Result<()> {
         self.edit_document(id, |document, tx| {
-            if !contains_page(document, page) {
-                return Err("Сторінку PDF не знайдено".into());
-            }
-            tx.execute(
-                "INSERT INTO pdf_reading_positions (document_id,page) VALUES (?1,?2)
-                 ON CONFLICT(document_id) DO UPDATE SET page=excluded.page
-                 WHERE pdf_reading_positions.page<>excluded.page",
-                params![id, page],
-            )
-            .map_err(database_error)?;
-            pdf_page_ocr::schedule_window(tx, document, page)?;
+            set_page(tx, document, page, true)?;
             Ok(false)
         })
     }
+
+    /// Enter the text of a physical page while retaining that page as the OCR focus.
+    pub fn open_pdf_reading_page(&mut self, id: &str, revision: &str, page: u16) -> Result<Option<usize>> {
+        let mut opened = None;
+        self.edit_document(id, |document, tx| {
+            if document.current_revision_id.as_deref() != Some(revision) {
+                return Err("Текст PDF змінився. Відкрийте сторінку знову.".into());
+            }
+            set_page(tx, document, page, true)?;
+            let Some((start, end)) = page_bounds(document, page) else { return Ok(false); };
+            let overlaps = |sentence: &crate::Sentence| sentence.start_utf16 < end && sentence.end_utf16 > start;
+            opened = if document.sentences.get(document.position).is_some_and(overlaps) {
+                Some(document.position)
+            } else {
+                document.sentences.iter().position(overlaps)
+            };
+            let Some(position) = opened else { return Ok(false); };
+            let retain_word = document.position == position && document.reading_token_utf16
+                .is_some_and(|offset| {
+                    let absolute = document.sentences[position].start_utf16 + offset;
+                    start <= absolute && absolute < end
+                });
+            let changed = document.position != position || (!retain_word && document.reading_token_utf16.is_some());
+            document.position = position;
+            if !retain_word {
+                document.reading_token_utf16 = None;
+            }
+            Ok(changed)
+        })?;
+        Ok(opened)
+    }
+}
+
+pub(crate) fn focus_for_offset(db: &Connection, document: &Document, offset: usize) -> Result<()> {
+    let page = if document.format != "pdf" {
+        None
+    } else if let Some(starts) = &document.pdf_page_starts {
+        starts.iter().enumerate().rev()
+            .find(|(_, start)| start.is_some_and(|start| start <= offset))
+            .and_then(|(page, _)| u16::try_from(page).ok())
+    } else {
+        document.blocks.iter().find(|block| block.start_utf16 <= offset && offset < block.end_utf16)
+            .and_then(|block| block.page.and_then(|page| u16::try_from(page).ok()))
+            .or_else(|| document.ocr_lines.iter().flatten()
+                .find(|line| line.source_span.is_some_and(|span| span.start_utf16 <= offset && offset < span.end_utf16))
+                .map(|line| line.page))
+    };
+    if let Some(page) = page.filter(|&page| contains_page(document, page)) {
+        set_page(db, document, page, false)?;
+    }
+    Ok(())
+}
+
+fn page_bounds(document: &Document, page: u16) -> Option<(usize, usize)> {
+    if let Some(starts) = &document.pdf_page_starts {
+        let index = usize::from(page);
+        let start = *starts.get(index)?.as_ref()?;
+        let end = starts[index + 1..].iter().flatten().copied().next()
+            .unwrap_or_else(|| document.text.encode_utf16().count());
+        return (start < end).then_some((start, end));
+    }
+    let mut blocks = document.blocks.iter().filter(|block| block.page == Some(usize::from(page)));
+    if let Some(first) = blocks.next() {
+        return Some((first.start_utf16, blocks.last().unwrap_or(first).end_utf16));
+    }
+    let mut spans = document.ocr_lines.iter().flatten()
+        .filter(|line| line.page == page).filter_map(|line| line.source_span);
+    let first = spans.next()?;
+    Some((first.start_utf16, spans.last().unwrap_or(first).end_utf16))
+}
+
+fn set_page(db: &Connection, document: &Document, page: u16, force_schedule: bool) -> Result<()> {
+    if !contains_page(document, page) {
+        return Err("Сторінку PDF не знайдено".into());
+    }
+    let changed = db.execute(
+        "INSERT INTO pdf_reading_positions (document_id,page) VALUES (?1,?2)
+         ON CONFLICT(document_id) DO UPDATE SET page=excluded.page
+         WHERE pdf_reading_positions.page<>excluded.page",
+        params![document.id, page],
+    ).map_err(database_error)?;
+    if force_schedule || changed != 0 {
+        pdf_page_ocr::schedule_window(db, document, page)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn export(db: &Connection) -> Result<BTreeMap<String, u16>> {

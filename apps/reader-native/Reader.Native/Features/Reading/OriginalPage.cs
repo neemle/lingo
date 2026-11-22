@@ -318,13 +318,17 @@ internal sealed class OriginalPage : ContentPage
         UpdateEditButtons();
         try
         {
-            await session.SelectSentenceAsync(position);
+            var opened = true;
+            if (document.CurrentRevisionId is { } revision)
+                opened = await session.OpenPdfReadingPageAsync(documentId, revision, pageIndex);
+            else
+                await session.SelectSentenceAsync(position);
             if (session.Error.Length > 0)
             {
                 status.Text = session.Error;
                 return;
             }
-            if (session.Document?.Id == documentId && session.Document.Position == position &&
+            if (opened && session.Document?.Id == documentId &&
                 Navigation.NavigationStack.LastOrDefault() == this)
                 await Navigation.PopAsync();
         }
