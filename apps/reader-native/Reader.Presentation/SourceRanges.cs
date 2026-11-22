@@ -18,16 +18,40 @@ public sealed class SourceRanges(string text)
         var spokenStarts = StringInfo.ParseCombiningCharacters(spoken);
         if (originalStarts.Length != spokenStarts.Length) return (spoken, null);
 
-        return (spoken, (start, length) =>
-        {
-            if (start < 0 || length <= 0 || start > spoken.Length - length) return;
-            var first = FloorIndex(spokenStarts, start);
-            var after = CeilingIndex(spokenStarts, start + length);
-            var originalStart = originalStarts[first];
-            var originalEnd = after < originalStarts.Length ? originalStarts[after] : source.Length;
-            boundary(originalStart, originalEnd - originalStart);
-        });
+        return (spoken, MapSpeechBoundary(source.Length, spoken.Length, originalStarts, spokenStarts, 0, boundary));
     }
+
+    public static (string Text, Action<int, int> Boundary) ProjectPronunciation(
+        string source, string spoken, int sourceOffset, Action<int, int> boundary)
+    {
+        if (spoken != source)
+        {
+            // The core only inserts accents. Each grapheme still corresponds to the same original grapheme.
+            var originalStarts = StringInfo.ParseCombiningCharacters(source);
+            var spokenStarts = StringInfo.ParseCombiningCharacters(spoken);
+            var first = Array.BinarySearch(originalStarts, sourceOffset);
+            if (first >= 0 && originalStarts.Length == spokenStarts.Length)
+            {
+                var from = spokenStarts[first];
+                return (spoken[from..],
+                    MapSpeechBoundary(source.Length, spoken.Length, originalStarts, spokenStarts, from, boundary));
+            }
+        }
+
+        return (source[sourceOffset..], (start, length) => boundary(sourceOffset + start, length));
+    }
+
+    private static Action<int, int> MapSpeechBoundary(int originalLength, int spokenLength,
+        int[] originalStarts, int[] spokenStarts, int spokenOffset, Action<int, int> boundary) =>
+        (start, length) =>
+        {
+            if (start < 0 || length <= 0 || start > spokenLength - spokenOffset - length) return;
+            var first = FloorIndex(spokenStarts, spokenOffset + start);
+            var after = CeilingIndex(spokenStarts, spokenOffset + start + length);
+            var originalStart = originalStarts[first];
+            var originalEnd = after < originalStarts.Length ? originalStarts[after] : originalLength;
+            boundary(originalStart, originalEnd - originalStart);
+        };
 
     public static TextSelection? Selection(string source, int start, int length) =>
         new SourceRanges(source).Selection(start, length);

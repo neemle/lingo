@@ -160,6 +160,8 @@ public sealed class CoreClient : IDisposable
         Call<DictionaryArchive>(new { version = 1, operation = "export_dictionary", documentId });
     public DictionaryImport ImportDictionary(DictionaryArchive archive) =>
         Call<DictionaryImport>(new { version = 1, operation = "import_dictionary", archive });
+    public string PrepareUkrainianSpeech(string text) =>
+        CallIndependent<string>(new { version = 1, operation = "prepare_ukrainian_speech", text });
     public SpeechAudio SynthesizeSpeech(string id, string sentenceId, uint speaker, float rate, string engine = "piper-uk") =>
         CallIndependent<SpeechAudio>(new { version = 1, operation = "synthesize_speech", id, sentenceId, engine, speaker, rate });
 

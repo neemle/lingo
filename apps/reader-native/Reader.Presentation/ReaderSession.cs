@@ -230,6 +230,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         client.ImportDictionary(archive);
         return Read();
     });
+    public Task<string> PrepareUkrainianSpeechAsync(string text) => Task.Run(() => client.PrepareUkrainianSpeech(text));
     public Task<SpeechAudio> SynthesizeSpeechAsync(string id, string sentenceId, uint speaker, float rate, string engine) =>
         Task.Run(() => client.SynthesizeSpeech(id, sentenceId, speaker, rate, engine));
 

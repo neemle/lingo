@@ -693,9 +693,12 @@ public partial class ReadingPage : ContentPage
             {
                 var fallbackReason = status != LocalSpeech.CompletedStatus ? status : null;
                 systemUsesSpeechOverride = hasSpeechOverride;
+                var pronounced = await PrepareSystemSpeechAsync(session, doc.Language, speechText);
+                if (request != speechRequest || activeSpeechSource is not { } active ||
+                    !IsSpeechSourceCurrent(session, active)) return;
                 status = hasSpeechOverride
-                    ? await speech.SpeakAsync(speechText, doc.Language)
-                    : await PlaySystemSentenceAsync(session, doc, sentence, startAt, textHash, request,
+                    ? await speech.SpeakAsync(pronounced, doc.Language)
+                    : await PlaySystemSentenceAsync(session, doc, sentence, pronounced, startAt, textHash, request,
                         () => receivedCue = true);
                 if (fallbackReason is not null && status is not null && status != LocalSpeech.CompletedStatus)
                     status = $"{fallbackReason} {status}";
@@ -748,20 +751,24 @@ public partial class ReadingPage : ContentPage
     }
 
     private Task<string?> PlaySystemSentenceAsync(ReaderSession session, Document document, Sentence sentence,
-        int startAt, string textHash, int request, Action receivedCue) =>
-        speech.SpeakAsync(sentence.Text[startAt..], document.Language, (start, length) => Dispatcher.Dispatch(() =>
-        {
-            if (request == speechRequest && utteranceActive && !speechPaused &&
-                session.Document?.Id == document.Id && session.Sentence?.Id == sentence.Id &&
-                session.Sentence?.Text == sentence.Text &&
-                HighlightSpokenWord(sentence, startAt + start, length) is int spokenOffset)
+        string pronounced, int startAt, string textHash, int request, Action receivedCue)
+    {
+        var input = SourceRanges.ProjectPronunciation(sentence.Text, pronounced, startAt, (start, length) =>
+            Dispatcher.Dispatch(() =>
             {
-                receivedCue();
-                pendingSpeechResume = (document.Id, new(sentence.Id, textHash, spokenOffset));
-                if (lastSpeechSave == 0 || Stopwatch.GetElapsedTime(lastSpeechSave) >= TimeSpan.FromSeconds(2))
-                    SaveSpeechResume();
-            }
-        }));
+                if (request == speechRequest && utteranceActive && !speechPaused &&
+                    session.Document?.Id == document.Id && session.Sentence?.Id == sentence.Id &&
+                    session.Sentence?.Text == sentence.Text &&
+                    HighlightSpokenWord(sentence, start, length) is int spokenOffset)
+                {
+                    receivedCue();
+                    pendingSpeechResume = (document.Id, new(sentence.Id, textHash, spokenOffset));
+                    if (lastSpeechSave == 0 || Stopwatch.GetElapsedTime(lastSpeechSave) >= TimeSpan.FromSeconds(2))
+                        SaveSpeechResume();
+                }
+            }));
+        return speech.SpeakAsync(input.Text, document.Language, input.Boundary);
+    }
 
     private int? HighlightSpokenWord(Sentence sentence, int start, int length)
     {
