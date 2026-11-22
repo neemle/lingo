@@ -1,15 +1,16 @@
 use crate::{
     backup_limits::{LimitedReader, LimitedWriter},
     dictionary_transfer, document_revisions, practice, reading_history, Backup, BackupResource,
-    Document, Original, Result, Snapshot, Store,
+    Document, Original, Result, Snapshot, SpeechResume, Store,
 };
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{
     ser::{Error as _, SerializeSeq},
     Serialize, Serializer,
 };
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs::{self, File},
     io::{BufReader, BufWriter, Write},
     path::Path,
@@ -40,6 +41,110 @@ fn validate_resources(resources: &[BackupResource]) -> Result<()> {
         return Err("Маніфест ресурсів резервної копії завеликий.".into());
     }
     Ok(())
+}
+
+/// A destination can already contain this source under a different document ID.
+pub(crate) fn merge_existing_document(
+    db: &Connection,
+    incoming: &Document,
+    speech_resume: Option<SpeechResume>,
+) -> Result<bool> {
+    let body: Option<String> = db
+        .query_row(
+            "SELECT body FROM documents WHERE source_hash=?1",
+            [&incoming.source_hash],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(archive_error)?;
+    let Some(body) = body else {
+        return Ok(false);
+    };
+    let mut local: Document = serde_json::from_str(&body).map_err(archive_error)?;
+    if local.language != incoming.language
+        || local.text != incoming.text
+        || local.sentences.len() != incoming.sentences.len()
+        || local
+            .sentences
+            .iter()
+            .zip(&incoming.sentences)
+            .any(|(local, incoming)| {
+                local.start_utf8 != incoming.start_utf8
+                    || local.end_utf8 != incoming.end_utf8
+                    || local.text != incoming.text
+            })
+    {
+        // A different OCR transcript or sentence segmentation can refer to different text.
+        return Ok(true);
+    }
+
+    let ids: HashMap<_, _> = incoming
+        .sentences
+        .iter()
+        .zip(&local.sentences)
+        .map(|(incoming, local)| (incoming.id.as_str(), local.id.as_str()))
+        .collect();
+    if !incoming.bookmarks.is_empty() {
+        local.bookmarks.extend(
+            incoming
+                .bookmarks
+                .iter()
+                .filter_map(|id| ids.get(id.as_str()).map(|id| (*id).to_owned())),
+        );
+        local.bookmarks.sort_unstable();
+        local.bookmarks.dedup();
+    }
+    merge_sentence_text(&mut local.notes, &incoming.notes, &ids);
+    merge_sentence_text(
+        &mut local.speech_text_overrides,
+        &incoming.speech_text_overrides,
+        &ids,
+    );
+    for (target, translations) in &incoming.reviewed_translations {
+        merge_sentence_text(
+            local
+                .reviewed_translations
+                .entry(target.clone())
+                .or_default(),
+            translations,
+            &ids,
+        );
+    }
+    if local.position == 0 {
+        local.position = incoming.position;
+    }
+    let speech_resume = speech_resume.and_then(|mut resume| {
+        resume.sentence_id = (*ids.get(resume.sentence_id.as_str())?).to_owned();
+        Some(resume)
+    });
+    if let Some(resume) = speech_resume.filter(|resume| local.matches_speech_resume(resume)) {
+        if !Store::read_speech_resume(db, &local.id)?
+            .is_some_and(|current| local.matches_speech_resume(&current))
+        {
+            Store::write_speech_resume(db, &local.id, &resume)?;
+        }
+    }
+    let body = serde_json::to_string(&local).map_err(archive_error)?;
+    db.execute(
+        "UPDATE documents SET body=?1 WHERE id=?2 AND body<>?1",
+        params![body, local.id],
+    )
+    .map_err(archive_error)?;
+    Ok(true)
+}
+
+fn merge_sentence_text(
+    local: &mut BTreeMap<String, String>,
+    incoming: &BTreeMap<String, String>,
+    sentence_ids: &HashMap<&str, &str>,
+) {
+    for (id, text) in incoming {
+        if let Some(&local_id) = sentence_ids.get(id.as_str()) {
+            local
+                .entry(local_id.to_owned())
+                .or_insert_with(|| text.clone());
+        }
+    }
 }
 
 struct StreamingOriginals<'a> {

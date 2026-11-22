@@ -1391,6 +1391,9 @@ impl Store {
         for (d, o, history) in validated {
             let mut d = d;
             let speech_resume = d.speech_resume.take();
+            if backup_files::merge_existing_document(&tx, &d, speech_resume.clone())? {
+                continue;
+            }
             let inserted = tx
                 .execute(
                     "INSERT OR IGNORE INTO documents VALUES (?1,?2,?3)",
