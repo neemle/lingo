@@ -1,3 +1,4 @@
+use crate::practice::{self, PracticeProgress};
 use crate::review_schedule::MAX_INTERVAL_DAYS;
 use crate::{valid_language, Document, Result, ReviewEvent, ReviewState, Store, Vocabulary};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
@@ -15,6 +16,8 @@ pub struct DictionaryArchive {
     pub entries: Vec<Vocabulary>,
     pub reviews: Vec<DictionaryReview>,
     pub sources: Vec<DictionarySource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub practice: Option<PracticeProgress>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +44,7 @@ pub struct DictionaryImport {
     pub added_cards: usize,
     pub existing_cards: usize,
     pub added_reviews: usize,
+    pub restored_practice: bool,
 }
 
 pub(crate) fn initialize(db: &Connection) -> Result<()> {
@@ -151,12 +155,18 @@ impl Store {
         let tx = self.connection.unchecked_transaction().map_err(error)?;
         let entries = self.dictionary_collection(document_id)?;
         let (sources, reviews) = export_details(&tx, &entries)?;
+        let practice = if document_id.is_none() {
+            practice::read(&tx)?.filter(|progress| progress.question.is_some())
+        } else {
+            None
+        };
         tx.commit().map_err(error)?;
         Ok(DictionaryArchive {
             version: VERSION,
             entries,
             reviews,
             sources,
+            practice,
         })
     }
 
@@ -365,6 +375,9 @@ fn restore_archive(
         discard_stale_memory(&mut local.reverse, before.reverse, added.reverse);
         write_card(tx, &local)?;
     }
+    if let Some(progress) = archive.practice {
+        stats.restored_practice = practice::restore_if_fresh(tx, progress, &card_ids)?;
+    }
     Ok((stats, card_ids))
 }
 
@@ -446,6 +459,7 @@ pub(crate) fn restore_backup_dictionary(
             entries,
             reviews,
             sources,
+            practice: None,
         },
     )?;
     Ok(ids)
@@ -723,6 +737,15 @@ fn validate_archive(archive: &DictionaryArchive) -> Result<()> {
             return Err("Некоректна картка в архіві словника".into());
         }
         entry.validate_annotations()?;
+    }
+    if let Some(progress) = &archive.practice {
+        let question = progress
+            .question
+            .as_ref()
+            .ok_or("В архіві немає запитання практики.")?;
+        if !cards.contains(question.card_id.as_str()) {
+            return Err("В архіві немає картки для практики.".into());
+        }
     }
     let mut sources = BTreeSet::new();
     for source in &archive.sources {

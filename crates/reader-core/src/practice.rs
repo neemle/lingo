@@ -225,10 +225,10 @@ pub(crate) fn restore_if_fresh(
     connection: &Connection,
     mut incoming: PracticeProgress,
     card_ids: &BTreeMap<String, String>,
-) -> Result<()> {
+) -> Result<bool> {
     incoming.validate()?;
     if read(connection)?.is_some() {
-        return Ok(());
+        return Ok(false);
     }
     if let Some(question) = &mut incoming.question {
         question.card_id = card_ids
@@ -239,7 +239,8 @@ pub(crate) fn restore_if_fresh(
     align_question(connection, &mut incoming)?;
     incoming.revision = 0;
     incoming.advance()?;
-    write(connection, &incoming)
+    write(connection, &incoming)?;
+    Ok(true)
 }
 
 #[cfg(test)]

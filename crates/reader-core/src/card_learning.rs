@@ -257,12 +257,56 @@ mod tests {
         assert_eq!(question.given_answer.as_deref(), Some("авокадо"));
 
         store.review(&lawyer.id, "forward", 2).unwrap();
+        let archive = store.export_dictionary(None).unwrap();
+        let json = serde_json::to_value(&archive).unwrap();
+        assert!(json.get("practice").is_some());
+        let filtered = store.export_dictionary(Some(&second.id)).unwrap();
+        let legacy_json = serde_json::to_value(filtered).unwrap();
+        assert!(legacy_json.get("practice").is_none());
         let mut standalone = Store::open(&root.path().join("standalone.db")).unwrap();
-        for _ in 0..2 {
+        assert!(
+            !standalone
+                .import_dictionary(serde_json::from_value(legacy_json).unwrap())
+                .unwrap()
+                .restored_practice
+        );
+        assert!(
             standalone
-                .import_dictionary(store.export_dictionary(None).unwrap())
-                .unwrap();
-        }
+                .import_dictionary(archive.clone())
+                .unwrap()
+                .restored_practice
+        );
+        assert!(
+            !standalone
+                .import_dictionary(archive.clone())
+                .unwrap()
+                .restored_practice
+        );
+        assert_eq!(
+            standalone.practice().unwrap().question.unwrap().card_id,
+            lawyer.id
+        );
+
+        let mut duplicate = Store::open(&root.path().join("duplicate.db")).unwrap();
+        let local_document = duplicate
+            .import("local.txt", b"Elle parle aux avocats.", "fr")
+            .unwrap();
+        let local_card = duplicate
+            .save_word(entry("lawyer", "адвокат", &local_document))
+            .unwrap();
+        assert_ne!(local_card.id, lawyer.id);
+        assert_ne!(local_document.id, second.id);
+        assert!(
+            duplicate
+                .import_dictionary(archive)
+                .unwrap()
+                .restored_practice
+        );
+        let resumed = duplicate.practice().unwrap();
+        assert_eq!(resumed.collection.unwrap().document_id, local_document.id);
+        let resumed = resumed.question.unwrap();
+        assert_eq!(resumed.card_id, local_card.id);
+        assert_eq!(resumed.given_answer.as_deref(), Some("авокадо"));
         let entries = standalone.dictionary_collection(None).unwrap();
         assert_eq!(entries.len(), 3);
         let lawyer = entries.iter().find(|card| card.id == lawyer.id).unwrap();
