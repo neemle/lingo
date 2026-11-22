@@ -58,10 +58,16 @@ jobs:
           app="$(find apps/reader-native/Reader.Native/bin/Release/net10.0-maccatalyst -type d -name '*.app' -print -quit)"
           executable="$(plutil -extract CFBundleExecutable raw -o - "$app/Contents/Info.plist")"
           bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist")"
-          component="$RUNNER_TEMP/Lingo.app"
+          payload="$RUNNER_TEMP/lingo-catalyst-payload"
+          components="$RUNNER_TEMP/lingo-catalyst-components.plist"
           package="$RUNNER_TEMP/lingo-catalyst.pkg"
-          ditto "$app" "$component"
-          pkgbuild --component "$component" --identifier "$bundle_id.pkg" --install-location /Applications "$package"
+          mkdir -p "$payload"
+          ditto "$app" "$payload/Lingo.app"
+          pkgbuild --analyze --root "$payload" "$components"
+          # Installer must install at /Applications even if Launch Services has indexed the build copy.
+          plutil -replace 0.BundleIsRelocatable -bool false "$components"
+          pkgbuild --root "$payload" --component-plist "$components" \
+            --identifier "$bundle_id.pkg" --install-location /Applications "$package"
           pkgutil --payload-files "$package" | awk -v entry="./Lingo.app/Contents/MacOS/$executable" \
             '$0 == entry { found = 1 } END { exit !found }'
           sudo installer -pkg "$package" -target /
