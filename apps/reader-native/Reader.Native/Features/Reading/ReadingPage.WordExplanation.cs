@@ -10,13 +10,15 @@ public partial class ReadingPage
     private async void ExplainWordClicked(object? sender, EventArgs args)
     {
         var session = AppState.Session;
-        if (explainingWord || selection is not { } word || session.Document is not { } document) return;
+        if (explainingWord || selection is not { } word ||
+            session.Document is not { CurrentRevisionId: { } revision } document) return;
         var sentence = Array.Find(document.Sentences,
             item => word.StartUtf16 >= item.StartUtf16 && word.StartUtf16 < item.EndUtf16);
         if (sentence is null) return;
 
         bool CurrentSelection() => selection == word && session.Document is { } current &&
-            current.Id == document.Id && current.Language == document.Language && WordCard.IsVisible;
+            current.Id == document.Id && current.Language == document.Language &&
+            current.CurrentRevisionId == revision && WordCard.IsVisible;
 
         explainingWord = true;
         ExplainWord.IsEnabled = false;
@@ -27,7 +29,8 @@ public partial class ReadingPage
             if (!CurrentSelection()) return;
             foreach (var model in models)
             {
-                var saved = await session.ExplainWordAsync(model.Id, document.Id, sentence.Id, word.Text, cachedOnly: true);
+                var saved = await session.ExplainWordAsync(model.Id, document.Id, sentence.Id, word.Text,
+                    cachedOnly: true, startUtf16: word.StartUtf16, revisionId: revision);
                 if (!CurrentSelection()) return;
                 if (saved is not null)
                 {
@@ -56,7 +59,8 @@ public partial class ReadingPage
             if (selected is null || !CurrentSelection()) return;
             WordExplanationText.IsVisible = true;
             WordExplanationText.Text = $"{selected.Name} готує пояснення…";
-            var explanation = await session.ExplainWordAsync(selected.Id, document.Id, sentence.Id, word.Text);
+            var explanation = await session.ExplainWordAsync(selected.Id, document.Id, sentence.Id, word.Text,
+                startUtf16: word.StartUtf16, revisionId: revision);
             if (CurrentSelection() && explanation is not null) ShowExplanation(selected.Name, explanation);
         }
         catch (Exception error)

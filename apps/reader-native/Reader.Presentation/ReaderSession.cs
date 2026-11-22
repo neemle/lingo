@@ -400,8 +400,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         object? focus = null, string? revisionId = null, bool cachedOnly = false) =>
         Task.Run(() => client.ReviewSentence(model, document, page, sentence, focus, revisionId, cachedOnly));
 
-    public Task<WordExplanation?> ExplainWordAsync(string model, string document, string sentence, string word, bool cachedOnly = false) =>
-        Task.Run(() => client.ExplainWord(model, document, sentence, word, cachedOnly));
+    public Task<WordExplanation?> ExplainWordAsync(string model, string document, string sentence, string word,
+        bool cachedOnly = false, int? startUtf16 = null, string? revisionId = null) =>
+        Task.Run(() => client.ExplainWord(model, document, sentence, word, cachedOnly, startUtf16, revisionId));
 
     public Task<WordExplanation?> ExplainDetachedWordAsync(string model, string document, int page,
         TextSelection selection, string? revisionId = null, bool cachedOnly = false) =>

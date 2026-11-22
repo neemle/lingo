@@ -203,21 +203,12 @@ fn validate(command: &Command) -> Result<()> {
         {
             Err(Error::new("invalid_argument", "Invalid local sentence review request"))
         }
-        Command::ExplainWord {
-            model,
-            document,
-            sentence,
-            word,
-            ..
-        } if model.len() > 32
-            || document.len() > 128
-            || sentence.len() > 128
-            || word.len() > 320 =>
+        Command::ExplainWord { model, document, sentence, word, start_utf16, revision_id, .. }
+            if model.len() > 32 || document.len() > 128 || sentence.len() > 128 || word.len() > 320
+                || start_utf16.is_some() != revision_id.is_some()
+                || revision_id.as_ref().is_some_and(|id| id.len() != 64 || !id.bytes().all(|byte| byte.is_ascii_hexdigit())) =>
         {
-            Err(Error::new(
-                "invalid_argument",
-                "Word explanation fields exceed their wire bounds",
-            ))
+            Err(Error::new("invalid_argument", "Invalid word explanation address"))
         }
         Command::ExplainDetachedWord { model, document, word, revision_id, .. }
             if model.len() > 32 || !valid_token_address(document, "selection") || word.len() > 320

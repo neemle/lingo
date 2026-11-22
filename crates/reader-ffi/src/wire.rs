@@ -352,6 +352,10 @@ pub enum Command {
         document: String,
         sentence: String,
         word: String,
+        #[serde(rename = "startUtf16")]
+        start_utf16: Option<usize>,
+        #[serde(rename = "revisionId")]
+        revision_id: Option<String>,
         #[serde(default, rename = "cachedOnly")]
         cached_only: bool,
     },

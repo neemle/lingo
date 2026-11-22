@@ -159,7 +159,7 @@ impl Store {
             DetachedPageAnalysis::Sentence { sentence_id, start } =>
                 (sentence_at(&sentence_id)?, AnalysisScope::Sentence { start }),
             DetachedPageAnalysis::Selection { start_utf16, text } =>
-                detached_selection(&cached.sentences, start_utf16, &text)?,
+                resolve_text_selection(&cached.sentences, start_utf16, &text)?,
             DetachedPageAnalysis::Expression { sentence_id, revision_id, member_starts_utf16 } => {
                 if cached.revision != revision_id {
                     return Err("Текст сторінки PDF змінився. Виберіть вираз знову.".into());
@@ -180,7 +180,7 @@ impl Store {
     ) -> Result<Option<WordLookup>> {
         let cached = self.detached_pdf_sentences(document_id, page)?
             .ok_or("Текст сторінки PDF недоступний.")?;
-        let (sentence, scope) = detached_selection(&cached.sentences, start_utf16, selected)?;
+        let (sentence, scope) = resolve_text_selection(&cached.sentences, start_utf16, selected)?;
         let (word, offset) = match scope {
             AnalysisScope::Word { start_utf16 } => {
                 let (_, _, word) = word_parts(&sentence.text).find(|(_, offset, _)| *offset == start_utf16)
@@ -207,7 +207,7 @@ impl Store {
     ) -> Result<crate::Vocabulary> {
         let cached = self.detached_pdf_sentences(document_id, page)?
             .ok_or("Текст сторінки PDF недоступний.")?;
-        let (sentence, _) = detached_selection(&cached.sentences, input.start_utf16, &input.selected_text)?;
+        let (sentence, _) = resolve_text_selection(&cached.sentences, input.start_utf16, &input.selected_text)?;
         self.save_word_for_document(crate::Vocabulary {
             id: String::new(),
             word: input.selected_text,
@@ -414,7 +414,7 @@ impl Store {
     }
 }
 
-pub(crate) fn detached_selection<'a>(
+pub(crate) fn resolve_text_selection<'a>(
     sentences: &'a [Sentence], start_utf16: usize, selected: &str,
 ) -> Result<(&'a Sentence, AnalysisScope)> {
     const MAX_SELECTION_BYTES: usize = 4096;
@@ -424,10 +424,10 @@ pub(crate) fn detached_selection<'a>(
     let left_trimmed = selected.trim_start();
     let prefix = selected.len() - left_trimmed.len();
     let start_utf16 = start_utf16.checked_add(selected[..prefix].encode_utf16().count())
-        .ok_or("Виділення сторінки PDF завелике.")?;
+        .ok_or("Виділення завелике.")?;
     let selected = left_trimmed.trim_end();
     let end_utf16 = start_utf16.checked_add(selected.encode_utf16().count())
-        .ok_or("Виділення сторінки PDF завелике.")?;
+        .ok_or("Виділення завелике.")?;
     let sentence = sentences.iter().find(|sentence| {
         sentence.start_utf16 <= start_utf16 && sentence.end_utf16 >= end_utf16
     }).ok_or("Виділення має бути в межах одного речення.")?;
@@ -437,10 +437,10 @@ pub(crate) fn detached_selection<'a>(
         crate::ocr::byte_at_utf16(&sentence.text, start),
         crate::ocr::byte_at_utf16(&sentence.text, end),
     ) else {
-        return Err("Некоректна позиція виділення PDF.".into());
+        return Err("Некоректна позиція виділення.".into());
     };
     if sentence.text.get(first..last) != Some(selected) {
-        return Err("Текст виділення на сторінці PDF змінився.".into());
+        return Err("Виділений текст змінився.".into());
     }
     let members: Vec<_> = word_parts(&sentence.text)
         .take_while(|(_, offset, _)| *offset < end)

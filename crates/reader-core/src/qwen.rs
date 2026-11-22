@@ -1,5 +1,5 @@
 use crate::{
-    knowledge::{annotation_cache, detached_selection, select_words, AnalysisScope},
+    knowledge::{annotation_cache, resolve_text_selection, select_words, AnalysisScope},
     optional_models::OptionalModelJob,
     Document, Result, Sentence, Store,
 };
@@ -263,7 +263,7 @@ impl Store {
         };
         let (sentence, scope) = match focus {
             Some(ReviewFocus::Selection { start_utf16, text }) => {
-                let (sentence, scope) = detached_selection(&sentences, *start_utf16, text)?;
+                let (sentence, scope) = resolve_text_selection(&sentences, *start_utf16, text)?;
                 if sentence_id.is_some_and(|id| sentence.id != id) {
                     return Err("Виділення вже не належить вибраному реченню.".into());
                 }
@@ -358,26 +358,54 @@ impl Store {
             .find(word)
             .ok_or("Виділеного слова немає в реченні.")?;
         let (context, _) = word_context(&sentence.text, word, start);
-        let example = WordExample {
-            language: &document.language,
-            word,
-            sentence: context,
-            offset: None,
-        };
-        let example = serde_json::to_string(&example).map_err(|error| error.to_string())?;
-        let work = self.prepare_hint_work(
+        self.prepare_word_example(
             model,
             document_id,
-            "qwen-word-explanation-v1",
-            SYSTEM,
-            example,
+            WordExample {
+                language: &document.language,
+                word,
+                sentence: context,
+                offset: None,
+            },
             cached_only,
-        )?;
-        Ok(ExplainWordJob {
-            work,
-            word: word.to_owned(),
-            system: SYSTEM,
-        })
+        )
+    }
+
+    pub fn prepare_positioned_word_explanation(
+        &self,
+        model: &str,
+        document_id: &str,
+        sentence_id: &str,
+        start_utf16: usize,
+        word: &str,
+        revision: &str,
+        cached_only: bool,
+    ) -> Result<ExplainWordJob> {
+        validate_word_request(model, word)?;
+        let document = self.token_document(document_id)?;
+        if document.current_revision_id.as_deref() != Some(revision) {
+            return Err("Текст змінився. Виберіть фрагмент знову.".into());
+        }
+        let (sentence, selected, start) = selected_word(&document.sentences, start_utf16, word)?;
+        if sentence.id != sentence_id {
+            return Err("Виділення вже не належить вибраному реченню.".into());
+        }
+        let (context, offset) = word_context(&sentence.text, selected, start);
+        // A legacy result remains valid if the text identifies only one occurrence.
+        let unique = sentence.text.find(selected) == Some(start)
+            && !sentence.text[start + selected.chars().next().map_or(0, char::len_utf8)..]
+                .contains(selected);
+        self.prepare_word_example(
+            model,
+            document_id,
+            WordExample {
+                language: &document.language,
+                word: selected,
+                sentence: context,
+                offset: (!unique).then_some(offset),
+            },
+            cached_only,
+        )
     }
 
     pub fn prepare_detached_word_explanation(
@@ -397,35 +425,55 @@ impl Store {
         if revision.is_some_and(|expected| expected != cached.revision) {
             return Err("Текст сторінки PDF змінився. Виберіть фрагмент знову.".into());
         }
-        let (sentence, _) = detached_selection(&cached.sentences, start_utf16, word)?;
-        let selected = word.trim();
-        let leading = word.len() - word.trim_start().len();
-        let offset_utf16 =
-            start_utf16 + word[..leading].encode_utf16().count() - sentence.start_utf16;
-        let start = crate::ocr::byte_at_utf16(&sentence.text, offset_utf16)
-            .ok_or("Некоректна позиція виділення PDF.")?;
+        let (sentence, selected, start) = selected_word(&cached.sentences, start_utf16, word)?;
         let (context, offset) = word_context(&sentence.text, selected, start);
-        let example = serde_json::to_string(&WordExample {
-            language: &cached.language,
-            word: selected,
-            sentence: context,
-            offset: Some(offset),
-        })
-        .map_err(|error| error.to_string())?;
-        let work = self.prepare_hint_work(
+        self.prepare_word_example(
             model,
             document,
-            "qwen-selected-word-v1",
-            SELECTED_WORD_SYSTEM,
-            example,
+            WordExample {
+                language: &cached.language,
+                word: selected,
+                sentence: context,
+                offset: Some(offset),
+            },
             cached_only,
-        )?;
-        Ok(ExplainWordJob {
-            work,
-            word: selected.to_owned(),
-            system: SELECTED_WORD_SYSTEM,
-        })
+        )
     }
+
+    fn prepare_word_example(
+        &self,
+        model: &str,
+        document: &str,
+        example: WordExample<'_>,
+        cached_only: bool,
+    ) -> Result<ExplainWordJob> {
+        let (version, system) = if example.offset.is_some() {
+            ("qwen-selected-word-v1", SELECTED_WORD_SYSTEM)
+        } else {
+            ("qwen-word-explanation-v1", SYSTEM)
+        };
+        let word = example.word.to_owned();
+        let example = serde_json::to_string(&example).map_err(|error| error.to_string())?;
+        let work =
+            self.prepare_hint_work(model, document, version, system, example, cached_only)?;
+        Ok(ExplainWordJob { work, word, system })
+    }
+}
+
+fn selected_word<'a, 'b>(
+    sentences: &'a [Sentence],
+    start_utf16: usize,
+    word: &'b str,
+) -> Result<(&'a Sentence, &'b str, usize)> {
+    let (sentence, _) = resolve_text_selection(sentences, start_utf16, word)?;
+    let left_trimmed = word.trim_start();
+    let leading = word[..word.len() - left_trimmed.len()]
+        .encode_utf16()
+        .count();
+    let offset = start_utf16 + leading - sentence.start_utf16;
+    let start =
+        crate::ocr::byte_at_utf16(&sentence.text, offset).ok_or("Некоректна позиція виділення.")?;
+    Ok((sentence, left_trimmed.trim_end(), start))
 }
 
 fn validate_word_request(model: &str, word: &str) -> Result<()> {

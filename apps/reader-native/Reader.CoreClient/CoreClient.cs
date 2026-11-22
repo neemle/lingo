@@ -308,8 +308,13 @@ public sealed class CoreClient : IDisposable
             version = 1, operation = "review_sentence", model, document, page, sentence, focus, revisionId, cachedOnly,
         });
 
-    public WordExplanation? ExplainWord(string model, string document, string sentence, string word, bool cachedOnly = false) =>
-        CallIndependent<WordExplanation?>(new { version = 1, operation = "explain_word", model, document, sentence, word, cachedOnly });
+    public WordExplanation? ExplainWord(string model, string document, string sentence, string word,
+        bool cachedOnly = false, int? startUtf16 = null, string? revisionId = null) =>
+        CallIndependent<WordExplanation?>(new
+        {
+            version = 1, operation = "explain_word", model, document, sentence, word,
+            startUtf16, revisionId, cachedOnly
+        });
 
     public WordExplanation? ExplainDetachedWord(string model, string document, int page, int startUtf16,
         string word, string? revisionId = null, bool cachedOnly = false) =>

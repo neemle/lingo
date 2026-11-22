@@ -255,16 +255,18 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             return encode_job(job.run());
         }
         Command::ExplainWord {
-            model,
-            document,
-            sentence,
-            word,
-            cached_only,
+            model, document, sentence, word, start_utf16, revision_id, cached_only,
         } => {
-            let job = registry::lock()?
-                .store(handle)?
-                .prepare_word_explanation(model, document, sentence, word, *cached_only)
-                .map_err(gateway::domain)?;
+            let state = registry::lock()?;
+            let store = state.store(handle)?;
+            let job = if let Some((start, revision)) = start_utf16.zip(revision_id.as_deref()) {
+                store.prepare_positioned_word_explanation(
+                    model, document, sentence, start, word, revision, *cached_only,
+                )
+            } else {
+                store.prepare_word_explanation(model, document, sentence, word, *cached_only)
+            }.map_err(gateway::domain)?;
+            drop(state);
             return encode_job(job.run());
         }
         Command::ExplainDetachedWord {
