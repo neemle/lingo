@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 mod application;
+pub(crate) mod archive;
 mod document_importer;
 mod persistence;
 
@@ -57,7 +58,7 @@ pub struct ArticleDraft {
     pub source_url: String,
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum IntakeKind {
     Text, Link, Txt, Docx, Photo, Pdf, TextPdf, ScannedPdf, MixedPdf,

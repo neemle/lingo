@@ -6,7 +6,7 @@ use crate::{
     backup_limits::{LimitedReader, LimitedWriter},
     document_layout,
     document_revisions::DocumentRevision,
-    file_originals, pdf_detached_pages, pdf_layers, pdf_page_ocr, Backup, BackupInspection, BackupResource, Document,
+    file_originals, intake::archive as intake_archive, pdf_detached_pages, pdf_layers, pdf_page_ocr, Backup, BackupInspection, BackupResource, Document,
     Original,
     Result, Store, MAX_IMPORT,
 };
@@ -32,6 +32,7 @@ mod model_hint_archive;
 const VERSION: u32 = 2;
 const PAGE_CACHE_VERSION: u32 = 3;
 const MODEL_HINT_VERSION: u32 = 4;
+const INTAKE_VERSION: u32 = 5;
 const MANIFEST: &str = "manifest.json";
 const MAX_DOCUMENTS: usize = 32_768;
 const MAX_ARCHIVE_ENTRIES: usize = u16::MAX as usize - 1;
@@ -58,6 +59,7 @@ fn entry_name(index: usize) -> String {
 }
 
 pub(crate) fn write(store: &Store, output: &mut File) -> Result<()> {
+    let _intake = store.lock_intake()?;
     let tx = store
         .connection
         .unchecked_transaction()
@@ -122,7 +124,18 @@ pub(crate) fn write(store: &Store, output: &mut File) -> Result<()> {
         backup.model_hints = Some(model_hint_archive::write(&tx, &mut zip)?);
         backup.version = MODEL_HINT_VERSION;
     }
+    backup.pending_intake = intake_archive::pending_ids(
+        &tx, MAX_ARCHIVE_ENTRIES.saturating_sub(archive_entry_count(&backup)),
+    )?;
+    if !backup.pending_intake.is_empty() {
+        backup.version = INTAKE_VERSION;
+    }
     validate_manifest(&backup)?;
+    for id in &backup.pending_intake {
+        zip.start_file(intake_archive::entry_name(id), stored.large_file(true))
+            .map_err(archive_error)?;
+        intake_archive::write(store, &tx, id, &mut zip)?;
+    }
     zip.start_file(MANIFEST, stored).map_err(archive_error)?;
     serde_json::to_writer(LimitedWriter::new(&mut zip, MAX_BACKUP_FILE_BYTES), &backup)
         .map_err(archive_error)?;
@@ -163,17 +176,22 @@ pub(crate) fn write(store: &Store, output: &mut File) -> Result<()> {
 pub(crate) fn inspect(file: File) -> Result<BackupInspection> {
     let (mut zip, backup) = open(file)?;
     validate_entries(&mut zip, &backup, None)?;
+    for id in &backup.pending_intake {
+        let entry = checked_entry(&mut zip, &intake_archive::entry_name(id))?;
+        intake_archive::inspect(entry.size(), entry)?;
+    }
     Ok(inspection(&backup))
 }
 
 pub(crate) fn restore(store: &mut Store, file: File) -> Result<Vec<BackupResource>> {
     let (mut zip, backup) = open(file)?;
+    let _intake = (!backup.pending_intake.is_empty()).then(|| store.lock_intake()).transpose()?;
     let root = &store.file_original_directory;
     let documents = validate_entries(&mut zip, &backup, Some(root))?;
     let resources = backup.resources.clone();
 
     // The SQLite write transaction is dropped before this guard on every failure.
-    let mut published = PublishedOriginals::default();
+    let mut published = PublishedFiles::default();
     let tx = store
         .connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -220,6 +238,12 @@ pub(crate) fn restore(store: &mut Store, file: File) -> Result<Vec<BackupResourc
         }
     }
     restore_model_hints(&mut zip, &tx, &backup)?;
+    for id in &backup.pending_intake {
+        let entry = checked_entry(&mut zip, &intake_archive::entry_name(id))?;
+        if let Some(path) = intake_archive::restore(&tx, root, id, entry.size(), entry)? {
+            published.paths.push(path);
+        }
+    }
     restore_library_data(&tx, backup)?;
     if !published.paths.is_empty() {
         file_originals::sync_directory(root)?;
@@ -291,11 +315,11 @@ fn restore_detached_cache(
 }
 
 #[derive(Default)]
-struct PublishedOriginals {
+struct PublishedFiles {
     paths: Vec<PathBuf>,
 }
 
-impl Drop for PublishedOriginals {
+impl Drop for PublishedFiles {
     fn drop(&mut self) {
         for path in &self.paths {
             let _ = fs::remove_file(path);
@@ -340,20 +364,26 @@ fn archive_entry_count(backup: &Manifest) -> usize {
     1 + backup.originals.len()
         + backup.originals.iter().filter(|entry| entry.detached_cache.is_some()).count()
         + usize::from(backup.model_hints.is_some())
+        + backup.pending_intake.len()
 }
 
 fn validate_manifest(backup: &Manifest) -> Result<()> {
-    if !matches!(backup.version, VERSION | PAGE_CACHE_VERSION | MODEL_HINT_VERSION) {
+    if !matches!(backup.version, VERSION | PAGE_CACHE_VERSION | MODEL_HINT_VERSION | INTAKE_VERSION) {
         return Err("Невідома версія резервної копії.".into());
     }
     if archive_entry_count(backup) > MAX_ARCHIVE_ENTRIES {
         return Err("У резервній копії забагато записів.".into());
     }
-    if (backup.version == MODEL_HINT_VERSION) != backup.model_hints.is_some()
+    if (backup.version == MODEL_HINT_VERSION && backup.model_hints.is_none())
+        || (backup.version < MODEL_HINT_VERSION && backup.model_hints.is_some())
         || backup.model_hints.as_ref().is_some_and(|metadata| !metadata.valid())
     {
         return Err("Некоректний опис архіву збережених підказок.".into());
     }
+    if (backup.version == INTAKE_VERSION) == backup.pending_intake.is_empty() {
+        return Err("Некоректний опис черги імпорту в резервній копії.".into());
+    }
+    intake_archive::validate_ids(&backup.pending_intake)?;
     crate::translation::validate_cache(&backup.translation_cache, &backup.snapshot.documents)?;
     validate_resources(&backup.resources)?;
     backup.reader_preferences.validate()?;

@@ -153,7 +153,7 @@ pub(super) fn validate_input(input: IntakeInput) -> Result<ValidatedInput> {
     Ok(ValidatedInput { name, kind, asset })
 }
 
-fn classify_file(name: &str, bytes: &[u8]) -> Result<IntakeKind> {
+pub(super) fn classify_file(name: &str, bytes: &[u8]) -> Result<IntakeKind> {
     let extension = extension(name).to_ascii_lowercase();
     match extension.as_str() {
         "pdf" if bytes.starts_with(b"%PDF-") => Ok(IntakeKind::Pdf),
@@ -168,7 +168,7 @@ fn extension(name: &str) -> &str {
     Path::new(name).extension().and_then(|value| value.to_str()).unwrap_or_default()
 }
 
-fn validate_article_url(url: &str) -> Result<()> {
+pub(super) fn validate_article_url(url: &str) -> Result<()> {
     let authority = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))
         .and_then(|rest| rest.split(['/', '?', '#']).next());
     if url.len() > 4096 || url.chars().any(|c| c.is_whitespace() || c.is_control() || c == '\\')
@@ -190,7 +190,7 @@ fn text_bytes(text: String) -> Result<Vec<u8>> {
     Ok(text.into_bytes())
 }
 
-fn validate_text(text: &str) -> Result<()> {
+pub(super) fn validate_text(text: &str) -> Result<()> {
     if text.trim().is_empty() || text.len() > MAX_IMPORT {
         return Err("Потрібне непорожнє текстове джерело до 20 МіБ.".into());
     }
@@ -202,7 +202,7 @@ fn text_name(name: &str) -> Result<String> {
     Ok(if name.to_ascii_lowercase().ends_with(".txt") { name.to_owned() } else { format!("{name}.txt") })
 }
 
-fn safe_name(name: &str, limit: usize) -> Result<&str> {
+pub(super) fn safe_name(name: &str, limit: usize) -> Result<&str> {
     Path::new(name).file_name().and_then(|name| name.to_str())
         .filter(|name| name.len() <= limit && !name.trim().is_empty() && !name.chars().any(char::is_control))
         .ok_or_else(|| "Некоректна назва вхідного матеріалу.".into())

@@ -113,6 +113,7 @@ impl Store {
     pub fn insert_intake(&mut self, prepared: PreparedIntake, request_id: Option<&str>) -> Result<IntakeItem> {
         let id = request_id.map(Uuid::parse_str).transpose().map_err(intake_error)?
             .unwrap_or_else(Uuid::new_v4);
+        let _guard = self.lock_intake()?;
         let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(intake_error)?;
         if request_id.is_some() {
@@ -126,9 +127,7 @@ impl Store {
             params![id.to_string(), serialized, prepared.payload],
         ).map_err(intake_error)?;
         if let Some(file) = prepared.file {
-            file_originals::verify_root(&self.file_original_directory)?;
-            let path = pdf_path(&self.file_original_directory, id);
-            file.persist_noclobber(&path).map_err(intake_error)?;
+            let path = publish_pdf(&self.file_original_directory, id, file)?;
             if let Err(error) = file_originals::sync_directory(&self.file_original_directory)
                 .and_then(|_| tx.commit().map_err(intake_error))
             {
@@ -186,14 +185,7 @@ impl Store {
     }
 
     pub fn save_intake_pdf_text(&mut self, id: &str, draft: PdfTextDraft) -> Result<String> {
-        file_originals::validate_pdf_page_text(&draft.page_texts)?;
-        if let Some(from) = draft.deferred_from {
-            file_originals::validate_deferred_text_layers(&draft.page_texts, from)?;
-        }
-        let sample = draft.page_texts.iter().map(|page| page.trim())
-            .filter(|page| !page.is_empty()).take(4)
-            .map(|page| page.chars().take(2000).collect::<String>())
-            .collect::<Vec<_>>().join("\n");
+        let sample = validate_pdf_draft(&draft)?;
         let body = serde_json::to_vec(&draft).map_err(intake_error)?;
         let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(intake_error)?;
@@ -258,7 +250,7 @@ impl Store {
         Ok(removed != 0)
     }
 
-    pub(super) fn lock_intake(&self) -> Result<Option<fs::File>> {
+    pub(crate) fn lock_intake(&self) -> Result<Option<fs::File>> {
         if self.connection.path().is_none_or(str::is_empty) {
             return Ok(None);
         }
@@ -276,7 +268,7 @@ impl Store {
         Ok((IntakeItem::new(id.to_owned(), metadata, document), payload))
     }
 
-    fn intake_pdf_path(&self, id: &str, size: u64) -> Result<PathBuf> {
+    pub(super) fn intake_pdf_path(&self, id: &str, size: u64) -> Result<PathBuf> {
         file_originals::verify_root(&self.file_original_directory)?;
         let path = pdf_path(&self.file_original_directory, Uuid::parse_str(id).map_err(intake_error)?);
         let metadata = path.symlink_metadata().map_err(intake_error)?;
@@ -299,6 +291,17 @@ fn load_article(db: &Connection, id: &str) -> Result<Option<ArticleDraft>> {
         "SELECT payload FROM intake WHERE id=?1", [id], |row| row.get(0),
     ).optional().map_err(intake_error)?.flatten();
     decode_article(body.as_deref())
+}
+
+pub(super) fn validate_pdf_draft(draft: &PdfTextDraft) -> Result<String> {
+    file_originals::validate_pdf_page_text(&draft.page_texts)?;
+    if let Some(from) = draft.deferred_from {
+        file_originals::validate_deferred_text_layers(&draft.page_texts, from)?;
+    }
+    Ok(draft.page_texts.iter().map(|page| page.trim())
+        .filter(|page| !page.is_empty()).take(4)
+        .map(|page| page.chars().take(2000).collect::<String>())
+        .collect::<Vec<_>>().join("\n"))
 }
 
 fn pdf_text_sample(db: &Connection, id: &str) -> Result<Option<String>> {
@@ -390,6 +393,15 @@ impl IntakeRepository for Store {
         }
         Ok(())
     }
+}
+
+// Call after inserting a new UUID in the SQLite write transaction. Any file
+// already at this path is an orphan from an interrupted publication.
+pub(super) fn publish_pdf(root: &Path, id: Uuid, file: NamedTempFile) -> Result<PathBuf> {
+    file_originals::verify_root(root)?;
+    let path = pdf_path(root, id);
+    file.persist(&path).map_err(intake_error)?;
+    Ok(path)
 }
 
 fn pdf_path(root: &Path, id: Uuid) -> PathBuf {

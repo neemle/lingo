@@ -362,6 +362,8 @@ pub struct Backup<Originals = Vec<Original>> {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_hints: Option<BackupHintManifest>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_intake: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub translation_cache: Vec<translation::TranslationCacheEntry>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]

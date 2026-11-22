@@ -244,6 +244,7 @@ pub(crate) fn assemble<O>(
         pdf_reading_positions: pdf_reading_position::export(tx)?,
         reader_preferences: crate::reader_preferences::read(tx)?,
         model_hints: None,
+        pending_intake: Vec::new(),
         translation_cache: Vec::new(),
     })
 }
@@ -333,6 +334,7 @@ pub struct BackupInspection {
     pub reviews: usize,
     pub reading_sessions: usize,
     pub resources: usize,
+    pub pending_intake: usize,
     pub has_practice: bool,
 }
 
@@ -357,6 +359,7 @@ pub(crate) fn inspection<O>(backup: &Backup<O>) -> BackupInspection {
         reviews: backup.reviews.len(),
         reading_sessions: backup.reading_sessions.len(),
         resources: backup.resources.len(),
+        pending_intake: backup.pending_intake.len(),
         has_practice: backup
             .practice
             .as_ref()
