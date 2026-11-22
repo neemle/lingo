@@ -48,7 +48,11 @@
     </Picker>
    </FlexLayout>
 
-   <Border Padding="30,40" Stroke="{StaticResource BorderTone}" BackgroundColor="{StaticResource Panel}"
+   <Picker x:Name="CollectionPicker" Title="Добірка для практики" SelectedIndexChanged="CollectionChanged"
+    IsEnabled="False" MaximumWidthRequest="420" HorizontalOptions="Start"
+    SemanticProperties.Description="Добірка для практики" />
+
+   <Border x:Name="QuestionPanel" Padding="30,40" Stroke="{StaticResource BorderTone}" BackgroundColor="{StaticResource Panel}"
     StrokeShape="RoundRectangle 13" MinimumHeightRequest="400" MaximumWidthRequest="760" HorizontalOptions="Fill">
     <VerticalStackLayout Spacing="18" VerticalOptions="Center">
      <Label x:Name="QueueStatus" TextColor="{StaticResource Muted}" FontSize="12" CharacterSpacing="0.7"

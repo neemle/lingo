@@ -1,12 +1,20 @@
 using Reader.Contracts;
 using Reader.Native.Services;
 using Reader.Presentation;
+using VocabularyCard = Reader.Contracts.Vocabulary;
 
 namespace Reader.Native.Features.Practice;
 
 public partial class PracticePage : ContentPage
 {
+    private sealed record CollectionChoice(PracticeCollection? Scope, string Title);
+
+    private static readonly CollectionChoice AllCards = new(null, "Усі картки");
+    private CollectionChoice[] collections = [AllCards];
+    private VocabularyCard[] vocabulary = [];
     private PracticeProgress? progress;
+    private int loadVersion;
+    private bool loading;
     private bool renderingSettings;
     private bool grading;
     private bool visible;
@@ -19,32 +27,141 @@ public partial class PracticePage : ContentPage
         visible = true;
         BindingContext = AppState.Session;
         if (grading) return;
-        await AppState.Session.RefreshAsync();
-        if (visible) Reload();
+        await LoadAsync(refreshLibrary: true);
     }
 
     protected override void OnDisappearing()
     {
         visible = false;
+        loadVersion++;
+        loading = false;
         base.OnDisappearing();
     }
 
-    private void Reload()
+    private async Task LoadAsync(bool refreshLibrary = false, CollectionChoice? selected = null)
     {
-        try { OpenQuestion(AppState.Session.GetPractice()); }
-        catch (Exception error) { QueueStatus.Text = error.Message; }
+        var request = ++loadVersion;
+        var session = AppState.Session;
+        loading = true;
+        UpdateControls();
+        QueueStatus.Text = "Завантажуємо картки…";
+        try
+        {
+            if (refreshLibrary)
+            {
+                await session.RefreshAsync();
+                if (request != loadVersion) return;
+                var sources = await session.DictionarySourcesAsync();
+                if (request != loadVersion) return;
+                SetCollections(sources);
+            }
+
+            var state = session.GetPractice();
+            var scope = selected is null ? state.Collection : selected.Scope;
+            var collection = collections.FirstOrDefault(choice => SameCollection(choice.Scope, scope))?.Scope ?? scope;
+            var cards = collection is null ? session.Snapshot.Vocabulary
+                : await session.DictionaryCollectionAsync(collection.DocumentId);
+            if (request != loadVersion) return;
+
+            var changed = selected is not null && !SameCollection(state.Collection, scope);
+            if (changed || state.Question is { } question && !cards.Any(card => card.Id == question.CardId))
+                OpenQuestion(state with { Collection = scope, Question = null }, cards, settingsChanged: true);
+            else
+                OpenQuestion(state, cards);
+        }
+        catch (Exception error)
+        {
+            if (request != loadVersion) return;
+            if (progress is { } saved) ShowSelectedCollection(saved.Collection);
+            QueueStatus.Text = error.Message;
+        }
+        finally
+        {
+            if (request == loadVersion)
+            {
+                loading = false;
+                UpdateControls();
+            }
+        }
     }
 
-    private void OpenQuestion(PracticeProgress state, bool settingsChanged = false)
+    private void SetCollections(DictionarySource[] sources)
+    {
+        var documents = AppState.Session.Snapshot.Documents;
+        var choices = sources
+            .GroupBy(source => (source.SourceHash is not null, source.SourceHash ?? source.DocumentId))
+            .Select(group =>
+            {
+                var source = group.First();
+                var local = documents.FirstOrDefault(document => document.Id == source.DocumentId ||
+                    source.SourceHash is not null && document.SourceHash == source.SourceHash);
+                if (local is not null) return new CollectionChoice(new(local.Id, local.SourceHash), local.Title);
+
+                var title = string.IsNullOrWhiteSpace(source.Title) ? "Документ" : source.Title;
+                return new CollectionChoice(new(source.DocumentId, source.SourceHash), $"{title} (з архіву)");
+            })
+            .DistinctBy(choice => choice.Scope!.DocumentId)
+            .OrderBy(choice => choice.Title, StringComparer.CurrentCulture);
+        collections = [AllCards, .. choices];
+        var duplicateTitles = collections.Where(choice => choice.Scope is not null)
+            .GroupBy(choice => choice.Title, StringComparer.CurrentCulture)
+            .Where(group => group.Count() > 1 || group.Key == AllCards.Title)
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.CurrentCulture);
+        collections = collections.Select(choice => choice.Scope is { } scope && duplicateTitles.Contains(choice.Title)
+            ? choice with { Title = $"{choice.Title} · {scope.DocumentId[..Math.Min(scope.DocumentId.Length, 8)]}" }
+            : choice).ToArray();
+        ShowSelectedCollection(progress?.Collection);
+    }
+
+    private void ShowSelectedCollection(PracticeCollection? scope)
+    {
+        renderingSettings = true;
+        try
+        {
+            var index = Array.FindIndex(collections, choice => SameCollection(choice.Scope, scope));
+            if (index < 0)
+            {
+                collections = [.. collections, new(scope, "Збережена добірка")];
+                index = collections.Length - 1;
+            }
+            var titles = collections.Select(choice => choice.Title).ToArray();
+            if (CollectionPicker.ItemsSource is not string[] previous || !previous.SequenceEqual(titles))
+                CollectionPicker.ItemsSource = titles;
+            CollectionPicker.SelectedIndex = index;
+        }
+        finally { renderingSettings = false; }
+    }
+
+    private static bool SameCollection(PracticeCollection? first, PracticeCollection? second) =>
+        first?.DocumentId == second?.DocumentId ||
+        first?.SourceHash is { } hash && hash == second?.SourceHash;
+
+    private async void CollectionChanged(object? sender, EventArgs args)
+    {
+        var index = CollectionPicker.SelectedIndex;
+        if (!visible || loading || grading || renderingSettings || progress is null ||
+            index < 0 || index >= collections.Length) return;
+        var selected = collections[index];
+        if (!SameCollection(progress.Collection, selected.Scope)) await LoadAsync(selected: selected);
+    }
+
+    private void UpdateControls()
+    {
+        var ready = visible && !loading && !grading && progress is not null;
+        QuestionPanel.IsEnabled = Direction.IsEnabled = Mode.IsEnabled = ready;
+        CollectionPicker.IsEnabled = ready && collections.Length > 1;
+    }
+
+    private void OpenQuestion(PracticeProgress state, VocabularyCard[] cards, bool settingsChanged = false)
     {
         var session = AppState.Session;
-        var vocabulary = session.Snapshot.Vocabulary;
         var reverse = state.Direction == "reverse";
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var due = vocabulary.Where(card => (reverse ? card.Reverse : card.Forward).DueAt <= now).ToArray();
+        var due = cards.Where(card => (reverse ? card.Reverse : card.Forward).DueAt <= now).ToArray();
         if (state.Question is null && due.FirstOrDefault() is { } card)
         {
-            var question = PracticeQuestion.Create(card, vocabulary, reverse, state.Mode == 2);
+            var question = PracticeQuestion.Create(card, cards, reverse, state.Mode == 2);
             state = session.SetPractice(state with
             {
                 Question = new SavedQuestion(card.Id, question.Prompt, question.Answers, question.Options),
@@ -53,6 +170,8 @@ public partial class PracticePage : ContentPage
         else if (settingsChanged) state = session.SetPractice(state);
 
         progress = state;
+        vocabulary = cards;
+        ShowSelectedCollection(state.Collection);
         Render(state, due.Length);
     }
 
@@ -72,12 +191,15 @@ public partial class PracticePage : ContentPage
 
         var saved = state.Question;
         var session = AppState.Session;
-        var noCards = session.Snapshot.Vocabulary.Length == 0;
-        Prompt.Text = saved?.Prompt ?? (noCards ? "Знайдімо ваші перші слова" : "На сьогодні все");
-        var card = saved is null ? null : session.Snapshot.Vocabulary.FirstOrDefault(entry => entry.Id == saved.CardId);
+        var allCards = state.Collection is null;
+        var noCards = vocabulary.Length == 0;
+        var emptyTitle = allCards ? "Знайдімо ваші перші слова" : "У добірці немає карток";
+        var emptyHint = allCards ? "Збережіть кілька слів під час читання, щоб почати практику."
+            : "Оберіть іншу добірку або додайте слова з документа.";
+        Prompt.Text = saved?.Prompt ?? (noCards ? emptyTitle : "На сьогодні все");
+        var card = saved is null ? null : vocabulary.FirstOrDefault(entry => entry.Id == saved.CardId);
         var context = saved is null
-            ? noCards ? "Збережіть кілька слів під час читання, щоб почати практику."
-                : "Усі картки цього напряму повторено. Можна змінити напрям або повернутися до читання."
+            ? noCards ? emptyHint : "Усі картки цього напряму повторено. Можна змінити напрям або повернутися до читання."
             : state.Direction == "reverse" ? "Згадайте слово мовою оригіналу."
                 : card?.Context;
         if (state.Direction == "forward" && card?.Sense is { } sense)
@@ -139,14 +261,14 @@ public partial class PracticePage : ContentPage
 
     private void ShowAnswer(string? attempt)
     {
-        if (grading || progress is not { Question: { Revealed: false } question } state) return;
+        if (loading || grading || progress is not { Question: { Revealed: false } question } state) return;
         try
         {
             var saved = AppState.Session.SetPractice(state with
             {
                 Question = question with { Revealed = true, GivenAnswer = attempt },
             });
-            OpenQuestion(saved);
+            OpenQuestion(saved, vocabulary);
         }
         catch (Exception error) { QueueStatus.Text = error.Message; }
     }
@@ -154,38 +276,39 @@ public partial class PracticePage : ContentPage
     private async void GradeClicked(object? sender, EventArgs args)
     {
         var session = AppState.Session;
-        if (grading || session.Busy || progress is not { Question.Revealed: true } state ||
+        if (loading || grading || session.Busy || progress is not { Question.Revealed: true } state ||
             sender is not Button { CommandParameter: string value } || !byte.TryParse(value, out var grade))
             return;
 
         grading = true;
-        Grades.IsEnabled = Direction.IsEnabled = Mode.IsEnabled = false;
+        UpdateControls();
         try
         {
             await session.GradePracticeAsync(state.Revision, grade);
-            if (visible) Reload();
+            if (visible) await LoadAsync();
         }
         finally
         {
             grading = false;
-            Grades.IsEnabled = Direction.IsEnabled = Mode.IsEnabled = true;
+            UpdateControls();
         }
     }
 
-    private void PracticeSettingChanged(object? sender, EventArgs args) => ChangePracticeSettings(progress?.Direction);
+    private async void PracticeSettingChanged(object? sender, EventArgs args) =>
+        await ChangePracticeSettingsAsync(progress?.Direction);
 
-    private void PracticeDirectionClicked(object? sender, EventArgs args)
+    private async void PracticeDirectionClicked(object? sender, EventArgs args)
     {
         if (sender is Button { CommandParameter: string direction } && direction != progress?.Direction)
-            ChangePracticeSettings(direction);
+            await ChangePracticeSettingsAsync(direction);
     }
 
     private async void ReturnToReadingClicked(object? sender, EventArgs args) =>
         await Shell.Current.GoToAsync(AppState.Session.Document is null ? AppShell.LibraryRoute : AppShell.ReadingRoute);
 
-    private void ChangePracticeSettings(string? direction)
+    private async Task ChangePracticeSettingsAsync(string? direction)
     {
-        if (renderingSettings || grading || progress is not { } state || Mode.SelectedIndex < 0 || direction is null) return;
+        if (renderingSettings || loading || grading || progress is not { } state || Mode.SelectedIndex < 0 || direction is null) return;
         try
         {
             OpenQuestion(state with
@@ -193,12 +316,12 @@ public partial class PracticePage : ContentPage
                 Direction = direction,
                 Mode = (byte)Mode.SelectedIndex,
                 Question = null,
-            }, settingsChanged: true);
+            }, vocabulary, settingsChanged: true);
         }
         catch (Exception error)
         {
-            Reload();
-            QueueStatus.Text = error.Message;
+            await LoadAsync();
+            if (visible) QueueStatus.Text = error.Message;
         }
     }
 }
