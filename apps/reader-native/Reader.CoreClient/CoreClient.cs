@@ -20,6 +20,10 @@ public sealed class CoreClient : IDisposable
     }
 
     public Snapshot Snapshot() => Call<Snapshot>(new { version = 1, operation = "snapshot" });
+    public ReadingSession[] RecentReadingSessions() =>
+        Call<ReadingSession[]>(new { version = 1, operation = "recent_reading_sessions" });
+    public void CheckpointReading(ReadingSession session) =>
+        Call<JsonElement>(new { version = 1, operation = "checkpoint_reading", session });
     public string? DetectLanguage(string text)
     {
         var length = Math.Min(text.Length, 8000);

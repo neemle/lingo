@@ -51,6 +51,7 @@ public partial class ReadingPage : ContentPage
         base.OnAppearing();
         BindingContext = AppState.Session;
         AppState.Session.PropertyChanged += SessionChanged;
+        BeginReadingHistory();
         UpdateHighlight();
         readinessPair = null;
         UpdateTranslation();
@@ -68,6 +69,7 @@ public partial class ReadingPage : ContentPage
 
     protected override void OnDisappearing()
     {
+        EndReadingHistory(keepVisit: showingMeanings);
         StopSpeech();
         voiceCatalogRevision++;
         readinessRequest++;
@@ -87,6 +89,7 @@ public partial class ReadingPage : ContentPage
         // Notifications describe a completed session state. Update once per state change.
         if (args.PropertyName == nameof(ReaderSession.Snapshot))
         {
+            SyncReadingHistory();
             UpdateHighlight();
             UpdateTranslation();
             RefreshVoices();
@@ -292,6 +295,7 @@ public partial class ReadingPage : ContentPage
     {
         var session = AppState.Session;
         if (session.Document is not { } doc) return;
+        RecordReadingActivity();
         if (selection != selected)
         {
             Translation.Text = "";
@@ -562,6 +566,7 @@ public partial class ReadingPage : ContentPage
             PauseSpeech.IsEnabled = !modelVoice;
             SpeechStatus.Text = modelVoice ? "Готуємо локальне озвучення…" : "Озвучення поточного речення…";
 
+            RecordReadingActivity();
             if (modelVoice)
             {
                 status = await PlayModelAsync(session, doc, sentence, voice!, rate, request, token);
@@ -591,6 +596,7 @@ public partial class ReadingPage : ContentPage
             PauseSpeech.IsEnabled = false;
             if (status == LocalSpeech.CompletedStatus)
             {
+                RecordReadingActivity();
                 pendingSpeechResume = null;
                 try { session.SetSpeechResume(doc.Id, sentence.Id, textHash, null); }
                 catch (Exception error)
@@ -656,10 +662,19 @@ public partial class ReadingPage : ContentPage
         speechPaused = !speechPaused;
         PauseSpeech.Text = speechPaused ? "Продовжити" : "Пауза";
         SpeechStatus.Text = speechPaused ? "Озвучення призупинено." : "Озвучення поточного речення…";
-        if (speechPaused) SaveSpeechResume();
+        RecordReadingActivity();
+        if (speechPaused)
+        {
+            ResetReadingActivity();
+            SaveSpeechResume();
+        }
     }
 
-    private void StopClicked(object? sender, EventArgs args) => StopSpeech();
+    private void StopClicked(object? sender, EventArgs args)
+    {
+        RecordReadingActivity();
+        StopSpeech();
+    }
 
     private void StopSpeech()
     {

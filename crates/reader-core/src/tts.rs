@@ -9,6 +9,8 @@ use std::path::Path;
 use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
+pub(crate) mod cache;
+
 const MODEL: &str = "piper-uk";
 const SAMPLE_RATE: u32 = 22_050;
 const MAX_INPUT_BYTES: usize = 4096;
@@ -81,9 +83,19 @@ impl Store {
 
 impl SpeechJob {
     pub fn run(self) -> Result<SpeechAudio> {
-        self.model.run_interactive(|directory, should_yield| {
+        let spoken = ukrainian_stress(&self.text);
+        let cache = cache::SpeechCacheKey::new(
+            MODEL,
+            self.model.revision(),
+            "uk",
+            &self.speaker.to_string(),
+            self.rate,
+            &spoken,
+            SAMPLE_RATE,
+        );
+        self.model.run_cached_interactive(|directory| cache.read(directory), |directory, should_yield| {
             let config = PiperConfig::load(directory)?;
-            let chunks = config.chunks(&ukrainian_stress(&self.text))?;
+            let chunks = config.chunks(&spoken)?;
             let threads = std::thread::available_parallelism().map_or(1, |count| count.get().min(3));
             let mut session = Session::builder(onnx_runtime::environment()?)
                 .map_err(speech_error)?
@@ -131,7 +143,9 @@ impl SpeechJob {
                 waveform.resize(waveform.len() + silence, 0.0);
                 waveform.extend_from_slice(samples);
             }
-            to_wav(&waveform, SAMPLE_RATE)
+            let audio = to_wav(&waveform, SAMPLE_RATE)?;
+            cache.write(directory, &audio);
+            Ok(audio)
         })
     }
 }

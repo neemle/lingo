@@ -79,6 +79,29 @@ internal static class DesktopFiles
         return null;
     }
 
+    internal static async Task<string?> GetDropTextAsync(DropEventArgs args)
+    {
+        if (args.PlatformArgs?.DropSession is not { } session) return null;
+        foreach (var item in session.Items)
+        {
+            var provider = item.ItemProvider;
+            if (provider.HasItemConformingTo("public.file-url") ||
+                provider.SuggestedName is { } name && DesktopFile.Supports(name)) continue;
+            var type = provider.HasItemConformingTo("public.utf8-plain-text") ? "public.utf8-plain-text" : "public.plain-text";
+            if (!provider.HasItemConformingTo(type)) continue;
+            var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            provider.LoadItem(type, null, (value, error) => completion.TrySetResult(error is null ? value switch
+            {
+                NSString nativeText => nativeText.ToString(),
+                NSData data when data.Length <= Reader.CoreClient.CoreClient.MaxImportBytes =>
+                    System.Text.Encoding.UTF8.GetString(data.ToArray()),
+                _ => null,
+            } : null));
+            if (await completion.Task is { Length: > 0 } text) return text;
+        }
+        return null;
+    }
+
     private static Task<byte[]> ReadProviderAsync(NSItemProvider provider, string type)
     {
         var completion = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);

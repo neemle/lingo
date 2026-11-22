@@ -10,11 +10,21 @@ public partial class LibraryPage
 
     private async void PasteTextClicked(object? sender, EventArgs args)
     {
+        string? clipboard = null;
+        try { if (Clipboard.Default.HasText) clipboard = await Clipboard.Default.GetTextAsync(); }
+        catch (Exception error) when (error is InvalidOperationException or UnauthorizedAccessException or NotSupportedException) { }
+        await ImportPastedTextAsync(clipboard);
+    }
+
+    private async Task ImportPastedTextAsync(string? initial)
+    {
         if (importing || changingLanguage || AppState.Session.Busy || !DesktopImport.Gate.Wait(0)) return;
         importing = true;
         try
         {
-            var pasted = await CollectPastedTextAsync();
+            if (initial is not null && Encoding.UTF8.GetByteCount(initial) > Reader.CoreClient.CoreClient.MaxImportBytes)
+                throw new InvalidDataException("Текст перевищує 20 МБ.");
+            var pasted = await CollectPastedTextAsync(initial);
             if (pasted is null) return;
             var session = AppState.Session;
             await session.WaitUntilIdleAsync();
@@ -30,7 +40,7 @@ public partial class LibraryPage
         }
     }
 
-    private async Task<PastedDocument?> CollectPastedTextAsync()
+    private async Task<PastedDocument?> CollectPastedTextAsync(string? initial)
     {
         var completion = new TaskCompletionSource<PastedDocument?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var closing = false;
@@ -41,7 +51,7 @@ public partial class LibraryPage
             ItemsSource = DocumentLanguages.All.Select(item => item.Name).ToArray(),
             SelectedIndex = -1,
         };
-        var text = new Editor { Placeholder = "Вставте текст, який хочете прочитати", MinimumHeightRequest = 240 };
+        var text = new Editor { Text = initial, Placeholder = "Вставте текст, який хочете прочитати", MinimumHeightRequest = 240 };
         var status = new Label { TextColor = (Color)Application.Current!.Resources["Accent"] };
         var detect = new Button { Text = "Визначити мову", Style = (Style)Application.Current.Resources["OutlineButton"] };
         var import = new Button { Text = "Почати читати", Style = (Style)Application.Current.Resources["AccentButton"] };

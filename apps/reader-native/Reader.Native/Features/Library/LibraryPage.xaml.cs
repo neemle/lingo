@@ -87,10 +87,14 @@ public partial class LibraryPage : ContentPage
     {
         try
         {
-            if (await DesktopFiles.GetDropAddressAsync(args) is { } address)
-                await ImportArticleAsync(address);
+            var address = await DesktopFiles.GetDropAddressAsync(args);
+            var text = address is null ? await DesktopFiles.GetDropTextAsync(args) : null;
+            if ((address ?? WebArticles.Address(text)) is { } webAddress)
+                await ImportArticleAsync(webAddress);
+            else if (!string.IsNullOrWhiteSpace(text))
+                await ImportPastedTextAsync(text);
             else if (await DesktopFiles.QueueDropAsync(args) == 0)
-                ImportStatus.Text = "Серед перетягнутих об’єктів немає підтримуваних файлів або посилань.";
+                ImportStatus.Text = "Серед перетягнутих об’єктів немає підтримуваних файлів, тексту або посилань.";
         }
         catch (Exception error) { await DisplayAlertAsync("Імпорт", error.Message, "Гаразд"); }
     }

@@ -14,6 +14,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
     match command {
         Command::Open { .. } => Err(Error::new("invalid_handle", "Open requires handle zero")),
         Command::Snapshot => value(store.snapshot()),
+        Command::RecentReadingSessions => value(store.recent_reading_sessions()),
+        Command::CheckpointReading { session } => value(store.checkpoint_reading(session)),
         Command::DetectLanguage { text } => {
             value(Ok(reader_core::language_detection::detect(&text)))
         }

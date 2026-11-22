@@ -277,12 +277,40 @@ impl OptionalModelJob {
         self.run_checked(inference, &|| permit.should_yield())
     }
 
-    pub(crate) fn run_interactive<T>(
+    pub(crate) fn run_cached_interactive<T>(
         self,
+        cached: impl Fn(&Path) -> Option<T>,
         inference: impl FnOnce(&Path, &dyn Fn() -> bool) -> Result<T>,
     ) -> Result<T> {
+        if let Some(audio) = self.read_installed_cache(&cached)? {
+            return Ok(audio);
+        }
         let _permit = RESOURCES.interactive();
+        if let Some(audio) = self.read_installed_cache(cached)? {
+            return Ok(audio);
+        }
         self.run_checked(inference, &|| false)
+    }
+
+    fn read_installed_cache<T>(
+        &self,
+        cached: impl FnOnce(&Path) -> Option<T>,
+    ) -> Result<Option<T>> {
+        if !package_directory(self.paths.installed())? {
+            return Ok(None);
+        }
+        let _gate = lock_package(&self.paths.lock, false)?;
+        let installed = self.paths.installed();
+        if !package_directory(installed)?
+            || self
+                .model
+                .assets
+                .iter()
+                .any(|asset| local_size(&installed.join(asset.name)) != Some(asset.bytes))
+        {
+            return Ok(None);
+        }
+        Ok(cached(installed))
     }
 
     fn run_checked<T>(

@@ -11,6 +11,7 @@
      <KeyboardAccelerator Modifiers="{OnPlatform MacCatalyst=Cmd, WinUI=Ctrl}" Key="O" />
     </MenuFlyoutItem.KeyboardAccelerators>
    </MenuFlyoutItem>
+   <MenuFlyoutItem Text="Історія читання" Clicked="ReadingHistoryClicked" IsEnabled="{Binding CanInteract}" />
    <MenuFlyoutItem Text="Додати статтю за посиланням" Clicked="ImportArticleClicked" IsEnabled="{Binding CanInteract}" />
   </MenuBarItem>
  </ContentPage.MenuBarItems>
@@ -22,6 +23,8 @@
    </VerticalStackLayout>
    <FlexLayout x:Name="LibraryActions" Grid.Row="1" Grid.ColumnSpan="2" Wrap="Wrap" AlignItems="Center" VerticalOptions="Center">
     <ActivityIndicator IsRunning="{Binding Busy}" IsVisible="{Binding Busy}" Color="{StaticResource Sage}" />
+    <Button Text="Історія" Margin="0,0,8,6" Style="{StaticResource OutlineButton}" Clicked="ReadingHistoryClicked"
+     IsEnabled="{Binding CanInteract}" SemanticProperties.Description="Історія читання" />
     <Button Text="Розпізнати PDF" Margin="0,0,8,6" Style="{StaticResource OutlineButton}" Clicked="ScanPdfClicked" IsEnabled="{Binding CanInteract}" />
     <Button x:Name="ResumePdf" Text="Продовжити OCR" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
      Clicked="ResumePdfClicked" IsVisible="False" IsEnabled="{Binding CanInteract}" />
@@ -36,7 +39,7 @@
    <Border Padding="12,9" Stroke="#D6D9CA" StrokeThickness="1" StrokeDashArray="5,4"
     StrokeShape="RoundRectangle 8" BackgroundColor="#F0F3E9">
     <Border.GestureRecognizers><DropGestureRecognizer Drop="FilesDropped" /></Border.GestureRecognizers>
-    <Label Text="Перетягніть TXT, DOCX, PDF, фотографію або посилання сюди · до 20 МБ на файл"
+    <Label Text="Перетягніть файл, фотографію, текст або посилання сюди · до 20 МБ на файл"
      TextColor="{StaticResource Sage}" FontSize="13" />
    </Border>
    <Label Text="{Binding Error}" TextColor="{StaticResource Accent}" SemanticProperties.Description="Помилка операції" />

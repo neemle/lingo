@@ -18,6 +18,10 @@ pub enum Command {
         path: String,
     },
     Snapshot,
+    RecentReadingSessions,
+    CheckpointReading {
+        session: reader_core::reading_history::ReadingSession,
+    },
     DetectLanguage {
         text: String,
     },

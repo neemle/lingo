@@ -30,6 +30,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public ReaderSession(string path) => client = new Client(path);
 
     public Task RefreshAsync() => RunAsync(Read);
+    public Task<ReadingSession[]> RecentReadingSessionsAsync() => Task.Run(client.RecentReadingSessions);
+    public Task CheckpointReadingAsync(ReadingSession session) =>
+        Task.Run(() => client.CheckpointReading(session));
 
     public Task<string?> DetectLanguageAsync(string text) => Task.Run(() => client.DetectLanguage(text));
     public Task<string?> DetectDocumentLanguageAsync(string name, byte[] bytes) =>

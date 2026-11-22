@@ -25,6 +25,14 @@ internal static class DesktopFiles
         if (data is null || data.Contains(StandardDataFormats.StorageItems)) return null;
         if (data.Contains(StandardDataFormats.WebLink))
             return WebArticles.Address((await data.GetWebLinkAsync()).AbsoluteUri);
-        return data.Contains(StandardDataFormats.Text) ? WebArticles.Address(await data.GetTextAsync()) : null;
+        return null;
+    }
+
+    internal static async Task<string?> GetDropTextAsync(DropEventArgs args)
+    {
+        var data = args.PlatformArgs?.DragEventArgs.DataView;
+        if (data is null || data.Contains(StandardDataFormats.StorageItems) || !data.Contains(StandardDataFormats.Text))
+            return null;
+        return await data.GetTextAsync();
     }
 }

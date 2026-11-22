@@ -22,6 +22,7 @@ pub mod optional_models;
 pub mod pdf_layers;
 pub mod practice;
 pub mod qwen;
+pub mod reading_history;
 mod review_schedule;
 pub use review_schedule::FsrsMemory;
 mod resources;
@@ -265,6 +266,8 @@ pub struct Backup {
     pub practice: Option<practice::PracticeProgress>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resources: Vec<BackupResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reading_sessions: Vec<reading_history::ReadingSession>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -357,6 +360,7 @@ impl Store {
             )
             .map_err(|error| error.to_string())?;
         dictionary_transfer::initialize(&connection)?;
+        reading_history::initialize(&connection)?;
         Ok(Self {
             connection,
             model_directory: path.with_file_name("translation-models"),
@@ -1115,6 +1119,7 @@ impl Store {
             dictionary_review_origins,
             practice: practice::read(&tx)?,
             resources: self.backup_resources(),
+            reading_sessions: reading_history::export(&tx)?,
         };
         tx.commit().map_err(|error| error.to_string())?;
         Ok(backup)
@@ -1230,6 +1235,7 @@ impl Store {
             backup.dictionary_sources,
             &backup.snapshot.documents,
         )?;
+        reading_history::restore(&tx, backup.reading_sessions, &backup.snapshot.documents)?;
         if let Some(progress) = backup.practice {
             practice::restore_if_fresh(&tx, progress, &review_cards)?;
         }

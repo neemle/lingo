@@ -5,7 +5,7 @@
 //! The independently distributed model weights are licensed under OpenRAIL.
 
 use crate::optional_models::OptionalModelJob;
-use crate::tts::{to_wav, ukrainian_stress, SpeechAudio, STRESS_MARK};
+use crate::tts::{cache::SpeechCacheKey, to_wav, ukrainian_stress, SpeechAudio, STRESS_MARK};
 use crate::{onnx_runtime, Document, Result, Store};
 use ort::session::Session;
 use ort::value::Tensor;
@@ -86,38 +86,52 @@ impl Store {
 
 impl MultilingualSpeechJob {
     pub fn run(self) -> Result<SpeechAudio> {
-        self.model.run_interactive(|directory, should_yield| {
-            let mut engine = Engine::load(directory, self.voice)?;
-            let spoken = if self.language == "uk" {
-                ukrainian_stress(&self.text)
-            } else {
-                self.text.as_str().into()
-            };
-            let chunks = text_chunks(&spoken, &engine.indexer)?;
-            let mut waveform = Vec::new();
-            for chunk in chunks {
-                check_interrupted(should_yield)?;
-                let pause = if waveform.is_empty() {
-                    0
-                } else {
-                    SAMPLE_RATE as usize / 10
-                };
-                let remaining = MAX_SAMPLES - waveform.len();
-                if pause >= remaining {
-                    return Err("Озвучення перевищує 45 секунд".into());
+        let spoken = if self.language == "uk" {
+            ukrainian_stress(&self.text)
+        } else {
+            self.text.as_str().into()
+        };
+        let cache = SpeechCacheKey::new(
+            MODEL,
+            self.model.revision(),
+            &self.language,
+            self.voice,
+            self.rate,
+            &spoken,
+            SAMPLE_RATE,
+        );
+        self.model.run_cached_interactive(
+            |directory| cache.read(directory),
+            |directory, should_yield| {
+                let mut engine = Engine::load(directory, self.voice)?;
+                let chunks = text_chunks(&spoken, &engine.indexer)?;
+                let mut waveform = Vec::new();
+                for chunk in chunks {
+                    check_interrupted(should_yield)?;
+                    let pause = if waveform.is_empty() {
+                        0
+                    } else {
+                        SAMPLE_RATE as usize / 10
+                    };
+                    let remaining = MAX_SAMPLES - waveform.len();
+                    if pause >= remaining {
+                        return Err("Озвучення перевищує 45 секунд".into());
+                    }
+                    let audio = engine.synthesize(
+                        &chunk,
+                        &self.language,
+                        self.rate,
+                        remaining - pause,
+                        should_yield,
+                    )?;
+                    waveform.resize(waveform.len() + pause, 0.0);
+                    waveform.extend(audio);
                 }
-                let audio = engine.synthesize(
-                    &chunk,
-                    &self.language,
-                    self.rate,
-                    remaining - pause,
-                    should_yield,
-                )?;
-                waveform.resize(waveform.len() + pause, 0.0);
-                waveform.extend(audio);
-            }
-            to_wav(&waveform, SAMPLE_RATE)
-        })
+                let audio = to_wav(&waveform, SAMPLE_RATE)?;
+                cache.write(directory, &audio);
+                Ok(audio)
+            },
+        )
     }
 }
 
