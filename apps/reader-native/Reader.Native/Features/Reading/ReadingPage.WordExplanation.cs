@@ -20,7 +20,7 @@ public partial class ReadingPage
             current.Id == document.Id && current.Language == document.Language &&
             current.CurrentRevisionId == revision && WordCard.IsVisible;
 
-        await ExplainSelectionAsync(WordExplanationText, CurrentSelection,
+        await ExplainSelectionAsync(WordExplanationText, WordExplanationBusy, document.Id, CurrentSelection,
             (model, cachedOnly) => session.ExplainWordAsync(model, document.Id, sentence.Id, word.Text,
                 cachedOnly: cachedOnly, startUtf16: word.StartUtf16, revisionId: revision));
     }
@@ -30,18 +30,18 @@ public partial class ReadingPage
         if (explainingWord || loadingDetachedSentence || detachedAddress is not { } address ||
             detachedSelection is not { } word || detachedSentence is not { RevisionId: { } revision }) return;
 
-        bool CurrentSelection() => DetachedPdfReader.IsVisible &&
+        bool CurrentSelection() => DetachedPdfReader.IsVisible && DetachedWordCard.IsVisible &&
             ReferenceEquals(detachedAddress, address) && ReferenceEquals(detachedSelection, word) &&
             detachedSentence?.RevisionId == revision;
 
         var session = AppState.Session;
-        await ExplainSelectionAsync(DetachedWordExplanationText, CurrentSelection,
+        await ExplainSelectionAsync(DetachedWordExplanationText, DetachedWordExplanationBusy, address.Document, CurrentSelection,
             (model, cachedOnly) => session.ExplainDetachedWordAsync(model, address.Document, address.Page, word,
                 revisionId: revision, cachedOnly: cachedOnly));
     }
 
-    private async Task ExplainSelectionAsync(Label result, Func<bool> isCurrent,
-        Func<string, bool, Task<WordExplanation?>> explain)
+    private async Task ExplainSelectionAsync(Label result, ActivityIndicator spinner, string documentId,
+        Func<bool> isCurrent, Func<string, bool, Task<WordExplanation?>> explain)
     {
         explainingWord = true;
         ExplainWord.IsEnabled = DetachedExplainWord.IsEnabled = false;
@@ -52,7 +52,7 @@ public partial class ReadingPage
             if (!isCurrent()) return;
             if (selected is not null && await explain(selected.Id, true) is { } saved)
             {
-                if (isCurrent()) ShowExplanation(result, selected.Name, saved);
+                await ShowExplanationAsync(result, spinner, documentId, selected.Name, saved, isCurrent);
                 return;
             }
             if (!isCurrent()) return;
@@ -65,10 +65,12 @@ public partial class ReadingPage
                 return;
             }
             if (!isCurrent()) return;
+            spinner.IsVisible = spinner.IsRunning = true;
             result.IsVisible = true;
             result.Text = $"{selected.Name} готує пояснення…";
             var explanation = await explain(selected.Id, false);
-            if (isCurrent() && explanation is not null) ShowExplanation(result, selected.Name, explanation);
+            if (explanation is not null)
+                await ShowExplanationAsync(result, spinner, documentId, selected.Name, explanation, isCurrent);
         }
         catch (Exception error)
         {
@@ -80,6 +82,7 @@ public partial class ReadingPage
         }
         finally
         {
+            spinner.IsRunning = spinner.IsVisible = false;
             explainingWord = false;
             ExplainWord.IsEnabled = true;
             UpdateDetachedExplainButton();
@@ -93,11 +96,31 @@ public partial class ReadingPage
         DetachedExplainWord.IsEnabled = DetachedExplainWord.IsVisible && !explainingWord;
     }
 
-    private static void ShowExplanation(Label result, string model, WordExplanation explanation)
+    private static async Task ShowExplanationAsync(Label result, ActivityIndicator spinner, string documentId,
+        string model, WordExplanation explanation, Func<bool> isCurrent)
     {
-        result.IsVisible = true;
+        if (!isCurrent()) return;
         var detail = explanation.Explanation.Replace(" У цьому реченні — ", $"{Environment.NewLine}Граматична роль: ");
         var label = explanation.Cached ? "Збережена підказка" : "Локальна підказка";
+        if (explanation.Gloss is { } gloss)
+        {
+            string? ukrainian = gloss.Language == "uk" ? gloss.Text : null;
+            if (ukrainian is null)
+            {
+                spinner.IsVisible = spinner.IsRunning = true;
+                result.IsVisible = true;
+                result.Text = "Перекладаємо словникове визначення…";
+                try
+                {
+                    ukrainian = (await AppState.Session.TranslateDictionaryGlossAsync(documentId, gloss.Language, gloss.Text))?.Text;
+                }
+                catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
+            }
+            if (!isCurrent()) return;
+            detail += $"{Environment.NewLine}{ukrainian ?? gloss.Text}";
+            label = ukrainian is null ? $"{label} · Wiktionary" : $"{label} · Wiktionary, офлайн-переклад";
+        }
+        result.IsVisible = true;
         result.Text = $"{detail}{Environment.NewLine}{label} · {model}";
     }
 }

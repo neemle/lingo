@@ -41,6 +41,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
         base.ConnectHandler(platformView);
         platformView.SelectionChanged += Selected;
         VirtualView.OffsetRevealRequested += RevealOffset;
+        VirtualView.SelectionAnchor = SelectionAnchor;
         tap = new UITapGestureRecognizer(Tapped) { CancelsTouchesInView = false };
         tap.ShouldRecognizeSimultaneously = (_, _) => true;
         platformView.AddGestureRecognizer(tap);
@@ -50,6 +51,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
     {
         platformView.SelectionChanged -= Selected;
         VirtualView.OffsetRevealRequested -= RevealOffset;
+        VirtualView.SelectionAnchor = null;
         if (tap is not null) { platformView.RemoveGestureRecognizer(tap); tap.Dispose(); }
         tap = null;
         renderedText = null;
@@ -90,6 +92,21 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
     {
         if (projection?.ToSource(start, length) is { } source)
             VirtualView.SelectSource(source.Start, source.Length);
+    }
+
+    private Microsoft.Maui.Graphics.Point? SelectionAnchor(int start, int length)
+    {
+        var displayed = DisplayRange(start, length);
+        var beginning = PlatformView.BeginningOfDocument;
+        var first = PlatformView.GetPosition(beginning, displayed.Location);
+        var last = PlatformView.GetPosition(beginning, displayed.Location + displayed.Length);
+        if (first is null || last is null || PlatformView.GetTextRange(first, last) is not { } range) return null;
+        var rect = PlatformView.GetFirstRectForRange(range);
+        var bounds = PlatformView.Bounds;
+        var x = (double)(rect.X + rect.Width / 2 - bounds.X);
+        var y = (double)(rect.Y + rect.Height / 2 - bounds.Y);
+        return double.IsFinite(x) && double.IsFinite(y) && x >= 0 && x <= bounds.Width && y >= 0 && y <= bounds.Height
+            ? new Microsoft.Maui.Graphics.Point(x, y) : null;
     }
 
     private NSRange DisplayRange(int start, int length, bool includeLeadingMarker = false)

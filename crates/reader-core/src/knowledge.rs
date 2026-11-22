@@ -206,6 +206,10 @@ pub struct WordLookup {
 }
 
 impl WordLookup {
+    pub(crate) fn into_meanings(self) -> Vec<WordMeaning> {
+        self.meanings
+    }
+
     pub(crate) fn bind_expression_tokens(&mut self, token_id: impl Fn(usize) -> String) {
         for expression in &mut self.expressions {
             expression.token_ids = expression
@@ -223,6 +227,12 @@ impl WordLookup {
 pub struct WordContext {
     sentence: String,
     start_utf16: usize,
+}
+
+impl WordContext {
+    pub(crate) fn at(sentence: &str, start_utf16: usize) -> Self {
+        Self { sentence: sentence.into(), start_utf16 }
+    }
 }
 
 impl Pack {
@@ -345,6 +355,10 @@ impl Store {
         source: &Path,
     ) -> Result<KnowledgePackage> {
         self.prepare_knowledge_package(language, source)?.run()
+    }
+
+    pub(crate) fn has_dictionary(&self, language: &str) -> bool {
+        lexicon::available(&self.knowledge_directory, language)
     }
 
     pub fn lookup_word(

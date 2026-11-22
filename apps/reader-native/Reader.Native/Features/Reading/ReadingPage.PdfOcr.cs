@@ -218,11 +218,11 @@ public partial class ReadingPage
             selected.StartUtf16 < current.Sentence.StartUtf16 || selected.LengthUtf16 <= 0 ||
             selected.StartUtf16 > current.Sentence.EndUtf16 - selected.LengthUtf16 ||
             selected.StartUtf16 > address.Text.Length - selected.LengthUtf16 ||
-            !address.Text.AsSpan(selected.StartUtf16, selected.LengthUtf16).SequenceEqual(selected.Text) ||
-            TargetCode is not { } target) return;
+            !address.Text.AsSpan(selected.StartUtf16, selected.LengthUtf16).SequenceEqual(selected.Text)) return;
         SetDetachedSelection(selected);
         UpdateDetachedControls();
-        await SaveDetachedWordAsync(address, selected, target);
+        DetachedSelectedWord.Text = selected.Text;
+        ShowWordPopup(DetachedPdfText, selected, DetachedWordCard);
     }
 
     private async Task<int?> PdfNarrationBoundaryAsync(string documentId, Sentence completed, CancellationToken token)

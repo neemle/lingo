@@ -48,7 +48,12 @@ public partial class ReadingPage : ContentPage
     private SpeechResume? speechResume;
     private bool loadingSpeechPreferences;
     private bool speechPreferencesReady;
-    public ReadingPage() => InitializeComponent();
+    public ReadingPage()
+    {
+        InitializeComponent();
+        WordCard.PropertyChanged += WordPopupVisibilityChanged;
+        DetachedWordCard.PropertyChanged += WordPopupVisibilityChanged;
+    }
 
     protected override void OnAppearing()
     {
@@ -433,7 +438,7 @@ public partial class ReadingPage : ContentPage
         OpenSpelling.IsVisible = !selected.Text.Any(char.IsWhiteSpace);
         ShowExpressionOptions(null, selected);
         KnowledgeAnalysis.Text = "Пошук у мовному пакеті…";
-        WordCard.IsVisible = true;
+        ShowWordPopup(SourceText, selected, WordCard);
         var index = Array.FindIndex(doc.Sentences, sentence => selected.StartUtf16 >= sentence.StartUtf16
             && selected.StartUtf16 < sentence.EndUtf16);
         try

@@ -108,6 +108,8 @@ public partial class ReadingPage
         if (detachedAddress is null || loadingDetachedSentence) return;
         SetDetachedSelection(selected);
         UpdateDetachedControls();
+        DetachedSelectedWord.Text = selected.Text;
+        ShowWordPopup(DetachedPdfText, selected, DetachedWordCard);
     }
 
     private void SetDetachedSelection(TextSelection? selected)
@@ -115,6 +117,7 @@ public partial class ReadingPage
         if (detachedSelection != selected) detachedWordTranslation = null;
         detachedSelection = selected;
         DetachedWordExplanationText.IsVisible = false;
+        if (selected is null) DetachedWordCard.IsVisible = false;
     }
 
     private async void DetachedAnalyzeClicked(object? sender, EventArgs args)

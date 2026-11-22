@@ -155,6 +155,12 @@ pub struct WordMeaning {
     context_matches: usize,
 }
 
+impl WordMeaning {
+    pub(crate) fn definition(&self) -> (&str, &str, &str) {
+        (&self.sense.gloss, self.gloss_language, &self.sense.part_of_speech)
+    }
+}
+
 #[derive(Deserialize)]
 struct WiktextractEntry {
     word: String,
