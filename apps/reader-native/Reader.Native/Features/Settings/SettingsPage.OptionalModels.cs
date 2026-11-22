@@ -26,7 +26,8 @@ public partial class SettingsPage
         try
         {
             var previous = SelectedOptionalModel?.Id;
-            optionalModels = await AppState.Session.OptionalModelsAsync();
+            optionalModels = (await AppState.Session.OptionalModelsAsync())
+                .Where(model => model.Id != "qwen-0.8b" || model.HasLocalFiles).ToArray();
             optionalInventoryRead = true;
             OptionalModelChoice.ItemsSource = optionalModels.Select(model =>
                 $"{model.Name} · {model.Assets.Sum(asset => asset.Bytes) / 1_000_000d:F0} МБ · {model.License} · " +
@@ -83,17 +84,21 @@ public partial class SettingsPage
             _ => "Доступну пам’ять визначити не вдалося.",
         };
         OptionalModelChoice.IsEnabled = !optionalModelBusy;
-        DownloadOptionalModel.IsEnabled = RemoveOptionalModel.IsEnabled = !optionalModelBusy && selected is not null;
-        OpenOptionalModel.IsEnabled = !optionalModelBusy && optionalInventoryRead && selected is not null;
+        var canInstall = selected is not null && selected.Id != "qwen-0.8b";
+        RemoveOptionalModel.IsEnabled = !optionalModelBusy && selected is not null;
+        DownloadOptionalModel.IsEnabled = !optionalModelBusy && canInstall;
+        OpenOptionalModel.IsEnabled = !optionalModelBusy && optionalInventoryRead && canInstall;
         ExportOptionalModel.IsEnabled = !optionalModelBusy && selected is { FilesPresent: true };
         VerifyOptionalModel.IsEnabled = !optionalModelBusy && selected is { HasLocalFiles: true };
-        RollbackOptionalModel.IsEnabled = !optionalModelBusy && selected is { HasRecoveryCopy: true };
+        RollbackOptionalModel.IsEnabled = !optionalModelBusy && canInstall && selected is { HasRecoveryCopy: true };
         var localTransfer = selected is not null && optionalTransfer?.Revision == selected.Revision
             ? optionalTransfer : null;
-        RepairOptionalModel.IsEnabled = !optionalModelBusy && selected is not null
+        RepairOptionalModel.IsEnabled = !optionalModelBusy && canInstall && selected is not null
             && (localTransfer is { TotalBytes: > 0 } && localTransfer.TotalBytes == localTransfer.ReceivedBytes
                 || Directory.Exists(Path.Combine(OptionalStagingRoot, selected.Revision)));
-        OptionalModelRecovery.Text = selected is { HasRecoveryCopy: true }
+        OptionalModelRecovery.Text = selected?.Id == "qwen-0.8b"
+            ? "Збережені підказки 0.8B доступні. Нові підказки генерує Qwen 2B."
+            : selected is { HasRecoveryCopy: true }
             ? "Є збережена локальна копія. Перед відновленням буде перевірено її контрольні суми."
             : "Збереженої копії немає. Незавершене завантаження можна продовжити або встановити з кешу.";
         DownloadOptionalModel.Text = localTransfer is { Status: "paused" or "awaitingRange" or "readyToInstall" }

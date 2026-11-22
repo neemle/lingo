@@ -195,6 +195,7 @@ pub struct OptionalModel {
     pub(crate) files_present: bool,
     has_local_files: bool,
     has_recovery_copy: bool,
+    can_generate_language_hints: bool,
     memory: MemoryReadiness,
     assets: Vec<OptionalAsset>,
 }
@@ -488,6 +489,7 @@ impl Store {
                                 local_size(&path.join(asset.name)) == Some(asset.bytes)
                             })
                     }),
+                    can_generate_language_hints: model.id == crate::qwen::HINT_GENERATION_MODEL,
                     memory: model.budget.readiness(),
                     assets: model
                         .assets

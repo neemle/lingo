@@ -159,7 +159,7 @@ When multiple directions share a package, removing the package disables all of t
 In **Налаштування → Додаткові локальні моделі**, choose a model to download, verify or remove.
 Stopping a download keeps the partial files so the next attempt can resume. Each completed file must match
 its pinned SHA-256 before the model is activated. An interrupted replacement preserves the previous files.
-Select a word and choose **Пояснити з Qwen** for a local, generated explanation. The app checks available
+Select a word and choose **Пояснити з Qwen** for a local explanation with Qwen 2B. Previously saved Qwen 0.8B hints are still available from cache. The app checks available
 memory before loading the model and labels the result with the model name. Qwen is optional for reading,
 translation and the vocabulary.
 

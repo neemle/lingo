@@ -20,6 +20,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub(crate) const HINT_GENERATION_MODEL: &str = "qwen-2b";
+
 const CONTEXT_TOKENS: u32 = 768;
 const RESPONSE_TOKENS: usize = 160;
 const BATCH: usize = 32;
@@ -344,6 +346,12 @@ impl Store {
         let cached = annotation_cache::read_model_hint(&self.connection, document, &key)?;
         if cached_only || cached.is_some() {
             return Ok(HintWork::Cached(cached));
+        }
+        if model != HINT_GENERATION_MODEL {
+            return Err(
+                "Для нових підказок використовуйте Qwen 2B. Збережені підказки 0.8B доступні."
+                    .into(),
+            );
         }
         let database = self
             .connection

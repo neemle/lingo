@@ -48,7 +48,8 @@ public partial class ReadingPage
         try
         {
             var models = (await AppState.Session.OptionalModelsAsync())
-                .Where(model => model.Id is "qwen-0.8b" or "qwen-2b").ToArray();
+                .Where(model => model.Id is "qwen-0.8b" or "qwen-2b")
+                .OrderByDescending(model => model.CanGenerateLanguageHints).ToArray();
             if (!isCurrent()) return;
             foreach (var model in models)
             {
@@ -60,25 +61,22 @@ public partial class ReadingPage
                     return;
                 }
             }
-            var installed = models.Where(model => model.FilesPresent).ToArray();
-            if (installed.Length == 0)
+            var selected = models.FirstOrDefault(model => model.CanGenerateLanguageHints && model.FilesPresent);
+            if (selected is null)
             {
                 if (await DisplayAlertAsync("Локальне пояснення",
-                    "Для пояснень встановіть одну з моделей Qwen у налаштуваннях.",
+                    "Для нових пояснень встановіть Qwen 2B у налаштуваннях.",
                     "Налаштування", "Закрити") && isCurrent())
                     await Shell.Current.GoToAsync(AppShell.SettingsRoute);
                 return;
             }
-
-            OptionalModel? selected = installed[0];
-            if (installed.Length > 1)
+            if (!isCurrent()) return;
+            if (selected.Memory?.Ready == false)
             {
-                var names = installed.ToDictionary(model => model.Memory?.Ready == false
-                    ? $"{model.Name} · бракує пам’яті" : model.Name);
-                var choice = await DisplayActionSheetAsync("Модель пояснення", "Скасувати", null, names.Keys.ToArray());
-                selected = choice is null ? null : names.GetValueOrDefault(choice);
+                result.IsVisible = true;
+                result.Text = "Для Qwen 2B зараз бракує пам’яті.";
+                return;
             }
-            if (selected is null || !isCurrent()) return;
             result.IsVisible = true;
             result.Text = $"{selected.Name} готує пояснення…";
             var explanation = await explain(selected.Id, false);

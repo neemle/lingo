@@ -198,7 +198,7 @@ public partial class ReadingPage
             {
                 var models = (await AppState.Session.OptionalModelsAsync())
                     .Where(model => model.Id is "qwen-0.8b" or "qwen-2b")
-                    .OrderBy(model => model.Id == "qwen-2b" ? 1 : 0).ToArray();
+                    .OrderByDescending(model => model.CanGenerateLanguageHints).ToArray();
                 foreach (var model in models)
                 {
                     if (await review(model.Id, true) is not { } cached) continue;
@@ -207,13 +207,13 @@ public partial class ReadingPage
                 }
                 if (cachedOnly) return;
 
-                var installed = models.Where(model => model.FilesPresent).ToArray();
+                var installed = models.Where(model => model.CanGenerateLanguageHints && model.FilesPresent).ToArray();
                 var available = installed.FirstOrDefault(model => model.Memory?.Ready != false);
                 if (available is null)
                 {
                     hints.Text = installed.Length == 0
-                        ? "Установіть Qwen у налаштуваннях. Підказки мовного пакета залишаються доступними."
-                        : "Для встановлених моделей Qwen зараз бракує пам’яті.";
+                        ? "Установіть Qwen 2B у налаштуваннях. Підказки мовного пакета залишаються доступними."
+                        : "Для Qwen 2B зараз бракує пам’яті.";
                     return;
                 }
                 hints.Text = $"{available.Name} перевіряє текст…";
