@@ -133,6 +133,8 @@ The card reports matching corpus occurrences and keeps other readings available.
 frequency-based lookup and can be updated from Settings.
 The latest index also uses annotated fixed expressions and verb particles. Select a part of the expression
 to see matches such as **turned … off** and their corpus counts.
+Choose the expression when saving a card to practice its canonical form. The card retains the occurrence
+and its sentence even after the language index is replaced.
 In **Форма для словникової картки**, choose the reading you intend to save. Equivalent inflections
 of the same lemma, part of speech and reviewed translation share one card and its review history.
 The card retains the recorded form, source sentence and the grammatical data available when saved.

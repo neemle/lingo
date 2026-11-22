@@ -9,7 +9,7 @@ public sealed record WordAnalysis(string Lemma, string PartOfSpeech, string Feat
 
 public sealed record WordContext(string Sentence, int StartUtf16);
 
-public sealed record ExpressionMatch(string Text, string Kind, int Observations);
+public sealed record ExpressionMatch(string Text, string Canonical, string Kind, int Observations);
 
 public sealed record WordLookup(KnowledgePackage Package, int TotalObservations, WordAnalysis[] Analyses,
     ExpressionMatch[] Expressions);

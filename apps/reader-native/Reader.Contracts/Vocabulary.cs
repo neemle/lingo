@@ -12,7 +12,11 @@ public sealed record Vocabulary(
     ReviewState Reverse)
 {
     public LemmaSnapshot? Analysis { get; init; }
+    public ExpressionSnapshot? Expression { get; init; }
 }
 
 public sealed record LemmaSnapshot(string Lemma, string Surface, string PartOfSpeech, string Features,
+    string Source, string SourceVersion, string? Context = null, string? DocumentId = null);
+
+public sealed record ExpressionSnapshot(string Canonical, string Surface, string Kind, int Observations,
     string Source, string SourceVersion, string? Context = null, string? DocumentId = null);

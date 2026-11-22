@@ -36,6 +36,22 @@
        </Label>
        <Label Text="{Binding Analysis.Source, StringFormat='Граматичний розбір: {0}'}" FontSize="12" />
       </VerticalStackLayout>
+      <VerticalStackLayout Spacing="4">
+       <VerticalStackLayout.Triggers>
+        <DataTrigger TargetType="VerticalStackLayout" Binding="{Binding Expression}" Value="{x:Null}">
+         <Setter Property="IsVisible" Value="False" />
+        </DataTrigger>
+       </VerticalStackLayout.Triggers>
+       <Label Text="{Binding Expression.Surface, StringFormat='У тексті: {0}'}" FontSize="13" />
+       <Label Text="{Binding Expression.Context}" FontSize="14" LineBreakMode="WordWrap">
+        <Label.Triggers>
+         <DataTrigger TargetType="Label" Binding="{Binding Expression.Context}" Value="{x:Null}">
+          <Setter Property="IsVisible" Value="False" />
+         </DataTrigger>
+        </Label.Triggers>
+       </Label>
+       <Label Text="{Binding Expression.Source, StringFormat='Джерело виразу: {0}'}" FontSize="12" />
+      </VerticalStackLayout>
       <Label Text="{Binding Forward.Reviews, StringFormat='Прямий напрям: {0} повторень'}" FontSize="12" />
       <Label Text="{Binding Reverse.Reviews, StringFormat='Зворотний напрям: {0} повторень'}" FontSize="12" />
      </VerticalStackLayout>

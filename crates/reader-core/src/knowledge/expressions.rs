@@ -10,6 +10,7 @@ const MAX_PARTICLE_GAP: usize = 6;
 #[serde(rename_all = "camelCase")]
 pub struct ExpressionMatch {
     text: String,
+    canonical: String,
     kind: String,
     observations: u32,
 }
@@ -179,21 +180,25 @@ pub(super) fn lookup(
             ))
         })
         .map_err(|error| error.to_string())?;
-    let mut matches = BTreeMap::<(String, String), u32>::new();
+    let mut matches = BTreeMap::<(String, String, String), u32>::new();
     for row in rows {
         let (kind, parts, observations) = row.map_err(|error| error.to_string())?;
         let parts: Vec<String> = serde_json::from_str(&parts).map_err(|error| error.to_string())?;
+        let canonical = parts.join(" ");
         for start in 0..=selected {
             if let Some(text) = match_expression(&window, &parts, &kind, start, selected) {
-                let count = matches.entry((text, kind.clone())).or_default();
+                let count = matches
+                    .entry((text, kind.clone(), canonical.clone()))
+                    .or_default();
                 *count = (*count).max(observations);
             }
         }
     }
     let mut matches: Vec<_> = matches
         .into_iter()
-        .map(|((text, kind), observations)| ExpressionMatch {
+        .map(|((text, kind, canonical), observations)| ExpressionMatch {
             text,
+            canonical,
             kind,
             observations,
         })

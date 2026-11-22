@@ -26,7 +26,9 @@ public partial class ReadingPage : ContentPage
     }
     private readonly LocalSpeech speech = new();
     private TextSelection? selection;
-    private LemmaSnapshot[] vocabularyReadings = [];
+    private sealed record VocabularyReadingOption(string Label, LemmaSnapshot? Lemma = null,
+        ExpressionSnapshot? Expression = null);
+    private VocabularyReadingOption[] vocabularyReadings = [];
     private string? documentId;
     private int speechRequest;
     private bool speechPaused;
@@ -238,15 +240,22 @@ public partial class ReadingPage : ContentPage
             if (lookup.Expressions.Length > 0)
                 KnowledgeAnalysis.Text += Environment.NewLine + string.Join(Environment.NewLine, lookup.Expressions.Select(expression =>
                     $"{(expression.Kind == "particle" ? "Дієслово з часткою" : "Сталий вираз")} · {expression.Text} · у корпусі: {expression.Observations}"));
-            vocabularyReadings = lookup.Analyses.DistinctBy(analysis => (analysis.Lemma, analysis.PartOfSpeech))
-                .Select(analysis => new LemmaSnapshot(analysis.Lemma, selected.Text, analysis.PartOfSpeech,
-                    analysis.Features, lookup.Package.Name, $"{lookup.Package.Version} · {lookup.Package.Revision}"))
+            var version = $"{lookup.Package.Version} · {lookup.Package.Revision}";
+            var lemmas = lookup.Analyses.DistinctBy(analysis => (analysis.Lemma, analysis.PartOfSpeech))
+                .Select(analysis => new VocabularyReadingOption($"Лема · {analysis.Lemma} · {analysis.PartOfSpeech}",
+                    Lemma: new LemmaSnapshot(analysis.Lemma, selected.Text, analysis.PartOfSpeech,
+                        analysis.Features, lookup.Package.Name, version)));
+            var expressions = lookup.Expressions.DistinctBy(expression => (expression.Canonical, expression.Kind))
+                .Select(expression => new VocabularyReadingOption($"Вираз · {expression.Text}",
+                    Expression: new ExpressionSnapshot(expression.Canonical, expression.Text, expression.Kind,
+                        expression.Observations, lookup.Package.Name, version)));
+            vocabularyReadings = lemmas.Concat(expressions)
                 .ToArray();
             if (vocabularyReadings.Length > 0)
             {
                 VocabularyReading.ItemsSource = new[] { $"Виділена форма · {selected.Text}" }
-                    .Concat(vocabularyReadings.Select(analysis => $"Лема · {analysis.Lemma} · {analysis.PartOfSpeech}")).ToArray();
-                VocabularyReading.SelectedIndex = vocabularyReadings.Length == 1 ? 1 : 0;
+                    .Concat(vocabularyReadings.Select(reading => reading.Label)).ToArray();
+                VocabularyReading.SelectedIndex = vocabularyReadings is [{ Lemma: not null }] ? 1 : 0;
                 VocabularyReading.IsVisible = true;
             }
         }
@@ -261,9 +270,9 @@ public partial class ReadingPage : ContentPage
     {
         if (selection is not { } selected) return;
         var index = VocabularyReading.SelectedIndex - 1;
-        var analysis = VocabularyReading.IsVisible && index >= 0 && index < vocabularyReadings.Length
+        var reading = VocabularyReading.IsVisible && index >= 0 && index < vocabularyReadings.Length
             ? vocabularyReadings[index] : null;
-        await AppState.Session.SaveWordAsync(selected, Translation.Text ?? "", analysis);
+        await AppState.Session.SaveWordAsync(selected, Translation.Text ?? "", reading?.Lemma, reading?.Expression);
         if (selection == selected && AppState.Session.Error.Length == 0)
         {
             WordCard.IsVisible = false;

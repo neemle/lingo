@@ -186,6 +186,7 @@ mod tests {
                 forward: ReviewState::default(),
                 reverse: ReviewState::default(),
                 analysis: None,
+                expression: None,
             })
             .unwrap();
         let options = vec!["merci".into(), "bonjour".into(), "salut".into()];

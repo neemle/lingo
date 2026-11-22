@@ -99,6 +99,23 @@ pub struct Vocabulary {
     pub reverse: ReviewState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analysis: Option<Box<LemmaSnapshot>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expression: Option<Box<ExpressionSnapshot>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpressionSnapshot {
+    pub canonical: String,
+    pub surface: String,
+    pub kind: String,
+    pub observations: u32,
+    pub source: String,
+    pub source_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +145,18 @@ impl Vocabulary {
     }
 
     fn word_key(&self) -> String {
+        if let Some(expression) = &self.expression {
+            return format!(
+                "expression:{}",
+                serde_json::json!([
+                    self.language,
+                    self.target_language,
+                    knowledge::word_key(&expression.canonical),
+                    expression.kind,
+                    knowledge::word_key(&self.translation),
+                ])
+            );
+        }
         match &self.analysis {
             None => self.surface_key(&self.word),
             Some(analysis) => format!(
@@ -143,7 +172,26 @@ impl Vocabulary {
         }
     }
 
-    fn validate_analysis(&self) -> Result<()> {
+    fn validate_annotations(&self) -> Result<()> {
+        if let Some(expression) = &self.expression {
+            if self.analysis.is_some()
+                || self.word != expression.canonical
+                || !["fixed", "particle"].contains(&expression.kind.as_str())
+                || expression.observations == 0
+            {
+                return Err("Некоректний вираз словникової картки".into());
+            }
+            for (value, limit) in [
+                (&expression.canonical, 500),
+                (&expression.surface, 500),
+                (&expression.source, 120),
+                (&expression.source_version, 80),
+            ] {
+                if value.trim().is_empty() || value.len() > limit {
+                    return Err("Некоректний запис виразу словникової картки".into());
+                }
+            }
+        }
         if let Some(analysis) = &self.analysis {
             for (value, limit) in [
                 (&analysis.lemma, 500),
@@ -778,7 +826,17 @@ impl Store {
             analysis.document_id = None;
             entry.word = analysis.lemma.clone();
         }
-        entry.validate_analysis()?;
+        if let Some(expression) = &mut entry.expression {
+            expression.canonical = expression
+                .canonical
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            expression.context = None;
+            expression.document_id = None;
+            entry.word = expression.canonical.clone();
+        }
+        entry.validate_annotations()?;
 
         let key = entry.word_key();
         let tx = self
@@ -796,7 +854,7 @@ impl Store {
         if let Some(body) = existing {
             return serde_json::from_str(&body).map_err(|e| e.to_string());
         }
-        if entry.analysis.is_some() {
+        if entry.analysis.is_some() || entry.expression.is_some() {
             let legacy_key = entry.surface_key(&entry.word);
             let legacy: Option<String> = tx
                 .query_row(
@@ -810,13 +868,18 @@ impl Store {
                 let mut card: Vocabulary =
                     serde_json::from_str(&body).map_err(|error| error.to_string())?;
                 card.word = entry.word;
-                card.analysis = entry.analysis.map(|mut analysis| {
-                    if entry.context != card.context || entry.document_id != card.document_id {
-                        analysis.context = Some(entry.context);
-                        analysis.document_id = Some(entry.document_id);
+                if entry.context != card.context || entry.document_id != card.document_id {
+                    if let Some(analysis) = &mut entry.analysis {
+                        analysis.context = Some(entry.context.clone());
+                        analysis.document_id = Some(entry.document_id.clone());
                     }
-                    analysis
-                });
+                    if let Some(expression) = &mut entry.expression {
+                        expression.context = Some(entry.context);
+                        expression.document_id = Some(entry.document_id);
+                    }
+                }
+                card.analysis = entry.analysis;
+                card.expression = entry.expression;
                 tx.execute(
                     "UPDATE vocabulary SET word_key=?1, body=?2 WHERE id=?3",
                     params![
@@ -1028,7 +1091,7 @@ impl Store {
             if v.word.trim().is_empty() || v.translation.trim().is_empty() {
                 return Err("Некоректна словникова картка".into());
             }
-            v.validate_analysis()?;
+            v.validate_annotations()?;
         }
         let tx = self.connection.transaction().map_err(|e| e.to_string())?;
         for (d, o) in validated {
@@ -1181,6 +1244,7 @@ mod tests {
                 forward: ReviewState::default(),
                 reverse: ReviewState::default(),
                 analysis: None,
+                expression: None,
             })
             .unwrap();
         db.review(&entry.id, "forward", 2).unwrap();
@@ -1246,6 +1310,7 @@ mod tests {
                 document_id: "story".into(),
                 forward: ReviewState::default(),
                 reverse: ReviewState::default(),
+                expression: None,
                 analysis: pos.map(|pos| {
                     Box::new(LemmaSnapshot {
                         lemma: "read".into(),
@@ -1309,6 +1374,75 @@ mod tests {
         assert_eq!(restored.snapshot().unwrap().vocabulary.len(), 3);
         assert_eq!(restored.export().unwrap().reviews[0].entry_id, first.id);
     }
+    #[test]
+    fn expression_cards_reuse_canonical_identity_and_preserve_evidence() {
+        let mut db = Store::open(Path::new(":memory:")).unwrap();
+        let make_card = |surface: &str, translation: &str, context: &str| Vocabulary {
+            id: String::new(),
+            word: "off".into(),
+            translation: translation.into(),
+            language: "en".into(),
+            target_language: "uk".into(),
+            context: context.into(),
+            document_id: "story".into(),
+            forward: ReviewState::default(),
+            reverse: ReviewState::default(),
+            analysis: None,
+            expression: Some(Box::new(ExpressionSnapshot {
+                canonical: "turn off".into(),
+                surface: surface.into(),
+                kind: "particle".into(),
+                observations: 2,
+                source: "UD English EWT".into(),
+                source_version: "2.18".into(),
+                context: None,
+                document_id: None,
+            })),
+        };
+        let mut manual = make_card("turn off", "вимикати", "Turn off the fan.");
+        manual.word = "turn off".into();
+        manual.expression = None;
+        let legacy = db.save_word(manual).unwrap();
+        db.review(&legacy.id, "forward", 2).unwrap();
+        let reviewed = db
+            .save_word(make_card(
+                "turned … off",
+                "вимикати",
+                "She turned the light off.",
+            ))
+            .unwrap();
+        let again = db
+            .save_word(make_card(
+                "turn off",
+                "вимикати",
+                "Please turn off the fan.",
+            ))
+            .unwrap();
+        assert_eq!(reviewed.id, legacy.id);
+        assert_eq!(again.id, reviewed.id);
+        assert_eq!(again.word, "turn off");
+        assert_eq!(again.forward.reviews, 1);
+        assert_eq!(again.context, "Turn off the fan.");
+        let different = db
+            .save_word(make_card("turned … off", "відвертати", ""))
+            .unwrap();
+        assert_ne!(different.id, again.id);
+
+        let mut clean = Store::open(Path::new(":memory:")).unwrap();
+        clean.restore(db.export().unwrap()).unwrap();
+        let entry = clean
+            .save_word(make_card("turn off", "вимикати", ""))
+            .unwrap();
+        let snapshot = entry.expression.unwrap();
+        assert_eq!(snapshot.surface, "turned … off");
+        assert_eq!(
+            snapshot.context.as_deref(),
+            Some("She turned the light off.")
+        );
+        assert_eq!(snapshot.source, "UD English EWT");
+        assert_eq!(clean.export().unwrap().reviews[0].entry_id, again.id);
+    }
+
     #[test]
     fn speech_checkpoint_restarts_and_survives_backup() {
         let dir = tempfile::tempdir().unwrap();
