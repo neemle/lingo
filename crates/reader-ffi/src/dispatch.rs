@@ -46,6 +46,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
                     .collect::<Vec<_>>()
             }),
         ),
+        Command::PdfOcrJob { job } => value(store.pdf_ocr_job(job)),
         Command::ImportMixedPdf {
             name,
             bytes,
@@ -103,9 +104,10 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::CheckOptionalModelSpace { id, staging_root } => {
             value(store.check_optional_model_space(&id, std::path::Path::new(&staging_root)))
         }
-        Command::InstallOptionalModel { id, staging_root } => {
-            value(store.install_optional_model(&id, std::path::Path::new(&staging_root)))
-        }
+        Command::InstallOptionalModel { .. } => Err(Error::new(
+            "internal_error",
+            "Optional model installation requires unlocked dispatch",
+        )),
         Command::RollbackOptionalModel { id } => value(store.rollback_optional_model(&id)),
         Command::VerifyOptionalModel { id } => value(store.verify_optional_model(&id)),
         Command::RemoveOptionalModel { id } => value(store.remove_optional_model(&id)),

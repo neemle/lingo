@@ -101,7 +101,7 @@ public partial class SettingsPage
             cancellation.Token.ThrowIfCancellationRequested();
 
             StopOptionalModel.IsVisible = false;
-            OptionalModelStatus.Text = "Перевірка й встановлення…";
+            OptionalModelStatus.Text = "Перевірка файлів і контрольний запуск…";
             await AppState.Session.InstallOptionalModelAsync(model.Id, OptionalStagingRoot);
             OptionalModelStatus.Text = $"Файли {model.Name} перевірено й встановлено.";
             await RefreshOptionalModelsAsync();

@@ -73,6 +73,13 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
+        Command::InstallOptionalModel { id, staging_root } => {
+            let job = registry::lock()?
+                .store(handle)?
+                .prepare_optional_model_install(id, std::path::Path::new(staging_root))
+                .map_err(gateway::domain)?;
+            return encode_job(job.run());
+        }
         Command::InstallLexicalPackage { language, path } => {
             let job = registry::lock()?
                 .store(handle)?

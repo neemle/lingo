@@ -111,7 +111,11 @@ public partial class ReadingPage
             paragraph.PivotLanguage, true, paragraph.MoreBefore, paragraph.MoreAfter);
     }
 
-    private async void TranslateOfflineClicked(object? sender, EventArgs args)
+    private async void TranslateOfflineClicked(object? sender, EventArgs args) => await TranslateOfflineAsync(true);
+
+    private async void TranslateSentenceClicked(object? sender, EventArgs args) => await TranslateOfflineAsync(false);
+
+    private async Task TranslateOfflineAsync(bool useContext)
     {
         var session = AppState.Session;
         if (translating || session.Busy || readiness?.Ready != true || ActiveTranslationKey() is not { } key
@@ -119,29 +123,35 @@ public partial class ReadingPage
 
         translating = true;
         statusKey = key;
-        machineStatus = "Перекладаємо абзац…";
+        machineStatus = useContext ? "Перекладаємо абзац…" : "Перекладаємо речення…";
         UpdateTranslation();
         var scope = new TranslationScope(key.Document, key.Source, key.Target);
         try
         {
-            TranslationWindow? paragraph = null;
-            try
+            if (useContext)
             {
-                var result = await session.TranslateParagraphAsync(key.Document, key.Sentence, key.Target);
-                paragraph = BuildParagraphWindow(document, scope, result);
-                if (paragraph.Units.Length > 0) RememberWindow(paragraph);
-            }
-            catch (Exception error)
-            {
-                if (ActiveTranslationKey() != key || ReviewedFor(document, key.Target, key.Sentence) is not null)
-                    throw;
-                machineStatus = error.Message;
+                try
+                {
+                    var result = await session.TranslateParagraphAsync(key.Document, key.Sentence, key.Target);
+                    var paragraph = BuildParagraphWindow(document, scope, result);
+                    if (paragraph.Units.Length > 0) RememberWindow(paragraph);
+                    if (paragraph.UnitFor(document.Position) is { } translated && session.Document is { } current &&
+                        MachineFor(current, paragraph, translated) is not null)
+                    {
+                        machineStatus = null;
+                        return;
+                    }
+                }
+                catch (Exception error)
+                {
+                    if (ActiveTranslationKey() != key || ReviewedFor(document, key.Target, key.Sentence) is not null)
+                        throw;
+                    machineStatus = error.Message;
+                }
             }
 
             if (ActiveTranslationKey() != key) return;
-            if (session.ReviewedTranslation(key.Target) is not null
-                || paragraph?.UnitFor(document.Position) is { } translated && session.Document is { } current
-                   && MachineFor(current, paragraph, translated) is not null)
+            if (session.ReviewedTranslation(key.Target) is not null)
             {
                 machineStatus = null;
                 return;

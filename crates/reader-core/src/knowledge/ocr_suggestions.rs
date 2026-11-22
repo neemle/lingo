@@ -1,7 +1,9 @@
 use super::word_key;
 use crate::{Result, Store};
+use rusqlite::{Connection, ToSql};
 use serde::Serialize;
 use std::collections::BTreeMap;
+use unicode_normalization::char::is_combining_mark;
 use unicode_segmentation::UnicodeSegmentation;
 
 const LATIN: &str = "abcdefghijklmnopqrstuvwxyz'";
@@ -40,16 +42,84 @@ pub struct OcrSuggestion {
     replacement: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpellingSuggestion {
+    replacement: String,
+    observations: u32,
+    previous_observations: u32,
+    next_observations: u32,
+    high_confidence: bool,
+}
+
+pub(super) fn suggest_spelling(
+    db: &Connection,
+    language: &str,
+    word: &str,
+    key: &str,
+    left: Option<i64>,
+    right: Option<i64>,
+) -> Result<Vec<SpellingSuggestion>> {
+    if !(3..=32).contains(&key.chars().count())
+        || !key.chars().any(char::is_alphabetic)
+        || !key.chars().all(|letter| {
+            letter.is_alphabetic()
+                || letter.is_ascii_digit()
+                || letter == '\''
+                || is_combining_mark(letter)
+        })
+    {
+        return Ok(Vec::new());
+    }
+    let candidates = candidate_edits(key, &alphabet(language));
+    let candidates = serde_json::to_string(&candidates.into_keys().collect::<Vec<_>>())
+        .map_err(|error| error.to_string())?;
+    let context_columns = if left.is_some() || right.is_some() {
+        "coalesce((SELECT sum(observations) FROM neighbors WHERE term=f.term AND side=0 AND neighbor=?2),0),
+         coalesce((SELECT sum(observations) FROM neighbors WHERE term=f.term AND side=1 AND neighbor=?3),0)"
+    } else {
+        "0,0"
+    };
+    let mut query = db.prepare(&format!(
+        "WITH candidates(term, observations, previous, next) AS (
+             SELECT f.term, sum(f.observations), {context_columns}
+             FROM json_each(?1) AS c JOIN forms f ON f.term=c.value GROUP BY f.term
+         )
+         SELECT term, observations, previous, next FROM candidates
+         ORDER BY (previous > 0) + (next > 0) DESC, previous + next DESC, observations DESC, term LIMIT 3"
+    )).map_err(|error| error.to_string())?;
+    let values: &[&dyn ToSql] = &[&candidates, &left, &right];
+    let rows = query
+        .query_map(&values[..query.parameter_count()], |row| {
+            Ok(SpellingSuggestion {
+                replacement: preserve_case(word, &row.get::<_, String>(0)?),
+                observations: row.get(1)?,
+                previous_observations: row.get(2)?,
+                next_observations: row.get(3)?,
+                high_confidence: false,
+            })
+        })
+        .map_err(|error| error.to_string())?;
+    let mut suggestions = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| error.to_string())?;
+    let supports_both_sides = |candidate: &SpellingSuggestion| {
+        candidate.previous_observations > 0 && candidate.next_observations > 0
+    };
+    // A unique candidate must have corpus support against both adjacent words.
+    if let Some((first, alternatives)) = suggestions.split_first_mut() {
+        first.high_confidence =
+            supports_both_sides(first) && !alternatives.iter().any(supports_both_sides);
+    }
+    Ok(suggestions)
+}
+
 impl Store {
     pub fn suggest_ocr(&self, language: &str, text: &str) -> Result<Option<Vec<OcrSuggestion>>> {
         let Some((_, db)) = self.open_knowledge_index(language)? else {
             return Ok(None);
         };
-        let alphabet = match language {
-            "uk" => UKRAINIAN.to_owned(),
-            "fr" => format!("{LATIN}{FRENCH}"),
-            _ => LATIN.to_owned(),
-        };
+        let alphabet = alphabet(language);
         let mut known = db
             .prepare("SELECT EXISTS(SELECT 1 FROM forms WHERE term=?1)")
             .map_err(|error| error.to_string())?;
@@ -100,6 +170,14 @@ impl Store {
         }
         results.truncate(12);
         Ok(Some(results))
+    }
+}
+
+fn alphabet(language: &str) -> String {
+    match language {
+        "uk" => UKRAINIAN.to_owned(),
+        "fr" => format!("{LATIN}{FRENCH}"),
+        _ => LATIN.to_owned(),
     }
 }
 

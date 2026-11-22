@@ -132,6 +132,8 @@
         Style="{StaticResource PlayerButton}" Clicked="EditTranslationClicked" />
        <Button x:Name="TranslateOffline" Text="Перекласти абзац офлайн" Margin="0,3,5,0"
         Style="{StaticResource PlayerButton}" Clicked="TranslateOfflineClicked" />
+       <Button x:Name="TranslateSentence" Text="Перекласти речення" Margin="0,3,5,0"
+        Style="{StaticResource PlayerButton}" Clicked="TranslateSentenceClicked" />
        <Button x:Name="ShareTranslationPair" Text="Поширити пару" Margin="0,3,5,0"
         Style="{StaticResource PlayerButton}" Clicked="ShareTranslationPairClicked" IsVisible="False"
         SemanticProperties.Description="Поширити оригінал і показаний переклад" />
@@ -158,6 +160,8 @@
        Clicked="OpenMeaningsClicked" IsVisible="False" Margin="0,0,7,0" />
       <Button x:Name="OpenSyntax" Text="Синтаксис" Style="{StaticResource PlayerButton}"
        Clicked="OpenSyntaxClicked" IsVisible="False" Margin="0,0,7,0" />
+      <Button x:Name="OpenSpelling" Text="Правопис" Style="{StaticResource PlayerButton}"
+       Clicked="OpenSpellingClicked" IsVisible="False" Margin="0,0,7,0" />
       <Button Text="Поширити виділене" Style="{StaticResource PlayerButton}" Clicked="ShareSelectionClicked"
        Margin="0,0,7,0" SemanticProperties.Description="Поширити виділений уривок оригіналу" />
       <Button x:Name="ExplainWord" Text="Пояснити з Qwen" Style="{StaticResource PlayerButton}" Clicked="ExplainWordClicked" />

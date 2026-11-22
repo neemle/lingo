@@ -93,61 +93,110 @@ impl SpeechJob {
             &spoken,
             SAMPLE_RATE,
         );
-        self.model.run_cached_interactive(|directory| cache.read(directory), |directory, should_yield| {
-            let config = PiperConfig::load(directory)?;
-            let chunks = config.chunks(&spoken)?;
-            let threads = std::thread::available_parallelism().map_or(1, |count| count.get().min(3));
-            let mut session = Session::builder(onnx_runtime::environment()?)
-                .map_err(speech_error)?
-                .with_intra_threads(threads)
-                .map_err(speech_error)?
-                .with_inter_threads(1)
-                .map_err(speech_error)?
-                .commit_from_file(directory.join("piper-uk.onnx"))
-                .map_err(speech_error)?;
-
-            let mut waveform = Vec::new();
-            for chunk in chunks {
-                if should_yield() {
-                    return Err("Локальне озвучення перервано".into());
-                }
-                let ids = config.encode(&chunk)?;
-                let length = ids.len();
-                let input = Tensor::from_array(([1, length], ids)).map_err(speech_error)?;
-                let input_lengths = Tensor::from_array(([1], vec![length as i64])).map_err(speech_error)?;
-                let scales = Tensor::from_array((
-                    [3],
-                    vec![config.inference.noise_scale, config.inference.length_scale / self.rate,
-                        config.inference.noise_w],
-                )).map_err(speech_error)?;
-                let sid = Tensor::from_array(([1], vec![i64::from(self.speaker)])).map_err(speech_error)?;
-                let outputs = session
-                    .run(ort::inputs! {
-                        "input" => input, "input_lengths" => input_lengths, "scales" => scales, "sid" => sid
-                    })
-                    .map_err(speech_error)?;
-                let (shape, samples) = outputs
-                    .get("output")
-                    .ok_or("Голосовий пакет не повернув аудіо")?
-                    .try_extract_tensor::<f32>()
-                    .map_err(speech_error)?;
-                match shape.as_ref() {
-                    [1, 1, 1, count]
-                        if *count > 0 && *count as usize == samples.len() => {}
-                    _ => return Err("Некоректний формат аудіо голосового пакета".into()),
-                }
-                let silence = if waveform.is_empty() { 0 } else { SAMPLE_RATE as usize / 20 };
-                if waveform.len() + silence + samples.len() > MAX_SAMPLES {
-                    return Err("Озвучення перевищує допустимі 45 секунд".into());
-                }
-                waveform.resize(waveform.len() + silence, 0.0);
-                waveform.extend_from_slice(samples);
-            }
-            let audio = to_wav(&waveform, SAMPLE_RATE)?;
-            cache.write(directory, &audio);
-            Ok(audio)
-        })
+        self.model.run_cached_interactive(
+            |directory| cache.read(directory),
+            |directory, should_yield| {
+                let audio = synthesize_at(
+                    directory,
+                    &spoken,
+                    self.speaker,
+                    self.rate,
+                    MAX_SAMPLES,
+                    should_yield,
+                )?;
+                cache.write(directory, &audio);
+                Ok(audio)
+            },
+        )
     }
+}
+
+fn synthesize_at(
+    directory: &Path,
+    spoken: &str,
+    speaker: u32,
+    rate: f32,
+    sample_limit: usize,
+    should_yield: &dyn Fn() -> bool,
+) -> Result<SpeechAudio> {
+    let config = PiperConfig::load(directory)?;
+    let chunks = config.chunks(spoken)?;
+    let threads = std::thread::available_parallelism().map_or(1, |count| count.get().min(3));
+    let mut session = Session::builder(onnx_runtime::environment()?)
+        .map_err(speech_error)?
+        .with_intra_threads(threads)
+        .map_err(speech_error)?
+        .with_inter_threads(1)
+        .map_err(speech_error)?
+        .commit_from_file(directory.join("piper-uk.onnx"))
+        .map_err(speech_error)?;
+
+    let mut waveform = Vec::new();
+    for chunk in chunks {
+        if should_yield() {
+            return Err("Локальне озвучення перервано".into());
+        }
+        let ids = config.encode(&chunk)?;
+        let length = ids.len();
+        let input = Tensor::from_array(([1, length], ids)).map_err(speech_error)?;
+        let input_lengths = Tensor::from_array(([1], vec![length as i64])).map_err(speech_error)?;
+        let scales = Tensor::from_array((
+            [3],
+            vec![
+                config.inference.noise_scale,
+                config.inference.length_scale / rate,
+                config.inference.noise_w,
+            ],
+        ))
+        .map_err(speech_error)?;
+        let sid = Tensor::from_array(([1], vec![i64::from(speaker)])).map_err(speech_error)?;
+        let outputs = session
+            .run(ort::inputs! {
+            "input" => input, "input_lengths" => input_lengths, "scales" => scales, "sid" => sid
+                })
+            .map_err(speech_error)?;
+        let (shape, samples) = outputs
+            .get("output")
+            .ok_or("Голосовий пакет не повернув аудіо")?
+            .try_extract_tensor::<f32>()
+            .map_err(speech_error)?;
+        match shape.as_ref() {
+            [1, 1, 1, count] if *count > 0 && *count as usize == samples.len() => {}
+            _ => return Err("Некоректний формат аудіо голосового пакета".into()),
+        }
+        let silence = if waveform.is_empty() {
+            0
+        } else {
+            SAMPLE_RATE as usize / 20
+        };
+        if waveform.len() + silence + samples.len() > sample_limit {
+            return Err(format!(
+                "Озвучення перевищує допустимі {} секунд",
+                sample_limit / SAMPLE_RATE as usize
+            ));
+        }
+        waveform.resize(waveform.len() + silence, 0.0);
+        waveform.extend_from_slice(samples);
+    }
+    to_wav(&waveform, SAMPLE_RATE)
+}
+
+pub(crate) fn smoke(directory: &Path, interrupted: &dyn Fn() -> bool) -> Result<()> {
+    if interrupted() {
+        return Err("Перевірку Piper відкладено.".into());
+    }
+    synthesize_at(
+        directory,
+        "Тест.",
+        0,
+        1.0,
+        SAMPLE_RATE as usize * 4,
+        interrupted,
+    )?;
+    if interrupted() {
+        return Err("Перевірку Piper відкладено.".into());
+    }
+    Ok(())
 }
 
 pub(crate) const STRESS_MARK: char = '\u{301}';

@@ -168,6 +168,41 @@ impl ExplainWordJob {
     }
 }
 
+/// One short CPU decode verifies the staged GGUF and runtime without generating an explanation.
+pub(crate) fn smoke(directory: &Path, interrupted: &dyn Fn() -> bool) -> Result<()> {
+    let check = || {
+        if interrupted() {
+            Err("Перевірку Qwen відкладено.".into())
+        } else {
+            Ok(())
+        }
+    };
+    check()?;
+    let backend = backend()?;
+    let model = load_model(backend, &directory.join("model.gguf"), 0)?;
+    check()?;
+    let mut context = model
+        .new_context(backend, context_parameters())
+        .map_err(runtime_error)?;
+    let tokens = model.vocab().tokenize(b"Hello", false, false);
+    if tokens.is_empty() || tokens.len() > 16 {
+        return Err("Qwen не закодував короткий контрольний текст.".into());
+    }
+    let mut batch = LlamaBatch::new(16, 1);
+    for (index, token) in tokens.iter().enumerate() {
+        batch
+            .add(*token, index as i32, &[0], index + 1 == tokens.len())
+            .map_err(runtime_error)?;
+    }
+    check()?;
+    context.decode(&mut batch).map_err(runtime_error)?;
+    let logits = context.get_logits();
+    if logits.is_empty() || logits.iter().any(|value| !value.is_finite()) {
+        return Err("Qwen повернув некоректний результат контрольного запуску.".into());
+    }
+    check()
+}
+
 fn backend() -> Result<&'static LlamaBackend> {
     static BACKEND: OnceLock<Result<LlamaBackend>> = OnceLock::new();
     BACKEND

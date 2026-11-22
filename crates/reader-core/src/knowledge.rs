@@ -102,6 +102,7 @@ pub struct WordLookup {
     analyses: Vec<WordAnalysis>,
     expressions: Vec<expressions::ExpressionMatch>,
     syntax_evidence: Vec<syntax::SyntaxEvidence>,
+    spelling_suggestions: Vec<ocr_suggestions::SpellingSuggestion>,
     lexical_package: Option<LexicalPackage>,
     meanings: Vec<WordMeaning>,
 }
@@ -237,6 +238,7 @@ impl Store {
                 analyses: Vec::new(),
                 expressions: Vec::new(),
                 syntax_evidence: Vec::new(),
+                spelling_suggestions: Vec::new(),
                 lexical_package,
                 meanings,
             }));
@@ -244,9 +246,8 @@ impl Store {
         let index_version: u32 = db
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| error.to_string())?;
-        let (previous, next) = context
-            .and_then(|context| context.neighbors(&key))
-            .unwrap_or_default();
+        let neighbors = context.and_then(|context| context.neighbors(&key));
+        let (previous, next) = neighbors.unwrap_or_default();
         let (left, right) = if index_version >= 2 {
             (previous.and_then(token_hash), next.and_then(token_hash))
         } else {
@@ -312,12 +313,19 @@ impl Store {
             context,
             cue,
         )?;
+        let spelling_suggestions =
+            if analyses.is_empty() && meanings.is_empty() && neighbors.is_some() {
+                ocr_suggestions::suggest_spelling(&db, language, word, &key, left, right)?
+            } else {
+                Vec::new()
+            };
         Ok(Some(WordLookup {
             package: pack.describe(index_version),
             total_observations: total,
             analyses,
             expressions,
             syntax_evidence,
+            spelling_suggestions,
             lexical_package,
             meanings,
         }))

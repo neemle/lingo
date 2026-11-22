@@ -220,6 +220,8 @@ pub(crate) fn translate_paragraph(
     }
 
     const CONTEXT_SENTENCES: usize = 4;
+    const CONTEXT_GROUP: usize = 3;
+    const CONTEXT_BYTES: usize = 768;
     let sentences = &document.sentences;
     let paragraph = document.paragraph_utf8_range(sentences[selected].start_utf8);
     let first = sentences
@@ -238,6 +240,10 @@ pub(crate) fn translate_paragraph(
     };
     let mut start = first.max(selected.saturating_sub(CONTEXT_SENTENCES));
     let mut end = last.min(selected + CONTEXT_SENTENCES + 1);
+    // Use paragraph-relative group boundaries so moving the selection does not
+    // change the context of overlapping units.
+    start -= (start - first) % CONTEXT_GROUP;
+    end = last.min(end + (CONTEXT_GROUP - (end - first) % CONTEXT_GROUP) % CONTEXT_GROUP);
     // A nearby window boundary must not cut a strictly continuing physical line.
     while start > first && start + 11 > selected && can_wrap(start - 1, start) {
         start -= 1;
@@ -254,12 +260,18 @@ pub(crate) fn translate_paragraph(
         let mut next = index + 1;
         while next < end
             && next - index < 12
-            && sentences[next]
-                .end_utf8
-                .saturating_sub(sentences[index].start_utf8)
-                <= 1024
-            && can_wrap(next - 1, next)
+            && reviewed(index).is_none()
+            && reviewed(next).is_none()
         {
+            let bytes = sentences[next]
+                .end_utf8
+                .saturating_sub(sentences[index].start_utf8);
+            let continues_context = next - index < CONTEXT_GROUP
+                && (next - first) % CONTEXT_GROUP != 0
+                && bytes <= CONTEXT_BYTES;
+            if !(continues_context || (bytes <= 1024 && can_wrap(next - 1, next))) {
+                break;
+            }
             next += 1;
         }
         if index <= selected && selected < next {

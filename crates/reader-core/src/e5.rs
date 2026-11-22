@@ -126,6 +126,17 @@ impl SemanticVocabularyJob {
     }
 }
 
+pub(crate) fn smoke(directory: &Path, interrupted: &dyn Fn() -> bool) -> Result<()> {
+    check_priority(interrupted)?;
+    let mut encoder = E5::open(directory)?;
+    check_priority(interrupted)?;
+    let vectors = encoder.encode(&["query: book"])?;
+    if vectors.len() != 1 || vectors[0].iter().any(|value| !value.is_finite()) {
+        return Err("E5 повернув некоректний контрольний вектор.".into());
+    }
+    check_priority(interrupted)
+}
+
 #[derive(Default)]
 struct VectorCache {
     vectors: HashMap<Key, Embedding>,

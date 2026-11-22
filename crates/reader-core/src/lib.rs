@@ -17,6 +17,7 @@ pub mod language_detection;
 mod marian_provider;
 mod model_storage;
 pub mod ocr;
+pub mod ocr_jobs;
 mod onnx_runtime;
 pub mod optional_models;
 pub mod pdf_layers;
@@ -361,6 +362,7 @@ impl Store {
             .map_err(|error| error.to_string())?;
         dictionary_transfer::initialize(&connection)?;
         reading_history::initialize(&connection)?;
+        ocr_jobs::initialize(&connection)?;
         Ok(Self {
             connection,
             model_directory: path.with_file_name("translation-models"),

@@ -20,10 +20,14 @@ public sealed record ExpressionMatch(string Text, string Canonical, string Kind,
 public sealed record SyntaxEvidence(string Relation, bool SelectedIsHead, string OtherWord,
     int OtherStartUtf16, int Observations);
 
+public sealed record SpellingSuggestion(string Replacement, int Observations, int PreviousObservations,
+    int NextObservations, bool HighConfidence);
+
 public sealed record WordLookup(KnowledgePackage Package, int TotalObservations, WordAnalysis[] Analyses,
     ExpressionMatch[] Expressions)
 {
     public LexicalPackage? LexicalPackage { get; init; }
     public WordMeaning[] Meanings { get; init; } = [];
     public SyntaxEvidence[] SyntaxEvidence { get; init; } = [];
+    public SpellingSuggestion[] SpellingSuggestions { get; init; } = [];
 }

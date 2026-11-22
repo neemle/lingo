@@ -12,6 +12,7 @@ use std::{
     fs::{self, File},
     io::{self, Write},
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 struct Model {
@@ -318,25 +319,7 @@ impl OptionalModelJob {
         inference: impl FnOnce(&Path, &dyn Fn() -> bool) -> Result<T>,
         requested_yield: &dyn Fn() -> bool,
     ) -> Result<T> {
-        let memory = self.model.budget.readiness();
-        if memory.available_mib.is_none() {
-            return Err("Не вдалося визначити доступну пам’ять. Модель пропущено.".into());
-        }
-        if memory
-            .total_mib
-            .is_some_and(|total| total < memory.minimum_total_mib)
-        {
-            return Err(format!(
-                "Для {} потрібно щонайменше {} МіБ RAM.",
-                self.model.name, memory.minimum_total_mib
-            ));
-        }
-        if !memory.ready {
-            return Err(format!(
-                "Для {} потрібно {} МіБ доступної пам’яті.",
-                self.model.name, memory.required_mib
-            ));
-        }
+        check_memory(self.model)?;
         let installed = self.paths.installed();
         if !package_directory(installed)? {
             return Err("Модель відсутня.".into());
@@ -353,6 +336,61 @@ impl OptionalModelJob {
             return Err("Аналіз відкладено, щоб виконати переклад.".into());
         }
         inference(installed, requested_yield)
+    }
+}
+
+fn check_memory(model: &Model) -> Result<()> {
+    let memory = model.budget.readiness();
+    if memory.available_mib.is_none() {
+        return Err("Не вдалося визначити доступну пам’ять. Модель пропущено.".into());
+    }
+    if memory
+        .total_mib
+        .is_some_and(|total| total < memory.minimum_total_mib)
+    {
+        return Err(format!(
+            "Для {} потрібно щонайменше {} МіБ RAM.",
+            model.name, memory.minimum_total_mib
+        ));
+    }
+    if !memory.ready {
+        return Err(format!(
+            "Для {} потрібно {} МіБ доступної пам’яті.",
+            model.name, memory.required_mib
+        ));
+    }
+    Ok(())
+}
+
+/// A verified local candidate installation independent of the SQLite connection.
+pub struct OptionalModelInstallJob {
+    model: &'static Model,
+    root: PathBuf,
+    staging_root: PathBuf,
+}
+
+impl OptionalModelInstallJob {
+    pub fn run(self) -> Result<()> {
+        install_optional_model_files(&self.root, self.model, &self.staging_root, |directory| {
+            let permit = RESOURCES.optional()?;
+            check_memory(self.model)?;
+            let deadline = Instant::now() + Duration::from_secs(20);
+            let interrupted = || permit.should_yield() || Instant::now() >= deadline;
+            if interrupted() {
+                return Err("Контрольний запуск відкладено. Повторіть встановлення.".into());
+            }
+            match self.model.id {
+                "qwen-0.8b" | "qwen-2b" => crate::qwen::smoke(directory, &interrupted)?,
+                "multilingual-e5-small" => crate::e5::smoke(directory, &interrupted)?,
+                "piper-uk" => crate::tts::smoke(directory, &interrupted)?,
+                "supertonic-3" => crate::supertonic::smoke(directory, &interrupted)?,
+                _ => return Err("Контрольний запуск цієї моделі не підтримується.".into()),
+            }
+            if interrupted() {
+                return Err("Контрольний запуск відкладено. Повторіть встановлення.".into());
+            }
+            Ok(())
+        })
     }
 }
 
@@ -431,37 +469,20 @@ impl Store {
         ])
     }
 
-    pub fn install_optional_model(&self, id: &str, staging_root: &Path) -> Result<()> {
-        self.install_optional_model_files(model(id)?, staging_root)
+    pub fn prepare_optional_model_install(
+        &self,
+        id: &str,
+        staging_root: &Path,
+    ) -> Result<OptionalModelInstallJob> {
+        Ok(OptionalModelInstallJob {
+            model: model(id)?,
+            root: self.optional_model_directory.clone(),
+            staging_root: staging_root.to_owned(),
+        })
     }
 
-    fn install_optional_model_files(&self, model: &Model, staging_root: &Path) -> Result<()> {
-        let source = staging_root.join(model.revision);
-        if !package_directory(&source)? {
-            return Err("Завантажені файли моделі відсутні.".into());
-        }
-        let root = &self.optional_model_directory;
-        fs::create_dir_all(root).map_err(model_error)?;
-        let paths = ModelPaths::new(root, model.id);
-        let _gate = lock_package(&paths.lock, true)?;
-        ensure_capacity([(
-            root,
-            model.assets.iter().map(|asset| asset.bytes).sum::<u64>() + PACKAGE_OVERHEAD,
-        )])?;
-        let staged = tempfile::tempdir_in(root).map_err(model_error)?;
-        for asset in model.assets {
-            let mut output = File::create(staged.path().join(asset.name)).map_err(model_error)?;
-            verify_asset(&source.join(asset.name), asset, &mut output)?;
-            output.sync_all().map_err(model_error)?;
-        }
-        activate_verified_package(
-            staged.path(),
-            &paths.active,
-            &paths.previous,
-            &paths.removed,
-        )?;
-        // Retain the prior install for an explicit offline, checksum-verified rollback.
-        Ok(())
+    pub fn install_optional_model(&self, id: &str, staging_root: &Path) -> Result<()> {
+        self.prepare_optional_model_install(id, staging_root)?.run()
     }
 
     pub fn rollback_optional_model(&self, id: &str) -> Result<()> {
@@ -521,6 +542,42 @@ impl Store {
     }
 }
 
+fn install_optional_model_files(
+    root: &Path,
+    model: &Model,
+    staging_root: &Path,
+    probe: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    let source = staging_root.join(model.revision);
+    if !package_directory(&source)? {
+        return Err("Завантажені файли моделі відсутні.".into());
+    }
+    fs::create_dir_all(root).map_err(model_error)?;
+    let paths = ModelPaths::new(root, model.id);
+    let _gate = lock_package(&paths.lock, true)?;
+    ensure_capacity([(
+        root,
+        model.assets.iter().map(|asset| asset.bytes).sum::<u64>() + PACKAGE_OVERHEAD,
+    )])?;
+    let staged = tempfile::tempdir_in(root).map_err(model_error)?;
+    for asset in model.assets {
+        let mut output = File::create(staged.path().join(asset.name)).map_err(model_error)?;
+        verify_asset(&source.join(asset.name), asset, &mut output)?;
+        output.sync_all().map_err(model_error)?;
+    }
+    probe(staged.path()).map_err(|error| {
+            format!("Модель не активовано: контрольний запуск не завершено. Завантажені файли збережено для повторної спроби. {error}")
+        })?;
+    activate_verified_package(
+        staged.path(),
+        &paths.active,
+        &paths.previous,
+        &paths.removed,
+    )?;
+    // Retain the prior install for an explicit offline, checksum-verified rollback.
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -551,22 +608,39 @@ mod tests {
         let candidate = staged.join("model.onnx");
         let active = store.optional_model_directory.join("fixture/model.onnx");
         fs::write(&candidate, b"abc").unwrap();
-        store
-            .install_optional_model_files(&model, root.path())
-            .unwrap();
+        install_optional_model_files(&store.optional_model_directory, &model, root.path(), |_| {
+            Ok(())
+        })
+        .unwrap();
 
-        store
-            .install_optional_model_files(&model, root.path())
-            .unwrap();
+        install_optional_model_files(&store.optional_model_directory, &model, root.path(), |_| {
+            Ok(())
+        })
+        .unwrap();
         let previous = store
             .optional_model_directory
             .join(".previous-fixture/model.onnx");
         assert_eq!(fs::read(&previous).unwrap(), b"abc");
 
+        let failed_probe = install_optional_model_files(
+            &store.optional_model_directory,
+            &model,
+            root.path(),
+            |_| Err("Контрольний runtime недоступний.".into()),
+        );
+        assert!(failed_probe.unwrap_err().contains("не активовано"));
+        assert_eq!(fs::read(&active).unwrap(), b"abc");
+        assert_eq!(fs::read(&previous).unwrap(), b"abc");
+        assert_eq!(fs::read(&candidate).unwrap(), b"abc");
+
         fs::write(&candidate, b"bad").unwrap();
-        assert!(store
-            .install_optional_model_files(&model, root.path())
-            .is_err());
+        assert!(install_optional_model_files(
+            &store.optional_model_directory,
+            &model,
+            root.path(),
+            |_| Ok(())
+        )
+        .is_err());
         assert_eq!(fs::read(&active).unwrap(), b"abc");
 
         fs::write(&active, b"bad").unwrap();
@@ -578,9 +652,10 @@ mod tests {
 
         fs::write(&active, b"bad").unwrap();
         fs::write(&candidate, b"abc").unwrap();
-        store
-            .install_optional_model_files(&model, root.path())
-            .unwrap();
+        install_optional_model_files(&store.optional_model_directory, &model, root.path(), |_| {
+            Ok(())
+        })
+        .unwrap();
         assert_eq!(fs::read(active).unwrap(), b"abc");
     }
 }

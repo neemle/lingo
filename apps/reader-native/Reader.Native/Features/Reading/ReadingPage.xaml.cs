@@ -190,12 +190,13 @@ public partial class ReadingPage : ContentPage
         var window = active && document is not null && TargetCode is { } targetCode
             ? FindTranslationWindow(document, targetCode) : null;
         var unit = document is not null && window is not null ? window.UnitFor(document.Position) : null;
-        var machine = active && document is not null && TargetCode is { } machineTarget
-            ? ActiveMachine(document, machineTarget) : null;
-        var machineLabel = machine?.JoinedLines == true
-            ? "Машинний переклад об’єднаних рядків" : "Машинний переклад";
+        var alignment = active && document is not null && TargetCode is { } machineTarget
+            ? ActiveMachineAlignment(document, machineTarget) : null;
+        var machine = alignment?.Translation;
+        var machineLabel = alignment?.Unit.Sources.Length > 1 ? "Машинний переклад групи речень"
+            : machine?.JoinedLines == true ? "Машинний переклад об’єднаних рядків" : "Машинний переклад";
         TranslationNotice.Text = !active ? "Відкрийте документ для читання."
-            : translating && key == statusKey ? "Перекладаємо абзац…"
+            : translating && key == statusKey ? machineStatus
             : text is not null ? "Ваш переклад активного речення"
             : machine?.PivotLanguage is { } pivot ? $"{machineLabel} через {DocumentLanguages.Name(pivot)}"
             : machine is not null ? machineLabel
@@ -210,7 +211,9 @@ public partial class ReadingPage : ContentPage
             && (window.MoreBefore || window.MoreAfter);
         TranslateOffline.IsEnabled = active && !session.Busy && !translating && readiness?.Ready == true
             && (window is null || !window.IsParagraph || canExtend
+                || alignment is not null && !ReferenceEquals(unit, alignment.Value.Unit)
                 || document is not null && HasUntranslatedUnits(document, window));
+        TranslateSentence.IsEnabled = active && !session.Busy && !translating && readiness?.Ready == true && text is null;
         OpenTranslationPackages.IsVisible = active && readiness is { Missing.Length: > 0 };
         TargetLanguage.IsEnabled = active && !session.Busy;
         UpdateSourceLocation(document, session.Sentence);
@@ -309,6 +312,7 @@ public partial class ReadingPage : ContentPage
         SelectedWord.Text = selected.Text;
         ShowMeanings(null);
         ShowLocalSyntax(null);
+        ShowSpelling(null);
         KnowledgeAnalysis.Text = "Пошук у мовному пакеті…";
         WordCard.IsVisible = true;
         var index = Array.FindIndex(doc.Sentences, sentence => selected.StartUtf16 >= sentence.StartUtf16
@@ -319,9 +323,11 @@ public partial class ReadingPage : ContentPage
             var context = index < 0 ? null : new WordContext(doc.Sentences[index].Text,
                 selected.StartUtf16 - doc.Sentences[index].StartUtf16);
             var lookup = await session.LookupWordAsync(doc.Language, selected.Text, context);
-            if (selection != selected || session.Document?.Id != doc.Id || !WordCard.IsVisible) return;
+            if (selection != selected || session.Document is not { } current || current.Id != doc.Id
+                || current.Language != doc.Language || !WordCard.IsVisible) return;
             ShowMeanings(lookup);
             ShowLocalSyntax(lookup);
+            ShowSpelling(lookup);
             if (lookup is null)
             {
                 KnowledgeAnalysis.Text = "Встановіть мовний пакет у налаштуваннях.";

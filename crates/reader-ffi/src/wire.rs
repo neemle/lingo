@@ -47,6 +47,9 @@ pub enum Command {
         bytes: Vec<u8>,
         pages: u16,
     },
+    PdfOcrJob {
+        job: reader_core::ocr_jobs::JobRequest,
+    },
     ImportMixedPdf {
         name: String,
         bytes: Vec<u8>,

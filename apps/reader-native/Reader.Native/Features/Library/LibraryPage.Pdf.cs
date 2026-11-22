@@ -15,8 +15,8 @@ public partial class LibraryPage
             var found = false;
             foreach (var job in PdfOcrCheckpoint.List())
             {
-                if (ImportedPdf(snapshot, job) is null) found = true;
-                else job.Complete();
+                if (ImportedPdf(snapshot, job) is not { } document) found = true;
+                else job.Complete(document.Id);
             }
             return found;
         });
@@ -50,7 +50,7 @@ public partial class LibraryPage
             {
                 if (await DisplayAlertAsync("Видалити чернетку OCR?", job.Name, "Видалити", "Скасувати"))
                 {
-                    await Task.Run(job.Complete);
+                    await Task.Run(job.Cancel);
                     await RefreshPendingPdfAsync();
                 }
                 return;
@@ -82,6 +82,7 @@ public partial class LibraryPage
         ResumePdf.IsVisible = false;
         PausePdf.IsVisible = PausePdf.IsEnabled = true;
         SetPdfStatus($"{job.Name} · відкриваємо PDF…");
+        var started = false;
         try
         {
             var session = AppState.Session;
@@ -89,10 +90,12 @@ public partial class LibraryPage
             var imported = ImportedPdf(session.Snapshot, job);
             if (imported is not null)
             {
-                await Task.Run(job.Complete);
+                await Task.Run(() => job.Complete(imported.Id));
                 SetPdfStatus("");
                 return imported.Id;
             }
+            await Task.Run(job.Start);
+            started = true;
 
             var progress = new Progress<int>(saved =>
             {
@@ -144,17 +147,19 @@ public partial class LibraryPage
             if (session.Error.Length > 0) throw new InvalidDataException(session.Error);
             if (session.Document is not { } document || document.SourceHash != job.Hash)
                 throw new InvalidDataException("Імпорт PDF не підтверджено.");
-            await Task.Run(job.Complete);
+            await Task.Run(() => job.Complete(document.Id));
             SetPdfStatus("");
             return document.Id;
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
+            if (started) await Task.Run(job.Pause);
             SetPdfStatus($"{job.Name} · розпізнавання призупинено. Прогрес збережено.");
             return null;
         }
         catch
         {
+            if (started) await Task.Run(job.Fail);
             SetPdfStatus($"{job.Name} · збережений прогрес доступний у бібліотеці.");
             throw;
         }

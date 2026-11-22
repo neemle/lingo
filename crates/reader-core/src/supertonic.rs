@@ -135,6 +135,18 @@ impl MultilingualSpeechJob {
     }
 }
 
+pub(crate) fn smoke(directory: &Path, interrupted: &dyn Fn() -> bool) -> Result<()> {
+    for voice in VOICES {
+        check_interrupted(interrupted)?;
+        let mut engine = Engine::load(directory, voice)?;
+        check_interrupted(interrupted)?;
+        let samples =
+            engine.synthesize("Тест.", "uk", 1.0, SAMPLE_RATE as usize * 4, interrupted)?;
+        to_wav(&samples, SAMPLE_RATE)?;
+    }
+    check_interrupted(interrupted)
+}
+
 #[derive(Deserialize)]
 struct Configuration {
     ae: AudioConfiguration,

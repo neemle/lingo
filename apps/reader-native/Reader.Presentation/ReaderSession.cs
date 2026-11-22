@@ -84,6 +84,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public Task<int[]> PdfPagesNeedingOcrAsync(string name, byte[] bytes, int pages) =>
         Task.Run(() => client.PdfPagesNeedingOcr(name, bytes, pages));
 
+    public T PdfOcrJob<T>(object job) => client.PdfOcrJob<T>(job);
+
     public Task ImportMixedPdfAsync(string name, byte[] bytes, string language, OcrLine[] lines, int pages) =>
         RunAsync(() =>
         {

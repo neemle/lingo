@@ -56,6 +56,8 @@ public sealed class CoreClient : IDisposable
         Call<int[]>(new { version = 1, operation = "pdf_pages_needing_ocr", name,
             bytes = bytes.Select(value => (int)value).ToArray(), pages });
 
+    public T PdfOcrJob<T>(object job) => Call<T>(new { version = 1, operation = "pdf_ocr_job", job });
+
     public Document ImportMixedPdf(string name, byte[] bytes, string language, OcrLine[] lines, int pages) =>
         Call<Document>(new { version = 1, operation = "import_mixed_pdf", name,
             bytes = bytes.Select(value => (int)value).ToArray(), language, lines, pages });
@@ -95,7 +97,7 @@ public sealed class CoreClient : IDisposable
     public void CheckOptionalModelSpace(string id, string stagingRoot) =>
         Call<JsonElement>(new { version = 1, operation = "check_optional_model_space", id, stagingRoot });
     public void InstallOptionalModel(string id, string stagingRoot) =>
-        Call<JsonElement>(new { version = 1, operation = "install_optional_model", id, stagingRoot });
+        CallIndependent<JsonElement>(new { version = 1, operation = "install_optional_model", id, stagingRoot });
     public void RollbackOptionalModel(string id) =>
         Call<JsonElement>(new { version = 1, operation = "rollback_optional_model", id });
     public void VerifyOptionalModel(string id) =>
