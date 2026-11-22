@@ -212,6 +212,12 @@ pub enum Command {
         #[serde(default)]
         background: bool,
     },
+    CachedTranslation {
+        id: String,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        target: String,
+    },
     TranslateSentence {
         id: String,
         #[serde(rename = "sentenceId")]

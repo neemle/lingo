@@ -261,6 +261,7 @@ public partial class ReadingPage : ContentPage
         UpdateSourceLocation(document, session.Sentence);
         UpdateParagraphPreview(document, window, unit);
         TrackTranslationScroll(key);
+        _ = RestoreCachedTranslationAsync();
         ScheduleAutoTranslation();
     }
 

@@ -21,9 +21,9 @@ use crate::{
     resources::RESOURCES,
     space::{ensure_capacity, PACKAGE_OVERHEAD},
     translation::{
-        input_for_sentence, route_readiness, translate_paragraph, AlignedTranslation, ModelEdge,
-        ParagraphTranslation, TranslationProvider, TranslationReadiness, TranslationRequest,
-        TranslationSettings,
+        cached_translation, input_for_sentence, route_readiness, translate_paragraph,
+        AlignedTranslation, CachedTranslation, ModelEdge, ParagraphTranslation,
+        TranslationProvider, TranslationReadiness, TranslationRequest, TranslationSettings,
     },
     Result, Store,
 };
@@ -105,12 +105,10 @@ pub struct TranslationWorker {
 }
 
 impl TranslationWorker {
-    fn open(self) -> Result<Store> {
-        let connection = Connection::open_with_flags(
-            &self.database,
-            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(|error| error.to_string())?;
+    fn open(self, mode: OpenFlags) -> Result<Store> {
+        let connection =
+            Connection::open_with_flags(&self.database, mode | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+                .map_err(|error| error.to_string())?;
         Ok(Store {
             connection,
             model_directory: self.model_directory,
@@ -125,7 +123,7 @@ impl TranslationWorker {
         sentence_id: &str,
         target: &str,
     ) -> Result<Option<AlignedTranslation>> {
-        self.open()?
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?
             .translate_installed_sentence(document_id, sentence_id, target)
     }
 
@@ -136,8 +134,18 @@ impl TranslationWorker {
         target: &str,
         background: bool,
     ) -> Result<ParagraphTranslation> {
-        self.open()?
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?
             .translate_paragraph_with_priority(document_id, sentence_id, target, background)
+    }
+
+    pub fn cached_translation(
+        self,
+        document_id: &str,
+        sentence_id: &str,
+        target: &str,
+    ) -> Result<CachedTranslation> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_ONLY)?
+            .cached_installed_translation(document_id, sentence_id, target)
     }
 }
 
@@ -352,12 +360,7 @@ impl Store {
         target: &str,
         background: bool,
     ) -> Result<ParagraphTranslation> {
-        let document = self.translation_document(document_id)?;
-        let selected = document
-            .sentences
-            .iter()
-            .position(|sentence| sentence.id == sentence_id)
-            .ok_or("Речення для перекладу не знайдено")?;
+        let (document, selected) = self.translation_selection(document_id, sentence_id)?;
         let directory = self.model_directory.clone();
         translate_paragraph(
             self,
@@ -371,7 +374,22 @@ impl Store {
         )
     }
 
-    fn translation_document(&self, document_id: &str) -> Result<crate::Document> {
+    pub fn cached_installed_translation(
+        &self,
+        document_id: &str,
+        sentence_id: &str,
+        target: &str,
+    ) -> Result<CachedTranslation> {
+        let (document, selected) = self.translation_selection(document_id, sentence_id)?;
+        let installed = MarianProvider::interactive(&self.model_directory).installed_models()?;
+        cached_translation(self, &installed, &document, selected, target)
+    }
+
+    fn translation_selection(
+        &self,
+        document_id: &str,
+        sentence_id: &str,
+    ) -> Result<(crate::Document, usize)> {
         let body: String = self
             .connection
             .query_row(
@@ -380,7 +398,14 @@ impl Store {
                 |row| row.get(0),
             )
             .map_err(|error| error.to_string())?;
-        serde_json::from_str(&body).map_err(|error| error.to_string())
+        let document: crate::Document =
+            serde_json::from_str(&body).map_err(|error| error.to_string())?;
+        let selected = document
+            .sentences
+            .iter()
+            .position(|sentence| sentence.id == sentence_id)
+            .ok_or("Речення для перекладу не знайдено")?;
+        Ok((document, selected))
     }
 
     pub fn translation_readiness(
@@ -400,12 +425,7 @@ impl Store {
         sentence_id: &str,
         target: &str,
     ) -> Result<Option<AlignedTranslation>> {
-        let document = self.translation_document(document_id)?;
-        let selected = document
-            .sentences
-            .iter()
-            .position(|sentence| sentence.id == sentence_id)
-            .ok_or("Речення для перекладу не знайдено")?;
+        let (document, selected) = self.translation_selection(document_id, sentence_id)?;
         let (text, joined_lines) = input_for_sentence(&document, selected);
         self.translate_aligned(
             &mut MarianProvider::interactive(package_dir),

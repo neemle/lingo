@@ -80,6 +80,22 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 };
             }
         }
+        Command::CachedTranslation {
+            id,
+            sentence_id,
+            target,
+        } => {
+            let worker = registry::lock()?
+                .store(handle)?
+                .prepare_translation_worker();
+            if let Some(worker) = worker {
+                return dispatch::cached_translation(worker.cached_translation(
+                    id,
+                    sentence_id,
+                    target,
+                ));
+            }
+        }
         Command::SemanticVocabulary { query, document_id } => {
             let job = registry::lock()?
                 .store(handle)?

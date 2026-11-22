@@ -207,6 +207,16 @@ pub struct ParagraphUnit {
     pub reviewed: bool,
 }
 
+pub struct CachedTranslation {
+    pub paragraph: ParagraphTranslation,
+    pub sentence: Option<AlignedTranslation>,
+}
+
+struct ParagraphPlan {
+    result: ParagraphTranslation,
+    pending: Vec<(usize, String)>,
+}
+
 pub(crate) fn translate_paragraph(
     store: &mut Store,
     provider: &mut impl TranslationProvider,
@@ -214,6 +224,71 @@ pub(crate) fn translate_paragraph(
     selected: usize,
     target: &str,
 ) -> Result<ParagraphTranslation> {
+    let ParagraphPlan {
+        mut result,
+        pending,
+    } = paragraph_plan(document, selected, target)?;
+    if !pending.is_empty() {
+        let (indices, input): (Vec<_>, Vec<_>) = pending.into_iter().unzip();
+        if let Some(aligned) =
+            store.translate_units(provider, &document.language, target, &input)?
+        {
+            result.pivot_language = aligned.route.pivot_language().map(str::to_owned);
+            for (index, text) in indices.into_iter().zip(aligned.segments) {
+                result.units[index].translation = Some(text);
+            }
+        }
+    }
+    Ok(result)
+}
+
+pub(crate) fn cached_translation(
+    store: &Store,
+    installed: &[ModelEdge],
+    document: &crate::Document,
+    selected: usize,
+    target: &str,
+) -> Result<CachedTranslation> {
+    let ParagraphPlan {
+        result: mut paragraph,
+        pending,
+    } = paragraph_plan(document, selected, target)?;
+    let mut sentence = None;
+    if let Some(route) = resolve_route(installed, &document.language, target)? {
+        paragraph.pivot_language = route.pivot_language().map(str::to_owned);
+        for (index, text) in pending {
+            paragraph.units[index].translation = store
+                .cached_segments(&unit_cache_key(&route, &text)?, 1)?
+                .map(|mut segments| segments.remove(0));
+        }
+
+        let active_id = &document.sentences[selected].id;
+        if !paragraph
+            .units
+            .iter()
+            .any(|unit| unit.translation.is_some() && unit.sentence_ids.contains(active_id))
+        {
+            let (text, joined_lines) = input_for_sentence(document, selected);
+            if let Some(segments) = store.cached_segments(&unit_cache_key(&route, &text)?, 1)? {
+                sentence = Some(AlignedTranslation {
+                    route,
+                    segments,
+                    joined_lines,
+                });
+            }
+        }
+    }
+    Ok(CachedTranslation {
+        paragraph,
+        sentence,
+    })
+}
+
+fn paragraph_plan(
+    document: &crate::Document,
+    selected: usize,
+    target: &str,
+) -> Result<ParagraphPlan> {
     valid_language(target)?;
     if document.language == target {
         return Err("Мова перекладу має відрізнятися від мови джерела".into());
@@ -312,21 +387,14 @@ pub(crate) fn translate_paragraph(
         true
     });
     pending.sort_by_key(|(index, _)| *index);
-    let mut pivot_language = None;
-    if !pending.is_empty() {
-        let (indices, input): (Vec<_>, Vec<_>) = pending.into_iter().unzip();
-        if let Some(result) = store.translate_units(provider, &document.language, target, &input)? {
-            pivot_language = result.route.pivot_language().map(str::to_owned);
-            for (index, translation) in indices.into_iter().zip(result.segments) {
-                units[index].translation = Some(translation);
-            }
-        }
-    }
-    Ok(ParagraphTranslation {
-        units,
-        pivot_language,
-        more_before: first < start,
-        more_after: end < last,
+    Ok(ParagraphPlan {
+        result: ParagraphTranslation {
+            units,
+            pivot_language: None,
+            more_before: first < start,
+            more_after: end < last,
+        },
+        pending,
     })
 }
 
@@ -436,6 +504,79 @@ mod tests {
                 && unsupported.missing.is_empty()
                 && unsupported.pivot_language.is_none()
         );
+    }
+
+    #[test]
+    fn reader_restores_partial_paragraph_and_sentence_cache_after_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("library.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        let document = store
+            .import(
+                "story.txt",
+                b"First sentence. Second sentence. Third sentence. Fourth sentence.",
+                "en",
+            )
+            .unwrap();
+        let mut edge = ModelEdge {
+            source: "en".into(),
+            target: "fr".into(),
+            revision: "test-v1".into(),
+            quality: None,
+        };
+        let route = Route::Direct(edge.clone());
+        let selected = 1;
+        let first = &document.sentences[selected].text;
+        let fourth = &document.sentences[3].text;
+        assert_eq!(
+            unit_cache_key(&route, first).unwrap(),
+            cache_key(
+                &route,
+                std::slice::from_ref(first),
+                None,
+                TranslationSettings::default(),
+            )
+            .unwrap()
+        );
+        store
+            .save_cached_segments([
+                (
+                    unit_cache_key(&route, first).unwrap(),
+                    &["Deux.".into()][..],
+                ),
+                (
+                    unit_cache_key(&route, fourth).unwrap(),
+                    &["Quatre.".into()][..],
+                ),
+            ])
+            .unwrap();
+        drop(store);
+
+        let store = Store::open(&path).unwrap();
+        let cached = cached_translation(
+            &store,
+            std::slice::from_ref(&edge),
+            &document,
+            selected,
+            "fr",
+        )
+        .unwrap();
+        assert_eq!(cached.paragraph.units.len(), 2);
+        assert!(cached.paragraph.units[0].translation.is_none());
+        assert_eq!(
+            cached.paragraph.units[1].translation.as_deref(),
+            Some("Quatre.")
+        );
+        assert_eq!(cached.sentence.unwrap().segments, ["Deux."]);
+
+        edge.revision = "test-v2".into();
+        let stale = cached_translation(&store, &[edge], &document, selected, "fr").unwrap();
+        assert!(stale
+            .paragraph
+            .units
+            .iter()
+            .all(|unit| unit.translation.is_none()));
+        assert!(stale.sentence.is_none());
     }
 
     #[test]
@@ -572,7 +713,7 @@ impl Store {
         let mut uncached = Vec::new();
         let mut output = vec![String::new(); input.len()];
         for (index, text) in input.iter().enumerate() {
-            let key = cache_key(&route, std::slice::from_ref(text), None, settings)?;
+            let key = unit_cache_key(&route, text)?;
             if let Some(mut value) = self.cached_segments(&key, 1)? {
                 output[index] = value.remove(0);
             } else {
@@ -653,9 +794,13 @@ impl Store {
     }
 }
 
+fn unit_cache_key(route: &Route, text: &str) -> Result<String> {
+    cache_key(route, &[text], None, TranslationSettings::default())
+}
+
 fn cache_key(
     route: &Route,
-    segments: &[String],
+    segments: &[impl Serialize],
     context: Option<&str>,
     settings: TranslationSettings,
 ) -> Result<String> {

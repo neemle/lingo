@@ -3,6 +3,7 @@ namespace Reader.Contracts;
 public sealed record DocumentBlock(string Kind, int StartUtf8, int EndUtf8,
     int StartUtf16, int EndUtf16, int? Page, int? HeadingLevel);
 
+public sealed record CachedTranslation(ParagraphTranslation Paragraph, MachineTranslation? Sentence);
 public sealed record ParagraphTranslation(ParagraphUnit[] Units, string? PivotLanguage,
     bool MoreBefore, bool MoreAfter);
 public sealed record ParagraphUnit(string[] SentenceIds, string? Translation, bool Reviewed);

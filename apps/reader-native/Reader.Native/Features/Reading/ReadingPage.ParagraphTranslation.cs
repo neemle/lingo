@@ -1,4 +1,5 @@
 using Reader.Contracts;
+using Reader.CoreClient;
 using Reader.Native.Services;
 using Reader.Presentation;
 
@@ -20,9 +21,12 @@ public partial class ReadingPage
     private bool translationScrollPending;
     private bool translationScrollQueued;
     private bool selectingPreviewRow;
+    private bool restoringTranslationCache;
+    private CachedWindowRequest? lastCacheRestore;
 
     private sealed record TranslationKey(string Document, string Sentence, string Source, string Target, string Text);
     private sealed record TranslationScope(string Document, string Source, string Target);
+    private sealed record CachedWindowRequest(TranslationKey Key, string? Revision, int ReadinessRequest);
     private sealed record PrefetchCandidate(int Position, TranslationKey Key, string? Pivot);
     private sealed record AutoTranslationRequest(TranslationKey Active, PrefetchCandidate? Lookahead = null);
     private sealed record PendingTranslation(AutoTranslationRequest Request, CancellationTokenSource Cancellation);
@@ -82,6 +86,53 @@ public partial class ReadingPage
         ScheduleAutoTranslation();
     }
 
+    private async Task RestoreCachedTranslationAsync()
+    {
+        var session = AppState.Session;
+        if (!readingPageActive || restoringTranslationCache || translating || session.Busy ||
+            readiness is not { Ready: true } route || ActiveTranslationKey() is not { } key ||
+            readinessPair != (key.Source, key.Target) || session.Document is not { } document)
+            return;
+
+        var request = new CachedWindowRequest(key, document.CurrentRevisionId, readinessRequest);
+        if (lastCacheRestore == request) return;
+        if (FindTranslationWindow(document, key.Target) is { IsParagraph: true } &&
+            (ActiveMachine(document, key.Target) is not null || ReviewedFor(document, key.Target, key.Sentence) is not null))
+            return;
+
+        lastCacheRestore = request;
+        restoringTranslationCache = true;
+        try
+        {
+            var cached = await session.ReadCachedTranslationAsync(key.Document, key.Sentence, key.Target);
+            if (!readingPageActive || translating || ActiveTranslationKey() != key ||
+                request.ReadinessRequest != readinessRequest || readiness?.PivotLanguage != route.PivotLanguage ||
+                session.Document is not { } current || current.Position != document.Position ||
+                current.CurrentRevisionId != request.Revision || current.Text != document.Text)
+                return;
+
+            var scope = new TranslationScope(key.Document, key.Source, key.Target);
+            if (cached.Paragraph.PivotLanguage == route.PivotLanguage)
+            {
+                var window = BuildParagraphWindow(current, scope, cached.Paragraph);
+                if (window.Units.Any(unit => MachineFor(current, window, unit) is not null) &&
+                    !MatchingTranslationWindows(current, key.Target).Any(previous =>
+                        previous.IsParagraph && previous.Anchor == window.Anchor))
+                    RememberWindow(window, background: true);
+            }
+
+            if (cached.Sentence is { } sentence && sentence.PivotLanguage == route.PivotLanguage &&
+                ReviewedFor(current, key.Target, key.Sentence) is null && ActiveMachine(current, key.Target) is null)
+                RememberWindow(BuildSentenceWindow(current, scope, sentence), background: true);
+        }
+        catch (CoreException) { } // Cache lookup can race a library change. Manual translation stays available.
+        finally
+        {
+            restoringTranslationCache = false;
+            if (readingPageActive) UpdateTranslation();
+        }
+    }
+
     private TranslationKey? PendingAutoTranslation() =>
         readingPageActive && autoTranslate && TranslationVisible && TranslateOffline.IsEnabled
             ? ActiveTranslationKey() : null;
@@ -103,6 +154,7 @@ public partial class ReadingPage
 
     private AutoTranslationRequest? NextTranslationRequest()
     {
+        if (restoringTranslationCache) return null;
         if (PendingAutoTranslation() is { } foreground && foreground != lastAutoTranslation) return new(foreground);
         if (!readingPageActive || !autoTranslate || !TranslationVisible || translating || utteranceActive || prefetching ||
             readiness is not { Ready: true } route || ActiveTranslationKey() is not { } active || active == lastPrefetchOrigin ||
@@ -118,7 +170,7 @@ public partial class ReadingPage
         {
             var sentence = document.Sentences[index];
             if (ReviewedFor(document, active.Target, sentence.Id) is not null ||
-                MatchingTranslationWindows(document, active.Target, index).Any()) continue;
+                HasMachineAt(document, active.Target, index)) continue;
 
             var key = active with { Sentence = sentence.Id, Text = sentence.Text };
             return prefetchAttempts.Contains((key, route.PivotLanguage)) ? null
@@ -167,7 +219,7 @@ public partial class ReadingPage
                 route.PivotLanguage != candidate.Pivot || result.PivotLanguage != candidate.Pivot ||
                 session.Document is not { } current || current.Id != key.Document || current.Language != key.Source ||
                 current.Text != before.Text || current.Sentences.ElementAtOrDefault(candidate.Position)?.Id != key.Sentence ||
-                MatchingTranslationWindows(current, key.Target, candidate.Position).Any()) return;
+                HasMachineAt(current, key.Target, candidate.Position)) return;
 
             var scope = new TranslationScope(key.Document, key.Source, key.Target);
             var window = BuildParagraphWindow(current with { Position = candidate.Position }, scope, result);
@@ -227,6 +279,10 @@ public partial class ReadingPage
         return null;
     }
 
+    private bool HasMachineAt(Document document, string target, int position) =>
+        MatchingTranslationWindows(document, target, position).Any(window =>
+            window.UnitFor(position) is { } unit && MachineFor(document, window, unit) is not null);
+
     private static string? ReviewedFor(Document document, string target, string sentenceId) =>
         document.ReviewedTranslations.GetValueOrDefault(target)?.GetValueOrDefault(sentenceId);
 
@@ -281,6 +337,14 @@ public partial class ReadingPage
             paragraph.PivotLanguage, true, paragraph.MoreBefore, paragraph.MoreAfter);
     }
 
+    private static TranslationWindow BuildSentenceWindow(Document document, TranslationScope scope,
+        MachineTranslation sentence)
+    {
+        var unit = new AlignedUnit(document.Position, [document.Sentences[document.Position]],
+            sentence.Text, sentence.JoinedLines, null);
+        return new TranslationWindow(scope, document.Position, [unit], sentence.PivotLanguage, false, false, false);
+    }
+
     private async void TranslateOfflineClicked(object? sender, EventArgs args)
     {
         lastAutoTranslation = ActiveTranslationKey();
@@ -332,13 +396,7 @@ public partial class ReadingPage
             }
 
             var sentence = await session.TranslateSentenceAsync(key.Document, key.Sentence, key.Target);
-            if (sentence is not null)
-            {
-                var unit = new AlignedUnit(document.Position, [document.Sentences[document.Position]],
-                    sentence.Text, sentence.JoinedLines, null);
-                RememberWindow(new TranslationWindow(scope, document.Position, [unit], sentence.PivotLanguage,
-                    false, false, false));
-            }
+            if (sentence is not null) RememberWindow(BuildSentenceWindow(document, scope, sentence));
             else readinessPair = null;
             machineStatus = null;
         }

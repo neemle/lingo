@@ -10,16 +10,27 @@ fn value<T: Serialize>(result: std::result::Result<T, String>) -> Result<Value> 
         .map_err(|_| Error::new("serialization_error", "Cannot encode core response"))
 }
 
+fn sentence_translation_body(result: reader_core::translation::AlignedTranslation) -> Value {
+    serde_json::json!({
+        "text": result.segments[0],
+        "pivotLanguage": result.route.pivot_language(),
+        "joinedLines": result.joined_lines,
+    })
+}
+
 pub fn sentence_translation(
     result: reader_core::Result<Option<reader_core::translation::AlignedTranslation>>,
 ) -> Result<Value> {
-    value(result.map(|translated| {
-        translated.map(|result| {
-            serde_json::json!({
-                "text": result.segments[0],
-                "pivotLanguage": result.route.pivot_language(),
-                "joinedLines": result.joined_lines,
-            })
+    value(result.map(|translated| translated.map(sentence_translation_body)))
+}
+
+pub fn cached_translation(
+    result: reader_core::Result<reader_core::translation::CachedTranslation>,
+) -> Result<Value> {
+    value(result.map(|cached| {
+        serde_json::json!({
+            "paragraph": cached.paragraph,
+            "sentence": cached.sentence.map(sentence_translation_body),
         })
     }))
 }
@@ -192,6 +203,11 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             sentence_id,
             target,
         } => sentence_translation(store.translate_installed_sentence(&id, &sentence_id, &target)),
+        Command::CachedTranslation {
+            id,
+            sentence_id,
+            target,
+        } => cached_translation(store.cached_installed_translation(&id, &sentence_id, &target)),
         Command::SaveWord { entry } => value(store.save_word(entry)),
         Command::SetVocabularyVariants {
             id,
