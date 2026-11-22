@@ -48,16 +48,11 @@ jobs:
           CXXFLAGS_aarch64_apple_ios_macabi: -target arm64-apple-ios15.0-macabi
         run: |
           export CMAKE_OSX_SYSROOT="$(xcrun --sdk macosx --show-sdk-path)"
-          cargo build -p reader-ffi --release --locked --target aarch64-apple-ios-macabi
+          cargo rustc -p reader-ffi --release --locked --target aarch64-apple-ios-macabi --crate-type staticlib
       - run: >-
           dotnet build apps/reader-native/Reader.Native/Reader.Native.csproj
           -f net10.0-maccatalyst -c Release -p:RuntimeIdentifier=maccatalyst-arm64
           -p:EnableCodeSigning=false -p:CreatePackage=false --nologo
-      - name: Verify the bundled Catalyst ONNX Runtime entry point
-        run: |
-          app="$(find apps/reader-native/Reader.Native/bin/Release/net10.0-maccatalyst -type d -name '*.app' -print -quit)"
-          executable="$(plutil -extract CFBundleExecutable raw -o - "$app/Contents/Info.plist")"
-          xcrun dyld_info -exports "$app/Contents/MacOS/$executable" | awk '$NF == "_OrtGetApiBase" { found = 1 } END { exit !found }'
       - name: Install and launch the Catalyst package
         run: |
           app="$(find apps/reader-native/Reader.Native/bin/Release/net10.0-maccatalyst -type d -name '*.app' -print -quit)"

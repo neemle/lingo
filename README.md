@@ -21,7 +21,7 @@ rustup target add aarch64-apple-ios-macabi
 CMAKE_OSX_SYSROOT="$(xcrun --sdk macosx --show-sdk-path)" \
   CFLAGS_aarch64_apple_ios_macabi="-target arm64-apple-ios15.0-macabi" \
   CXXFLAGS_aarch64_apple_ios_macabi="-target arm64-apple-ios15.0-macabi" \
-  cargo build -p reader-ffi --release --locked --target aarch64-apple-ios-macabi
+  cargo rustc -p reader-ffi --release --locked --target aarch64-apple-ios-macabi --crate-type staticlib
 reader_project=apps/reader-native/Reader.Native/Reader.Native.csproj
 dotnet build "$reader_project" -f net10.0-maccatalyst -p:EnableCodeSigning=false
 dotnet build "$reader_project" -t:Run -f net10.0-maccatalyst -p:EnableCodeSigning=false

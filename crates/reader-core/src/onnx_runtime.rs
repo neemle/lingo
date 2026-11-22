@@ -35,10 +35,13 @@ fn install_api() -> Result<()> {
 
 #[cfg(target_abi = "macabi")]
 fn symbol() -> Result<ApiBase> {
-    // The app statically links the native Catalyst slice and retains this symbol.
-    unsafe { libloading::os::unix::Library::this().get::<ApiBase>(b"OrtGetApiBase") }
-        .map(|symbol| *symbol)
-        .map_err(|_| "ONNX Runtime відсутній у збірці Читай.".into())
+    unsafe extern "system" {
+        fn OrtGetApiBase() -> *const OrtApiBase;
+    }
+
+    // The final app links the Catalyst archive. A direct reference also works
+    // when the app hides this symbol from the dynamic export table.
+    Ok(OrtGetApiBase)
 }
 
 #[cfg(not(target_abi = "macabi"))]
