@@ -454,11 +454,11 @@ public sealed class CoreClient : IDisposable
 
     public Vocabulary SaveDetachedPdfWord(string id, int page, int startUtf16, string selectedText,
         string translation, string target, LemmaSnapshot? analysis, ExpressionSnapshot? expression,
-        SenseSnapshot? sense = null, string? revisionId = null) =>
+        SenseSnapshot? sense = null, string? revisionId = null, string? reconstructedText = null) =>
         Call<Vocabulary>(new
         {
             version = 1, operation = "save_detached_pdf_word", id, page,
-            input = new { startUtf16, selectedText, translation, target, analysis, expression, sense, revisionId },
+            input = new { startUtf16, selectedText, translation, target, analysis, expression, sense, revisionId, reconstructedText },
         });
 
     public Vocabulary SaveWord(Vocabulary entry) =>

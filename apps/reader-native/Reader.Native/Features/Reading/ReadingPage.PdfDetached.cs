@@ -153,11 +153,17 @@ public partial class ReadingPage
         var session = AppState.Session;
         savingDetachedWord = true;
         UpdateDetachedControls();
+        (string Target, string Text, string Source)? draft =
+            detachedWordTranslation is { } candidate && candidate.Target == target ? candidate : null;
+        var reconstructed = draft is { } result && result.Source != selected.Text.Trim() ? result.Source : null;
         try
         {
             WordLookup? lookup = null;
-            try { lookup = await session.LookupDetachedPdfWordAsync(address.Document, address.Page, selected); }
-            catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
+            if (reconstructed is null)
+            {
+                try { lookup = await session.LookupDetachedPdfWordAsync(address.Document, address.Page, selected); }
+                catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
+            }
             if (detachedAddress != address || detachedSelection != selected || TargetCode != target) return;
 
             SenseSnapshot? sense = null;
@@ -168,17 +174,17 @@ public partial class ReadingPage
                 sense = choice.Sense;
             }
 
-            var description = sense is null ? $"«{selected.Text}» · {DocumentLanguages.Name(target)}"
+            var description = sense is null ? $"«{reconstructed ?? selected.Text}» · {DocumentLanguages.Name(target)}"
                 : $"«{selected.Text}» · {sense.Gloss}{Environment.NewLine}Переклад · {DocumentLanguages.Name(target)}";
             var translation = await DisplayPromptAsync("Додати до словника", description,
                 accept: "Далі", cancel: "Скасувати", placeholder: "Переклад",
                 initialValue: sense is { } chosenSense && chosenSense.GlossLanguage == target ? chosenSense.Gloss
-                    : detachedWordTranslation is { } draft && draft.Target == target ? draft.Text : null,
+                    : draft?.Text,
                 maxLength: 2000);
             if (string.IsNullOrWhiteSpace(translation) || !SelectionDocumentCurrent()) return;
 
             var reading = new VocabularyReadingOption("Як у тексті");
-            if (sense is null)
+            if (sense is null && reconstructed is null)
             {
                 LinguisticAnalysis? details = null;
                 try { details = await session.AnalyzeDetachedPdfSelectionAsync(address.Document, address.Page, selected); }
@@ -199,7 +205,7 @@ public partial class ReadingPage
             await session.WaitUntilIdleAsync();
             if (!SelectionDocumentCurrent()) return;
             await session.SaveDetachedPdfWordAsync(address.Document, address.Page, selected, translation,
-                target, reading.Lemma, reading.Expression, sense, revision);
+                target, reading.Lemma, reading.Expression, sense, revision, reconstructed);
             if (session.Error.Length > 0)
             {
                 await DisplayAlertAsync("Словник", session.Error, "Гаразд");

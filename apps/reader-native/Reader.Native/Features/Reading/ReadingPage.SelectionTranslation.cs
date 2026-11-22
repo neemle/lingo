@@ -7,7 +7,7 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage
 {
     private bool translatingSelection;
-    private (string Target, string Text)? detachedWordTranslation;
+    private (string Target, string Text, string Source)? detachedWordTranslation;
 
     private async void TranslateSelectionClicked(object? sender, EventArgs args)
     {
@@ -16,7 +16,7 @@ public partial class ReadingPage
         await ShowSelectionTranslationAsync(document.Id, document.Language, revision, target, currentSelection, null,
             () => readingPageActive && selection == currentSelection && TargetCode == target &&
                   AppState.Session.Document is { } active && active.Id == document.Id && active.CurrentRevisionId == revision,
-            text => Translation.Text = text);
+            result => Translation.Text = result.Text);
     }
 
     private async void TranslateDetachedSelectionClicked(object? sender, EventArgs args)
@@ -26,11 +26,11 @@ public partial class ReadingPage
         await ShowSelectionTranslationAsync(address.Document, address.Language, revision, target, currentSelection, address.Page,
             () => readingPageActive && ReferenceEquals(detachedAddress, address) && detachedSelection == currentSelection &&
                   detachedSentence?.RevisionId == revision && TargetCode == target,
-            text => detachedWordTranslation = (target, text));
+            result => detachedWordTranslation = (target, result.Text, result.SourceText ?? currentSelection.Text.Trim()));
     }
 
     private async Task ShowSelectionTranslationAsync(string id, string source, string revision, string target,
-        TextSelection selected, int? page, Func<bool> current, Action<string> setDraft)
+        TextSelection selected, int? page, Func<bool> current, Action<MachineTranslation> setDraft)
     {
         if (translatingSelection || AppState.Session.Busy) return;
         translatingSelection = true;
@@ -46,9 +46,9 @@ public partial class ReadingPage
             var route = result.PivotLanguage is { } pivot
                 ? DocumentLanguages.PivotRoute(source, pivot, target)
                 : DocumentLanguages.Name(target);
-            if (await DisplayAlertAsync("Машинний переклад", $"{result.Text}{Environment.NewLine}{route}",
+            if (await DisplayAlertAsync("Машинний переклад", $"«{result.SourceText ?? selected.Text}»{Environment.NewLine}{result.Text}{Environment.NewLine}{route}",
                 "Використати як чернетку", "Закрити") && current())
-                setDraft(result.Text);
+                setDraft(result);
         }
         catch (Exception error)
         {

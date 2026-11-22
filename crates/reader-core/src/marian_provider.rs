@@ -23,7 +23,7 @@ use crate::{
     translation::{
         cached_translation, route_readiness, search_cached_translation, sentence_translation_input,
         translate_paragraph, AlignedTranslation, CachedTranslation, ModelEdge,
-        ParagraphTranslation, TranslationProvider, TranslationReadiness, TranslationRequest,
+        ParagraphTranslation, SelectedTranslation, TranslationProvider, TranslationReadiness, TranslationRequest,
         TranslationRouteStatus, TranslationSearchPage, TranslationSelection, TranslationSettings,
     },
     Result, Store,
@@ -451,7 +451,7 @@ impl StoreWorker {
 
     pub fn translate_selection(
         self, id: &str, target: &str, selection: &TranslationSelection,
-    ) -> Result<Option<AlignedTranslation>> {
+    ) -> Result<Option<SelectedTranslation>> {
         self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?.translate_selected_text(id, target, selection)
     }
 
@@ -792,7 +792,7 @@ impl Store {
 
     pub fn translate_selected_text(
         &mut self, id: &str, target: &str, selection: &TranslationSelection,
-    ) -> Result<Option<AlignedTranslation>> {
+    ) -> Result<Option<SelectedTranslation>> {
         let (language, sentences, revision) = if let Some(page) = selection.page {
             let cached = self.detached_pdf_sentences(id, page)?
                 .ok_or("Текст сторінки PDF недоступний.")?;
@@ -807,10 +807,15 @@ impl Store {
         let (sentence, _) = crate::knowledge::resolve_text_selection(
             &sentences, selection.start_utf16, &selection.text,
         )?;
-        let source = selection.text.trim();
-        let context = (sentence.text != source && sentence.text.len() <= 768)
-            .then_some(sentence.text.as_str());
-        let input = [source.to_owned()];
+        let (source, context) = if let Some(page) = selection.page {
+            crate::pdf_detached_pages::word_break::project_selection(
+                self, (id, page), &sentences, sentence, selection.start_utf16, &selection.text,
+            )?
+        } else {
+            (selection.text.trim().into(), sentence.text.as_str().into())
+        };
+        let context = (context != source && context.len() <= 768).then_some(context.as_ref());
+        let input = [source.as_ref().to_owned()];
         let directory = self.model_directory.clone();
         let result = self.translate_aligned(
             &mut MarianProvider::interactive(&directory),
@@ -822,11 +827,12 @@ impl Store {
                 settings: TranslationSettings::default(),
             },
         )?;
-        if result.is_some() {
-            return Ok(result);
-        }
-        self.translation_cache_routes(&language, target)?
-            .cached_contextual_selection(self, source, context, target)
+        let result = match result {
+            Some(translation) => Some(translation),
+            None => self.translation_cache_routes(&language, target)?
+                .cached_contextual_selection(self, &source, context, target)?,
+        };
+        Ok(result.map(|translation| SelectedTranslation { translation, source_text: source.into_owned() }))
     }
 
     pub fn translation_routes(&self) -> Result<Vec<TranslationRouteStatus>> {

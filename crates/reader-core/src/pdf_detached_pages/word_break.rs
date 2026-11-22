@@ -1,7 +1,11 @@
 use super::{annotations, database_error, page_revision, read, sentence_prefix};
-use crate::{ocr, pdf_reading_position, Document, Result, Sentence, Store};
+use crate::{
+    document_tokens::word_parts, ocr, pdf_reading_position, translation::word_hyphen,
+    Document, Result, Sentence, Store,
+};
 use rusqlite::{params, OptionalExtension};
 use unicode_segmentation::UnicodeSegmentation;
+use std::{borrow::Cow, ops::Range};
 
 const MAX_BOUNDARY_BYTES: usize = 1024;
 
@@ -37,6 +41,55 @@ pub(crate) fn neighboring_fragments(
         _ => None,
     };
     Ok((previous, next))
+}
+
+pub(crate) struct JoinedBoundary {
+    pub text: String,
+    pub center: Range<usize>,
+}
+
+pub(crate) fn join_fragments(
+    original: &str, previous: Option<&str>, next: Option<&str>,
+) -> Option<JoinedBoundary> {
+    let prefix = previous.and_then(word_hyphen).unwrap_or_default();
+    let (center, suffix) = next
+        .and_then(|suffix| word_hyphen(original).map(|center| (center, suffix)))
+        .unwrap_or((original, ""));
+    (!prefix.is_empty() || !suffix.is_empty()).then(|| JoinedBoundary {
+        text: format!("{prefix}{center}{suffix}"),
+        center: prefix.len()..prefix.len() + center.len(),
+    })
+}
+
+pub(crate) fn project_selection<'a>(
+    store: &Store, location: (&str, u16), sentences: &[Sentence], sentence: &'a Sentence,
+    start_utf16: usize, selected: &'a str,
+) -> Result<(Cow<'a, str>, Cow<'a, str>)> {
+    let (id, page) = location;
+    let (previous, next) = neighboring_fragments(
+        store, id, page, None, sentences.first().filter(|first| first.id == sentence.id),
+        sentences.last().filter(|last| last.id == sentence.id),
+    )?;
+    let trimmed = selected.trim_start();
+    let Some(joined) = join_fragments(&sentence.text, previous.as_deref(), next.as_deref()) else {
+        return Ok((trimmed.trim_end().into(), sentence.text.as_str().into()));
+    };
+    let leading = selected[..selected.len() - trimmed.len()].encode_utf16().count();
+    let local = start_utf16 + leading - sentence.start_utf16;
+    let start = ocr::byte_at_utf16(&sentence.text, local)
+        .ok_or("Некоректна позиція виділення.")? + joined.center.start;
+    let end = (start + trimmed.trim_end().len()).min(joined.center.end);
+    let mut extent = start..end;
+    for (offset, _, word) in word_parts(&joined.text) {
+        let word_end = offset + word.len();
+        if offset < end && word_end > start
+            && (offset < joined.center.start || word_end > joined.center.end)
+        {
+            extent.start = extent.start.min(offset);
+            extent.end = extent.end.max(word_end);
+        }
+    }
+    Ok((joined.text[extent].to_owned().into(), joined.text.into()))
 }
 
 fn excerpt(

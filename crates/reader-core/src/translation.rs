@@ -230,6 +230,11 @@ pub struct TranslationSelection {
     pub(crate) text: String,
 }
 
+pub struct SelectedTranslation {
+    pub translation: AlignedTranslation,
+    pub source_text: String,
+}
+
 pub(crate) fn route_readiness(
     catalog: &[ModelEdge],
     installed: &[ModelEdge],

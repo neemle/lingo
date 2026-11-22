@@ -3,7 +3,6 @@ use crate::{
     knowledge::{annotation_cache, resolve_text_selection, select_words, AnalysisScope},
     optional_models::OptionalModelJob,
     pdf_detached_pages::word_break,
-    translation::word_hyphen,
     Document, Result, Sentence, Store,
 };
 use llama_cpp_2::{
@@ -658,13 +657,9 @@ fn review_examples(
     previous: Option<&str>,
     next: Option<&str>,
 ) -> Result<Vec<String>> {
-    let prefix = previous.and_then(word_hyphen).unwrap_or_default();
-    let (center, suffix) = next
-        .and_then(|suffix| word_hyphen(original).map(|center| (center, suffix)))
-        .unwrap_or((original, ""));
-    let joined = (!prefix.is_empty() || !suffix.is_empty())
-        .then(|| format!("{prefix}{center}{suffix}"));
-    let (sentence, prefix_bytes) = joined.as_deref().map_or((original, 0), |text| (text, prefix.len()));
+    let joined = word_break::join_fragments(original, previous, next);
+    let (sentence, prefix_bytes) = joined.as_ref()
+        .map_or((original, 0), |joined| (joined.text.as_str(), joined.center.start));
     let examples = match scope {
         Some(scope) => vec![extract_focused_review(language, original, sentence, scope, prefix_bytes)?],
         None => review_windows(sentence)?.into_iter().map(|sentence| SentenceExample {

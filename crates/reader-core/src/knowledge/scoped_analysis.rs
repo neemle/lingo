@@ -59,6 +59,7 @@ pub struct DetachedVocabularyInput {
     start_utf16: usize,
     selected_text: String,
     revision_id: Option<String>,
+    reconstructed_text: Option<String>,
     translation: String,
     target: String,
     analysis: Option<Box<crate::LemmaSnapshot>>,
@@ -212,6 +213,17 @@ impl Store {
             return Err("Текст сторінки PDF змінився. Виділіть фрагмент знову.".into());
         }
         let (sentence, _) = resolve_text_selection(&cached.sentences, input.start_utf16, &input.selected_text)?;
+        let word = if let Some(expected) = input.reconstructed_text.as_deref() {
+            let (text, _) = crate::pdf_detached_pages::word_break::project_selection(
+                self, (document_id, page), &cached.sentences, sentence, input.start_utf16, &input.selected_text,
+            )?;
+            if text != expected {
+                return Err("Текст сусідньої сторінки змінився. Перекладіть виділення знову.".into());
+            }
+            text.into_owned()
+        } else {
+            input.selected_text
+        };
         let anchor = crate::dictionary_transfer::DictionarySentenceAnchor {
             sentence_id: sentence.id.clone(),
             revision_id: cached.revision,
@@ -220,7 +232,7 @@ impl Store {
         };
         self.save_word_with_anchor(crate::Vocabulary {
             id: String::new(),
-            word: input.selected_text,
+            word,
             translation: input.translation,
             language: cached.language,
             target_language: input.target,

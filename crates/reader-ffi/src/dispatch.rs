@@ -25,6 +25,16 @@ pub fn sentence_translation(
     value(result.map(|translated| translated.map(sentence_translation_body)))
 }
 
+pub fn selected_translation(
+    result: reader_core::Result<Option<reader_core::translation::SelectedTranslation>>,
+) -> Result<Value> {
+    value(result.map(|selected| selected.map(|selected| {
+        let mut response = sentence_translation_body(selected.translation);
+        response["sourceText"] = Value::String(selected.source_text);
+        response
+    })))
+}
+
 pub fn cached_translation(
     result: reader_core::Result<reader_core::translation::CachedTranslation>,
 ) -> Result<Value> {
@@ -310,7 +320,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             target,
         } => sentence_translation(store.translate_installed_sentence(&id, &sentence_id, &target)),
         Command::TranslateSelection { id, target, selection } =>
-            sentence_translation(store.translate_selected_text(&id, &target, &selection)),
+            selected_translation(store.translate_selected_text(&id, &target, &selection)),
         Command::ScheduleTranslationWindow { id, sentence_id, revision_id, target } => {
             value(store.schedule_translation_window(&id, &sentence_id, &revision_id, &target))
         }
