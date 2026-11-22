@@ -46,7 +46,7 @@
    <Label x:Name="RecentHeading" Text="НЕЩОДАВНО ВІДКРИТІ" FontSize="9" CharacterSpacing="1.5"
     TextColor="{StaticResource Muted}" IsVisible="False" />
    <VerticalStackLayout x:Name="RecentBooks" Spacing="4" />
-   <Border Margin="0,9,0,0" Padding="13" BackgroundColor="#E6E8DC" Stroke="#DBDFCF" StrokeShape="RoundRectangle 9">
+   <Border AutomationId="LibrarySidebarFooter" Margin="0,9,0,0" Padding="13" BackgroundColor="#E6E8DC" Stroke="#DBDFCF" StrokeShape="RoundRectangle 9">
     <VerticalStackLayout Spacing="5">
      <Label Text="Локальна бібліотека" FontAttributes="Bold" TextColor="{StaticResource Sage}" FontSize="12" />
      <Label Text="Тексти й прогрес на цьому пристрої." TextColor="{StaticResource Muted}" FontSize="11" />

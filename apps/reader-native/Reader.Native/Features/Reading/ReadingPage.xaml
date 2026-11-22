@@ -119,7 +119,7 @@
        Loaded="TranslationViewportReady">
        <VerticalStackLayout Spacing="10" Padding="16,12">
         <Label x:Name="TranslationNotice" Style="{StaticResource ReaderMeta}" />
-        <Border x:Name="ActiveTranslationCard" BackgroundColor="#F6F4EB" StrokeThickness="0"
+        <Border x:Name="ActiveTranslationCard" AutomationId="ActiveTranslationCard" BackgroundColor="#F6F4EB" StrokeThickness="0"
          StrokeShape="RoundRectangle 7" IsVisible="False">
          <Grid ColumnDefinitions="3,*">
           <BoxView Color="{StaticResource Accent}" />
@@ -190,7 +190,7 @@
 
   <VerticalStackLayout Grid.Row="4" Spacing="4">
    <Label Text="{Binding Error}" TextColor="{StaticResource Accent}" />
-   <Border BackgroundColor="{StaticResource Panel}" Stroke="{StaticResource BorderTone}" StrokeShape="RoundRectangle 11">
+   <Border AutomationId="ReadingControls" BackgroundColor="{StaticResource Panel}" Stroke="{StaticResource BorderTone}" StrokeShape="RoundRectangle 11">
     <Border.Shadow><Shadow Brush="#62644E" Opacity="0.09" Radius="10" Offset="0,4" /></Border.Shadow>
     <VerticalStackLayout>
      <FlexLayout Padding="14,7,14,3" Wrap="Wrap" JustifyContent="SpaceBetween" AlignItems="Center">
