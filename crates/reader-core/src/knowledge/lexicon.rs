@@ -376,10 +376,7 @@ fn dictionary_sense(
         "verb" => "VERB",
         other => other,
     };
-    let id = format!(
-        "{:x}",
-        Sha256::digest(format!("{language}\0{word}\0{part_of_speech}\0{gloss}").as_bytes())
-    );
+    let id = crate::card_learning::sense_id(language, word, part_of_speech, gloss);
     let examples = sense
         .examples
         .into_iter()
@@ -422,6 +419,7 @@ pub(super) fn lookup(
     analyses: &[WordAnalysis],
     expressions: &[super::expressions::ExpressionMatch],
     context: Option<&WordContext>,
+    cue: Option<super::grammar_cues::GrammarCue>,
 ) -> Result<(Option<LexicalPackage>, Vec<WordMeaning>)> {
     let Some(pack) = find_pack(language) else {
         return Ok((None, Vec::new()));
@@ -430,6 +428,10 @@ pub(super) fn lookup(
         return Ok((Some(pack.describe(false)), Vec::new()));
     };
 
+    let context = context.filter(|context| context.neighbors(selected).is_some());
+    let gloss_anchor = context
+        .filter(|_| language == "en")
+        .and_then(english_complement_anchor);
     let selected = lexical_key(language, selected);
     let context_words = context.map_or_else(BTreeSet::new, |context| {
         content_words(language, &context.sentence)
@@ -477,34 +479,55 @@ pub(super) fn lookup(
                 *lemma == key && analysis.part_of_speech == sense.part_of_speech
             });
             let grammar_context = matching_grammar
+                .clone()
                 .map(|(_, analysis)| analysis.context_observations)
                 .max();
-            let context_matches = sense
+            let grammar_priority = cue.map_or(0, |cue| {
+                cue.lexical_priority(
+                    &sense.tags,
+                    matching_grammar
+                        .clone()
+                        .any(|(_, analysis)| analysis.grammar_evidence.is_some()),
+                )
+            });
+            let example_matches = sense
                 .examples
                 .iter()
                 .map(|example| {
-                    content_words(language, &example.text)
-                        .intersection(&context_words)
-                        .filter(|word| **word != key && **word != selected)
-                        .count()
+                    contextual_overlap(language, &example.text, &context_words, &key, &selected)
                 })
                 .max()
                 .unwrap_or_default();
-            candidates.push((sense, context_matches, grammar_context, key == selected));
+            // An of-complement gives more direct lexical evidence than unrelated words elsewhere in the sentence.
+            let gloss_matches = gloss_anchor.as_ref().is_some_and(|anchor| {
+                *anchor != key
+                    && *anchor != selected
+                    && content_words(language, &sense.gloss).contains(anchor)
+            });
+
+            candidates.push((
+                sense,
+                example_matches,
+                (
+                    grammar_priority,
+                    gloss_matches,
+                    example_matches,
+                    grammar_context,
+                    key == selected,
+                ),
+            ));
         }
     }
 
     // Keep lexical alternatives even when one sense has contextual evidence.
     // Dictionary order breaks ties without implying corpus frequency.
-    candidates.sort_by_key(|(_, examples, corpus, direct)| {
-        std::cmp::Reverse((*examples, *corpus, *direct))
-    });
+    candidates.sort_by_key(|(_, _, rank)| std::cmp::Reverse(*rank));
     let only_candidate = candidates.len() == 1;
     let meanings = candidates
         .into_iter()
         .take(MAX_RESULTS)
-        .map(|(sense, context_matches, _, _)| {
-            let confidence = if context_matches >= 2 {
+        .map(|(sense, context_matches, rank)| {
+            let confidence = if context_matches >= 2 && (cue.is_none() || rank.0 > 0) {
                 "contextual"
             } else if only_candidate {
                 "dictionary"
@@ -544,7 +567,70 @@ fn content_words(language: &str, text: &str) -> BTreeSet<String> {
         .filter(|word| word.chars().filter(|ch| ch.is_alphabetic()).take(4).count() >= 4)
         .take(128)
         .map(|word| lexical_key(language, word))
+        .filter(|word| {
+            language != "en"
+                || !matches!(
+                    word.as_str(),
+                    "about"
+                        | "also"
+                        | "from"
+                        | "have"
+                        | "into"
+                        | "over"
+                        | "some"
+                        | "such"
+                        | "than"
+                        | "that"
+                        | "their"
+                        | "them"
+                        | "then"
+                        | "there"
+                        | "these"
+                        | "they"
+                        | "this"
+                        | "those"
+                        | "under"
+                        | "were"
+                        | "what"
+                        | "when"
+                        | "where"
+                        | "which"
+                        | "while"
+                        | "with"
+                        | "would"
+                        | "your"
+                )
+        })
         .collect()
+}
+
+fn english_complement_anchor(context: &WordContext) -> Option<String> {
+    let mut after = context
+        .parts()
+        .filter(|(offset, _)| *offset > context.start_utf16);
+    if word_key(after.next()?.1) != "of" {
+        return None;
+    }
+    let leading = word_key(after.next()?.1);
+    let word = if matches!(leading.as_str(), "the" | "a" | "an") {
+        word_key(after.next()?.1)
+    } else {
+        leading
+    };
+    (word.chars().count() >= 3 && word.chars().all(char::is_alphabetic)).then_some(word)
+}
+
+fn contextual_overlap(
+    language: &str,
+    candidate: &str,
+    source: &BTreeSet<String>,
+    lemma: &str,
+    selected: &str,
+) -> usize {
+    content_words(language, candidate)
+        .intersection(source)
+        .filter(|word| word.as_str() != lemma && word.as_str() != selected)
+        .count()
 }
 
 fn article_url(word: &str, language: &str) -> String {

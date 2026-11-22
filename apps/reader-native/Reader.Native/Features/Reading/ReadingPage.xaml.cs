@@ -325,6 +325,14 @@ public partial class ReadingPage : ContentPage
             var readings = lookup.Analyses.Select(analysis =>
                 $"{analysis.Lemma} · {analysis.PartOfSpeech}" +
                 (analysis.Features.Length == 0 ? "" : $" · {analysis.Features.Replace("|", ", ")}") +
+                (analysis.GrammarEvidence switch
+                {
+                    "frenchDeterminerGender" => " · рід узгоджується з артиклем",
+                    "ukrainianGenitivePreposition" => " · прийменник вимагає родового відмінка",
+                    "ukrainianInfinitiveComplement" => " · інфінітив після дієслова «хотіти»",
+                    "englishDeterminerNoun" => " · іменникове читання після артикля",
+                    _ => "",
+                }) +
                 $" · {(double)analysis.Observations / lookup.TotalObservations:P0}" +
                 (analysis.ContextObservations == 0 ? "" : $" · збігів із сусідніми словами: {analysis.ContextObservations}"));
             KnowledgeAnalysis.Text = lookup.Analyses.Length == 0

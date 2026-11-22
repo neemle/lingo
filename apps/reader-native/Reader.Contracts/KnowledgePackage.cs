@@ -5,7 +5,10 @@ public sealed record KnowledgePackage(string Language, string Name, string Versi
     bool ContextAvailable, bool ExpressionsAvailable);
 
 public sealed record WordAnalysis(string Lemma, string PartOfSpeech, string Features, int Observations,
-    int ContextObservations);
+    int ContextObservations)
+{
+    public string? GrammarEvidence { get; init; }
+}
 
 public sealed record WordContext(string Sentence, int StartUtf16);
 

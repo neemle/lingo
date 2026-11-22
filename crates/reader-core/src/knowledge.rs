@@ -11,6 +11,7 @@ use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
 mod expressions;
+mod grammar_cues;
 mod lexicon;
 mod ocr_suggestions;
 
@@ -87,6 +88,8 @@ pub struct WordAnalysis {
     features: String,
     observations: u32,
     context_observations: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grammar_evidence: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -215,8 +218,15 @@ impl Store {
             if !lexicon::available(&self.knowledge_directory, language) {
                 return Ok(None);
             }
-            let (lexical_package, meanings) =
-                lexicon::lookup(&self.knowledge_directory, language, &key, &[], &[], context)?;
+            let (lexical_package, meanings) = lexicon::lookup(
+                &self.knowledge_directory,
+                language,
+                &key,
+                &[],
+                &[],
+                context,
+                None,
+            )?;
             return Ok(Some(WordLookup {
                 package: pack.describe(0),
                 total_observations: 0,
@@ -229,10 +239,14 @@ impl Store {
         let index_version: u32 = db
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| error.to_string())?;
-        let (left, right) = context
-            .filter(|_| index_version >= 2)
-            .map(|context| context.neighbor_hashes(&key))
+        let (previous, next) = context
+            .and_then(|context| context.neighbors(&key))
             .unwrap_or_default();
+        let (left, right) = if index_version >= 2 {
+            (previous.and_then(token_hash), next.and_then(token_hash))
+        } else {
+            (None, None)
+        };
         let candidates = if left.is_some() || right.is_some() {
             "SELECT f.lemma, f.pos, f.features, f.observations, coalesce(m.hits,0) AS hits
              FROM forms f LEFT JOIN (
@@ -246,13 +260,9 @@ impl Store {
         };
         let mut query = db
             .prepare(&format!(
-                "WITH candidates AS ({candidates}), ranked AS (
-                    SELECT lemma,pos,features,observations,hits,sum(observations) OVER () AS total,
-                           row_number() OVER (PARTITION BY lemma,pos ORDER BY hits DESC,observations DESC,features) AS variant
-                    FROM candidates
-                 )
-                 SELECT lemma,pos,features,observations,total,hits FROM ranked
-                 ORDER BY variant != 1,hits DESC,observations DESC,lemma,pos,features LIMIT 5"
+                "WITH candidates AS ({candidates})
+                 SELECT lemma,pos,features,observations,sum(observations) OVER (),hits FROM candidates
+                 ORDER BY hits DESC,observations DESC,lemma,pos,features"
             ))
             .map_err(|error| error.to_string())?;
         let rows = query
@@ -264,6 +274,7 @@ impl Store {
                         features: row.get(2)?,
                         observations: row.get(3)?,
                         context_observations: row.get(5)?,
+                        grammar_evidence: None,
                     },
                     row.get::<_, u32>(4)?,
                 ))
@@ -276,6 +287,9 @@ impl Store {
             total = observations;
             analyses.push(analysis);
         }
+        let previous = previous.map(word_key);
+        let cue = grammar_cues::GrammarCue::infer(language, previous.as_deref(), &analyses);
+        grammar_cues::order_readings(&mut analyses, cue);
         let expressions = match context {
             Some(context) if index_version >= 3 => expressions::lookup(&db, context, &key)?,
             _ => Vec::new(),
@@ -287,6 +301,7 @@ impl Store {
             &analyses,
             &expressions,
             context,
+            cue,
         )?;
         Ok(Some(WordLookup {
             package: pack.describe(index_version),
@@ -316,22 +331,19 @@ impl WordContext {
             .filter(|(_, part)| !part.trim().is_empty())
     }
 
-    fn neighbor_hashes(&self, selected: &str) -> (Option<i64>, Option<i64>) {
+    fn neighbors(&self, selected: &str) -> Option<(Option<&str>, Option<&str>)> {
         let mut parts = self.parts();
         let mut previous = None;
         while let Some((start, part)) = parts.next() {
             if start == self.start_utf16 && word_key(part) == selected {
-                return (
-                    previous.and_then(token_hash),
-                    parts.next().and_then(|(_, word)| token_hash(word)),
-                );
+                return Some((previous, parts.next().map(|(_, word)| word)));
             }
             if start >= self.start_utf16 {
                 break;
             }
             previous = Some(part);
         }
-        (None, None)
+        None
     }
 }
 
