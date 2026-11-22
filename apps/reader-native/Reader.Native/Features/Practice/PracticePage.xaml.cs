@@ -105,7 +105,7 @@ public partial class PracticePage : ContentPage
                 if (local is not null) return new CollectionChoice(new(local.Id, local.SourceHash), local.Title);
 
                 var title = string.IsNullOrWhiteSpace(source.Title) ? "Документ" : source.Title;
-                return new CollectionChoice(new(source.DocumentId, source.SourceHash), $"{title} (з архіву)");
+                return new CollectionChoice(new(source.DocumentId, source.SourceHash), $"{title} (словникова добірка)");
             })
             .DistinctBy(choice => choice.Scope!.DocumentId)
             .OrderBy(choice => choice.Title, StringComparer.CurrentCulture);

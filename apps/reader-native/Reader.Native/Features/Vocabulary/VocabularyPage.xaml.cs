@@ -74,7 +74,7 @@ public partial class VocabularyPage : ContentPage
                 var title = string.IsNullOrWhiteSpace(source.Title)
                     ? $"Документ {ShortId(source.DocumentId)}"
                     : source.Title;
-                return new(source.DocumentId, $"{title} (з архіву)", source.SourceHash);
+                return new(source.DocumentId, $"{title} (словникова добірка)", source.SourceHash);
             }
 
             var namedChoices = sources

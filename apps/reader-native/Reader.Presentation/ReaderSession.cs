@@ -114,6 +114,12 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         return Read();
     });
 
+    public Task DeleteDocumentAsync(string id) => RunAsync(() =>
+    {
+        client.DeleteDocument(id);
+        return (client.Snapshot(), selectedId == id ? null : selectedId);
+    });
+
     public Task RenameDocumentAsync(string id, string title) => RunAsync(() =>
     {
         client.RenameDocument(id, title);

@@ -14,6 +14,15 @@ public static class AppState
         session = null;
     }
 
+    internal static void ForgetRecentDocument(string id)
+    {
+        if (Preferences.Get("lastDocument", "") == id) Preferences.Remove("lastDocument");
+        var remaining = Preferences.Get("recentDocuments", "").Split(';', StringSplitOptions.RemoveEmptyEntries)
+            .Where(value => value != id);
+        Preferences.Set("recentDocuments", string.Join(';', remaining));
+        (Shell.Current as AppShell)?.RefreshRecent();
+    }
+
     public static async Task OpenAsync(string id)
     {
         if (Session.Busy) return;

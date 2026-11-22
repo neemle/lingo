@@ -14,7 +14,7 @@ public partial class LibraryPage : ContentPage
         new([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"], StringComparer.OrdinalIgnoreCase);
     private bool importing;
     private bool changingLanguage;
-    private bool renamingDocument;
+    private bool editingDocument;
     private Task loading = Task.CompletedTask;
     private ReaderSession? observedSession;
     private Snapshot? displayedSnapshot;
@@ -298,7 +298,7 @@ public partial class LibraryPage : ContentPage
             || !DesktopImport.Gate.Wait(0))
             return;
 
-        renamingDocument = true;
+        editingDocument = true;
         try
         {
             var document = session.Snapshot.Documents.FirstOrDefault(item => item.Id == card.Id);
@@ -313,7 +313,37 @@ public partial class LibraryPage : ContentPage
         }
         finally
         {
-            renamingDocument = false;
+            editingDocument = false;
+            DesktopImport.Gate.Release();
+        }
+    }
+
+    private async void DeleteDocumentClicked(object? sender, EventArgs args)
+    {
+        var session = AppState.Session;
+        if (openingCard || editingDocument || session.Busy ||
+            sender is not Button { CommandParameter: Document card } || !DesktopImport.Gate.Wait(0))
+            return;
+
+        editingDocument = true;
+        try
+        {
+            var document = session.Snapshot.Documents.FirstOrDefault(item => item.Id == card.Id);
+            if (document is null) return;
+            if (!await DisplayAlertAsync("Видалити документ?",
+                $"Локальну копію «{document.Title}» та її прогрес буде видалено. Словникові картки й повторення збережуться.",
+                "Видалити", "Скасувати")) return;
+            await session.DeleteDocumentAsync(document.Id);
+            if (session.Error.Length > 0)
+            {
+                await DisplayAlertAsync("Видалення документа", session.Error, "Гаразд");
+                return;
+            }
+            AppState.ForgetRecentDocument(document.Id);
+        }
+        finally
+        {
+            editingDocument = false;
             DesktopImport.Gate.Release();
         }
     }
@@ -332,7 +362,7 @@ public partial class LibraryPage : ContentPage
 
     private async Task OpenCardAsync(LibraryCard card)
     {
-        if (openingCard || importing || changingLanguage || renamingDocument || AppState.Session.Busy) return;
+        if (openingCard || importing || changingLanguage || editingDocument || AppState.Session.Busy) return;
         openingCard = true;
         try
         {

@@ -84,6 +84,8 @@ public sealed class CoreClient : IDisposable
         Call<JsonElement>(new { version = 1, operation = "position", id, position });
     public void SetDocumentLanguage(string id, string language) =>
         Call<JsonElement>(new { version = 1, operation = "set_document_language", id, language });
+    public bool DeleteDocument(string id) =>
+        Call<bool>(new { version = 1, operation = "delete_document", id });
     public void RenameDocument(string id, string title) =>
         Call<JsonElement>(new { version = 1, operation = "rename_document", id, title });
     public SpeechResume? SpeechResume(string id) =>
