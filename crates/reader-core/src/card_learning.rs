@@ -246,6 +246,7 @@ mod tests {
                     options: vec![lawyer.translation.clone(), "правник".into(), "друге".into()],
                     revealed: true,
                     given_answer: Some("авокадо".into()),
+                    elapsed_ms: None,
                 }),
             })
             .unwrap()

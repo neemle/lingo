@@ -30,6 +30,8 @@ pub struct SavedQuestion {
     pub options: Vec<String>,
     pub revealed: bool,
     pub given_answer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u32>,
 }
 
 impl Default for PracticeProgress {
@@ -64,6 +66,9 @@ impl PracticeProgress {
                     .any(|answer| answer.trim().is_empty())
                 || question.options.len() > 4
                 || (self.mode != 2 && !question.options.is_empty())
+                || question.elapsed_ms.is_some_and(|elapsed| {
+                    !question.revealed || elapsed > crate::review_schedule::MAX_ELAPSED_MS
+                })
                 || question
                     .given_answer
                     .as_ref()
@@ -165,6 +170,14 @@ impl Store {
 
     pub fn set_practice(&mut self, mut progress: PracticeProgress) -> Result<PracticeProgress> {
         progress.validate()?;
+        if progress
+            .question
+            .as_ref()
+            .and_then(|question| question.given_answer.as_deref())
+            .is_some_and(|answer| !crate::review_schedule::valid_answer(answer))
+        {
+            return Err("Відповідь перевищує 2000 байтів.".into());
+        }
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -189,7 +202,18 @@ impl Store {
             .take()
             .filter(|question| question.revealed)
             .ok_or("Спочатку відкрийте відповідь.")?;
-        Self::record_review(&tx, &question.card_id, &progress.direction, grade)?;
+        Self::record_review(
+            &tx,
+            &question.card_id,
+            &progress.direction,
+            grade,
+            // A question persisted by an older build may contain an unbounded answer.
+            question
+                .given_answer
+                .as_deref()
+                .filter(|answer| crate::review_schedule::valid_answer(answer)),
+            question.elapsed_ms,
+        )?;
         progress.advance()?;
         write(&tx, &progress)?;
         tx.commit().map_err(|error| error.to_string())?;
@@ -245,6 +269,7 @@ mod tests {
                 accepted_translations: Vec::new(),
             })
             .unwrap();
+        let card_id = card.id.clone();
         let options = vec!["merci".into(), "bonjour".into(), "salut".into()];
         let mut progress = store
             .set_practice(PracticeProgress {
@@ -259,6 +284,7 @@ mod tests {
                     options: options.clone(),
                     revealed: false,
                     given_answer: None,
+                    elapsed_ms: None,
                 }),
             })
             .unwrap();
@@ -271,6 +297,7 @@ mod tests {
         let question = progress.question.as_mut().unwrap();
         question.revealed = true;
         question.given_answer = Some("merci".into());
+        question.elapsed_ms = Some(1250);
         let progress = store.set_practice(progress).unwrap();
         let archive = store.export().unwrap();
         drop(store);
@@ -298,7 +325,54 @@ mod tests {
         let card = &store.snapshot().unwrap().vocabulary[0];
         assert_eq!(card.forward.reviews, 0);
         assert_eq!(card.reverse.reviews, 1);
-        assert_eq!(store.export().unwrap().reviews.len(), 1);
+        let completed = store.export().unwrap();
+        assert_eq!(completed.reviews.len(), 1);
+        let review = store
+            .vocabulary_review_history(&card_id)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(review.answer.as_deref(), Some("merci"));
+        assert_eq!(review.elapsed_ms, Some(1250));
+
+        let mut full = Store::open(&root.path().join("completed.sqlite")).unwrap();
+        full.restore(completed).unwrap();
+        let restored = full
+            .vocabulary_review_history(&card_id)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(restored.answer, review.answer);
+        assert_eq!(restored.elapsed_ms, review.elapsed_ms);
+
+        let detailed = store.export_dictionary(None).unwrap();
+        let origin = detailed.reviews[0].id.clone();
+        let mut legacy = detailed.clone();
+        legacy.reviews[0].event.answer = None;
+        legacy.reviews[0].event.elapsed_ms = None;
+        let mut dictionary = Store::open(&root.path().join("dictionary.sqlite")).unwrap();
+        assert_eq!(
+            dictionary
+                .import_dictionary(legacy.clone())
+                .unwrap()
+                .added_reviews,
+            1
+        );
+        assert_eq!(
+            dictionary
+                .import_dictionary(detailed)
+                .unwrap()
+                .added_reviews,
+            0
+        );
+        assert_eq!(
+            dictionary.import_dictionary(legacy).unwrap().added_reviews,
+            0
+        );
+        let upgraded = dictionary.export_dictionary(None).unwrap();
+        assert_eq!(upgraded.reviews[0].id, origin);
+        assert_eq!(upgraded.reviews[0].event.answer, review.answer);
+        assert_eq!(upgraded.reviews[0].event.elapsed_ms, review.elapsed_ms);
 
         let mut clean = Store::open(&root.path().join("restored.sqlite")).unwrap();
         clean.restore(archive.clone()).unwrap();

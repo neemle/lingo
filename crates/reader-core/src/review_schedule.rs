@@ -33,12 +33,44 @@ impl FsrsMemory {
     }
 }
 
+pub(crate) const MAX_ELAPSED_MS: u32 = 86_400_000;
+
+pub(crate) fn valid_answer(answer: &str) -> bool {
+    !answer.trim().is_empty() && answer.len() <= 2_000
+}
+
+pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
+    let tx = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    let (has_answer, has_elapsed) = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('review_events') WHERE name='answer'),
+                    EXISTS(SELECT 1 FROM pragma_table_info('review_events') WHERE name='elapsed_ms')",
+            [],
+            |row| Ok((row.get::<_, bool>(0)?, row.get::<_, bool>(1)?)),
+        )
+        .map_err(storage_error)?;
+    if !has_answer {
+        tx.execute("ALTER TABLE review_events ADD COLUMN answer TEXT", [])
+            .map_err(storage_error)?;
+    }
+    if !has_elapsed {
+        tx.execute(
+            "ALTER TABLE review_events ADD COLUMN elapsed_ms INTEGER",
+            [],
+        )
+        .map_err(storage_error)?;
+    }
+    tx.commit().map_err(storage_error)
+}
+
 impl Store {
     pub fn vocabulary_review_history(&self, card_id: &str) -> Result<Vec<ReviewEvent>> {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT direction, grade, reviewed_at FROM review_events
+                "SELECT direction, grade, reviewed_at, answer, elapsed_ms FROM review_events
              WHERE entry_id=?1 ORDER BY reviewed_at DESC, id DESC LIMIT 20",
             )
             .map_err(storage_error)?;
@@ -49,6 +81,8 @@ impl Store {
                     direction: row.get(0)?,
                     grade: row.get(1)?,
                     reviewed_at: row.get(2)?,
+                    answer: row.get(3)?,
+                    elapsed_ms: row.get(4)?,
                 })
             })
             .map_err(storage_error)?;

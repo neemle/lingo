@@ -176,8 +176,9 @@ pub(crate) fn export_details(
     entries: &[Vocabulary],
 ) -> Result<(Vec<DictionarySource>, Vec<DictionaryReview>)> {
     let ids: BTreeSet<_> = entries.iter().map(|card| card.id.as_str()).collect();
-    let reviews = reviews(db)?
+    let reviews = review_rows(db)?
         .into_iter()
+        .map(|(_, review)| review)
         .filter(|review| ids.contains(review.event.entry_id.as_str()))
         .collect();
 
@@ -282,14 +283,14 @@ fn restore_archive(
     let mut existing_reviews = BTreeMap::new();
     let mut local_history = BTreeMap::<String, History>::new();
     let affected: BTreeSet<_> = card_ids.values().collect();
-    for review in reviews(tx)? {
+    for (row_id, review) in review_rows(tx)? {
         if affected.contains(&review.event.entry_id) {
             local_history
                 .entry(review.event.entry_id.clone())
                 .or_default()
                 .record(&review.event);
         }
-        existing_reviews.insert(review.id, review.event);
+        existing_reviews.insert(review.id, (row_id, review.event));
     }
     let mut incoming_history = BTreeMap::<String, History>::new();
     let mut added_history = BTreeMap::<String, History>::new();
@@ -300,19 +301,20 @@ fn restore_archive(
             .or_default()
             .record(&review.event);
         review.event.entry_id = card_ids[&source_card].clone();
-        if let Some(existing) = existing_reviews.get(&review.id) {
-            if !same_review(existing, &review.event) {
-                return Err("Конфлікт ідентифікаторів історії повторень".into());
-            }
+        if let Some((row_id, existing)) = existing_reviews.get(&review.id) {
+            merge_review_details(tx, *row_id, existing, &review.event)?;
             continue;
         }
         tx.execute(
-            "INSERT INTO review_events(entry_id,direction,grade,reviewed_at) VALUES (?1,?2,?3,?4)",
+            "INSERT INTO review_events(entry_id,direction,grade,reviewed_at,answer,elapsed_ms)
+             VALUES (?1,?2,?3,?4,?5,?6)",
             params![
                 review.event.entry_id,
                 review.event.direction,
                 review.event.grade,
-                review.event.reviewed_at
+                review.event.reviewed_at,
+                review.event.answer,
+                review.event.elapsed_ms
             ],
         )
         .map_err(error)?;
@@ -647,13 +649,14 @@ fn remap_card_sources(card: &mut Vocabulary, sources: &BTreeMap<&str, String>) {
     }
 }
 
-fn reviews(db: &Connection) -> Result<Vec<DictionaryReview>> {
+fn review_rows(db: &Connection) -> Result<Vec<(i64, DictionaryReview)>> {
     let mut statement = db
         .prepare(
             "SELECT e.entry_id,e.direction,e.grade,e.reviewed_at,o.origin,
                  ROW_NUMBER() OVER (
                      PARTITION BY e.entry_id,e.direction,e.grade,e.reviewed_at ORDER BY e.id
-                 )
+                 ),
+                 e.id,e.answer,e.elapsed_ms
          FROM review_events e JOIN vocabulary v ON v.id=e.entry_id
          LEFT JOIN dictionary_review_origins o ON o.event_id=e.id ORDER BY e.id",
         )
@@ -665,13 +668,18 @@ fn reviews(db: &Connection) -> Result<Vec<DictionaryReview>> {
                 direction: row.get(1)?,
                 grade: row.get(2)?,
                 reviewed_at: row.get(3)?,
+                answer: row.get(7)?,
+                elapsed_ms: row.get(8)?,
             };
             let origin: Option<String> = row.get(4)?;
             let ordinal: i64 = row.get(5)?;
-            Ok(DictionaryReview {
-                id: origin.unwrap_or_else(|| review_origin(&event, ordinal)),
-                event,
-            })
+            Ok((
+                row.get(6)?,
+                DictionaryReview {
+                    id: origin.unwrap_or_else(|| review_origin(&event, ordinal)),
+                    event,
+                },
+            ))
         })
         .map_err(error)?;
     rows.map(|row| row.map_err(error)).collect()
@@ -741,6 +749,13 @@ fn validate_archive(archive: &DictionaryArchive) -> Result<()> {
             || !matches!(event.direction.as_str(), "forward" | "reverse")
             || event.grade > 3
             || event.reviewed_at < 0
+            || event
+                .answer
+                .as_deref()
+                .is_some_and(|answer| !crate::review_schedule::valid_answer(answer))
+            || event
+                .elapsed_ms
+                .is_some_and(|elapsed| elapsed > crate::review_schedule::MAX_ELAPSED_MS)
         {
             return Err("Некоректна історія повторень в архіві словника".into());
         }
@@ -748,11 +763,33 @@ fn validate_archive(archive: &DictionaryArchive) -> Result<()> {
     Ok(())
 }
 
-fn same_review(a: &ReviewEvent, b: &ReviewEvent) -> bool {
-    a.entry_id == b.entry_id
-        && a.direction == b.direction
-        && a.grade == b.grade
-        && a.reviewed_at == b.reviewed_at
+fn merge_review_details(
+    tx: &Connection,
+    row_id: i64,
+    local: &ReviewEvent,
+    incoming: &ReviewEvent,
+) -> Result<()> {
+    if local.entry_id != incoming.entry_id
+        || local.direction != incoming.direction
+        || local.grade != incoming.grade
+        || local.reviewed_at != incoming.reviewed_at
+        || matches!((&local.answer, &incoming.answer), (Some(a), Some(b)) if a != b)
+        || matches!((local.elapsed_ms, incoming.elapsed_ms), (Some(a), Some(b)) if a != b)
+    {
+        return Err("Конфлікт ідентифікаторів історії повторень".into());
+    }
+    // Older archives omit these values but carry the same review identity.
+    if (local.answer.is_none() && incoming.answer.is_some())
+        || (local.elapsed_ms.is_none() && incoming.elapsed_ms.is_some())
+    {
+        tx.execute(
+            "UPDATE review_events SET answer=COALESCE(answer,?1), elapsed_ms=COALESCE(elapsed_ms,?2)
+             WHERE id=?3",
+            params![incoming.answer, incoming.elapsed_ms, row_id],
+        )
+        .map_err(error)?;
+    }
+    Ok(())
 }
 
 fn identifier(value: &str) -> bool {
