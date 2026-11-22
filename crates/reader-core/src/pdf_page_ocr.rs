@@ -282,6 +282,7 @@ impl Store {
             if file_backed && result.span.is_none() {
                 if let Some((text, language)) = pdf_detached_pages::read(&self.connection, id, result.page)? {
                     let detached = document_layout::detached_pdf_document(text,
+                        language.as_deref().unwrap_or(&document.language),
                         self.detached_pdf_ocr(id, result.page)?.map(|cached| cached.lines));
                     result.text = detached.text;
                     result.blocks = detached.blocks;

@@ -206,7 +206,8 @@ impl Store {
             let extracted = document_layout::from_transcript(text, Some(starts));
             Document { text: extracted.text, blocks: extracted.blocks, pdf_page_starts: extracted.pdf_page_starts, ..Document::default() }
         } else {
-            document_layout::detached_pdf_document(text, self.detached_pdf_ocr(id, page)?.map(|ocr| ocr.lines))
+            document_layout::detached_pdf_document(text, &language,
+                self.detached_pdf_ocr(id, page)?.map(|ocr| ocr.lines))
         };
         let document = Document {
             id: id.to_owned(),

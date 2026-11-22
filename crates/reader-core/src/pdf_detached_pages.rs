@@ -243,9 +243,7 @@ impl Store {
 
     fn detached_speech_layout(&self, id: &str, page: u16, text: String, language: &str) -> Result<crate::Document> {
         let lines = self.detached_pdf_ocr(id, page)?.map(|ocr| ocr.lines);
-        let mut document = crate::document_layout::detached_pdf_document(text, lines);
-        document.language = language.into();
-        Ok(document)
+        Ok(crate::document_layout::detached_pdf_document(text, language, lines))
     }
 
     fn speech_on_detached_page(

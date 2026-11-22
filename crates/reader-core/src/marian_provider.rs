@@ -864,7 +864,7 @@ impl Store {
                 self, (id, page), &cached.sentences, sentence, selection.start_utf16, &selection.text,
             )?;
             let layout = crate::document_layout::detached_pdf_document(
-                cached.text, self.detached_pdf_ocr(id, page)?.map(|ocr| ocr.lines),
+                cached.text, &cached.language, self.detached_pdf_ocr(id, page)?.map(|ocr| ocr.lines),
             );
             let (source, context) = cleaned(&layout, sentence, projected);
             (cached.language, source, context)

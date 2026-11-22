@@ -1,10 +1,11 @@
 use crate::{
+    document_layout::{detached_pdf_document, mask_pdf_note_references, reflow_ocr_paragraphs},
     document_tokens::word_parts,
     knowledge::{annotation_cache, resolve_text_selection, select_words, AnalysisScope, WordContext},
     optional_models::OptionalModelJob,
     pdf_detached_pages::word_break,
     resources::ModelBudget,
-    Result, Sentence, Store,
+    Document, Result, Sentence, Store,
 };
 use llama_cpp_2::{
     context::LlamaContext,
@@ -18,6 +19,7 @@ use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    borrow::Cow,
     num::NonZeroU32,
     path::{Path, PathBuf},
     sync::OnceLock,
@@ -349,11 +351,24 @@ impl Store {
         if model != HINT_GENERATION_MODEL {
             return Err("Для локальних підказок використовуйте Qwen 2B.".into());
         }
-        let detached;
-        let canonical = page.is_none().then(|| self.token_document(document)).transpose()?;
-        let (language, sentences, current_revision) = if let Some(page) = page {
-            detached = self.detached_pdf_sentences(document, page)?
-                .ok_or("Текст сторінки PDF недоступний.")?;
+        let mut detached = page.map(|page| {
+            self.detached_pdf_sentences(document, page)?
+                .ok_or_else(|| String::from("Текст сторінки PDF недоступний."))
+        }).transpose()?;
+        let detached_layout = if let (Some(page), Some(cached)) = (page, detached.as_mut()) {
+            Some(detached_pdf_document(
+                std::mem::take(&mut cached.text),
+                &cached.language,
+                self.detached_pdf_ocr(document, page)?.map(|cached| cached.lines),
+            ))
+        } else {
+            None
+        };
+        let mut canonical = page.is_none().then(|| self.token_document(document)).transpose()?;
+        if let Some(document) = &mut canonical {
+            reflow_ocr_paragraphs(document);
+        }
+        let (language, sentences, current_revision) = if let Some(detached) = &detached {
             (detached.language.as_str(), detached.sentences.as_slice(), Some(detached.revision.as_str()))
         } else {
             let current = canonical.as_ref().ok_or("Документ відсутній.")?;
@@ -399,9 +414,13 @@ impl Store {
         } else {
             (None, None)
         };
+        let review_text = detached_layout.as_ref().or(canonical.as_ref()).map_or_else(
+            || Cow::Borrowed(sentence.text.as_str()),
+            |layout| pdf_review_text(layout, sentence, scope.is_some()),
+        );
         let examples = review_examples(
             language,
-            &sentence.text,
+            &review_text,
             scope,
             previous.as_deref(),
             next.as_deref(),
@@ -828,6 +847,18 @@ fn review_examples(
     };
     examples.iter().map(|example| serde_json::to_string(example).map_err(|error| error.to_string()))
         .collect()
+}
+
+fn pdf_review_text<'a>(document: &Document, sentence: &'a Sentence, scoped: bool) -> Cow<'a, str> {
+    let text = mask_pdf_note_references(document, &sentence.text, sentence.start_utf8)
+        .map_or_else(|| Cow::Borrowed(sentence.text.as_str()), Cow::Owned);
+    // The word and expression scopes still use their original UTF-16 offsets.
+    if !scoped && document.format == "pdf" && text.contains('\n') {
+        return Cow::Owned(crate::translation::normalize_ocr_input(
+            document, &text, sentence.start_utf16,
+        ));
+    }
+    text
 }
 
 fn review_windows(text: &str) -> Result<Vec<&str>> {
@@ -1295,6 +1326,28 @@ fn runtime_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn french_pdf_review_discards_note_numbers_and_joins_wrapped_words() {
+        let text = "📖 Est-\nelle chez l’usurpateur⁸ avec un exerci-\nce ?";
+        let document = detached_pdf_document(
+            format!("{text}\n\n8 Usurpateur : personne qui a pris le pouvoir."), "fr", None,
+        );
+        let sentence = crate::segment_pdf_with_titles(&document.text, "pdf").remove(0);
+        assert_eq!(
+            pdf_review_text(&document, &sentence, false),
+            "📖 Est-elle chez l’usurpateur avec un exercice ?"
+        );
+
+        let focus = text[..text.find("avec").unwrap()].encode_utf16().count();
+        let scoped = pdf_review_text(&document, &sentence, true);
+        let examples = review_examples(
+            "fr", &scoped, Some(AnalysisScope::Word { start_utf16: focus }), None, None,
+        ).unwrap();
+        let example: serde_json::Value = serde_json::from_str(&examples[0]).unwrap();
+        assert_eq!(example["focus"][0]["text"], "avec");
+        assert!(!example["sentence"].as_str().unwrap().contains('⁸'));
+    }
 
     #[test]
     fn displayed_role_requires_local_grammar_evidence_even_for_cached_results() {

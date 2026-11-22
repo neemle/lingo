@@ -263,8 +263,7 @@ mod tests {
     #[test]
     fn model_narration_joins_pdf_wraps_but_keeps_french_inversion() {
         let input = "Les marchan-\ndises sont ici. Est-\nelle au port ?";
-        let mut document = crate::document_layout::detached_pdf_document(input.into(), None);
-        document.language = "fr".into();
+        let document = crate::document_layout::detached_pdf_document(input.into(), "fr", None);
         let sentences = crate::segment_pdf_with_titles(input, "pdf");
         let narrate = |sentence: &Sentence| model_pdf_narration(&document, sentence, sentence.text.clone());
         assert_eq!(narrate(&sentences[0]), "Les marchandises sont ici.");
@@ -275,7 +274,7 @@ mod tests {
     fn only_same_page_footnote_markers_are_silent_with_original_offsets() {
         let source = "Le marin voit les mâts1 et le quai², au niveau B2 en 1815.";
         let text = format!("{source}\n1 Mât : pièce du navire.\n2 Quai : bord du port.");
-        let document = crate::document_layout::detached_pdf_document(text, None);
+        let document = crate::document_layout::detached_pdf_document(text, "fr", None);
         let sentence = crate::segment_pdf_with_titles(source, "pdf").remove(0);
         let pronunciation = without_pdf_note_markers(&document, &sentence, source).unwrap();
         assert_eq!(pronunciation, "Le marin voit les mâts  et le quai , au niveau B2 en 1815.");

@@ -290,7 +290,7 @@ impl Store {
             AnalysisScope::Sentence { .. } => return Ok(None),
         };
         let layout = crate::document_layout::detached_pdf_document(
-            cached.text, self.detached_pdf_ocr(document_id, page)?.map(|ocr| ocr.lines),
+            cached.text, &cached.language, self.detached_pdf_ocr(document_id, page)?.map(|ocr| ocr.lines),
         );
         let mask = crate::document_layout::mask_pdf_note_references;
         let spelling = crate::ocr::byte_at_utf16(&sentence.text, offset)

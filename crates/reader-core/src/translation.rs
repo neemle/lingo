@@ -1064,8 +1064,13 @@ pub(crate) fn normalize_ocr_input(
             && split_ocr_drop_cap(document, offset, word_end_utf16, tail_start_utf16);
         if let Some(prefix) = continued {
             let next = tail.split(|ch: char| !ch.is_alphabetic()).next().unwrap_or("");
-            let inversion = document.language == "fr" &&
-                matches!(next, "il" | "ils" | "elle" | "elles" | "on" | "ce" | "tu" | "vous" | "nous" | "je");
+            let inversion = document.language == "fr" && match next {
+                // "ce" is also a common line-ending suffix, as in "exerci-\nce".
+                "ce" => matches!(prefix.to_lowercase().as_str(),
+                    "est" | "était" | "sera" | "serait" | "fut" | "fût" | "sont" | "étaient"),
+                "il" | "ils" | "elle" | "elles" | "on" | "tu" | "vous" | "nous" | "je" => true,
+                _ => false,
+            };
             normalized.push_str(if inversion { word } else { prefix });
         } else if drop_cap {
             normalized.push_str(word);

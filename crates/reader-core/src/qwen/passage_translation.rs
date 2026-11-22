@@ -80,7 +80,7 @@ impl Store {
                 .find(|sentence| sentence.id == sentence_id)
                 .ok_or("Речення сторінки змінилося.")?;
             let document = crate::document_layout::detached_pdf_document(
-                cached.text, self.detached_pdf_ocr(id, page)?.map(|cached| cached.lines),
+                cached.text, &cached.language, self.detached_pdf_ocr(id, page)?.map(|cached| cached.lines),
             );
             if crate::document_layout::sentence_in_footnote(&document.blocks, sentence) {
                 return Err("Виноски пропускаються під час перекладу.".into());
