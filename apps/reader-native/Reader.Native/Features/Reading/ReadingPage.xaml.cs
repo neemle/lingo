@@ -207,14 +207,39 @@ public partial class ReadingPage : ContentPage
 
     private async void SourceSelected(object? sender, TextSelection selected)
     {
+        var session = AppState.Session;
+        if (session.Document is not { } doc) return;
         if (selection != selected) Translation.Text = "";
         selection = selected;
         SelectedWord.Text = selected.Text;
+        KnowledgeAnalysis.Text = "Пошук у мовному пакеті…";
         WordCard.IsVisible = true;
-        if (AppState.Session.Document is not { } doc) return;
         var index = Array.FindIndex(doc.Sentences, sentence => selected.StartUtf16 >= sentence.StartUtf16
             && selected.StartUtf16 < sentence.EndUtf16);
-        if (index >= 0 && index != doc.Position) { StopSpeech(); await AppState.Session.SelectSentenceAsync(index); }
+        if (index >= 0 && index != doc.Position) { StopSpeech(); await session.SelectSentenceAsync(index); }
+        try
+        {
+            var lookup = await session.LookupWordAsync(doc.Language, selected.Text);
+            if (selection != selected || session.Document?.Id != doc.Id || !WordCard.IsVisible) return;
+            if (lookup is null)
+            {
+                KnowledgeAnalysis.Text = "Пакет граматичного аналізу для цієї мови відсутній.";
+                return;
+            }
+            var source = $"{lookup.Package.Name} {lookup.Package.Version} · {lookup.Package.License}";
+            var readings = lookup.Analyses.Select(analysis =>
+                $"{analysis.Lemma} · {analysis.PartOfSpeech}" +
+                (analysis.Features.Length == 0 ? "" : $" · {analysis.Features.Replace("|", ", ")}") +
+                $" · {(double)analysis.Observations / lookup.TotalObservations:P0}");
+            KnowledgeAnalysis.Text = lookup.Analyses.Length == 0
+                ? $"Словоформи немає в корпусі {source}."
+                : $"{string.Join(Environment.NewLine, readings)}{Environment.NewLine}Частота в корпусі · {source}";
+        }
+        catch (Exception error)
+        {
+            if (selection == selected && session.Document?.Id == doc.Id && WordCard.IsVisible)
+                KnowledgeAnalysis.Text = $"Не вдалося виконати аналіз. {error.Message}";
+        }
     }
 
     private async void SaveWordClicked(object? sender, EventArgs args)

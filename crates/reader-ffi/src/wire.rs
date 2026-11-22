@@ -83,6 +83,15 @@ pub enum Command {
         text: String,
     },
     TranslationPackages,
+    KnowledgePackages,
+    InstallKnowledgePackage {
+        language: String,
+        path: String,
+    },
+    LookupWord {
+        language: String,
+        word: String,
+    },
     InstallTranslationPackage {
         path: String,
     },

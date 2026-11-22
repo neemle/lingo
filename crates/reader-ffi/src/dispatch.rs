@@ -73,6 +73,11 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             text,
         } => value(store.set_reviewed_translation(&id, &sentence_id, &target, &text)),
         Command::TranslationPackages => value(Ok(store.translation_packages())),
+        Command::KnowledgePackages => value(Ok(store.knowledge_packages())),
+        Command::InstallKnowledgePackage { language, path } => {
+            value(store.install_knowledge_package(&language, std::path::Path::new(&path)))
+        }
+        Command::LookupWord { language, word } => value(store.lookup_word(&language, &word)),
         Command::InstallTranslationPackage { path } => {
             value(store.install_translation_package(std::path::Path::new(&path)))
         }

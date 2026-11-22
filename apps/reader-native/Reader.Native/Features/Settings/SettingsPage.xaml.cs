@@ -19,6 +19,46 @@ public partial class SettingsPage : ContentPage
     {
         base.OnAppearing();
         await RefreshTranslationPackagesAsync();
+        await RefreshKnowledgePackagesAsync();
+    }
+
+    private async Task RefreshKnowledgePackagesAsync()
+    {
+        try
+        {
+            var packages = await AppState.Session.KnowledgePackagesAsync();
+            KnowledgePackages.Text = string.Join(Environment.NewLine, packages.Select(package =>
+                $"{LanguageName(package.Language)} · {package.Name} {package.Version} · {package.License} · " +
+                (package.Installed ? "встановлено" : "доступно для завантаження")));
+            InstallKnowledge.IsVisible = packages.Any(package => !package.Installed);
+        }
+        catch (Exception error) { KnowledgeStatus.Text = error.Message; }
+    }
+
+    private async void InstallKnowledgeClicked(object? sender, EventArgs args)
+    {
+        InstallKnowledge.IsEnabled = false;
+        try
+        {
+            var packages = await AppState.Session.KnowledgePackagesAsync();
+            var choices = packages.Where(package => !package.Installed).ToDictionary(package =>
+                $"{LanguageName(package.Language)} · {package.License} · {package.Bytes / 1_000_000d:F0} МБ");
+            if (choices.Count == 0) return;
+            var choice = await DisplayActionSheetAsync("Пакети Universal Dependencies", "Скасувати", null, choices.Keys.ToArray());
+            if (choice is null || !choices.TryGetValue(choice, out var selected)) return;
+            KnowledgeStatus.Text = $"Завантаження {selected.Name}…";
+            var root = Path.Combine(FileSystem.CacheDirectory, "knowledge-downloads");
+            var path = await Downloader.FetchKnowledgeAsync(selected, root, CancellationToken.None);
+            KnowledgeStatus.Text = "Створення локального індексу…";
+            await AppState.Session.InstallKnowledgePackageAsync(selected.Language, path);
+            KnowledgeStatus.Text = $"Встановлено {selected.Name}. Аналіз слів працює офлайн.";
+            await RefreshKnowledgePackagesAsync();
+            try { File.Delete(path); }
+            catch (IOException) { KnowledgeStatus.Text += " Не вдалося видалити тимчасову копію."; }
+            catch (UnauthorizedAccessException) { KnowledgeStatus.Text += " Не вдалося видалити тимчасову копію."; }
+        }
+        catch (Exception error) { KnowledgeStatus.Text = error.Message; }
+        finally { InstallKnowledge.IsEnabled = true; }
     }
 
     private async Task RefreshTranslationPackagesAsync()

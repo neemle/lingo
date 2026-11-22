@@ -9,6 +9,7 @@ rusqlite = { version = "0.38", features = ["bundled", "backup"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 sha2 = "0.10"
 unicode-segmentation = "1.12"
+unicode-normalization = "0.1"
 zip = { version = "9.8.1", default-features = false, features = ["deflate"] }
 quick-xml = "0.38"
 pdf-extract = "0.12.1"

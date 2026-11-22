@@ -27,8 +27,11 @@
   <ProgressBar x:Name="DownloadProgress" IsVisible="False" />
   <Label x:Name="ModelStatus" />
   <Button x:Name="InstallTranslation" Text="Встановити мовний пакет із ZIP" Clicked="InstallTranslationClicked" />
-  <Label Text="Переклад працює з установленими пакетами. Розпізнавання фотографій використовує доступні мови системи. Автоматичний граматичний аналіз ще недоступний."
-   TextColor="#A65F43" />
+  <Label Text="Граматичний аналіз" FontSize="22" FontAttributes="Bold" />
+  <Label x:Name="KnowledgePackages" />
+  <Button x:Name="InstallKnowledge" Text="Завантажити пакет аналізу" Clicked="InstallKnowledgeClicked" />
+  <Label x:Name="KnowledgeStatus" TextColor="#63725C" />
+  <Label Text="Розпізнавання фотографій використовує доступні мови системи." />
   <Label Text="Озвучення використовує голоси операційної системи. Встановіть потрібну мову в системних налаштуваннях.
 Читай підсвічує слова, коли голос передає їхні межі." />
   <Button Text="Відкрити перевірку нативного тексту й голосу" Clicked="ProbeClicked" />

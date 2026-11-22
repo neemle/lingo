@@ -5,7 +5,7 @@ macOS (Mac Catalyst), backed by Rust and local SQLite. Requirements and work tra
 
 The reader imports UTF-8 TXT, DOCX, PDFs and supported photographs up to 20 MiB, retains originals, restores sentence progress,
 and saves manual translations with context. Forward/reverse practice states and JSON backups use the same Rust core.
-Translation models are optional and installed separately. The app reports unavailable OCR and grammar features.
+Translation and grammar packages are optional and installed separately. The app reports unavailable OCR and missing packages.
 
 ## Build and run
 
@@ -116,3 +116,18 @@ On Windows, select the five files and compress them to ZIP. In the app, open **�
 installing the package. Open the reader, select the target language and choose **Перекласти офлайн**.
 With French → English and English → Ukrainian installed, the reader can also translate French → Ukrainian
 through English. The translation panel marks that route. Installing French → Ukrainian enables the direct route.
+
+## Offline word analysis
+
+In **Налаштування**, select **Завантажити пакет аналізу** and choose a language. The reader verifies the
+corpus against its pinned SHA-256 and builds a local read-only index. Select a word in the source to see
+observed lemmas, parts of speech, grammatical features and relative frequency. If there are multiple
+readings, the card shows the most frequent variant for each before showing additional variants.
+The card names the corpus and marks missing forms. Analysis leaves the original and reading text intact.
+
+The initial indexes use the training annotations from Universal Dependencies 2.18 and omit corpus passages.
+They can be reinstalled independently of documents and backup data.
+
+- English uses [UD English EWT](https://github.com/UniversalDependencies/UD_English-EWT/tree/b7711cce01cdd4f5fcc0a8199b8a50d951b16c0c), CC BY-SA 4.0 for annotations.
+- French uses [UD French GSD](https://github.com/UniversalDependencies/UD_French-GSD/tree/15958a5df1d09e2a360784caaed07b9a3fcbf7a8), CC BY-SA 4.0 for annotations.
+- Ukrainian uses [UD Ukrainian IU](https://github.com/UniversalDependencies/UD_Ukrainian-IU/tree/0d5ed088e959ccfbd933d768114d8503c32c9b37), CC BY-NC-SA 4.0.

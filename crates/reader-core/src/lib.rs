@@ -9,6 +9,7 @@ use std::{
 use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
 
+pub mod knowledge;
 mod marian_provider;
 pub mod ocr;
 pub mod pdf_layers;
@@ -266,6 +267,7 @@ pub fn parse_file(name: &str, bytes: &[u8]) -> Result<String> {
 pub struct Store {
     connection: Connection,
     model_directory: std::path::PathBuf,
+    knowledge_directory: std::path::PathBuf,
 }
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
@@ -276,6 +278,7 @@ impl Store {
         Ok(Self {
             connection,
             model_directory: path.with_file_name("translation-models"),
+            knowledge_directory: path.with_file_name("languages"),
         })
     }
     pub fn snapshot(&self) -> Result<Snapshot> {

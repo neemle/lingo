@@ -1401,6 +1401,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "unicode-normalization",
  "unicode-segmentation",
  "uuid",
  "zip",

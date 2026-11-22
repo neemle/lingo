@@ -6,7 +6,7 @@ using Reader.Contracts;
 
 namespace Reader.Presentation;
 
-/// <summary>Downloads only pinned model assets. Source documents never enter this path.</summary>
+/// <summary>Downloads pinned translation and linguistic resources.</summary>
 public sealed class ModelDownload(HttpClient http)
 {
     private const long AssetLimit = 400_000_000;
@@ -26,7 +26,9 @@ public sealed class ModelDownload(HttpClient http)
         foreach (var asset in package.Assets)
         {
             var path = Path.Combine(directory, asset.Name);
-            await FetchAssetAsync(package, asset, path, completed, progress, cancellationToken);
+            var url = new Uri($"https://huggingface.co/Helsinki-NLP/opus-mt-{package.Source}-{package.Target}" +
+                $"/resolve/{package.Revision}/{asset.Name}");
+            await FetchAssetAsync(url, asset, path, completed, progress, cancellationToken);
             completed += asset.Bytes;
             progress?.Report(completed);
         }
@@ -43,6 +45,25 @@ public sealed class ModelDownload(HttpClient http)
         }
     }
 
+    public async Task<string> FetchKnowledgeAsync(KnowledgePackage package, string stagingRoot,
+        CancellationToken cancellationToken)
+    {
+        var url = new Uri(package.DownloadUrl);
+        if (url.Scheme != Uri.UriSchemeHttps || url.Host != "raw.githubusercontent.com" ||
+            !url.AbsolutePath.StartsWith("/UniversalDependencies/", StringComparison.Ordinal) ||
+            package.Revision.Length != 40 || !package.Revision.All(Uri.IsHexDigit) ||
+            package.Bytes <= 0 || package.Bytes > AssetLimit ||
+            package.Sha256.Length != 64 || !package.Sha256.All(Uri.IsHexDigit))
+            throw new InvalidDataException("Некоректний каталог граматичних пакетів.");
+
+        var path = Path.Combine(stagingRoot, $"{package.Revision}.conllu");
+        Directory.CreateDirectory(stagingRoot);
+        using var gate = OpenGate(stagingRoot, package.Revision);
+        await FetchAssetAsync(url, new TranslationAsset(package.Name, package.Bytes, package.Sha256),
+            path, 0, null, cancellationToken);
+        return path;
+    }
+
     public static void ClearStaging(TranslationPackageStatus package, string stagingRoot)
     {
         Validate(package);
@@ -57,7 +78,7 @@ public sealed class ModelDownload(HttpClient http)
         new(Path.Combine(root, $"{revision}.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
 
     private async Task FetchAssetAsync(
-        TranslationPackageStatus package, TranslationAsset asset, string path,
+        Uri url, TranslationAsset asset, string path,
         long completed, IProgress<long>? progress, CancellationToken cancellationToken)
     {
         var previous = File.Exists(path) ? new FileInfo(path).Length : 0;
@@ -68,8 +89,6 @@ public sealed class ModelDownload(HttpClient http)
             previous = 0;
         }
 
-        var url = new Uri($"https://huggingface.co/Helsinki-NLP/opus-mt-{package.Source}-{package.Target}" +
-            $"/resolve/{package.Revision}/{asset.Name}");
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.AcceptEncoding.ParseAdd("identity");
         if (previous != 0) request.Headers.Range = new RangeHeaderValue(previous, null);
