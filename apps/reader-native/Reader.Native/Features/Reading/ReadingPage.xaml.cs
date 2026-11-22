@@ -240,6 +240,9 @@ public partial class ReadingPage : ContentPage
             KnowledgeAnalysis.Text = lookup.Analyses.Length == 0
                 ? $"Словоформи немає в корпусі {source}."
                 : $"{string.Join(Environment.NewLine, readings)}{Environment.NewLine}Частота в корпусі · {source}";
+            if (lookup.Expressions.Length > 0)
+                KnowledgeAnalysis.Text += Environment.NewLine + string.Join(Environment.NewLine, lookup.Expressions.Select(expression =>
+                    $"{(expression.Kind == "particle" ? "Дієслово з часткою" : "Сталий вираз")} · {expression.Text} · у корпусі: {expression.Observations}"));
             vocabularyReadings = lookup.Analyses.DistinctBy(analysis => (analysis.Lemma, analysis.PartOfSpeech))
                 .Select(analysis => new LemmaSnapshot(analysis.Lemma, selected.Text, analysis.PartOfSpeech,
                     analysis.Features, lookup.Package.Name, $"{lookup.Package.Version} · {lookup.Package.Revision}"))

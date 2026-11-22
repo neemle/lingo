@@ -10,7 +10,10 @@ use std::{
 use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
+mod expressions;
 mod ocr_suggestions;
+
+const INDEX_VERSION: u32 = 3;
 
 struct Pack {
     language: &'static str,
@@ -70,6 +73,7 @@ pub struct KnowledgePackage {
     sha256: &'static str,
     installed: bool,
     context_available: bool,
+    expressions_available: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -88,6 +92,7 @@ pub struct WordLookup {
     package: KnowledgePackage,
     total_observations: u32,
     analyses: Vec<WordAnalysis>,
+    expressions: Vec<expressions::ExpressionMatch>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,6 +134,7 @@ impl Pack {
             sha256: self.sha256,
             installed: index_version != 0,
             context_available: index_version >= 2,
+            expressions_available: index_version >= 3,
         }
     }
 }
@@ -187,7 +193,7 @@ impl Store {
         staging
             .persist(&destination)
             .map_err(|error| error.to_string())?;
-        Ok(pack.describe(2))
+        Ok(pack.describe(INDEX_VERSION))
     }
 
     pub fn lookup_word(
@@ -250,10 +256,15 @@ impl Store {
             total = observations;
             analyses.push(analysis);
         }
+        let expressions = match context {
+            Some(context) if index_version >= 3 => expressions::lookup(&db, context, &key)?,
+            _ => Vec::new(),
+        };
         Ok(Some(WordLookup {
             package: pack.describe(index_version),
             total_observations: total,
             analyses,
+            expressions,
         }))
     }
 }
@@ -264,16 +275,19 @@ fn neighbor_hash(key: &str) -> i64 {
 }
 
 impl WordContext {
-    fn neighbor_hashes(&self, selected: &str) -> (Option<i64>, Option<i64>) {
-        let mut parts = self
-            .sentence
+    fn parts(&self) -> impl Iterator<Item = (usize, &str)> {
+        self.sentence
             .split_word_bounds()
             .scan(0, |offset, part| {
                 let start = *offset;
                 *offset += part.encode_utf16().count();
                 Some((start, part))
             })
-            .filter(|(_, part)| !part.trim().is_empty());
+            .filter(|(_, part)| !part.trim().is_empty())
+    }
+
+    fn neighbor_hashes(&self, selected: &str) -> (Option<i64>, Option<i64>) {
+        let mut parts = self.parts();
         let mut previous = None;
         while let Some((start, part)) = parts.next() {
             if start == self.start_utf16 && word_key(part) == selected {
@@ -314,10 +328,14 @@ fn build_pack(path: &Path, input: impl BufRead) -> Result<()> {
          CREATE TABLE neighbors (term TEXT NOT NULL, side INTEGER NOT NULL, neighbor INTEGER NOT NULL,
             lemma TEXT NOT NULL, pos TEXT NOT NULL, features TEXT NOT NULL, observations INTEGER NOT NULL,
             PRIMARY KEY(term,side,neighbor,lemma,pos,features)) WITHOUT ROWID;
-         PRAGMA user_version=2;",
+         CREATE TABLE expressions (anchor TEXT NOT NULL, kind TEXT NOT NULL, parts TEXT NOT NULL,
+             observations INTEGER NOT NULL, PRIMARY KEY(anchor,kind,parts)) WITHOUT ROWID;",
     )
     .map_err(|error| error.to_string())?;
     let transaction = db.transaction().map_err(|error| error.to_string())?;
+    transaction
+        .pragma_update(None, "user_version", INDEX_VERSION)
+        .map_err(|error| error.to_string())?;
     let mut inserted = 0usize;
     {
         let mut insert = transaction.prepare(
@@ -327,9 +345,11 @@ fn build_pack(path: &Path, input: impl BufRead) -> Result<()> {
             "INSERT INTO neighbors VALUES (?1,?2,?3,?4,?5,?6,1) ON CONFLICT DO UPDATE SET observations=observations+1",
         ).map_err(|error| error.to_string())?;
         let mut previous = None;
+        let mut expressions = expressions::Indexer::new(&transaction)?;
         for line in input.lines() {
             let line = line.map_err(|error| error.to_string())?;
             if line.is_empty() {
+                expressions.flush()?;
                 previous = None;
                 continue;
             }
@@ -342,8 +362,11 @@ fn build_pack(path: &Path, input: impl BufRead) -> Result<()> {
             else {
                 return Err("Неповний запис у корпусі CoNLL-U.".into());
             };
-            if id.parse::<u32>().is_err() {
+            let Ok(id) = id.parse::<u32>() else {
                 continue;
+            };
+            if let (Some(head), Some(relation)) = (fields.next(), fields.next()) {
+                expressions.token(id, form, lemma, head.parse().unwrap_or_default(), relation);
             }
             if !form.chars().any(char::is_alphabetic)
                 || lemma == "_"
@@ -380,6 +403,7 @@ fn build_pack(path: &Path, input: impl BufRead) -> Result<()> {
             ));
             inserted += 1;
         }
+        expressions.flush()?;
     }
     if inserted == 0 {
         return Err("У корпусі немає граматичних записів.".into());
@@ -498,5 +522,53 @@ mod tests {
         assert_eq!(first["lengthUtf16"], 6);
         assert_eq!(changes[1]["replacement"], "Book");
         assert!(store.suggest_ocr("fr", text).unwrap().is_none());
+    }
+
+    #[test]
+    fn expression_lookup_finds_parts_and_keeps_clause_boundaries() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(&root.path().join("reader.sqlite")).unwrap();
+        let path = PACKS[0].path(&store.knowledge_directory);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let corpus = concat!(
+            "1\tTurn\tturn\tVERB\t_\t_\t0\troot\n",
+            "2\tlights\tlight\tNOUN\t_\t_\t1\tobj\n",
+            "3\toff\toff\tADP\t_\t_\t1\tcompound:prt\n\n",
+            "1\tturned\tturn\tVERB\t_\t_\t0\troot\n",
+            "2\tbecause\tbecause\tADP\t_\t_\t1\tobl\n",
+            "3\tof\tof\tADP\t_\t_\t2\tfixed\n",
+        );
+        build_pack(&path, corpus.as_bytes()).unwrap();
+        let lookup = |sentence: &str, selected: &str| {
+            let start = sentence.find(selected).unwrap();
+            let context = WordContext {
+                sentence: sentence.into(),
+                start_utf16: sentence[..start].encode_utf16().count(),
+            };
+            serde_json::to_value(
+                store
+                    .lookup_word("en", selected, Some(&context))
+                    .unwrap()
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        for selected in ["turned", "off"] {
+            let found = lookup("😀 He turned the lights off.", selected);
+            assert_eq!(found["expressions"][0]["text"], "turned … off");
+            assert_eq!(found["expressions"][0]["kind"], "particle");
+        }
+        assert_eq!(
+            lookup("He turned because of the rain.", "of")["expressions"][0]["text"],
+            "because of"
+        );
+        assert!(lookup("He turned the lights, off.", "off")["expressions"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert!(lookup("He turned the lights off.", "lights")["expressions"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 }

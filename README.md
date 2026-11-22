@@ -131,6 +131,8 @@ The card names the corpus and marks missing forms. Analysis leaves the original 
 Current indexes can rank readings using observed words immediately before and after the selection.
 The card reports matching corpus occurrences and keeps other readings available. Earlier indexes retain
 frequency-based lookup and can be updated from Settings.
+The latest index also uses annotated fixed expressions and verb particles. Select a part of the expression
+to see matches such as **turned … off** and their corpus counts.
 In **Форма для словникової картки**, choose the reading you intend to save. Equivalent inflections
 of the same lemma, part of speech and reviewed translation share one card and its review history.
 The card retains the recorded form, source sentence and the grammatical data available when saved.
