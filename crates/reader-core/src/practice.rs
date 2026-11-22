@@ -1,7 +1,7 @@
-use crate::{card_learning::answer_key, dictionary_transfer, Result, Store};
+use crate::{card_learning::answer_key, dictionary_transfer, Result, Store, Vocabulary};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +32,21 @@ pub struct SavedQuestion {
     pub given_answer: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elapsed_ms: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PracticeQueue {
+    pub progress: PracticeProgress,
+    pub due_count: usize,
+    pub total_cards: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PracticeAnswer {
+    pub progress: PracticeProgress,
+    pub matches_dictionary: Option<bool>,
 }
 
 impl Default for PracticeProgress {
@@ -209,9 +224,154 @@ fn assert_revision(expected: u64, actual: u64) -> Result<()> {
     }
 }
 
+fn prompt(card: &Vocabulary, reverse: bool) -> &str {
+    if reverse {
+        &card.translation
+    } else {
+        &card.word
+    }
+}
+
+fn choices(card: &Vocabulary, candidates: &[Vocabulary], reverse: bool) -> Vec<String> {
+    let same_pair = |other: &&Vocabulary| {
+        card.language == other.language && card.target_language == other.target_language
+    };
+    let key = answer_key(prompt(card, reverse));
+    let could_answer = |other: &&Vocabulary| {
+        answer_key(prompt(other, reverse)) == key
+            || reverse && other.accepted_translations.iter().any(|variant| answer_key(variant) == key)
+    };
+    // Another sense with the same prompt may also be a valid answer.
+    let mut excluded: BTreeSet<_> = candidates
+        .iter()
+        .filter(same_pair)
+        .filter(could_answer)
+        .flat_map(|other| other.practice_answers(reverse))
+        .map(|answer| answer_key(&answer))
+        .collect();
+    let correct = if reverse { &card.word } else { &card.translation };
+    excluded.insert(answer_key(correct));
+    let mut options: Vec<_> = candidates
+        .iter()
+        .filter(same_pair)
+        .filter(|other| !could_answer(other))
+        .map(|other| if reverse { &other.word } else { &other.translation })
+        .filter(|answer| !answer.trim().is_empty() && excluded.insert(answer_key(answer)))
+        .take(3)
+        .cloned()
+        .collect();
+    if options.len() < 2 {
+        return Vec::new();
+    }
+    options.push(correct.clone());
+    options.sort_by_cached_key(|_| uuid::Uuid::new_v4());
+    options
+}
+
 impl Store {
     pub fn practice(&self) -> Result<PracticeProgress> {
         Ok(read(&self.connection)?.unwrap_or_default())
+    }
+
+    /// Select a due card in the saved direction and collection, or resume the open question.
+    pub fn next_practice_question(&mut self, revision: u64) -> Result<PracticeQueue> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let mut progress = read(&tx)?.unwrap_or_default();
+        assert_revision(revision, progress.revision)?;
+        let collection = progress
+            .collection
+            .as_ref()
+            .map(|scope| scope.document_id.as_str());
+        let cards = dictionary_transfer::collection_cards(&tx, collection, None)?;
+        let reverse = progress.direction == "reverse";
+        let due_at = |card: &Vocabulary| {
+            if reverse { card.reverse.due_at } else { card.forward.due_at }
+        };
+        let now = crate::now();
+        let due = cards.iter().filter(|card| due_at(card) <= now);
+        let due_count = due.clone().count();
+        if progress.question.is_none() {
+            // Oldest scheduled reviews come before new cards in this direction.
+            if let Some(card) = due.min_by_key(|card| (due_at(card) == 0, due_at(card))) {
+                let options = if progress.mode == 2 {
+                    if collection.is_some() {
+                        let vocabulary = dictionary_transfer::collection_cards(&tx, None, None)?;
+                        choices(card, &vocabulary, reverse)
+                    } else {
+                        choices(card, &cards, reverse)
+                    }
+                } else {
+                    Vec::new()
+                };
+                progress.question = Some(SavedQuestion {
+                    card_id: card.id.clone(),
+                    prompt: prompt(card, reverse).to_owned(),
+                    answers: card.practice_answers(reverse),
+                    options,
+                    revealed: false,
+                    given_answer: None,
+                    elapsed_ms: None,
+                });
+                progress.advance()?;
+                write(&tx, &progress)?;
+            }
+        }
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(PracticeQueue {
+            progress,
+            due_count,
+            total_cards: cards.len(),
+        })
+    }
+
+    /// Reveal and persist the answer once for the current question.
+    pub fn answer_practice_question(
+        &mut self,
+        revision: u64,
+        answer: Option<&str>,
+        elapsed_ms: Option<u32>,
+    ) -> Result<PracticeAnswer> {
+        let answer = answer.map(str::trim);
+        if answer.is_some_and(|text| text.is_empty() || !crate::review_schedule::valid_answer(text))
+            || elapsed_ms.is_some_and(|ms| ms > crate::review_schedule::MAX_ELAPSED_MS)
+        {
+            return Err("Некоректна відповідь або час відповіді.".into());
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let mut progress = read(&tx)?.unwrap_or_default();
+        assert_revision(revision, progress.revision)?;
+        let question = progress
+            .question
+            .as_mut()
+            .filter(|question| !question.revealed)
+            .ok_or("Немає відкритого запитання.")?;
+        let normalized = answer.map(answer_key);
+        let invalid_choice = !question.options.is_empty()
+            && !question.options.iter().any(|option| {
+                normalized.as_ref().is_some_and(|value| answer_key(option) == *value)
+            });
+        if progress.mode != 0 && normalized.is_none() || invalid_choice {
+            return Err("Введіть відповідь або виберіть один із варіантів.".into());
+        }
+        let matches_dictionary = normalized.map(|key| {
+            question.answers.iter().any(|candidate| answer_key(candidate) == key)
+        });
+        question.revealed = true;
+        question.given_answer = answer.map(str::to_owned);
+        question.elapsed_ms = elapsed_ms;
+        progress.advance()?;
+        write(&tx, &progress)?;
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(PracticeAnswer {
+            progress,
+            matches_dictionary,
+        })
     }
 
     pub fn set_practice(&mut self, mut progress: PracticeProgress) -> Result<PracticeProgress> {

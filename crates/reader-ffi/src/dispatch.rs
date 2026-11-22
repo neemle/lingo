@@ -270,6 +270,10 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             grade,
         } => value(store.review(&id, &direction, grade)),
         Command::Practice => value(store.practice()),
+        Command::NextPracticeQuestion { revision } => value(store.next_practice_question(revision)),
+        Command::AnswerPracticeQuestion { revision, answer, elapsed_ms } => {
+            value(store.answer_practice_question(revision, answer.as_deref(), elapsed_ms))
+        }
         Command::SetPractice { progress } => value(store.set_practice(progress)),
         Command::GradePractice { revision, grade } => value(store.grade_practice(revision, grade)),
         Command::Original { id } => value(store.original(&id)),

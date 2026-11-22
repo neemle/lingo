@@ -342,6 +342,15 @@ pub enum Command {
         grade: u8,
     },
     Practice,
+    NextPracticeQuestion {
+        revision: u64,
+    },
+    AnswerPracticeQuestion {
+        revision: u64,
+        answer: Option<String>,
+        #[serde(rename = "elapsedMs")]
+        elapsed_ms: Option<u32>,
+    },
     SetPractice {
         progress: reader_core::practice::PracticeProgress,
     },
