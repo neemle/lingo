@@ -15,7 +15,7 @@ public partial class AppShell : Shell
     private static readonly string[] Sections = ["library", "reading", "vocabulary", "practice", "settings"];
     private const string OriginalPdfPreference = "lastOriginalPdf";
     private readonly string previousRoute = RestoreRoute();
-    private readonly string? previousOriginalPdf = Preferences.Get(OriginalPdfPreference, null as string);
+    private readonly string previousOriginalPdf = Preferences.Get(OriginalPdfPreference, "");
     private ReaderSession? trackedSession;
     private string[] renderedRecent = [];
     private bool restored;
