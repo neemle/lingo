@@ -118,6 +118,22 @@ pub enum Command {
         target: String,
     },
     KnowledgePackages,
+    LexicalPackages,
+    InstallLexicalPackage {
+        language: String,
+        path: String,
+    },
+    DictionaryCollection {
+        #[serde(rename = "documentId")]
+        document_id: Option<String>,
+    },
+    ExportDictionary {
+        #[serde(rename = "documentId")]
+        document_id: Option<String>,
+    },
+    ImportDictionary {
+        archive: reader_core::dictionary_transfer::DictionaryArchive,
+    },
     InstallKnowledgePackage {
         language: String,
         path: String,
@@ -149,6 +165,20 @@ pub enum Command {
     CheckTranslationArchiveSpace {
         directory: String,
         bytes: u64,
+    },
+    SynthesizeSpeech {
+        id: String,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        engine: Option<String>,
+        speaker: u32,
+        rate: f32,
+    },
+    TranslateParagraph {
+        id: String,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        target: String,
     },
     TranslateSentence {
         id: String,

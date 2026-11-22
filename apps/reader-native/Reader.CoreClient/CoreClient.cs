@@ -104,6 +104,21 @@ public sealed class CoreClient : IDisposable
         Call<JsonElement>(new { version = 1, operation = "check_translation_download_space", source, target, stagingRoot, archiveDirectory });
     public void CheckTranslationArchiveSpace(string directory, long bytes) =>
         Call<JsonElement>(new { version = 1, operation = "check_translation_archive_space", directory, bytes });
+    public ParagraphTranslation TranslateParagraph(string id, string sentenceId, string target) =>
+        Call<ParagraphTranslation>(new { version = 1, operation = "translate_paragraph", id, sentenceId, target });
+    public LexicalPackage[] LexicalPackages() =>
+        Call<LexicalPackage[]>(new { version = 1, operation = "lexical_packages" });
+    public LexicalPackage InstallLexicalPackage(string language, string path) =>
+        CallIndependent<LexicalPackage>(new { version = 1, operation = "install_lexical_package", language, path });
+    public Vocabulary[] DictionaryCollection(string? documentId = null) =>
+        Call<Vocabulary[]>(new { version = 1, operation = "dictionary_collection", documentId });
+    public DictionaryArchive ExportDictionary(string? documentId = null) =>
+        Call<DictionaryArchive>(new { version = 1, operation = "export_dictionary", documentId });
+    public DictionaryImport ImportDictionary(DictionaryArchive archive) =>
+        Call<DictionaryImport>(new { version = 1, operation = "import_dictionary", archive });
+    public SpeechAudio SynthesizeSpeech(string id, string sentenceId, uint speaker, float rate, string engine = "piper-uk") =>
+        CallIndependent<SpeechAudio>(new { version = 1, operation = "synthesize_speech", id, sentenceId, engine, speaker, rate });
+
     public MachineTranslation? TranslateSentence(string id, string sentenceId, string target) =>
         Call<MachineTranslation?>(new { version = 1, operation = "translate_sentence", id, sentenceId, target });
     public Vocabulary SaveWord(Vocabulary entry) =>

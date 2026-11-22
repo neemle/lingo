@@ -75,7 +75,10 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             target,
             text,
         } => value(store.set_reviewed_translation(&id, &sentence_id, &target, &text)),
-        Command::ExplainWord { .. } | Command::SemanticVocabulary { .. } => Err(Error::new(
+        Command::ExplainWord { .. }
+        | Command::SemanticVocabulary { .. }
+        | Command::InstallLexicalPackage { .. }
+        | Command::SynthesizeSpeech { .. } => Err(Error::new(
             "internal_error",
             "Optional inference requires unlocked dispatch",
         )),
@@ -93,6 +96,14 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             value(store.translation_readiness(&source, &target))
         }
         Command::KnowledgePackages => value(Ok(store.knowledge_packages())),
+        Command::LexicalPackages => value(Ok(store.lexical_packages())),
+        Command::DictionaryCollection { document_id } => {
+            value(store.dictionary_collection(document_id.as_deref()))
+        }
+        Command::ExportDictionary { document_id } => {
+            value(store.export_dictionary(document_id.as_deref()))
+        }
+        Command::ImportDictionary { archive } => value(store.import_dictionary(archive)),
         Command::InstallKnowledgePackage { language, path } => {
             value(store.install_knowledge_package(&language, std::path::Path::new(&path)))
         }
@@ -122,6 +133,11 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::CheckTranslationArchiveSpace { directory, bytes } => {
             value(store.check_translation_archive_space(std::path::Path::new(&directory), bytes))
         }
+        Command::TranslateParagraph {
+            id,
+            sentence_id,
+            target,
+        } => value(store.translate_installed_paragraph(&id, &sentence_id, &target)),
         Command::TranslateSentence {
             id,
             sentence_id,

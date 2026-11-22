@@ -57,7 +57,7 @@ jobs:
         run: |
           app="$(find apps/reader-native/Reader.Native/bin/Release/net10.0-maccatalyst -type d -name '*.app' -print -quit)"
           executable="$(plutil -extract CFBundleExecutable raw -o - "$app/Contents/Info.plist")"
-          nm -gU "$app/Contents/MacOS/$executable" | awk '$NF == "_OrtGetApiBase" { found = 1 } END { exit !found }'
+          xcrun dyld_info -exports "$app/Contents/MacOS/$executable" | awk '$NF == "_OrtGetApiBase" { found = 1 } END { exit !found }'
   windows:
     runs-on: windows-2022
     steps:

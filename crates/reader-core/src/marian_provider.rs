@@ -18,8 +18,9 @@ use crate::{
     resources::RESOURCES,
     space::{ensure_capacity, PACKAGE_OVERHEAD},
     translation::{
-        input_for_sentence, route_readiness, AlignedTranslation, ModelEdge, TranslationProvider,
-        TranslationReadiness, TranslationRequest, TranslationSettings,
+        input_for_sentence, route_readiness, translate_paragraph, AlignedTranslation, ModelEdge,
+        ParagraphTranslation, TranslationProvider, TranslationReadiness, TranslationRequest,
+        TranslationSettings,
     },
     Result, Store,
 };
@@ -40,6 +41,9 @@ const MAX_ARCHIVE_BYTES: u64 = 400_000_000;
 struct Package {
     pub source: &'static str,
     pub target: &'static str,
+    pub repository: &'static str,
+    pub license: &'static str,
+    pub target_prefix: Option<&'static str>,
     pub revision: &'static str,
     pub sizes: [u64; 5],
     pub hashes: [&'static str; 5],
@@ -61,6 +65,8 @@ impl Package {
 pub struct TranslationPackageStatus {
     pub source: &'static str,
     pub target: &'static str,
+    pub repository: &'static str,
+    pub license: &'static str,
     pub files_present: bool,
     pub has_local_files: bool,
     pub revision: &'static str,
@@ -130,6 +136,8 @@ impl Store {
             .map(|package| TranslationPackageStatus {
                 source: package.source,
                 target: package.target,
+                repository: package.repository,
+                license: package.license,
                 files_present: provider.files_present(package),
                 has_local_files: provider.path(package).symlink_metadata().is_ok()
                     || provider.removed_path(package).symlink_metadata().is_ok()
@@ -187,36 +195,43 @@ impl Store {
         if archive.len() != ASSETS.len() {
             return Err("Архів має містити п’ять файлів мовного пакета".into());
         }
-        let (size, config_hash) = copy_and_hash(
+        let mut sizes = [0; ASSETS.len()];
+        for (index, asset) in ASSETS.iter().enumerate() {
+            let entry = archive.by_name(asset).map_err(model_error)?;
+            sizes[index] = entry.size();
+        }
+        let (_, config_hash) = copy_and_hash(
             archive.by_name("config.json").map_err(model_error)?,
             io::sink(),
-            64 * 1024,
+            asset_limit("config.json"),
         )?;
-        if size == 0 {
-            return Err("Конфігурація мовного пакета порожня".into());
-        }
-        let package = catalog::PACKAGES
+        let mut candidates: Vec<_> = catalog::PACKAGES
             .iter()
-            .find(|model| model.hashes[0] == config_hash)
-            .ok_or("Версію мовного пакета не підтримано")?;
+            .filter(|model| model.sizes == sizes && model.hashes[0] == config_hash)
+            .collect();
+        if candidates.is_empty() {
+            return Err("Версію мовного пакета не підтримано".into());
+        }
         let provider = MarianProvider {
             directory: &self.model_directory,
         };
         fs::create_dir_all(&self.model_directory).map_err(model_error)?;
         ensure_capacity([(
             &self.model_directory,
-            package.sizes.iter().sum::<u64>() + PACKAGE_OVERHEAD,
+            sizes.iter().sum::<u64>() + PACKAGE_OVERHEAD,
         )])?;
         let stage = tempfile::tempdir_in(&self.model_directory).map_err(model_error)?;
-        for (asset, expected) in ASSETS.iter().zip(package.hashes) {
+        for (index, asset) in ASSETS.iter().enumerate() {
             let input = archive.by_name(asset).map_err(model_error)?;
             let mut output = File::create(stage.path().join(asset)).map_err(model_error)?;
-            let (_, digest) = copy_and_hash(input, &mut output, asset_limit(asset))?;
-            if digest != expected {
+            let (size, digest) = copy_and_hash(input, &mut output, asset_limit(asset))?;
+            candidates.retain(|model| model.sizes[index] == size && model.hashes[index] == digest);
+            if candidates.is_empty() {
                 return Err(format!("Файл мовного пакета пошкоджений: {asset}"));
             }
             output.sync_all().map_err(model_error)?;
         }
+        let package = candidates[0];
         let _lock = provider.lock(package, true)?;
         let active = provider.path(package);
         let previous = provider.previous_path(package);
@@ -234,7 +249,11 @@ impl Store {
         remove_package_directory(&provider.removed_path(package)).map_err(|error| {
             format!("Пакет готовий. Не вдалося прибрати попередні файли. {error}")
         })?;
-        Ok(format!("{} → {}", package.source, package.target))
+        Ok(candidates
+            .iter()
+            .map(|entry| format!("{} → {}", entry.source, entry.target))
+            .collect::<Vec<_>>()
+            .join(", "))
     }
 
     pub fn translate_installed_sentence(
@@ -249,6 +268,42 @@ impl Store {
             sentence_id,
             target,
         )
+    }
+
+    pub fn translate_installed_paragraph(
+        &mut self,
+        document_id: &str,
+        sentence_id: &str,
+        target: &str,
+    ) -> Result<ParagraphTranslation> {
+        let document = self.translation_document(document_id)?;
+        let selected = document
+            .sentences
+            .iter()
+            .position(|sentence| sentence.id == sentence_id)
+            .ok_or("Речення для перекладу не знайдено")?;
+        let directory = self.model_directory.clone();
+        translate_paragraph(
+            self,
+            &mut MarianProvider {
+                directory: &directory,
+            },
+            &document,
+            selected,
+            target,
+        )
+    }
+
+    fn translation_document(&self, document_id: &str) -> Result<crate::Document> {
+        let body: String = self
+            .connection
+            .query_row(
+                "SELECT body FROM documents WHERE id=?1",
+                [document_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        serde_json::from_str(&body).map_err(|error| error.to_string())
     }
 
     pub fn translation_readiness(
@@ -270,16 +325,7 @@ impl Store {
         sentence_id: &str,
         target: &str,
     ) -> Result<Option<AlignedTranslation>> {
-        let body: String = self
-            .connection
-            .query_row(
-                "SELECT body FROM documents WHERE id=?1",
-                [document_id],
-                |row| row.get(0),
-            )
-            .map_err(|error| error.to_string())?;
-        let document: crate::Document =
-            serde_json::from_str(&body).map_err(|error| error.to_string())?;
+        let document = self.translation_document(document_id)?;
         let selected = document
             .sentences
             .iter()
@@ -317,18 +363,17 @@ impl MarianProvider<'_> {
     }
 
     fn path(&self, model: &Package) -> PathBuf {
-        self.directory
-            .join(format!("{}-{}", model.source, model.target))
+        self.directory.join(model.repository)
     }
 
     fn removed_path(&self, model: &Package) -> PathBuf {
         self.directory
-            .join(format!(".removed-{}-{}", model.source, model.target))
+            .join(format!(".removed-{}", model.repository))
     }
 
     fn previous_path(&self, model: &Package) -> PathBuf {
         self.directory
-            .join(format!(".previous-{}-{}", model.source, model.target))
+            .join(format!(".previous-{}", model.repository))
     }
 
     fn read_path(&self, model: &Package) -> PathBuf {
@@ -341,9 +386,7 @@ impl MarianProvider<'_> {
     }
 
     fn lock(&self, model: &Package, exclusive: bool) -> Result<File> {
-        let path = self
-            .directory
-            .join(format!(".{}-{}.lock", model.source, model.target));
+        let path = self.directory.join(format!(".{}.lock", model.repository));
         lock_package(&path, exclusive)
     }
 }
@@ -379,9 +422,19 @@ impl TranslationProvider for MarianProvider<'_> {
         let _lock = self.lock(package, false)?;
         let directory = self.read_path(package);
         verify_files(&directory, package, &ASSETS[..4])?;
-        let config: Config =
+        let mut configuration: serde_json::Value =
             serde_json::from_slice(&fs::read(directory.join("config.json")).map_err(model_error)?)
                 .map_err(model_error)?;
+        // The verified en-de weights include a shared embedding; that revision
+        // predates the explicit config field.
+        if package.repository == "en-de" {
+            if let Some(fields) = configuration.as_object_mut() {
+                fields
+                    .entry("share_encoder_decoder_embeddings")
+                    .or_insert(true.into());
+            }
+        }
+        let config: Config = serde_json::from_value(configuration).map_err(model_error)?;
         let vocabulary: HashMap<String, u32> =
             serde_json::from_slice(&fs::read(directory.join("vocab.json")).map_err(model_error)?)
                 .map_err(model_error)?;
@@ -422,61 +475,95 @@ impl TranslationProvider for MarianProvider<'_> {
             .get("<unk>")
             .ok_or("У мовному пакеті немає маркера невідомого слова")?;
 
+        let prefix = package
+            .target_prefix
+            .map(|tag| {
+                vocabulary
+                    .get(tag)
+                    .copied()
+                    .ok_or("Мовний пакет не містить маркера цільової мови")
+            })
+            .transpose()?;
+        let limit = config.max_position_embeddings.min(256);
+        let capacity = limit
+            .checked_sub(1 + usize::from(prefix.is_some()))
+            .filter(|limit| *limit > 0)
+            .ok_or("Некоректна довжина входу мовної моделі")?;
+
         let mut results = Vec::with_capacity(segments.len());
         for segment in segments {
-            let mut tokens: Vec<_> = input
-                .encode(segment)
-                .map_err(model_error)?
-                .iter()
-                .map(|piece| vocabulary.get(piece).copied().unwrap_or(unknown))
-                .collect();
-            let limit = config.max_position_embeddings.min(256);
-            if tokens.len() >= limit {
-                return Err("Речення задовге для цього мовного пакета".into());
-            }
-            tokens.push(config.eos_token_id);
-            model.reset_kv_cache();
-            let encoder_input = Tensor::new(tokens.as_slice(), &Device::Cpu)
-                .and_then(|x| x.unsqueeze(0))
-                .map_err(model_error)?;
-            let encoded = model
-                .encoder()
-                .forward(&encoder_input, 0)
-                .map_err(model_error)?;
-            let mut token = config.decoder_start_token_id;
-            let mut pieces = Vec::new();
-            let mut complete = false;
-            for index in 0..limit {
-                let decoder_input = Tensor::new(&[[token]], &Device::Cpu).map_err(model_error)?;
-                // Marian uses padding as the decoder start token but disallows generating it.
-                let scores = model
-                    .decode(&decoder_input, &encoded, index)
-                    .and_then(|output| output.get(0)?.get(0)?.to_vec1::<f32>())
-                    .map_err(model_error)?;
-                token = scores
+            let source_pieces = input.encode(segment).map_err(model_error)?;
+            let mut start = 0;
+            let mut translated_parts = Vec::new();
+            loop {
+                let mut end = source_pieces.len().min(start + capacity);
+                if end < source_pieces.len() {
+                    end = end.min(start + 160);
+                    end = ((start + 1)..=end)
+                        .rev()
+                        .find(|&index| source_pieces[index].starts_with('▁'))
+                        .unwrap_or(end);
+                }
+                let mut tokens: Vec<_> = prefix
                     .into_iter()
-                    .enumerate()
-                    .filter(|(id, score)| *id != config.pad_token_id as usize && score.is_finite())
-                    .max_by(|(_, a), (_, b)| a.total_cmp(b))
-                    .map(|(id, _)| id as u32)
-                    .ok_or("Модель не повернула доступного токена")?;
-                if token == config.eos_token_id || token == config.forced_eos_token_id {
-                    complete = true;
+                    .chain(
+                        source_pieces[start..end]
+                            .iter()
+                            .map(|piece| vocabulary.get(piece).copied().unwrap_or(unknown)),
+                    )
+                    .collect();
+                tokens.push(config.eos_token_id);
+                model.reset_kv_cache();
+                let encoder_input = Tensor::new(tokens.as_slice(), &Device::Cpu)
+                    .and_then(|x| x.unsqueeze(0))
+                    .map_err(model_error)?;
+                let encoded = model
+                    .encoder()
+                    .forward(&encoder_input, 0)
+                    .map_err(model_error)?;
+                let mut token = config.decoder_start_token_id;
+                let mut pieces = Vec::new();
+                let mut complete = false;
+                for index in 0..limit {
+                    let decoder_input =
+                        Tensor::new(&[[token]], &Device::Cpu).map_err(model_error)?;
+                    // Marian uses padding as the decoder start token but disallows generating it.
+                    let scores = model
+                        .decode(&decoder_input, &encoded, index)
+                        .and_then(|output| output.get(0)?.get(0)?.to_vec1::<f32>())
+                        .map_err(model_error)?;
+                    token = scores
+                        .into_iter()
+                        .enumerate()
+                        .filter(|(id, score)| {
+                            *id != config.pad_token_id as usize && score.is_finite()
+                        })
+                        .max_by(|(_, a), (_, b)| a.total_cmp(b))
+                        .map(|(id, _)| id as u32)
+                        .ok_or("Модель не повернула доступного токена")?;
+                    if token == config.eos_token_id || token == config.forced_eos_token_id {
+                        complete = true;
+                        break;
+                    }
+                    if token != config.pad_token_id {
+                        pieces.push(
+                            *output_pieces
+                                .get(&token)
+                                .ok_or("Невідомий токен перекладу")?,
+                        );
+                    }
+                }
+                if !complete {
+                    return Err("Модель не завершила переклад речення".into());
+                }
+                let translated = output.decode(&pieces).map_err(model_error)?;
+                translated_parts.push(translated.trim().to_owned());
+                if end == source_pieces.len() {
                     break;
                 }
-                if token != config.pad_token_id {
-                    pieces.push(
-                        *output_pieces
-                            .get(&token)
-                            .ok_or("Невідомий токен перекладу")?,
-                    );
-                }
+                start = end;
             }
-            if !complete {
-                return Err("Модель не завершила переклад речення".into());
-            }
-            let translated = output.decode(&pieces).map_err(model_error)?;
-            results.push(translated.trim().to_owned());
+            results.push(translated_parts.join(" "));
         }
         Ok(results)
     }

@@ -1618,6 +1618,7 @@ dependencies = [
  "candle-core",
  "candle-nn",
  "candle-transformers",
+ "flate2",
  "libc",
  "libloading",
  "llama-cpp-2",

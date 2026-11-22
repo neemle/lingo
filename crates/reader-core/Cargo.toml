@@ -11,6 +11,7 @@ sha2 = "0.10"
 unicode-segmentation = "1.12"
 unicode-normalization = "0.1"
 zip = { version = "9.8.1", default-features = false, features = ["deflate"] }
+flate2 = "1.1"
 quick-xml = "0.38"
 pdf-extract = "0.12.1"
 candle-core = "0.11.1"

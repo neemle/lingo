@@ -11,7 +11,10 @@ use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
 mod expressions;
+mod lexicon;
 mod ocr_suggestions;
+
+pub use lexicon::{LexicalPackage, LexicalPackageInstall, WordMeaning};
 
 const INDEX_VERSION: u32 = 3;
 
@@ -93,6 +96,8 @@ pub struct WordLookup {
     total_observations: u32,
     analyses: Vec<WordAnalysis>,
     expressions: Vec<expressions::ExpressionMatch>,
+    lexical_package: Option<LexicalPackage>,
+    meanings: Vec<WordMeaning>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -202,13 +207,28 @@ impl Store {
         word: &str,
         context: Option<&WordContext>,
     ) -> Result<Option<WordLookup>> {
+        let key = word_key(word);
         let Some((pack, db)) = self.open_knowledge_index(language)? else {
-            return Ok(None);
+            let Some(pack) = PACKS.iter().find(|pack| pack.language == language) else {
+                return Ok(None);
+            };
+            if !lexicon::available(&self.knowledge_directory, language) {
+                return Ok(None);
+            }
+            let (lexical_package, meanings) =
+                lexicon::lookup(&self.knowledge_directory, language, &key, &[], &[], context)?;
+            return Ok(Some(WordLookup {
+                package: pack.describe(0),
+                total_observations: 0,
+                analyses: Vec::new(),
+                expressions: Vec::new(),
+                lexical_package,
+                meanings,
+            }));
         };
         let index_version: u32 = db
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| error.to_string())?;
-        let key = word_key(word);
         let (left, right) = context
             .filter(|_| index_version >= 2)
             .map(|context| context.neighbor_hashes(&key))
@@ -260,11 +280,21 @@ impl Store {
             Some(context) if index_version >= 3 => expressions::lookup(&db, context, &key)?,
             _ => Vec::new(),
         };
+        let (lexical_package, meanings) = lexicon::lookup(
+            &self.knowledge_directory,
+            language,
+            &key,
+            &analyses,
+            &expressions,
+            context,
+        )?;
         Ok(Some(WordLookup {
             package: pack.describe(index_version),
             total_observations: total,
             analyses,
             expressions,
+            lexical_package,
+            meanings,
         }))
     }
 }

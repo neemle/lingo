@@ -12,4 +12,8 @@ public sealed record WordContext(string Sentence, int StartUtf16);
 public sealed record ExpressionMatch(string Text, string Canonical, string Kind, int Observations);
 
 public sealed record WordLookup(KnowledgePackage Package, int TotalObservations, WordAnalysis[] Analyses,
-    ExpressionMatch[] Expressions);
+    ExpressionMatch[] Expressions)
+{
+    public LexicalPackage? LexicalPackage { get; init; }
+    public WordMeaning[] Meanings { get; init; } = [];
+}

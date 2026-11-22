@@ -33,7 +33,7 @@ fn installs_pinned_models_translates_end_to_end_and_reuses_cache() {
         PathBuf::from(std::env::var_os("LINGO_TEST_MODEL_DIR").expect("LINGO_TEST_MODEL_DIR"));
     let scratch = tempfile::tempdir().unwrap();
     let mut store = Store::open(&scratch.path().join("model-test.sqlite")).unwrap();
-    assert_eq!(store.translation_packages().len(), 5);
+    assert_eq!(store.translation_packages().len(), 24);
     assert!(store
         .translation_packages()
         .iter()

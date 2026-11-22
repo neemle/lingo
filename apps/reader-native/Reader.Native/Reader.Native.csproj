@@ -47,7 +47,7 @@
       <LinkerFlags>-lc++ -u _reader_abi_version -u _reader_call -u _reader_close -u _reader_release</LinkerFlags>
     </NativeReference>
     <NativeReference Include="$(OnnxRuntimePath)/runtimes/ios/native/onnxruntime.xcframework.zip">
-      <Kind>Static</Kind><SmartLink>false</SmartLink>
+      <Kind>Static</Kind><ForceLoad>true</ForceLoad><SmartLink>false</SmartLink>
       <WeakFrameworks>CoreML</WeakFrameworks>
       <LinkerFlags>-u _OrtGetApiBase</LinkerFlags>
     </NativeReference>

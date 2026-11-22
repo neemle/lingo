@@ -4,13 +4,13 @@ use std::sync::OnceLock;
 
 type ApiBase = unsafe extern "system" fn() -> *const OrtApiBase;
 
-pub(super) fn environment() -> Result<&'static ort::environment::Environment> {
+pub(crate) fn environment() -> Result<&'static ort::environment::Environment> {
     static ENVIRONMENT: OnceLock<Result<ort::environment::Environment>> = OnceLock::new();
     ENVIRONMENT
         .get_or_init(|| {
             install_api()?;
             ort::init()
-                .with_name("Lingo E5")
+                .with_name("Lingo")
                 .with_telemetry(false)
                 .build()
                 .map_err(|error| error.to_string())

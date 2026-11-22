@@ -1,41 +1,175 @@
 use super::Package;
 
-// Pinned Helsinki-NLP model revisions containing Hugging Face safetensors conversions.
-// Hash order matches ASSETS.
+// Helsinki-NLP OPUS-MT weights with pinned Hugging Face Safetensors conversions.
+// Assets are attributed to their repository's published license. Hash order
+// matches ASSETS. Multilingual aliases share one package on disk.
 pub(super) const PACKAGES: &[Package] = &[
-    Package { source: "fr", target: "uk", revision: "e789f8670b3515ed604605d80d108dd97d779848", sizes: [1381, 832408, 1012055, 2443170, 305697276], hashes: [
+    Package { source: "fr", target: "uk", repository: "fr-uk", license: "Apache-2.0", target_prefix: None, revision: "e789f8670b3515ed604605d80d108dd97d779848", sizes: [1381, 832408, 1012055, 2443170, 305697276], hashes: [
         "6b478f468723fe9f18339683da1ba6f7927c88e3226be03556bf516229afe0ec",
         "3116f1a7e76762bb9a7180d52b8dc34807c636aefadf79eeeef9cb1bb0678515",
         "956d1d23875ccdf6e4174a84ee87d366bc212d8c235c71bc42224863922bfa6d",
         "cf758389f73cae579a8c4af90cf625bc872c38dfd9e21f8c4252574e274a5c8e",
         "371197ce4054f0f9fa8798596623fffc7cd6eb587c2bdc9031510705714524b3",
     ] },
-    Package { source: "en", target: "uk", revision: "55104bebd23cd2d87761e650aa6ac7369b379d1c", sizes: [1381, 808645, 1007605, 2367710, 305056940], hashes: [
+    Package { source: "en", target: "uk", repository: "en-uk", license: "Apache-2.0", target_prefix: None, revision: "55104bebd23cd2d87761e650aa6ac7369b379d1c", sizes: [1381, 808645, 1007605, 2367710, 305056940], hashes: [
         "01e85031802ed6c76c43269c1dc8b641d20687b79cc700cce8cd6e0440af8854",
         "4dc9157e60a15b157c2f3d5f892379b03aed111c9fe8ac7cecba5f2aa56379ef",
         "7abd810b2df512e6fe177f8732f6a0b3107614c84cc52aba20d805b4cb0d7b6b",
         "992107700c8d5f9c1f41fefa5f72ac99050852b39d75f979c4e59344e6d14770",
         "a0f3dce3522dc5c991df5b5b669c38622234f56eeb048f9ad95e4459e0ee1088",
     ] },
-    Package { source: "uk", target: "fr", revision: "dea3717a7169bffc2ff692e04af8a21fd1c20cae", sizes: [1381, 1012055, 832408, 2443170, 305697276], hashes: [
+    Package { source: "uk", target: "fr", repository: "uk-fr", license: "Apache-2.0", target_prefix: None, revision: "dea3717a7169bffc2ff692e04af8a21fd1c20cae", sizes: [1381, 1012055, 832408, 2443170, 305697276], hashes: [
         "c87aeb75f6e42d0ee43c93d2a1e045c0a8e060f579fea216aed7232901d349e7",
         "956d1d23875ccdf6e4174a84ee87d366bc212d8c235c71bc42224863922bfa6d",
         "3116f1a7e76762bb9a7180d52b8dc34807c636aefadf79eeeef9cb1bb0678515",
         "cf758389f73cae579a8c4af90cf625bc872c38dfd9e21f8c4252574e274a5c8e",
         "6cbb453ade0328202215995f053eb078578c4df6caa69e8db543756f17374ae7",
     ] },
-    Package { source: "en", target: "fr", revision: "c96fcd7f38a4c0d1ac9b61e255b47f3f7ff55e5e", sizes: [1416, 778395, 802397, 1339166, 300803256], hashes: [
+    Package { source: "en", target: "fr", repository: "en-fr", license: "Apache-2.0", target_prefix: None, revision: "c96fcd7f38a4c0d1ac9b61e255b47f3f7ff55e5e", sizes: [1416, 778395, 802397, 1339166, 300803256], hashes: [
         "df92c371911b45282caac6101fe7e7f5d5e9af7f9a99356067ffe306278ce72b",
         "173e9f493a668fe396d599e28d414a201193094e6ffd7a4678e5aab0f6d3d838",
         "78d0e717c77053f1c4b856d8661d9cb87c64f083a35418c087b9146300e4f585",
         "945c604346ce15ce4aff9001001e7f925e336d942c4087017f191871162cbdc4",
         "c32d3003ced798c78b9ca90fb69c8e23ad5b4c64c500628bdf3303bbc9272816",
     ] },
-    Package { source: "fr", target: "en", revision: "c4aed37b318c763fd177aa449b44e3b783cc6c02", sizes: [1416, 802397, 778395, 1339166, 300803608], hashes: [
+    Package { source: "fr", target: "en", repository: "fr-en", license: "Apache-2.0", target_prefix: None, revision: "c4aed37b318c763fd177aa449b44e3b783cc6c02", sizes: [1416, 802397, 778395, 1339166, 300803608], hashes: [
         "b3be13d046d9899d7aab8cf4ed624d9a79f5776038ba793f6b4d2ce3e02192f7",
         "78d0e717c77053f1c4b856d8661d9cb87c64f083a35418c087b9146300e4f585",
         "173e9f493a668fe396d599e28d414a201193094e6ffd7a4678e5aab0f6d3d838",
         "945c604346ce15ce4aff9001001e7f925e336d942c4087017f191871162cbdc4",
         "6e3837f34b903802c3d0d670362b997cee6e87584a1108eb3fa89e4625e4424a",
+    ] },
+    Package { source: "uk", target: "en", repository: "uk-en", license: "Apache-2.0", target_prefix: None, revision: "dd9f5251b1b6e73bb203c778d5583c38557daba2", sizes: [1381, 1007605, 808645, 2367710, 305056940], hashes: [
+        "767e0b7efd335e781b1856016407265b27893d213730e16b855a45ee85e17eda",
+        "7abd810b2df512e6fe177f8732f6a0b3107614c84cc52aba20d805b4cb0d7b6b",
+        "4dc9157e60a15b157c2f3d5f892379b03aed111c9fe8ac7cecba5f2aa56379ef",
+        "992107700c8d5f9c1f41fefa5f72ac99050852b39d75f979c4e59344e6d14770",
+        "a52221e3b5ad186534f7c5a1af9b89728db9ce437a08cb27c8c5d08cc13014fc",
+    ] },
+    Package { source: "en", target: "de", repository: "en-de", license: "CC-BY-4.0", target_prefix: None, revision: "73d41abacc3107122955929d3f6e2407ac52a0e0", sizes: [1335, 768489, 796845, 1273232, 297903668], hashes: [
+        "41c7890e6f6c1f72c5c626569cfe739a8362080940edbb1747f25173f541653b",
+        "678f2a1177d8389f67b66299762dcc4fc567e89b07e212ba91b0c56daecf47ce",
+        "bbd1f495eea99c8e21ae086d9146e0fa7b096c3dfdd9ba07ab8b631889df5c9b",
+        "0d70d89fee4a8b4ef99a56d712163baadcabd5600a597f71515547ee70306329",
+        "3fb78700bce624990eff6468d0e14fbde18a6aedac35821fa8c0c4ead5fae014",
+    ] },
+    Package { source: "de", target: "en", repository: "de-en", license: "Apache-2.0", target_prefix: None, revision: "8be33f00bcaf451dc5ed05fdd94282649696b8e7", sizes: [1381, 796845, 768489, 1273232, 297903668], hashes: [
+        "89368ef76ea89581025cdf605caac75b8a22af2c1a90ec57c8a5001f10537eeb",
+        "bbd1f495eea99c8e21ae086d9146e0fa7b096c3dfdd9ba07ab8b631889df5c9b",
+        "678f2a1177d8389f67b66299762dcc4fc567e89b07e212ba91b0c56daecf47ce",
+        "0d70d89fee4a8b4ef99a56d712163baadcabd5600a597f71515547ee70306329",
+        "5b1a66c79f6e871eb01b8818819e29bbdb6a25139af210b97b6efbf862493b4d",
+    ] },
+    Package { source: "en", target: "es", repository: "en-es", license: "Apache-2.0", target_prefix: None, revision: "8a8ff40364ed947066045b4f2504f58f029c7040", sizes: [1473, 801636, 825924, 1590040, 312062468], hashes: [
+        "666ad3c2943674b6a789e311d221e44ec23e27f1bd9727930754bf773ec8e464",
+        "4dd547c24816a335e7b0b2e63376a8f1b3cbfc671eda5ab808dd44fdadaa8791",
+        "e236ee6d866b635c0142114f8647f39831f9d92534aa2aad75c942f6a78ad0e3",
+        "257f346d7a6b2ecceafcca8ba05648ce2fd68dfaf105fb0e913dca7198f3f6d5",
+        "b3ecbf954573c2fd95d05d3ad4618baf961793db0da07c2add2e8a3a6cd78d0b",
+    ] },
+    Package { source: "es", target: "en", repository: "es-en", license: "Apache-2.0", target_prefix: None, revision: "d7a4e7e03d08f8aa6ed2948f8f52d0285bed7cce", sizes: [1438, 825924, 801636, 1590040, 312062468], hashes: [
+        "374443eacf8986c21386503e2fcd52eae6952ac09c87fd36695f5c12259a4cd1",
+        "e236ee6d866b635c0142114f8647f39831f9d92534aa2aad75c942f6a78ad0e3",
+        "4dd547c24816a335e7b0b2e63376a8f1b3cbfc671eda5ab808dd44fdadaa8791",
+        "257f346d7a6b2ecceafcca8ba05648ce2fd68dfaf105fb0e913dca7198f3f6d5",
+        "be17813aa5fbfa8a0f3c78e441c0461a76c68c9e63461bbbfe3ee12296fad3f1",
+    ] },
+    Package { source: "en", target: "it", repository: "en-it", license: "Apache-2.0", target_prefix: None, revision: "4106a035fb5cb94073793de781668e47c13015cb", sizes: [1381, 789468, 813725, 2351575, 342912236], hashes: [
+        "e0500492a3168b45a79bb6e3f0373d0190a9e3730e83d1316628b31f1b5a50c0",
+        "2efff2c37e51842c2817a6770280979b5dd803cebbe2928e576d42a888f89537",
+        "ef5b179cd5933782af78595099807b5c0156bd67665e4c3af425c7aec6d02d34",
+        "eb0d25eea013793e15cd574a698105dc147a5d4ba522ba5ddb8fb7554c51d37b",
+        "7012b826195f82a68efc878b39e763d2fbf8ebb485811375e9d9632899eba7d0",
+    ] },
+    Package { source: "it", target: "en", repository: "it-en", license: "Apache-2.0", target_prefix: None, revision: "3a1b763a296ef5e4dbc9c6f12c014447ba61c88e", sizes: [1381, 813709, 789549, 2369833, 343618124], hashes: [
+        "579f74b8a178cb5d006a521e497d2de643185160d45da2df7cdf2cda65ea2861",
+        "1bd307e2756991d470e4b40172147f7889b46a323b1a9a2150e66274825b1f21",
+        "5d0ea845f1daa59c379e797de366607b75594935f7c6d476c933e527bf25e0a8",
+        "f4ea61764cde265f25c2824bfe5b945685526ede81c5f2f76715a5652a63ccdb",
+        "a6e1dd4180f8aeec864ea5d79678025fa013e93df935d46159ebd6eb164782c1",
+    ] },
+    Package { source: "en", target: "nl", repository: "en-nl", license: "Apache-2.0", target_prefix: None, revision: "e80d73cca9576643fb5a8fa94e73d45ea38b4ea4", sizes: [1381, 789525, 813866, 1660216, 316221872], hashes: [
+        "d64feaab43c91ef67f7c743ba539f520ce554abcca859f67a00b1346e01bb48c",
+        "d05781fde84b8793191528a7a176e1b17f96265388f602379ee6ae3139f59141",
+        "f538d23d4b30641cd97c608d2a83890d503aa1286a5560f19ef949404a786e94",
+        "52ef60fa185ed5a6a6e75a4ea45de99582f1c1493df1c072a784489697407b2b",
+        "1e227db75d9134498000e1e91c9c8f6f6347d586d5fa2b7b08ea2c4e630c24db",
+    ] },
+    Package { source: "nl", target: "en", repository: "nl-en", license: "Apache-2.0", target_prefix: None, revision: "aba87d1c1a6e4be1563fd04c819f27c70f442ebf", sizes: [1381, 813866, 789525, 1660216, 316221872], hashes: [
+        "d0e83dd5b75e1680ead94e4166b386bf901320455f0494120cbf629044fef1ba",
+        "f538d23d4b30641cd97c608d2a83890d503aa1286a5560f19ef949404a786e94",
+        "d05781fde84b8793191528a7a176e1b17f96265388f602379ee6ae3139f59141",
+        "52ef60fa185ed5a6a6e75a4ea45de99582f1c1493df1c072a784489697407b2b",
+        "d0ea062014619242edc59e3f21d5d3c93cb9c8c7c707bf7d2932c57f90399e99",
+    ] },
+    Package { source: "en", target: "cs", repository: "en-cs", license: "Apache-2.0", target_prefix: None, revision: "d32de408381844b7b4b2465bf702198d64643b6c", sizes: [1381, 788721, 829548, 1596450, 306948884], hashes: [
+        "18d6ce2ed089abb39af5b95438e24bda8664b6ac17be644de806beda278792ab",
+        "8cb772d24cbd559a9e0c5dfd4726e1201b07497af59189f107dd812bff1909e7",
+        "a2e6d98cdd54d80ad404ad493a7755e723c8d619e998840eba682e3e3fe25e33",
+        "cd35c38843ebe40679f99e6922d8c844326e0bfe65066b52c735bc68c860180d",
+        "79f82c7a1228c0e56cd014af4f8712405908df1bd9099e0d873f0bf3b6374204",
+    ] },
+    Package { source: "cs", target: "en", repository: "cs-en", license: "Apache-2.0", target_prefix: None, revision: "8e6900031545fd8e7f80f5000da8a282bc93044a", sizes: [1381, 829548, 788721, 1596450, 306948884], hashes: [
+        "98b9d71aa0e0788e0018eefcf02ccabf043f9ce9c91209bad7eccf0e1e4f5bef",
+        "a2e6d98cdd54d80ad404ad493a7755e723c8d619e998840eba682e3e3fe25e33",
+        "8cb772d24cbd559a9e0c5dfd4726e1201b07497af59189f107dd812bff1909e7",
+        "cd35c38843ebe40679f99e6922d8c844326e0bfe65066b52c735bc68c860180d",
+        "28fcc2e7d7cfcea474fe35fe9ac0471dcfa165d5716db5189a19b8035c6e48aa",
+    ] },
+    Package { source: "en", target: "sv", repository: "en-sv", license: "Apache-2.0", target_prefix: None, revision: "75a9b8e71abcb314441c277d8385e81554dc2f78", sizes: [1381, 790085, 815294, 1291486, 294482984], hashes: [
+        "02c519c7bad6da35ddab8c0462826387dde4b2109d4f40b066dd4d008bc96259",
+        "70d69a2c08a7a2c18e4529c8ff62886aad2f8fd0e94fedeafe4bafc47a5f0d69",
+        "845278915ae2a708063110903d08c1e75ebb36607ef16ec9530955e1e95e62b8",
+        "24e474ba6c733601b3538b4ee05d9db7275caf45a2996c0cce9fb67c70b4a95b",
+        "1f10f4b66c86e4d98cdfa01e842ed2735312a6a99da08978b64e579e875fb0cb",
+    ] },
+    Package { source: "sv", target: "en", repository: "sv-en", license: "Apache-2.0", target_prefix: None, revision: "8f12539d775fc72dd0cb156271db4f939c8e5e18", sizes: [1381, 815294, 790085, 1291486, 294482984], hashes: [
+        "d47bbf76b7c3b746f3665a75f5da7f4e906cde98ef2c41f16dae46e00e0d2342",
+        "845278915ae2a708063110903d08c1e75ebb36607ef16ec9530955e1e95e62b8",
+        "70d69a2c08a7a2c18e4529c8ff62886aad2f8fd0e94fedeafe4bafc47a5f0d69",
+        "24e474ba6c733601b3538b4ee05d9db7275caf45a2996c0cce9fb67c70b4a95b",
+        "4e81e33e559aefc902ddebcf955a20ae966da2429ecc2a9b4740563f207f6dea",
+    ] },
+    Package { source: "en", target: "pl", repository: "en-zlw", license: "Apache-2.0", target_prefix: Some(">>pol<<"), revision: "233bfcb1a8d2c8c69405283f7da12d9350e1711c", sizes: [1395, 788226, 815306, 1372196, 297803120], hashes: [
+        "7448446c1991a49bd8056650f14f3ec79e350260061ba364500364f6b4c99885",
+        "3140fe2eddedc897ca27aa2b539b8064f667f82298eb95b2701ee490bde33388",
+        "ef8d9b0da062c863241e0d61af5108a53e1fb335c9c7712eeeb4498b2dd55782",
+        "2c10cc8737a03e84e1d4145c1e835ebacb930d8f62d81a5377fa6e3fac18b2b1",
+        "b84376bfce07e29ab137fc0095cf2cfc2ed6629ffc5378d5aa49846b020c63cb",
+    ] },
+    Package { source: "pl", target: "en", repository: "pl-en", license: "Apache-2.0", target_prefix: None, revision: "188c2f2da1065ae1a36ea08466652405fd56e186", sizes: [1381, 834921, 785212, 1515249, 308838776], hashes: [
+        "5303cdec6232c476b46f1b63cc792c46efe4cb2a962e4cc25396c2c0100c1590",
+        "86b3b5f9de4f5ed9c46321bab1f865e3aa9ddf63094e89b49dd515aeafa79ce4",
+        "9afaf3a45161adc40b0880d61f6f81f6ca352d68f881bc5d8da2b195023be1e0",
+        "c639e34d77775532ecf8a733a0955e351bf31daab149fd75841a1afc7b11e1e2",
+        "f22b7975aa726f2fe3eef3f7a46873f5849f25f631a4c4b402d0e16376c457fb",
+    ] },
+    Package { source: "en", target: "pt", repository: "en-roa", license: "Apache-2.0", target_prefix: Some(">>por<<"), revision: "81006b720fabc881ae35f876c0ac4edd798b7528", sizes: [1395, 785881, 793078, 1263081, 294969308], hashes: [
+        "a26408115795ffff114809ddff6db2cd18d27950fc4383ee6b59e7e694823381",
+        "7af6d14a9f962f6c14d98d28d92f88a76e3156a04d71aebfc0e3f14e9f829170",
+        "19c4d51efbe3ab5dca7eb6e7057d9f8331b92cdb076b6e6f3de4edd5133df543",
+        "2719cd659076b5c42045fb034f9a0a53ac8d344c2915d6f4cd8db5648532f98c",
+        "410b4fb350a172b4709a686256f2fb0bedcd1b71792bc8e2d60fc06846d07b9a",
+    ] },
+    Package { source: "pt", target: "en", repository: "roa-en", license: "Apache-2.0", target_prefix: None, revision: "d3bccb662923aaa42298f66768d391bcf7473f08", sizes: [1362, 800087, 779494, 1460304, 312062468], hashes: [
+        "02f5517998e1f27bd14d2d280bd5132490388abfb085d50f9b043b54fa51443a",
+        "baeab21ec00d0b490382b82499ef0348235c5a8e75de28aec8290adf62b007c4",
+        "121d4e0a20cda2052945d790d335f421f7bea7fa6b0ff7fbc9112eed5f12036f",
+        "1ffaf15a0b51f0774c1dc24a1a675859dc18fc7705ebe6a0ac45a9c560457c29",
+        "4fcf563ef9020be62dea74a1d319dd88db0ce4b13c4191e84eb55dce2380c539",
+    ] },
+    Package { source: "en", target: "ro", repository: "en-ro", license: "Apache-2.0", target_prefix: None, revision: "077edad2617e8c356175d956ce826c0b476bdf70", sizes: [1381, 788572, 816966, 1392122, 300862652], hashes: [
+        "606618c92703cb3933b27f4c494e0f132ec94ba51eadd374f8441c29c8ee4339",
+        "8808225d3a22c80125e8b2935f84d399cc0bffa502bb2aa25e7f279f4af15829",
+        "459a405b3563cdbd0c153fc11887248a160abc00679094854fb3717385370b80",
+        "29ae15ef83c4c89cac9b875e92f5e49e484ef2a18ce2ff9fa506a52f492a3663",
+        "85d888ebb650617d77d47177a8283177d9fbf65c21a54e90c400c38d3058f37e",
+    ] },
+    Package { source: "ro", target: "en", repository: "roa-en", license: "Apache-2.0", target_prefix: None, revision: "d3bccb662923aaa42298f66768d391bcf7473f08", sizes: [1362, 800087, 779494, 1460304, 312062468], hashes: [
+        "02f5517998e1f27bd14d2d280bd5132490388abfb085d50f9b043b54fa51443a",
+        "baeab21ec00d0b490382b82499ef0348235c5a8e75de28aec8290adf62b007c4",
+        "121d4e0a20cda2052945d790d335f421f7bea7fa6b0ff7fbc9112eed5f12036f",
+        "1ffaf15a0b51f0774c1dc24a1a675859dc18fc7705ebe6a0ac45a9c560457c29",
+        "4fcf563ef9020be62dea74a1d319dd88db0ce4b13c4191e84eb55dce2380c539",
     ] },
 ];

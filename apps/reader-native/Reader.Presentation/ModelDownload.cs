@@ -26,7 +26,8 @@ public sealed class ModelDownload(HttpClient http)
         foreach (var asset in package.Assets)
         {
             var path = Path.Combine(directory, asset.Name);
-            var url = new Uri($"https://huggingface.co/Helsinki-NLP/opus-mt-{package.Source}-{package.Target}" +
+            var repository = package.Repository ?? $"{package.Source}-{package.Target}";
+            var url = new Uri($"https://huggingface.co/Helsinki-NLP/opus-mt-{repository}" +
                 $"/resolve/{package.Revision}/{asset.Name}");
             await FetchAssetAsync(url, asset, path, completed, progress, cancellationToken);
             completed += asset.Bytes;
@@ -71,14 +72,33 @@ public sealed class ModelDownload(HttpClient http)
 
     private static void ValidateOptionalModel(OptionalModel model)
     {
-        if (!Hex(model.Revision, 40) || model.Assets.Length is < 1 or > 3 ||
+        if (!Hex(model.Revision, 40) || model.Assets.Length is < 1 or > 8 ||
             model.Assets.Select(asset => asset.Name).Distinct(StringComparer.Ordinal).Count() != model.Assets.Length ||
-            model.Assets.Any(asset => asset.Name is not ("model.gguf" or "model.onnx" or "tokenizer.json") ||
+            model.Assets.Any(asset => asset.Name is not ("model.gguf" or "model.onnx" or "tokenizer.json" or "piper-uk.onnx" or "piper-uk.json"
+                or "duration_predictor.onnx" or "text_encoder.onnx" or "vector_estimator.onnx"
+                or "vocoder.onnx" or "tts.json" or "unicode_indexer.json" or "M1.json" or "F1.json") ||
                 asset.Bytes is <= 0 or > 2_000_000_000 || !Hex(asset.Sha256, 64) ||
                 !Uri.TryCreate(asset.DownloadUrl, UriKind.Absolute, out var url) ||
                 url.Scheme != Uri.UriSchemeHttps || url.Host != "huggingface.co" ||
                 !url.AbsolutePath.Contains($"/resolve/{model.Revision}/", StringComparison.Ordinal)))
             throw new InvalidDataException("Некоректний каталог додаткових моделей.");
+    }
+
+    public async Task<string> FetchLexicalAsync(LexicalPackage package, string stagingRoot,
+        IProgress<long>? progress, CancellationToken cancellationToken)
+    {
+        if (!Uri.TryCreate(package.DownloadUrl, UriKind.Absolute, out var url) ||
+            url.Scheme != Uri.UriSchemeHttps || url.Host != "kaikki.org" ||
+            !url.AbsolutePath.StartsWith("/dictionary/", StringComparison.Ordinal) ||
+            package.Bytes is <= 0 or > 600_000_000 || !Hex(package.Sha256, 64))
+            throw new InvalidDataException("Некоректний каталог словникових пакетів.");
+
+        Directory.CreateDirectory(stagingRoot);
+        var path = Path.Combine(stagingRoot, $"{package.Sha256}.jsonl.gz");
+        using var gate = OpenGate(stagingRoot, package.Sha256);
+        await FetchAssetAsync(url, new TranslationAsset(package.Name, package.Bytes, package.Sha256),
+            path, 0, progress, cancellationToken);
+        return path;
     }
 
     public async Task<string> FetchKnowledgeAsync(KnowledgePackage package, string stagingRoot,
@@ -206,6 +226,8 @@ public sealed class ModelDownload(HttpClient http)
     {
         if (package.Source.Length != 2 || package.Target.Length != 2 ||
             !(package.Source + package.Target).All(char.IsAsciiLetterLower) || !Hex(package.Revision, 40) ||
+            (package.Repository is { } repo && (repo.Length is < 3 or > 40 ||
+                !repo.All(ch => char.IsAsciiLetterOrDigit(ch) || ch == '-'))) ||
             !package.Assets.Select(asset => asset.Name).Order(StringComparer.Ordinal).SequenceEqual(AssetNames.Order(StringComparer.Ordinal)) ||
             package.Assets.Any(asset => asset.Bytes <= 0 || asset.Bytes > AssetLimit || !Hex(asset.Sha256, 64)) ||
             package.Assets.Sum(asset => asset.Bytes) > AssetLimit)

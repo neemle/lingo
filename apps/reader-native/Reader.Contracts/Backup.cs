@@ -7,4 +7,6 @@ public sealed record Backup(
     ReviewEvent[] Reviews)
 {
     public PracticeProgress? Practice { get; init; }
+    public DictionarySource[] DictionarySources { get; init; } = [];
+    public string[] DictionaryReviewOrigins { get; init; } = [];
 }

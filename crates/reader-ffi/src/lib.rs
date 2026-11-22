@@ -53,29 +53,57 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         unsafe { std::slice::from_raw_parts(input, len as usize) }
     };
     let command = validation::decode(bytes)?;
-    if let Command::SemanticVocabulary { query } = &command {
-        let job = registry::lock()?
-            .store(handle)?
-            .prepare_semantic_vocabulary(query)
-            .map_err(gateway::domain)?;
-        let matches = job.run().map_err(gateway::domain)?;
-        return serde_json::to_value(matches)
-            .map_err(|_| Error::new("serialization_error", "Cannot encode core response"));
-    }
-    if let Command::ExplainWord {
-        model,
-        document,
-        sentence,
-        word,
-    } = &command
-    {
-        let job = registry::lock()?
-            .store(handle)?
-            .prepare_word_explanation(model, document, sentence, word)
-            .map_err(gateway::domain)?;
-        let explanation = job.run().map_err(gateway::domain)?;
-        return serde_json::to_value(explanation)
-            .map_err(|_| Error::new("serialization_error", "Cannot encode core response"));
+    match &command {
+        Command::SemanticVocabulary { query } => {
+            let job = registry::lock()?
+                .store(handle)?
+                .prepare_semantic_vocabulary(query)
+                .map_err(gateway::domain)?;
+            return encode_job(job.run());
+        }
+        Command::ExplainWord {
+            model,
+            document,
+            sentence,
+            word,
+        } => {
+            let job = registry::lock()?
+                .store(handle)?
+                .prepare_word_explanation(model, document, sentence, word)
+                .map_err(gateway::domain)?;
+            return encode_job(job.run());
+        }
+        Command::InstallLexicalPackage { language, path } => {
+            let job = registry::lock()?
+                .store(handle)?
+                .prepare_lexical_package(language, std::path::Path::new(path))
+                .map_err(gateway::domain)?;
+            return encode_job(job.run());
+        }
+        Command::SynthesizeSpeech {
+            id,
+            sentence_id,
+            engine,
+            speaker,
+            rate,
+        } => match engine.as_deref().unwrap_or("piper-uk") {
+            "piper-uk" => {
+                let job = registry::lock()?
+                    .store(handle)?
+                    .prepare_speech(id, sentence_id, *speaker, *rate)
+                    .map_err(gateway::domain)?;
+                return encode_job(job.run());
+            }
+            "supertonic-3" => {
+                let job = registry::lock()?
+                    .store(handle)?
+                    .prepare_multilingual_speech(id, sentence_id, *speaker, *rate)
+                    .map_err(gateway::domain)?;
+                return encode_job(job.run());
+            }
+            _ => return Err(Error::new("invalid_argument", "Невідомий рушій озвучення.")),
+        },
+        _ => {}
     }
     let mut state = registry::lock()?;
     catch_unwind(AssertUnwindSafe(|| state.call(handle, command))).unwrap_or_else(|_| {
@@ -85,6 +113,11 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             "Rust operation panicked; reopen the store",
         ))
     })
+}
+
+fn encode_job<T: serde::Serialize>(result: reader_core::Result<T>) -> Result<serde_json::Value> {
+    serde_json::to_value(result.map_err(gateway::domain)?)
+        .map_err(|_| Error::new("serialization_error", "Cannot encode core response"))
 }
 
 #[no_mangle]

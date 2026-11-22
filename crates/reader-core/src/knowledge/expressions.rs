@@ -10,7 +10,7 @@ const MAX_PARTICLE_GAP: usize = 6;
 #[serde(rename_all = "camelCase")]
 pub struct ExpressionMatch {
     text: String,
-    canonical: String,
+    pub(super) canonical: String,
     kind: String,
     observations: u32,
 }

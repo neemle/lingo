@@ -8,8 +8,6 @@ use std::{
 };
 use tokenizers::{PaddingParams, Tokenizer, TruncationParams};
 
-mod runtime;
-
 const DIMENSIONS: usize = 384;
 const TOKEN_LIMIT: usize = 160;
 const BATCH_SIZE: usize = 4;
@@ -151,7 +149,7 @@ struct E5 {
 
 impl E5 {
     fn open(directory: &Path) -> Result<Self> {
-        let env = runtime::environment()?;
+        let env = crate::onnx_runtime::environment()?;
         let threads = std::thread::available_parallelism().map_or(1, |count| count.get().min(3));
         let session = Session::builder(env)
             .map_err(e5_error)?

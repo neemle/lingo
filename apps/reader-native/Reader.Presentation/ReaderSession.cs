@@ -166,6 +166,23 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
     public Task CheckTranslationArchiveSpaceAsync(string directory, long bytes) =>
         Task.Run(() => client.CheckTranslationArchiveSpace(directory, bytes));
 
+    public Task<ParagraphTranslation> TranslateParagraphAsync(string id, string sentenceId, string target) =>
+        Task.Run(() => client.TranslateParagraph(id, sentenceId, target));
+    public Task<LexicalPackage[]> LexicalPackagesAsync() => Task.Run(client.LexicalPackages);
+    public Task<LexicalPackage> InstallLexicalPackageAsync(string language, string path) =>
+        Task.Run(() => client.InstallLexicalPackage(language, path));
+    public Task<Vocabulary[]> DictionaryCollectionAsync(string? documentId = null) =>
+        Task.Run(() => client.DictionaryCollection(documentId));
+    public Task<DictionaryArchive> ExportDictionaryAsync(string? documentId = null) =>
+        Task.Run(() => client.ExportDictionary(documentId));
+    public Task ImportDictionaryAsync(DictionaryArchive archive) => RunAsync(() =>
+    {
+        client.ImportDictionary(archive);
+        return Read();
+    });
+    public Task<SpeechAudio> SynthesizeSpeechAsync(string id, string sentenceId, uint speaker, float rate, string engine) =>
+        Task.Run(() => client.SynthesizeSpeech(id, sentenceId, speaker, rate, engine));
+
     public Task<MachineTranslation?> TranslateSentenceAsync(string id, string sentenceId, string target) =>
         Task.Run(() => client.TranslateSentence(id, sentenceId, target));
 

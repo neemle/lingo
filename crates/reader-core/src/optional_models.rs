@@ -92,6 +92,92 @@ const MODELS: &[Model] = &[
             },
         ],
     },
+    Model {
+        id: "piper-uk",
+        name: "Українські голоси Piper",
+        license: "MIT",
+        repo: "rhasspy/piper-voices",
+        revision: "e9c8a39444359388adaa94255becb37a5a2b8e51",
+        budget: ModelBudget {
+            working_mib: 384,
+            minimum_total_mib: 0,
+        },
+        assets: &[
+            Asset {
+                name: "piper-uk.onnx",
+                remote_path: "uk/uk_UA/ukrainian_tts/medium/uk_UA-ukrainian_tts-medium.onnx",
+                bytes: 76_735_663,
+                sha256: "7920419ac5f6fd8b6450520f24b52ed5a319cb53dd018fbcd71c9e079cbac84f",
+            },
+            Asset {
+                name: "piper-uk.json",
+                remote_path: "uk/uk_UA/ukrainian_tts/medium/uk_UA-ukrainian_tts-medium.onnx.json",
+                bytes: 2_002,
+                sha256: "4e96e72917ca9b94edc77d6ccfee03a73f450ba2fc1ca93c2e562bc014e5aa55",
+            },
+        ],
+    },
+    Model {
+        id: "supertonic-3",
+        name: "Supertonic 3",
+        license: "OpenRAIL",
+        repo: "Supertone/supertonic-3",
+        revision: "3cadd1ee6394adea1bd021217a0e650ede09a323",
+        budget: ModelBudget {
+            working_mib: 1536,
+            minimum_total_mib: 0,
+        },
+        assets: &[
+            Asset {
+                name: "duration_predictor.onnx",
+                remote_path: "onnx/duration_predictor.onnx",
+                bytes: 3_700_147,
+                sha256: "c3eb91414d5ff8a7a239b7fe9e34e7e2bf8a8140d8375ffb14718b1c639325db",
+            },
+            Asset {
+                name: "text_encoder.onnx",
+                remote_path: "onnx/text_encoder.onnx",
+                bytes: 36_416_150,
+                sha256: "c7befd5ea8c3119769e8a6c1486c4edc6a3bc8365c67621c881bbb774b9902ff",
+            },
+            Asset {
+                name: "vector_estimator.onnx",
+                remote_path: "onnx/vector_estimator.onnx",
+                bytes: 256_534_781,
+                sha256: "883ac868ea0275ef0e991524dc64f16b3c0376efd7c320af6b53f5b780d7c61c",
+            },
+            Asset {
+                name: "vocoder.onnx",
+                remote_path: "onnx/vocoder.onnx",
+                bytes: 101_424_195,
+                sha256: "085de76dd8e8d5836d6ca66826601f615939218f90e519f70ee8a36ed2a4c4ba",
+            },
+            Asset {
+                name: "tts.json",
+                remote_path: "onnx/tts.json",
+                bytes: 8_253,
+                sha256: "42078d3aef1cd43ab43021f3c54f47d2d75ceb4e75f627f118890128b06a0d09",
+            },
+            Asset {
+                name: "unicode_indexer.json",
+                remote_path: "onnx/unicode_indexer.json",
+                bytes: 277_676,
+                sha256: "9bf7346e43883a81f8645c81224f786d43c5b57f3641f6e7671a7d6c493cb24f",
+            },
+            Asset {
+                name: "M1.json",
+                remote_path: "voice_styles/M1.json",
+                bytes: 291_748,
+                sha256: "e35604687f5d23694b8e91593a93eec0e4eca6c0b02bb8ed69139ab2ea6b0a5b",
+            },
+            Asset {
+                name: "F1.json",
+                remote_path: "voice_styles/F1.json",
+                bytes: 292_046,
+                sha256: "bbdec6ee00231c2c742ad05483df5334cab3b52fda3ba38e6a07059c4563dbc2",
+            },
+        ],
+    },
 ];
 
 #[derive(Serialize)]
@@ -187,6 +273,22 @@ impl OptionalModelJob {
         inference: impl FnOnce(&Path, &dyn Fn() -> bool) -> Result<T>,
     ) -> Result<T> {
         let permit = RESOURCES.optional()?;
+        self.run_checked(inference, &|| permit.should_yield())
+    }
+
+    pub(crate) fn run_interactive<T>(
+        self,
+        inference: impl FnOnce(&Path, &dyn Fn() -> bool) -> Result<T>,
+    ) -> Result<T> {
+        let _permit = RESOURCES.interactive();
+        self.run_checked(inference, &|| false)
+    }
+
+    fn run_checked<T>(
+        self,
+        inference: impl FnOnce(&Path, &dyn Fn() -> bool) -> Result<T>,
+        requested_yield: &dyn Fn() -> bool,
+    ) -> Result<T> {
         let memory = self.model.budget.readiness();
         if memory.available_mib.is_none() {
             return Err("Не вдалося визначити доступну пам’ять. Модель пропущено.".into());
@@ -212,7 +314,6 @@ impl OptionalModelJob {
         }
         let _gate = lock_package(&self.paths.lock, false)?;
         let installed = self.paths.installed();
-        let requested_yield = || permit.should_yield();
         for asset in self.model.assets {
             if requested_yield() {
                 return Err("Аналіз відкладено, щоб виконати переклад.".into());
@@ -222,7 +323,7 @@ impl OptionalModelJob {
         if requested_yield() {
             return Err("Аналіз відкладено, щоб виконати переклад.".into());
         }
-        inference(installed, &requested_yield)
+        inference(installed, requested_yield)
     }
 }
 

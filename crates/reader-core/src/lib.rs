@@ -1,26 +1,27 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{
-    collections::BTreeMap,
-    io::{Cursor, Read},
-    path::Path,
-};
+use std::{collections::BTreeMap, path::Path};
 use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
 
+pub mod dictionary_transfer;
+pub mod document_layout;
 pub mod e5;
 pub mod knowledge;
 mod marian_provider;
 mod model_storage;
 pub mod ocr;
+mod onnx_runtime;
 pub mod optional_models;
 pub mod pdf_layers;
 pub mod practice;
 pub mod qwen;
 mod resources;
 mod space;
+pub mod supertonic;
 pub mod translation;
+pub mod tts;
 
 pub type Result<T> = std::result::Result<T, String>;
 pub const MAX_IMPORT: usize = 20 * 1024 * 1024;
@@ -41,6 +42,8 @@ pub struct Document {
     pub title: String,
     pub language: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<document_layout::DocumentBlock>,
     pub sentences: Vec<Sentence>,
     pub position: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -231,6 +234,10 @@ pub struct Backup {
     pub originals: Vec<Original>,
     #[serde(default)]
     pub reviews: Vec<ReviewEvent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dictionary_sources: Vec<dictionary_transfer::DictionarySource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dictionary_review_origins: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub practice: Option<practice::PracticeProgress>,
 }
@@ -300,90 +307,7 @@ fn validate_translation(text: &str) -> Result<()> {
 }
 
 pub fn parse_file(name: &str, bytes: &[u8]) -> Result<String> {
-    if bytes.len() > MAX_IMPORT {
-        return Err("Файл завеликий. Максимум — 20 МБ.".into());
-    }
-    let extension = Path::new(name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    let text = match extension.as_str() {
-        "txt" => String::from_utf8(bytes.to_vec())
-            .map_err(|_| "TXT має бути в кодуванні UTF-8".to_string())?
-            .trim_start_matches('\u{feff}')
-            .to_owned(),
-        "pdf" => {
-            if !bytes.starts_with(b"%PDF-") {
-                return Err("Некоректний PDF".into());
-            }
-            pdf_extract::extract_text_from_mem(bytes)
-                .map_err(|e| format!("Не вдалося прочитати PDF: {e}"))?
-        }
-        "docx" => {
-            let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
-                .map_err(|_| "Некоректний DOCX".to_string())?;
-            let mut member = archive
-                .by_name("word/document.xml")
-                .map_err(|_| "У DOCX немає текстового документа".to_string())?;
-            if member.size() > MAX_IMPORT as u64 {
-                return Err("Розпакований документ завеликий".into());
-            }
-            let mut xml = String::new();
-            member
-                .by_ref()
-                .take(MAX_IMPORT as u64 + 1)
-                .read_to_string(&mut xml)
-                .map_err(|e| e.to_string())?;
-            if xml.len() > MAX_IMPORT {
-                return Err("Розпакований документ завеликий".into());
-            }
-            let mut reader = quick_xml::Reader::from_str(&xml);
-            let mut result = String::new();
-            let mut in_text = false;
-            loop {
-                use quick_xml::events::Event;
-                match reader.read_event() {
-                    Ok(Event::Start(e)) if e.name().as_ref() == b"w:t" => in_text = true,
-                    Ok(Event::End(e)) if e.name().as_ref() == b"w:t" => in_text = false,
-                    Ok(Event::End(e)) if e.name().as_ref() == b"w:p" => result.push('\n'),
-                    Ok(Event::Empty(e)) if e.name().as_ref() == b"w:tab" => result.push('\t'),
-                    Ok(Event::Empty(e)) if e.name().as_ref() == b"w:br" => result.push('\n'),
-                    Ok(Event::Text(e)) if in_text => {
-                        result.push_str(&e.decode().map_err(|e| e.to_string())?)
-                    }
-                    Ok(Event::GeneralRef(e)) if in_text => {
-                        let r = e.decode().map_err(|e| e.to_string())?;
-                        if let Some(c) = quick_xml::escape::resolve_predefined_entity(&r) {
-                            result.push_str(c);
-                        } else if let Some(n) = r
-                            .strip_prefix("#x")
-                            .and_then(|x| u32::from_str_radix(x, 16).ok())
-                            .or_else(|| r.strip_prefix('#').and_then(|x| x.parse::<u32>().ok()))
-                        {
-                            if let Some(c) = char::from_u32(n) {
-                                result.push(c);
-                            }
-                        }
-                    }
-                    Ok(Event::Eof) => break,
-                    Err(e) => return Err(format!("Некоректний XML: {e}")),
-                    _ => {}
-                }
-            }
-            result
-        }
-        _ => return Err("Формат документа не підтримується.".into()),
-    };
-    if text.trim().is_empty() {
-        return Err(
-            "Тексту не знайдено. Для скану PDF скористайтеся дією «Розпізнати PDF».".into(),
-        );
-    }
-    if text.len() > MAX_IMPORT {
-        return Err("Витягнутий текст завеликий".into());
-    }
-    Ok(text)
+    document_layout::parse(name, bytes).map(|parsed| parsed.text)
 }
 
 pub struct Store {
@@ -400,6 +324,7 @@ impl Store {
             .map_err(|e| e.to_string())?;
         connection.execute("CREATE TABLE IF NOT EXISTS practice (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)", [])
             .map_err(|e| e.to_string())?;
+        dictionary_transfer::initialize(&connection)?;
         Ok(Self {
             connection,
             model_directory: path.with_file_name("translation-models"),
@@ -500,15 +425,17 @@ impl Store {
         mixed: bool,
     ) -> Result<Document> {
         valid_language(language)?;
-        let (text, pdf_page_starts) = match (ocr_lines.as_deref(), ocr_pdf_pages, mixed) {
+        let parsed = match (ocr_lines.as_deref(), ocr_pdf_pages, mixed) {
             (Some(lines), Some(pages), true) => {
                 let (text, offsets) = pdf_layers::merge(name, bytes, pages, lines)?;
-                (Some(text), Some(offsets))
+                Some(document_layout::from_transcript(text, Some(offsets)))
             }
-            (Some(lines), pages, false) => {
-                (Some(ocr::recognized_text(name, bytes, lines, pages)?), None)
-            }
-            (None, None, false) => (None, None),
+            (Some(lines), pages, false) => Some(document_layout::from_ocr(
+                ocr::recognized_text(name, bytes, lines, pages)?,
+                lines,
+                pages,
+            )),
+            (None, None, false) => None,
             _ => return Err("Некоректні параметри імпорту PDF".into()),
         };
         let hash = format!("{:x}", Sha256::digest(bytes));
@@ -519,35 +446,62 @@ impl Store {
                 [&hash],
                 |r| r.get(0),
             )
-            .ok();
+            .optional()
+            .map_err(|error| error.to_string())?;
         if let Some(body) = existing {
-            let existing: Document = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-            if mixed && existing.pdf_page_starts.is_none() {
+            let mut existing: Document = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+            if mixed && (existing.pdf_page_starts.is_none() || existing.ocr_pdf_pages.is_none()) {
                 if existing.language != language {
                     return Err("Виберіть мову вже імпортованого PDF перед розпізнаванням".into());
                 }
-                let (Some(text), Some(offsets), Some(lines), Some(pages)) =
-                    (text, pdf_page_starts, ocr_lines, ocr_pdf_pages)
+                let (Some(parsed), Some(lines), Some(pages)) = (parsed, ocr_lines, ocr_pdf_pages)
                 else {
                     return Err("Некоректні параметри імпорту PDF".into());
                 };
                 let mut updated = existing.clone();
                 self.edit_document(&existing.id, |document, tx| {
-                    ocr::update_transcript(document, text)?;
+                    ocr::update_transcript(document, parsed.text)?;
                     Self::discard_changed_speech_resume(tx, document)?;
                     document.ocr_lines = Some(lines);
                     document.ocr_pdf_pages = Some(pages);
-                    document.pdf_page_starts = Some(offsets);
+                    document.pdf_page_starts = parsed.pdf_page_starts;
+                    document.blocks = parsed.blocks;
                     updated = document.clone();
                     Ok(true)
                 })?;
                 return Ok(updated);
             }
+            if existing.blocks.is_empty() {
+                // Reimports may rebuild the new derived layout without touching
+                // the stored canonical text, sentence IDs or user state.
+                let parsed = if let Some(parsed) = parsed {
+                    Some(parsed)
+                } else {
+                    document_layout::parse(name, bytes).ok()
+                };
+                if let Some(parsed) = parsed.filter(|parsed| parsed.text == existing.text) {
+                    let id = existing.id.clone();
+                    self.edit_document(&id, |document, _| {
+                        if !document.blocks.is_empty() || parsed.text != document.text {
+                            existing = document.clone();
+                            return Ok(false);
+                        }
+                        document.pdf_page_starts = parsed.pdf_page_starts;
+                        document.blocks = parsed.blocks;
+                        existing = document.clone();
+                        Ok(true)
+                    })?;
+                }
+            }
             return Ok(existing);
         }
-        let text = match text {
-            Some(text) => text,
-            None => parse_file(name, bytes)?,
+        let document_layout::Extracted {
+            text,
+            blocks,
+            pdf_page_starts,
+        } = match parsed {
+            Some(parsed) => parsed,
+            None => document_layout::parse(name, bytes)?,
         };
         let id = Uuid::new_v4().to_string();
         let name = Path::new(name)
@@ -564,6 +518,7 @@ impl Store {
                 .into(),
             language: language.into(),
             text,
+            blocks,
             position: 0,
             speech_resume: None,
             bookmarks: Vec::new(),
@@ -638,25 +593,24 @@ impl Store {
                 return Ok(false);
             }
             line.correction = correction;
-            let (text, offsets) = if let (Some(pages), Some(_)) =
+            let parsed = if let (Some(pages), Some(_)) =
                 (document.ocr_pdf_pages, &document.pdf_page_starts)
             {
                 let (text, starts) =
                     pdf_layers::merge(&original.name, &original.bytes, pages, lines)?;
-                (text, Some(starts))
+                document_layout::from_transcript(text, Some(starts))
             } else {
-                (
-                    ocr::recognized_text(
-                        &original.name,
-                        &original.bytes,
-                        lines,
-                        document.ocr_pdf_pages,
-                    )?,
-                    None,
-                )
+                let text = ocr::recognized_text(
+                    &original.name,
+                    &original.bytes,
+                    lines,
+                    document.ocr_pdf_pages,
+                )?;
+                document_layout::from_ocr(text, lines, document.ocr_pdf_pages)
             };
-            ocr::update_transcript(document, text)?;
-            document.pdf_page_starts = offsets;
+            ocr::update_transcript(document, parsed.text)?;
+            document.pdf_page_starts = parsed.pdf_page_starts;
+            document.blocks = parsed.blocks;
             Self::discard_changed_speech_resume(tx, document)?;
             Ok(true)
         })
@@ -999,30 +953,21 @@ impl Store {
             .iter()
             .map(|d| self.original(&d.id))
             .collect::<Result<Vec<_>>>()?;
-        let mut stmt = self
-            .connection
-            .prepare("SELECT entry_id,direction,grade,reviewed_at FROM review_events ORDER BY id")
-            .map_err(|e| e.to_string())?;
-        let reviews = stmt
-            .query_map([], |r| {
-                Ok(ReviewEvent {
-                    entry_id: r.get(0)?,
-                    direction: r.get(1)?,
-                    grade: r.get(2)?,
-                    reviewed_at: r.get(3)?,
-                })
-            })
-            .map_err(|e| e.to_string())?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
+        let (dictionary_sources, review_records) =
+            dictionary_transfer::export_details(&tx, &snapshot.vocabulary)?;
+        let (dictionary_review_origins, reviews) = review_records
+            .into_iter()
+            .map(|record| (record.id, record.event))
+            .unzip();
         let backup = Backup {
             version: 1,
             snapshot,
             originals,
             reviews,
+            dictionary_sources,
+            dictionary_review_origins,
             practice: practice::read(&tx)?,
         };
-        drop(stmt);
         tx.commit().map_err(|error| error.to_string())?;
         Ok(backup)
     }
@@ -1042,7 +987,7 @@ impl Store {
             if format!("{:x}", Sha256::digest(&original.bytes)) != doc.source_hash {
                 return Err("Пошкоджений оригінал в архіві".into());
             }
-            let (text, pdf_page_starts) = match (
+            let parsed = match (
                 &doc.ocr_lines,
                 doc.ocr_pdf_pages,
                 doc.pdf_page_starts.is_some(),
@@ -1050,18 +995,20 @@ impl Store {
                 (Some(lines), Some(pages), true) => {
                     let (text, offsets) =
                         pdf_layers::merge(&original.name, &original.bytes, pages, lines)?;
-                    (text, Some(offsets))
+                    document_layout::from_transcript(text, Some(offsets))
                 }
-                (Some(lines), pages, false) => (
+                (Some(lines), pages, false) => document_layout::from_ocr(
                     ocr::recognized_text(&original.name, &original.bytes, lines, pages)?,
-                    None,
+                    lines,
+                    pages,
                 ),
-                (None, None, false) => (parse_file(&original.name, &original.bytes)?, None),
+                (None, None, _) => document_layout::parse(&original.name, &original.bytes)?,
                 _ => return Err("В архіві PDF немає потрібних даних сторінок".into()),
             };
             let mut d = doc.clone();
-            d.text = text;
-            d.pdf_page_starts = pdf_page_starts;
+            d.text = parsed.text;
+            d.blocks = parsed.blocks;
+            d.pdf_page_starts = parsed.pdf_page_starts;
             d.sentences = segment(&d.text, &d.id);
             d.position = d.position.min(d.sentences.len().saturating_sub(1));
             d.speech_resume = d
@@ -1093,15 +1040,10 @@ impl Store {
             }
             validated.push((d, original));
         }
-        for v in &backup.snapshot.vocabulary {
-            valid_language(&v.language)?;
-            valid_language(&v.target_language)?;
-            if v.word.trim().is_empty() || v.translation.trim().is_empty() {
-                return Err("Некоректна словникова картка".into());
-            }
-            v.validate_annotations()?;
-        }
-        let tx = self.connection.transaction().map_err(|e| e.to_string())?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
         for (d, o) in validated {
             let mut d = d;
             let speech_resume = d.speech_resume.take();
@@ -1122,28 +1064,14 @@ impl Store {
                 .map_err(|e| e.to_string())?;
             }
         }
-        let mut review_cards = BTreeMap::new();
-        for v in backup.snapshot.vocabulary {
-            let key = v.word_key();
-            tx.execute(
-                "INSERT OR IGNORE INTO vocabulary VALUES (?1,?2,?3)",
-                params![v.id, key, serde_json::to_string(&v).unwrap()],
-            )
-            .map_err(|e| e.to_string())?;
-            let local_id: String = tx.query_row(
-                "SELECT id FROM vocabulary WHERE id=?1 OR word_key=?2 ORDER BY id=?1 DESC LIMIT 1",
-                params![v.id, key], |row| row.get(0),
-            ).map_err(|error| error.to_string())?;
-            review_cards.insert(v.id, local_id);
-        }
-        for r in backup.reviews {
-            if !["forward", "reverse"].contains(&r.direction.as_str()) || r.grade > 3 {
-                return Err("Некоректна історія повторень".into());
-            }
-            if let Some(card_id) = review_cards.get(&r.entry_id) {
-                tx.execute("INSERT INTO review_events(entry_id,direction,grade,reviewed_at) SELECT ?1,?2,?3,?4 WHERE NOT EXISTS (SELECT 1 FROM review_events WHERE entry_id=?1 AND direction=?2 AND grade=?3 AND reviewed_at=?4)",params![card_id,r.direction,r.grade,r.reviewed_at]).map_err(|e|e.to_string())?;
-            }
-        }
+        let review_cards = dictionary_transfer::restore_backup_dictionary(
+            &tx,
+            backup.snapshot.vocabulary,
+            backup.reviews,
+            backup.dictionary_review_origins,
+            backup.dictionary_sources,
+            &backup.snapshot.documents,
+        )?;
         if let Some(progress) = backup.practice {
             practice::restore_if_fresh(&tx, progress, &review_cards)?;
         }
@@ -1553,7 +1481,7 @@ mod tests {
     }
     #[test]
     fn docx_entities_and_paragraphs() {
-        use std::io::Write;
+        use std::io::{Cursor, Write};
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
         writer
             .start_file(
