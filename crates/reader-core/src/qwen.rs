@@ -29,6 +29,9 @@ const CONTEXT_TOKENS: u32 = 768;
 const RESPONSE_TOKENS: usize = 160;
 const BATCH: usize = 32;
 const RESPONSE_BYTES: usize = 4096;
+const REVIEW_WINDOW: usize = 320;
+const REVIEW_OVERLAP: usize = 48;
+const MAX_REVIEW_LENGTH: usize = 4096;
 const SYSTEM: &str = concat!(
     "<|im_start|>system\n",
     "You are a concise dictionary for Ukrainian speakers. Identify the meaning of the selected word ",
@@ -158,7 +161,7 @@ pub struct SentenceReviewResult {
     cached: bool,
 }
 
-pub struct ReviewSentenceJob(HintWork<SentenceReview>);
+pub struct ReviewSentenceJob(Vec<HintWork<SentenceReview>>);
 
 enum HintWork<T> {
     Cached(Option<T>),
@@ -332,22 +335,17 @@ impl Store {
         } else {
             (None, None)
         };
-        let example = review_example(
+        let examples = review_examples(
             &language,
             &sentence.text,
             scope,
             previous.as_deref(),
             next.as_deref(),
         )?;
-        self.prepare_hint_work(
-            model,
-            document,
-            "qwen-sentence-review-v1",
-            REVIEW_SYSTEM,
-            example,
-            cached_only,
-        )
-        .map(ReviewSentenceJob)
+        let work = examples.into_iter().map(|example| self.prepare_hint_work(
+            model, document, "qwen-sentence-review-v1", REVIEW_SYSTEM, example, cached_only,
+        )).collect::<Result<Vec<_>>>()?;
+        Ok(ReviewSentenceJob(work))
     }
 
     fn prepare_hint_work<T: serde::de::DeserializeOwned>(
@@ -652,121 +650,159 @@ impl ExplainWordJob {
     }
 }
 
-fn review_example(
+fn review_examples(
     language: &str,
     original: &str,
     scope: Option<AnalysisScope>,
     previous: Option<&str>,
     next: Option<&str>,
-) -> Result<String> {
+) -> Result<Vec<String>> {
     let prefix = previous.and_then(word_hyphen).unwrap_or_default();
     let (center, suffix) = next
         .and_then(|suffix| word_hyphen(original).map(|center| (center, suffix)))
         .unwrap_or((original, ""));
     let joined = (!prefix.is_empty() || !suffix.is_empty())
-        .then(|| format!("{prefix}{center}{suffix}"))
-        .filter(|joined| scope.is_some() || joined.chars().take(321).count() <= 320);
+        .then(|| format!("{prefix}{center}{suffix}"));
     let (sentence, prefix_bytes) = joined.as_deref().map_or((original, 0), |text| (text, prefix.len()));
-
-    let example = extract_review_example(language, original, sentence, scope, prefix_bytes)?;
-    serde_json::to_string(&example).map_err(|error| error.to_string())
+    let examples = match scope {
+        Some(scope) => vec![extract_focused_review(language, original, sentence, scope, prefix_bytes)?],
+        None => review_windows(sentence)?.into_iter().map(|sentence| SentenceExample {
+            language, sentence, focus: Vec::new(),
+        }).collect(),
+    };
+    examples.iter().map(|example| serde_json::to_string(example).map_err(|error| error.to_string()))
+        .collect()
 }
 
-fn extract_review_example<'a>(
+fn review_windows(text: &str) -> Result<Vec<&str>> {
+    let mut offsets: Vec<_> = text.char_indices().take(MAX_REVIEW_LENGTH + 1).collect();
+    if offsets.len() > MAX_REVIEW_LENGTH {
+        return Err("Речення довше за 4096 символів. Виділіть фрагмент для локальної перевірки.".into());
+    }
+    if offsets.len() <= REVIEW_WINDOW {
+        return Ok(vec![text]);
+    }
+    let end = offsets.len();
+    offsets.push((text.len(), ' '));
+    let mut windows = Vec::new();
+    let mut first = 0;
+    while first < end {
+        let limit = (first + REVIEW_WINDOW).min(end);
+        let last = if limit == end {
+            end
+        } else {
+            (limit - REVIEW_OVERLAP..=limit).rev()
+                .find(|&index| offsets[index].1.is_whitespace()).unwrap_or(limit)
+        };
+        let excerpt = text[offsets[first].0..offsets[last].0].trim();
+        if !excerpt.is_empty() {
+            windows.push(excerpt);
+        }
+        if last == end {
+            break;
+        }
+        first = (last - REVIEW_OVERLAP..last)
+            .find(|&index| offsets[index].1.is_whitespace()).map_or(last - REVIEW_OVERLAP, |index| index + 1);
+    }
+    Ok(windows)
+}
+
+fn extract_focused_review<'a>(
     language: &'a str,
     original: &'a str,
     sentence: &'a str,
-    scope: Option<AnalysisScope>,
+    scope: AnalysisScope,
     prefix_bytes: usize,
 ) -> Result<SentenceExample<'a>> {
-    if let Some(scope) = scope {
-        let (mut words, _) = select_words(original, &scope)?;
-        if original != sentence {
-            // A selected fragment can now start inside the reconstructed token.
-            let mut joined_words = word_parts(sentence).peekable();
-            for word in &mut words {
-                let position = prefix_bytes + word.0;
-                while joined_words
-                    .peek()
-                    .is_some_and(|&(byte, _, text)| byte + text.len() <= position)
-                {
-                    joined_words.next();
-                }
-                *word = joined_words
-                    .peek()
-                    .copied()
-                    .filter(|(byte, _, _)| *byte <= position)
-                    .ok_or("Не вдалося зіставити вибране слово з текстом сусідньої сторінки.")?;
+    let (mut words, _) = select_words(original, &scope)?;
+    if original != sentence {
+        // A selected fragment can now start inside the reconstructed token.
+        let mut joined_words = word_parts(sentence).peekable();
+        for word in &mut words {
+            let position = prefix_bytes + word.0;
+            while joined_words
+                .peek()
+                .is_some_and(|&(byte, _, text)| byte + text.len() <= position)
+            {
+                joined_words.next();
             }
+            *word = joined_words
+                .peek()
+                .copied()
+                .filter(|(byte, _, _)| *byte <= position)
+                .ok_or("Не вдалося зіставити вибране слово з текстом сусідньої сторінки.")?;
         }
-        let first = words.first().ok_or("Виділіть слово або вираз.")?.0;
-        let &(last, _, last_word) = words.last().ok_or("Виділіть слово або вираз.")?;
-        let end = last + last_word.len();
-        if sentence[first..end].chars().take(129).count() > 128 {
-            return Err("Фрагмент для локальної перевірки має вміщуватися в 128 символів.".into());
-        }
-
-        let left = sentence[..first]
-            .char_indices()
-            .rev()
-            .nth(95)
-            .map_or(0, |(index, _)| index);
-        let right = sentence[end..]
-            .char_indices()
-            .nth(96)
-            .map_or(sentence.len(), |(index, _)| end + index);
-        let focus = words
-            .into_iter()
-            .map(|(byte, _, text)| FocusTerm {
-                offset: sentence[left..byte].chars().count(),
-                text,
-            })
-            .collect();
-        return Ok(SentenceExample {
-            language,
-            sentence: &sentence[left..right],
-            focus,
-        });
+    }
+    let first = words.first().ok_or("Виділіть слово або вираз.")?.0;
+    let &(last, _, last_word) = words.last().ok_or("Виділіть слово або вираз.")?;
+    let end = last + last_word.len();
+    if sentence[first..end].chars().take(129).count() > 128 {
+        return Err("Фрагмент для локальної перевірки має вміщуватися в 128 символів.".into());
     }
 
-    if sentence.chars().take(321).count() > 320 {
-        return Err("Локальна модель перевіряє речення до 320 символів.".into());
-    }
+    let left = sentence[..first]
+        .char_indices()
+        .rev()
+        .nth(95)
+        .map_or(0, |(index, _)| index);
+    let right = sentence[end..]
+        .char_indices()
+        .nth(96)
+        .map_or(sentence.len(), |(index, _)| end + index);
+    let focus = words
+        .into_iter()
+        .map(|(byte, _, text)| FocusTerm {
+            offset: sentence[left..byte].chars().count(),
+            text,
+        })
+        .collect();
     Ok(SentenceExample {
         language,
-        sentence,
-        focus: Vec::new(),
+        sentence: &sentence[left..right],
+        focus,
     })
 }
 
 impl ReviewSentenceJob {
     pub fn run(self) -> Result<Option<SentenceReviewResult>> {
-        self.0
-            .run(REVIEW_SYSTEM, REVIEW_GRAMMAR, |output| {
-                let mut review: SentenceReview = serde_json::from_str(
-                    json_output(output)
-                        .ok_or("Qwen не повернув перевірку у правильному форматі.")?,
-                )
-                .map_err(|_| "Qwen не повернув перевірку у правильному форматі.")?;
-                for note in [&mut review.spelling, &mut review.syntax]
-                    .into_iter()
-                    .flatten()
-                {
-                    let text = note.trim();
-                    if text.is_empty()
-                        || text.chars().count() > 240
-                        || text
-                            .chars()
-                            .any(|ch| ch.is_control() || matches!(ch, '<' | '>'))
-                    {
-                        return Err("Qwen повернув некоректну підказку.".into());
-                    }
-                    *note = text.to_owned();
+        let mut spelling = Vec::new();
+        let mut syntax = Vec::new();
+        let mut cached = true;
+        for work in self.0 {
+            let Some((review, was_cached)) = work.run(REVIEW_SYSTEM, REVIEW_GRAMMAR, parse_review)? else {
+                return Ok(None);
+            };
+            for (notes, note) in [(&mut spelling, review.spelling), (&mut syntax, review.syntax)] {
+                if let Some(note) = note.filter(|note| !notes.contains(note)) {
+                    notes.push(note);
                 }
-                Ok(review)
-            })
-            .map(|result| result.map(|(review, cached)| SentenceReviewResult { review, cached }))
+            }
+            cached &= was_cached;
+        }
+        Ok(Some(SentenceReviewResult {
+            review: SentenceReview {
+                spelling: (!spelling.is_empty()).then(|| spelling.join("\n")),
+                syntax: (!syntax.is_empty()).then(|| syntax.join("\n")),
+            },
+            cached,
+        }))
     }
+}
+
+fn parse_review(output: &[u8]) -> Result<SentenceReview> {
+    let invalid = "Qwen не повернув перевірку у правильному форматі.";
+    let mut review: SentenceReview = serde_json::from_str(json_output(output).ok_or(invalid)?)
+        .map_err(|_| invalid)?;
+    for note in [&mut review.spelling, &mut review.syntax].into_iter().flatten() {
+        let text = note.trim();
+        if text.is_empty() || text.chars().count() > 240
+            || text.chars().any(|ch| ch.is_control() || matches!(ch, '<' | '>'))
+        {
+            return Err("Qwen повернув некоректну підказку.".into());
+        }
+        *note = text.to_owned();
+    }
+    Ok(review)
 }
 
 fn run_prompt<T: Serialize + serde::de::DeserializeOwned>(
