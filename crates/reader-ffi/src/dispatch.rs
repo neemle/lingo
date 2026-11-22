@@ -108,6 +108,11 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             }
             None => value(store.set_speech_resume(&id, &sentence_id, &text_hash, offset_utf16)),
         },
+        Command::SetSpeechText {
+            id,
+            sentence_id,
+            text,
+        } => value(store.set_speech_text(&id, &sentence_id, &text)),
         Command::SetBookmark {
             id,
             sentence_id,

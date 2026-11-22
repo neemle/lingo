@@ -63,12 +63,12 @@ impl Store {
         if document.language != "uk" {
             return Err("Цей голос підтримує українську мову".into());
         }
-        let text = document
+        let sentence = document
             .sentences
-            .into_iter()
+            .iter()
             .find(|sentence| sentence.id == sentence_id)
-            .ok_or("Речення для озвучення не знайдено")?
-            .text;
+            .ok_or("Речення для озвучення не знайдено")?;
+        let text = document.speech_text(sentence).to_owned();
         if text.len() > MAX_INPUT_BYTES {
             return Err("Речення завелике для локального озвучення".into());
         }

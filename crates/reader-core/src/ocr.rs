@@ -328,7 +328,7 @@ pub(crate) fn update_transcript(document: &mut crate::Document, text: String) ->
             .and_then(|old| matching_index(old))
             .map(|index| sentences[index].id.clone())
             .ok_or(
-                "Зміна зачіпає речення із закладкою, нотаткою або збереженим перекладом".to_owned(),
+                "Зміна зачіпає речення із закладкою, нотаткою, збереженим перекладом або текстом озвучення".to_owned(),
             )
     };
 
@@ -343,6 +343,15 @@ pub(crate) fn update_transcript(document: &mut crate::Document, text: String) ->
     for (id, note) in &document.notes {
         if notes.insert(map_id(id)?, note.clone()).is_some() {
             return Err("Не вдалося однозначно перенести нотатки".into());
+        }
+    }
+    let mut speech_text_overrides = std::collections::BTreeMap::new();
+    for (id, text) in &document.speech_text_overrides {
+        if speech_text_overrides
+            .insert(map_id(id)?, text.clone())
+            .is_some()
+        {
+            return Err("Не вдалося однозначно перенести текст озвучення".into());
         }
     }
     let mut translations = std::collections::BTreeMap::new();
@@ -363,6 +372,7 @@ pub(crate) fn update_transcript(document: &mut crate::Document, text: String) ->
 
     document.bookmarks = bookmarks;
     document.notes = notes;
+    document.speech_text_overrides = speech_text_overrides;
     document.reviewed_translations = translations;
     document.position = position;
     document.text = text;

@@ -68,6 +68,8 @@ pub struct Document {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub notes: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub speech_text_overrides: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub reviewed_translations: BTreeMap<String, BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ocr_lines: Option<Vec<ocr::OcrLine>>,
@@ -81,6 +83,21 @@ pub struct Document {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_url: Option<String>,
 }
+impl Document {
+    fn speech_text<'a>(&'a self, sentence: &'a Sentence) -> &'a str {
+        self.speech_text_overrides
+            .get(&sentence.id)
+            .map_or(sentence.text.as_str(), String::as_str)
+    }
+
+    fn matches_speech_resume(&self, resume: &SpeechResume) -> bool {
+        self.sentences
+            .iter()
+            .find(|sentence| resume.sentence_id == sentence.id)
+            .is_some_and(|sentence| resume.matches(self.speech_text(sentence), &sentence.text))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpeechResume {
@@ -115,17 +132,18 @@ impl ModelSpeechResume {
 }
 
 impl SpeechResume {
-    fn matches(&self, sentence: &Sentence) -> bool {
-        if self.sentence_id != sentence.id
-            || self.text_hash != format!("{:x}", Sha256::digest(sentence.text.as_bytes()))
-        {
+    fn matches(&self, spoken: &str, source: &str) -> bool {
+        if self.text_hash != format!("{:x}", Sha256::digest(spoken.as_bytes())) {
             return false;
         }
         if let Some(model) = &self.model {
             return model.valid();
         }
+        if spoken != source {
+            return false;
+        }
         let mut offset = 0;
-        for grapheme in sentence.text.graphemes(true) {
+        for grapheme in source.graphemes(true) {
             if offset >= self.offset_utf16 {
                 return offset == self.offset_utf16;
             }
@@ -444,12 +462,7 @@ impl Store {
                 document.speech_resume = resume
                     .as_deref()
                     .and_then(|body| serde_json::from_str::<SpeechResume>(body).ok())
-                    .filter(|resume| {
-                        document
-                            .sentences
-                            .iter()
-                            .any(|sentence| resume.matches(sentence))
-                    });
+                    .filter(|resume| document.matches_speech_resume(resume));
                 Ok(document)
             })
             .collect::<Result<Vec<_>>>()?;
@@ -697,6 +710,7 @@ impl Store {
             speech_resume: None,
             bookmarks: Vec::new(),
             notes: BTreeMap::new(),
+            speech_text_overrides: BTreeMap::new(),
             reviewed_translations: BTreeMap::new(),
             ocr_lines,
             ocr_pdf_pages,
@@ -846,12 +860,9 @@ impl Store {
     }
 
     fn discard_changed_speech_resume(connection: &Connection, document: &Document) -> Result<()> {
-        if Self::read_speech_resume(connection, &document.id)?.is_some_and(|resume| {
-            !document
-                .sentences
-                .iter()
-                .any(|sentence| resume.matches(sentence))
-        }) {
+        if Self::read_speech_resume(connection, &document.id)?
+            .is_some_and(|resume| !document.matches_speech_resume(&resume))
+        {
             connection
                 .execute(
                     "DELETE FROM speech_resume WHERE document_id=?1",
@@ -964,6 +975,36 @@ impl Store {
                 return Ok(false);
             }
             document.notes.insert(sentence_id.into(), note.into());
+            Ok(true)
+        })
+    }
+
+    pub fn set_speech_text(&mut self, id: &str, sentence_id: &str, text: &str) -> Result<()> {
+        let text = text.trim();
+        self.edit_document(id, |document, tx| {
+            let sentence = document
+                .sentences
+                .iter()
+                .find(|sentence| sentence.id == sentence_id)
+                .ok_or("Речення для озвучення не знайдено")?;
+            let replacement = (!text.is_empty() && text != sentence.text).then_some(text);
+            if document
+                .speech_text_overrides
+                .get(sentence_id)
+                .map(String::as_str)
+                == replacement
+            {
+                return Ok(false);
+            }
+            if let Some(replacement) = replacement {
+                validate_speech_text(replacement)?;
+                document
+                    .speech_text_overrides
+                    .insert(sentence_id.into(), replacement.into());
+            } else {
+                document.speech_text_overrides.remove(sentence_id);
+            }
+            Self::discard_changed_speech_resume(tx, document)?;
             Ok(true)
         })
     }
@@ -1266,8 +1307,12 @@ impl Store {
             d.position = d.position.min(d.sentences.len().saturating_sub(1));
             d.speech_resume = d
                 .speech_resume
-                .filter(|resume| d.sentences.iter().any(|sentence| resume.matches(sentence)));
-            if !d.bookmarks.is_empty() || !d.reviewed_translations.is_empty() || !d.notes.is_empty()
+                .take()
+                .filter(|resume| d.matches_speech_resume(resume));
+            if !d.bookmarks.is_empty()
+                || !d.reviewed_translations.is_empty()
+                || !d.notes.is_empty()
+                || !d.speech_text_overrides.is_empty()
             {
                 let known: std::collections::HashSet<_> = d
                     .sentences
@@ -1286,6 +1331,12 @@ impl Store {
                         );
                     }
                     validate_sentence_note(note)?;
+                }
+                for (sentence_id, text) in &d.speech_text_overrides {
+                    if !known.contains(sentence_id.as_str()) || text.trim().is_empty() {
+                        return Err("Некоректний текст озвучення в архіві".into());
+                    }
+                    validate_speech_text(text)?;
                 }
                 for (target, segments) in &d.reviewed_translations {
                     valid_language(target)?;
@@ -1346,6 +1397,17 @@ impl Store {
         }
         tx.commit().map_err(|e| e.to_string())
     }
+}
+
+fn validate_speech_text(text: &str) -> Result<()> {
+    if text.len() > 1000
+        || text
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+    {
+        return Err("Текст озвучення перевищує 1000 байтів або містить керівні символи".into());
+    }
+    Ok(())
 }
 
 fn validate_sentence_note(note: &str) -> Result<()> {
@@ -1663,6 +1725,61 @@ mod tests {
         );
         assert_eq!(snapshot.source, "UD English EWT");
         assert_eq!(clean.export().unwrap().reviews[0].entry_id, again.id);
+    }
+
+    #[test]
+    fn pronunciation_override_preserves_original_and_checkpoint_in_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("speech.db");
+        let mut db = Store::open(&path).unwrap();
+        let source = "Відчинені вікна.";
+        let edited = "Відчинені вікна́.";
+        let doc = db.import("speech.txt", source.as_bytes(), "uk").unwrap();
+        let id = &doc.id;
+        let sentence_id = &doc.sentences[0].id;
+        let hash = |text: &str| format!("{:x}", Sha256::digest(text.as_bytes()));
+        db.set_speech_resume(id, sentence_id, &hash(source), Some(0))
+            .unwrap();
+        db.set_speech_text(id, sentence_id, edited).unwrap();
+        assert!(db.speech_resume(id).unwrap().is_none());
+        db.set_model_speech_resume(
+            id,
+            sentence_id,
+            &hash(edited),
+            ModelSpeechResume {
+                voice_id: "test".into(),
+                revision: "1".into(),
+                language: "uk".into(),
+                rate_percent: 100,
+                position_ms: 250,
+            },
+        )
+        .unwrap();
+        drop(db);
+
+        let db = Store::open(&path).unwrap();
+        let saved = db.snapshot().unwrap().documents.remove(0);
+        assert_eq!(saved.speech_text(&saved.sentences[0]), edited);
+        assert_eq!(saved.sentences[0].text, source);
+        assert_eq!(db.original(id).unwrap().bytes, source.as_bytes());
+        assert_eq!(saved.speech_resume.unwrap().model.unwrap().position_ms, 250);
+
+        let mut restored = Store::open(Path::new(":memory:")).unwrap();
+        let archive = serde_json::to_vec(&db.export().unwrap()).unwrap();
+        restored
+            .restore(serde_json::from_slice(&archive).unwrap())
+            .unwrap();
+        let snapshot = restored.snapshot().unwrap().documents.remove(0);
+        assert_eq!(snapshot.speech_text_overrides[sentence_id], edited);
+        assert!(snapshot.speech_resume.is_some());
+        assert!(restored
+            .set_speech_text(id, sentence_id, &"і".repeat(501))
+            .is_err());
+        restored.set_speech_text(id, sentence_id, "").unwrap();
+        assert!(restored.speech_resume(id).unwrap().is_none());
+        assert!(restored.snapshot().unwrap().documents[0]
+            .speech_text_overrides
+            .is_empty());
     }
 
     #[test]

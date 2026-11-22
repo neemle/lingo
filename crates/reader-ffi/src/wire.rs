@@ -91,6 +91,12 @@ pub enum Command {
         #[serde(default)]
         model: Option<reader_core::ModelSpeechResume>,
     },
+    SetSpeechText {
+        id: String,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        text: String,
+    },
     SetBookmark {
         id: String,
         #[serde(rename = "sentenceId")]
