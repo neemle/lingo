@@ -1187,7 +1187,34 @@ impl Store {
         })
     }
 
-    pub fn save_word(&mut self, mut entry: Vocabulary) -> Result<Vocabulary> {
+    pub fn save_word(&mut self, entry: Vocabulary) -> Result<Vocabulary> {
+        self.save_word_with_anchor(entry, None)
+    }
+
+    pub fn save_selected_word(
+        &mut self, mut entry: Vocabulary, selection: dictionary_transfer::DictionarySelection,
+    ) -> Result<Vocabulary> {
+        let document = self.token_document(&entry.document_id)?;
+        if document.current_revision_id.as_deref() != Some(&selection.revision_id) {
+            return Err("Текст документа змінився. Виділіть фрагмент знову.".into());
+        }
+        let (sentence, _) = knowledge::resolve_text_selection(
+            &document.sentences, selection.start_utf16, &entry.word,
+        )?;
+        let anchor = dictionary_transfer::DictionarySentenceAnchor {
+            sentence_id: sentence.id.clone(),
+            revision_id: selection.revision_id,
+            page: None,
+            sentence_start_utf16: sentence.start_utf16,
+        };
+        entry.language = document.language;
+        entry.context.clone_from(&sentence.text);
+        self.save_word_with_anchor(entry, Some(anchor))
+    }
+
+    pub(crate) fn save_word_with_anchor(
+        &mut self, mut entry: Vocabulary, anchor: Option<dictionary_transfer::DictionarySentenceAnchor>,
+    ) -> Result<Vocabulary> {
         valid_language(&entry.language)?;
         valid_language(&entry.target_language)?;
         entry.word = entry.word.trim().to_owned();
@@ -1256,7 +1283,7 @@ impl Store {
                 ],
             )
             .map_err(|e| e.to_string())?;
-            dictionary_transfer::remember_card_context(&tx, &card.id, &entry.document_id, &surface, &entry.context)?;
+            dictionary_transfer::remember_card_context(&tx, &card.id, &entry.document_id, &surface, &entry.context, anchor.as_ref())?;
             tx.commit().map_err(|e| e.to_string())?;
             return Ok(card);
         }
@@ -1296,7 +1323,7 @@ impl Store {
                     ],
                 )
                 .map_err(|error| error.to_string())?;
-                dictionary_transfer::remember_card_context(&tx, &card.id, &entry.document_id, &surface, &entry.context)?;
+                dictionary_transfer::remember_card_context(&tx, &card.id, &entry.document_id, &surface, &entry.context, anchor.as_ref())?;
                 tx.commit().map_err(|error| error.to_string())?;
                 return Ok(card);
             }
@@ -1309,7 +1336,7 @@ impl Store {
             params![entry.id, key, serde_json::to_string(&entry).unwrap()],
         )
         .map_err(|e| e.to_string())?;
-        dictionary_transfer::remember_card_context(&tx, &entry.id, &entry.document_id, &surface, &entry.context)?;
+        dictionary_transfer::remember_card_context(&tx, &entry.id, &entry.document_id, &surface, &entry.context, anchor.as_ref())?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(entry)
     }

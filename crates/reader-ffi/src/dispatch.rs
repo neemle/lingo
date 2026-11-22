@@ -330,7 +330,10 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             value(store.lookup_detached_pdf_word(&id, page, start_utf16, &text)),
         Command::SaveDetachedPdfWord { id, page, input } =>
             value(store.save_detached_pdf_word(&id, page, input)),
-        Command::SaveWord { entry } => value(store.save_word(entry)),
+        Command::SaveWord { entry, selection } => value(match selection {
+            Some(selection) => store.save_selected_word(entry, selection),
+            None => store.save_word(entry),
+        }),
         Command::DeleteVocabularyCard { id } => value(store.delete_vocabulary_card(&id)),
         Command::SetVocabularyVariants {
             id,

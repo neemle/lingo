@@ -443,15 +443,18 @@ public sealed class CoreClient : IDisposable
         CallIndependent<WordLookup?>(new { version = 1, operation = "lookup_detached_pdf_word", id, page, startUtf16, text });
 
     public Vocabulary SaveDetachedPdfWord(string id, int page, int startUtf16, string selectedText,
-        string translation, string target, LemmaSnapshot? analysis, ExpressionSnapshot? expression, SenseSnapshot? sense = null) =>
+        string translation, string target, LemmaSnapshot? analysis, ExpressionSnapshot? expression,
+        SenseSnapshot? sense = null, string? revisionId = null) =>
         Call<Vocabulary>(new
         {
             version = 1, operation = "save_detached_pdf_word", id, page,
-            input = new { startUtf16, selectedText, translation, target, analysis, expression, sense },
+            input = new { startUtf16, selectedText, translation, target, analysis, expression, sense, revisionId },
         });
 
     public Vocabulary SaveWord(Vocabulary entry) =>
         Call<Vocabulary>(new { version = 1, operation = "save_word", entry });
+    public Vocabulary SaveSelectedWord(Vocabulary entry, string revisionId, int startUtf16) =>
+        Call<Vocabulary>(new { version = 1, operation = "save_word", entry, selection = new { revisionId, startUtf16 } });
     public Vocabulary SetVocabularyVariants(string id, string[] acceptedTranslations, string? translation = null) =>
         Call<Vocabulary>(new { version = 1, operation = "set_vocabulary_variants", id, acceptedTranslations, translation });
     public bool DeleteVocabularyCard(string id) =>

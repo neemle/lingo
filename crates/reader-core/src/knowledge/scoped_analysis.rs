@@ -58,6 +58,7 @@ pub enum DetachedPageAnalysis {
 pub struct DetachedVocabularyInput {
     start_utf16: usize,
     selected_text: String,
+    revision_id: Option<String>,
     translation: String,
     target: String,
     analysis: Option<Box<crate::LemmaSnapshot>>,
@@ -207,8 +208,17 @@ impl Store {
     ) -> Result<crate::Vocabulary> {
         let cached = self.detached_pdf_sentences(document_id, page)?
             .ok_or("Текст сторінки PDF недоступний.")?;
+        if input.revision_id.as_deref().is_some_and(|expected| expected != cached.revision) {
+            return Err("Текст сторінки PDF змінився. Виділіть фрагмент знову.".into());
+        }
         let (sentence, _) = resolve_text_selection(&cached.sentences, input.start_utf16, &input.selected_text)?;
-        self.save_word(crate::Vocabulary {
+        let anchor = crate::dictionary_transfer::DictionarySentenceAnchor {
+            sentence_id: sentence.id.clone(),
+            revision_id: cached.revision,
+            page: Some(page),
+            sentence_start_utf16: sentence.start_utf16,
+        };
+        self.save_word_with_anchor(crate::Vocabulary {
             id: String::new(),
             word: input.selected_text,
             translation: input.translation,
@@ -222,7 +232,7 @@ impl Store {
             expression: input.expression,
             sense: input.sense,
             accepted_translations: Vec::new(),
-        })
+        }, Some(anchor))
     }
 
     /// Warm one sentence in the current reading window. A changed cursor or

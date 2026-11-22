@@ -538,9 +538,11 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         Task.Run(() => client.LookupDetachedPdfWord(id, page, selection.StartUtf16, selection.Text));
 
     public Task SaveDetachedPdfWordAsync(string id, int page, TextSelection selection, string translation,
-        string target, LemmaSnapshot? analysis, ExpressionSnapshot? expression, SenseSnapshot? sense = null) => RunAsync(() =>
+        string target, LemmaSnapshot? analysis, ExpressionSnapshot? expression, SenseSnapshot? sense = null,
+        string? revisionId = null) => RunAsync(() =>
     {
-        client.SaveDetachedPdfWord(id, page, selection.StartUtf16, selection.Text, translation, target, analysis, expression, sense);
+        client.SaveDetachedPdfWord(id, page, selection.StartUtf16, selection.Text, translation, target,
+            analysis, expression, sense, revisionId);
         return Read();
     });
 
@@ -552,8 +554,12 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
             throw new InvalidDataException("Виберіть мову перекладу для словникової картки.");
         var context = doc.Sentences.FirstOrDefault(sentence => selection.StartUtf16 >= sentence.StartUtf16
             && selection.StartUtf16 < sentence.EndUtf16)?.Text ?? "";
-        client.SaveWord(new Vocabulary("", selection.Text, translation, doc.Language, targetLanguage,
-            context, doc.Id, new ReviewState(), new ReviewState()) { Analysis = analysis, Expression = expression, Sense = sense });
+        var entry = new Vocabulary("", selection.Text, translation, doc.Language, targetLanguage,
+            context, doc.Id, new ReviewState(), new ReviewState()) { Analysis = analysis, Expression = expression, Sense = sense };
+        if (doc.CurrentRevisionId is { } revisionId)
+            client.SaveSelectedWord(entry, revisionId, selection.StartUtf16);
+        else
+            client.SaveWord(entry);
         return Read();
     });
 

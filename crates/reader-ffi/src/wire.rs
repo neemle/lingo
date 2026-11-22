@@ -576,6 +576,7 @@ pub enum Command {
     },
     SaveWord {
         entry: Vocabulary,
+        selection: Option<reader_core::dictionary_transfer::DictionarySelection>,
     },
     DeleteVocabularyCard {
         id: String,

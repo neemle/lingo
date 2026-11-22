@@ -148,7 +148,7 @@ public partial class ReadingPage
 
     private async Task SaveDetachedWordAsync(DetachedAddress address, TextSelection selected, string target)
     {
-        if (savingDetachedWord) return;
+        if (savingDetachedWord || detachedSentence?.RevisionId is not { } revision) return;
         var session = AppState.Session;
         savingDetachedWord = true;
         UpdateDetachedControls();
@@ -197,7 +197,7 @@ public partial class ReadingPage
             await session.WaitUntilIdleAsync();
             if (!SelectionDocumentCurrent()) return;
             await session.SaveDetachedPdfWordAsync(address.Document, address.Page, selected, translation,
-                target, reading.Lemma, reading.Expression, sense);
+                target, reading.Lemma, reading.Expression, sense, revision);
             if (session.Error.Length > 0)
             {
                 await DisplayAlertAsync("Словник", session.Error, "Гаразд");
@@ -215,7 +215,8 @@ public partial class ReadingPage
 
         bool SelectionDocumentCurrent() =>
             readingPageActive && session.Document is { } document && document.Id == address.Document &&
-            document.Language == address.Language && TargetCode == target;
+            document.Language == address.Language && TargetCode == target && ReferenceEquals(detachedAddress, address) &&
+            detachedSelection == selected && detachedSentence?.RevisionId == revision;
     }
 
     private static VocabularyReadingOption[] DetachedVocabularyReadings(

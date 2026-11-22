@@ -46,6 +46,24 @@ pub struct DictionaryExample {
     entry_id: String,
     surface: String,
     sentence: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    anchors: Vec<DictionarySentenceAnchor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DictionarySentenceAnchor {
+    pub(crate) sentence_id: String,
+    pub(crate) revision_id: String,
+    pub(crate) page: Option<u16>,
+    pub(crate) sentence_start_utf16: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DictionarySelection {
+    pub(crate) revision_id: String,
+    pub(crate) start_utf16: usize,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -80,6 +98,16 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
          );
          CREATE INDEX IF NOT EXISTS dictionary_document_contexts
             ON dictionary_card_contexts(document_id, card_id);
+         CREATE TABLE IF NOT EXISTS dictionary_context_anchors (
+            card_id TEXT NOT NULL,
+            document_id TEXT NOT NULL,
+            surface TEXT NOT NULL,
+            sentence TEXT NOT NULL,
+            anchor TEXT NOT NULL,
+            PRIMARY KEY (card_id, document_id, surface, sentence, anchor),
+            FOREIGN KEY (card_id, document_id, surface, sentence)
+                REFERENCES dictionary_card_contexts(card_id, document_id, surface, sentence) ON DELETE CASCADE
+         ) WITHOUT ROWID;
          CREATE TABLE IF NOT EXISTS dictionary_review_origins (
             origin TEXT PRIMARY KEY,
             event_id INTEGER NOT NULL UNIQUE REFERENCES review_events(id) ON DELETE CASCADE
@@ -259,16 +287,23 @@ pub(crate) fn export_details(
 
     let mut sources = sources_for(db, entries)?;
     let mut query = db.prepare(
-        "SELECT document_id, card_id, surface, sentence FROM dictionary_card_contexts ORDER BY rowid",
+        "SELECT c.document_id, c.card_id, c.surface, c.sentence,
+                (SELECT json_group_array(json(a.anchor)) FROM dictionary_context_anchors a
+                 WHERE (a.card_id,a.document_id,a.surface,a.sentence) =
+                       (c.card_id,c.document_id,c.surface,c.sentence))
+         FROM dictionary_card_contexts c ORDER BY c.rowid",
     ).map_err(error)?;
     let rows = query.query_map([], |row| Ok((
         row.get::<_, String>(0)?,
-        DictionaryExample { entry_id: row.get(1)?, surface: row.get(2)?, sentence: row.get(3)? },
+        DictionaryExample { entry_id: row.get(1)?, surface: row.get(2)?, sentence: row.get(3)?, anchors: Vec::new() },
+        row.get::<_, String>(4)?,
     ))).map_err(error)?;
     let mut examples = BTreeMap::<String, Vec<DictionaryExample>>::new();
     for row in rows {
-        let (document_id, example) = row.map_err(error)?;
+        let (document_id, mut example, anchors) = row.map_err(error)?;
         if ids.contains(example.entry_id.as_str()) {
+            example.anchors = serde_json::from_str(&anchors).map_err(error)?;
+            example.anchors.sort();
             examples.entry(document_id).or_default().push(example);
         }
     }
@@ -376,7 +411,7 @@ fn restore_archive(
         }
         for example in &source.examples {
             write_context(tx, &card_ids[&example.entry_id], &sources[source.document_id.as_str()],
-                &example.surface, &example.sentence)?;
+                &example.surface, &example.sentence, &example.anchors)?;
         }
     }
 
@@ -706,6 +741,7 @@ pub(crate) fn retain_removed_document_source(db: &Connection, id: &str) -> Resul
 
 pub(crate) fn remember_card_context(
     db: &Connection, card_id: &str, document_id: &str, surface: &str, sentence: &str,
+    anchor: Option<&DictionarySentenceAnchor>,
 ) -> Result<()> {
     let Some((title, source_hash)) = source_metadata(db, document_id)? else {
         return Ok(());
@@ -725,7 +761,8 @@ pub(crate) fn remember_card_context(
         params![card_id, document_id],
     ).map_err(error)?;
     if valid_example(surface, sentence) {
-        write_context(db, card_id, &document_id, surface, sentence)?;
+        let anchors = anchor.map_or_else(|| &[][..], std::slice::from_ref);
+        write_context(db, card_id, &document_id, surface, sentence, anchors)?;
     }
     Ok(())
 }
@@ -736,12 +773,23 @@ fn valid_example(surface: &str, sentence: &str) -> bool {
         && !surface.contains('\0') && !sentence.contains('\0')
 }
 
-fn write_context(db: &Connection, card_id: &str, document_id: &str, surface: &str, sentence: &str) -> Result<()> {
+fn write_context(
+    db: &Connection, card_id: &str, document_id: &str, surface: &str, sentence: &str,
+    anchors: &[DictionarySentenceAnchor],
+) -> Result<()> {
     db.execute(
         "INSERT OR IGNORE INTO dictionary_card_contexts(card_id,document_id,surface,sentence)
          VALUES (?1,?2,?3,?4)",
         params![card_id, document_id, surface, sentence],
     ).map_err(error)?;
+    for anchor in anchors {
+        let body = serde_json::to_string(anchor).map_err(error)?;
+        db.execute(
+            "INSERT OR IGNORE INTO dictionary_context_anchors(card_id,document_id,surface,sentence,anchor)
+             VALUES (?1,?2,?3,?4,?5)",
+            params![card_id, document_id, surface, sentence, body],
+        ).map_err(error)?;
+    }
     Ok(())
 }
 
@@ -922,7 +970,11 @@ fn validate_archive(archive: &DictionaryArchive) -> Result<()> {
                 .iter()
                 .any(|id| !cards.contains(id.as_str()))
             || source.examples.iter().any(|example|
-                !source.entry_ids.contains(&example.entry_id) || !valid_example(&example.surface, &example.sentence))
+                !source.entry_ids.contains(&example.entry_id)
+                    || !valid_example(&example.surface, &example.sentence)
+                    || example.anchors.iter().any(|anchor|
+                        !identifier(&anchor.sentence_id) || !identifier(&anchor.revision_id)
+                            || anchor.page == Some(u16::MAX) || anchor.sentence_start_utf16 > crate::MAX_IMPORT))
         {
             return Err("Некоректне джерело карток в архіві словника".into());
         }

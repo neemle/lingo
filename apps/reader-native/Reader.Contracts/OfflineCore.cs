@@ -25,7 +25,9 @@ public sealed record DictionaryReview(string Id, string EntryId, string Directio
 public sealed record DictionarySource(string DocumentId, string? Title, string? SourceHash, string[] EntryIds,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DictionaryExample[]? Examples = null);
 
-public sealed record DictionaryExample(string EntryId, string Surface, string Sentence);
+public sealed record DictionaryExample(string EntryId, string Surface, string Sentence,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DictionarySentenceAnchor[]? Anchors = null);
+public sealed record DictionarySentenceAnchor(string SentenceId, string RevisionId, int? Page, int SentenceStartUtf16);
 public sealed record DictionaryImport(int AddedCards, int ExistingCards, int AddedReviews, bool RestoredPractice = false);
 
 public sealed record SpeechAudio(int SampleRate, int Samples, int[] WavBytes);
