@@ -515,10 +515,10 @@ fn paragraph_plan(
     const CONTEXT_BYTES: usize = 768;
     let sentences = &document.sentences;
     let paragraph = document.paragraph_utf8_range(sentences[selected].start_utf8);
-    let first = sentences
+    let mut first = sentences
         .partition_point(|sentence| sentence.end_utf8 <= paragraph.start)
         .min(selected);
-    let last = sentences
+    let mut last = sentences
         .partition_point(|sentence| sentence.start_utf8 < paragraph.end)
         .max(selected + 1);
     let reviews = document.reviewed_translations.get(target);
@@ -529,6 +529,13 @@ fn paragraph_plan(
             && reviewed(right).is_none()
             && soft_wrap(document, left, right)
     };
+    if first > 0 && page_word_break(document, first - 1, first) && can_wrap(first - 1, first) {
+        first -= 1;
+    }
+    if last < sentences.len() && page_word_break(document, last - 1, last) && can_wrap(last - 1, last)
+    {
+        last += 1;
+    }
     let mut start = first.max(selected.saturating_sub(CONTEXT_SENTENCES));
     let mut end = last.min(selected + CONTEXT_SENTENCES + 1);
     // Use paragraph-relative group boundaries so moving the selection does not
@@ -570,17 +577,8 @@ fn paragraph_plan(
         }
         let review = reviewed(index).cloned();
         if review.is_none() {
-            let input = if next == index + 1 {
-                sentences[index].text.clone()
-            } else {
-                document
-                    .text
-                    .get(sentences[index].start_utf8..sentences[next - 1].end_utf8)
-                    .ok_or("Межі абзацу пошкоджені.")?
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            };
+            let input = inference_span(document, index, next - 1)
+                .ok_or("Межі абзацу пошкоджені.")?;
             pending.push((units.len(), input));
         }
         units.push(ParagraphUnit {
@@ -639,15 +637,85 @@ pub(crate) fn input_for_sentence(document: &crate::Document, selected: usize) ->
     {
         end += 1;
     }
-    if start == end {
-        return (active.text.clone(), false);
+    let input = inference_span(document, start, end).unwrap_or_else(|| active.text.clone());
+    (input, start != end)
+}
+
+fn inference_span(document: &crate::Document, first: usize, last: usize) -> Option<String> {
+    let first = &document.sentences[first];
+    let last = &document.sentences[last];
+    let span = document.text.get(first.start_utf8..last.end_utf8)?;
+    if document.format != "pdf" && document.ocr_lines.is_none() {
+        return Some(if first.id == last.id {
+            first.text.clone()
+        } else {
+            span.split_whitespace().collect::<Vec<_>>().join(" ")
+        });
     }
-    let span =
-        &document.text[document.sentences[start].start_utf8..document.sentences[end].end_utf8];
-    (span.split_whitespace().collect::<Vec<_>>().join(" "), true)
+    if first.id == last.id && !span.contains('\n') {
+        return Some(first.text.clone());
+    }
+
+    let mut normalized = String::with_capacity(span.len());
+    let mut rest = span;
+    let mut offset = first.start_utf16;
+    while !rest.is_empty() {
+        let word_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let (word, separator_and_tail) = rest.split_at(word_end);
+        let tail = separator_and_tail.trim_start();
+        let gap = &separator_and_tail[..separator_and_tail.len() - tail.len()];
+        let word_end_utf16 = offset + word.encode_utf16().count();
+        let tail_start_utf16 = word_end_utf16 + gap.encode_utf16().count();
+        let line_breaks = gap.bytes().filter(|&byte| byte == b'\n').count();
+        let continued = word_hyphen(word).filter(|_| {
+            tail.starts_with(char::is_lowercase)
+                && (line_breaks == 1
+                    || line_breaks == 2
+                        && adjacent_pdf_page(document, word_end_utf16, tail_start_utf16))
+        });
+        if let Some(prefix) = continued {
+            normalized.push_str(prefix);
+        } else {
+            normalized.push_str(word);
+            if !tail.is_empty() {
+                normalized.push(' ');
+            }
+        }
+        rest = tail;
+        offset = tail_start_utf16;
+    }
+    Some(normalized)
+}
+
+fn word_hyphen(word: &str) -> Option<&str> {
+    word.strip_suffix(['-', '\u{00ad}', '\u{2010}'])
+        .filter(|prefix| prefix.ends_with(char::is_alphabetic))
+}
+
+fn adjacent_pdf_page(document: &crate::Document, left: usize, right: usize) -> bool {
+    document.pdf_page_starts.as_ref().is_some_and(|starts| {
+        starts.windows(2).any(|pair| {
+            pair[0].is_some_and(|start| start < left) && pair[1] == Some(right)
+        })
+    })
+}
+
+fn page_word_break(document: &crate::Document, left: usize, right: usize) -> bool {
+    let previous = &document.sentences[left];
+    let next = &document.sentences[right];
+    word_hyphen(&previous.text).is_some()
+        && next.text.starts_with(char::is_lowercase)
+        && adjacent_pdf_page(document, previous.end_utf16, next.start_utf16)
+        && document.text.get(previous.end_utf8..next.start_utf8).is_some_and(|gap| {
+            gap.chars().all(char::is_whitespace)
+                && gap.bytes().filter(|&byte| byte == b'\n').count() == 2
+        })
 }
 
 fn soft_wrap(document: &crate::Document, left: usize, right: usize) -> bool {
+    if page_word_break(document, left, right) {
+        return true;
+    }
     let previous = &document.sentences[left];
     let next = &document.sentences[right];
     let Some(gap) = document.text.get(previous.end_utf8..next.start_utf8) else {

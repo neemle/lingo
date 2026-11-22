@@ -58,6 +58,15 @@ pub enum Command {
         bytes: Vec<u8>,
         pages: u16,
     },
+    PdfOcrNeededPages {
+        id: String,
+        center: u16,
+    },
+    CachePdfOcrPage {
+        id: String,
+        page: u16,
+        lines: Vec<reader_core::ocr::OcrLine>,
+    },
     PdfOcrJob {
         job: reader_core::ocr_jobs::JobRequest,
     },

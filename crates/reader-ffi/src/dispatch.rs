@@ -78,6 +78,10 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
                     .collect::<Vec<_>>()
             }),
         ),
+        Command::PdfOcrNeededPages { id, center } => value(store.pdf_ocr_needed_pages(&id, center)),
+        Command::CachePdfOcrPage { id, page, lines } => {
+            value(store.cache_pdf_ocr_page(&id, page, lines))
+        }
         Command::PdfOcrJob { job } => value(store.pdf_ocr_job(job)),
         Command::ImportMixedPdf {
             name,

@@ -29,6 +29,7 @@ pub mod ocr_jobs;
 mod onnx_runtime;
 pub mod optional_models;
 pub mod pdf_layers;
+mod pdf_page_ocr;
 pub mod practice;
 pub mod qwen;
 pub mod reading_history;
@@ -429,6 +430,7 @@ impl Store {
         ocr_jobs::initialize(&connection)?;
         document_revisions::initialize(&mut connection)?;
         file_originals::initialize(&connection)?;
+        pdf_page_ocr::initialize(&connection)?;
         let file_original_directory = file_originals::directory(path);
         file_originals::cleanup_orphans(&mut connection, &file_original_directory);
         Ok(Self {

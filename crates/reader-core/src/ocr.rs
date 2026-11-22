@@ -112,14 +112,20 @@ pub fn recognized_text(
 }
 
 pub(crate) fn recognized_lines(lines: &[OcrLine], pages: u16) -> Result<String> {
-    if lines.is_empty() || lines.len() > 8192 {
-        return Err("На зображенні немає доступного тексту або забагато рядків".into());
+    if lines.is_empty() {
+        return Err("На зображенні немає доступного тексту".into());
     }
     let mut text = String::new();
     let mut previous_page = 0;
+    let mut line_count = 0;
     let mut word_count = 0;
     for line in lines {
+        if line.page > previous_page {
+            line_count = 0;
+            word_count = 0;
+        }
         let value = line.reading_text();
+        line_count += 1;
         word_count += line.words.len();
         if line.page < previous_page
             || line.page >= pages
@@ -127,6 +133,7 @@ pub(crate) fn recognized_lines(lines: &[OcrLine], pages: u16) -> Result<String> 
             || !valid_text(value)
             || !valid_box(line.x, line.y, line.width, line.height)
             || line.confidence.is_some_and(|confidence| !unit(confidence))
+            || line_count > 8192
             || word_count > 65_536
             || line.words.len() > line.text.len()
             || line.words.iter().any(|word| {
@@ -290,9 +297,40 @@ pub(crate) fn refresh_provenance(document: &mut crate::Document) {
 
 /// Rebuild derived sentences without dropping or guessing user annotations.
 pub(crate) fn update_transcript(document: &mut crate::Document, text: String) -> Result<()> {
+    update_transcript_with_page_starts(document, text, None)
+}
+
+pub(crate) fn update_transcript_with_page_starts(
+    document: &mut crate::Document,
+    text: String,
+    starts: Option<&[Option<usize>]>,
+) -> Result<()> {
     use std::collections::HashMap;
 
     let sentences = crate::segment(&text, &document.id);
+    let old_pages = document
+        .pdf_page_starts
+        .iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(page, start)| start.map(|start| (start, page)))
+        .collect::<Vec<_>>();
+    let page_match = |old: &crate::Sentence| {
+        let starts = starts?;
+        let (old_start, page) = old_pages
+            .partition_point(|(start, _)| *start <= old.start_utf16)
+            .checked_sub(1)
+            .and_then(|index| old_pages.get(index).copied())?;
+        let new_start = starts
+            .get(page)
+            .copied()
+            .flatten()?
+            .checked_add(old.start_utf16.checked_sub(old_start)?)?;
+        sentences
+            .binary_search_by_key(&new_start, |sentence| sentence.start_utf16)
+            .ok()
+            .filter(|&index| sentences[index].text == old.text)
+    };
     let by_id: HashMap<_, _> = sentences
         .iter()
         .enumerate()
@@ -315,6 +353,10 @@ pub(crate) fn update_transcript(document: &mut crate::Document, text: String) ->
         *old_counts.entry(sentence.text.as_str()).or_insert(0usize) += 1;
     }
     let matching_index = |old: &crate::Sentence| {
+        // Inserting an earlier page can reuse an old offset on a different page.
+        if starts.is_some() && !old_pages.is_empty() {
+            return page_match(old);
+        }
         by_id
             .get(old.id.as_str())
             .copied()
@@ -368,6 +410,10 @@ pub(crate) fn update_transcript(document: &mut crate::Document, text: String) ->
         }
         translations.insert(language.clone(), moved);
     }
+    let speech_resume = document.speech_resume.clone().and_then(|mut resume| {
+        resume.sentence_id = map_id(&resume.sentence_id).ok()?;
+        Some(resume)
+    });
     let position = document
         .sentences
         .get(document.position)
@@ -381,6 +427,7 @@ pub(crate) fn update_transcript(document: &mut crate::Document, text: String) ->
     document.position = position;
     document.text = text;
     document.sentences = sentences;
+    document.speech_resume = speech_resume.filter(|resume| document.matches_speech_resume(resume));
     Ok(())
 }
 

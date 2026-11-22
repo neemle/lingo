@@ -137,7 +137,14 @@ fn validate(command: &Command) -> Result<()> {
                 "Word explanation fields exceed their wire bounds",
             ))
         }
-        Command::DeleteDocument { id } if id.is_empty() || id.len() > 256 || id.contains('\0') => {
+        Command::CachePdfOcrPage { lines, .. } if lines.len() > 8192 => {
+            Err(Error::new("invalid_argument", "Too many OCR lines for one PDF page"))
+        }
+        Command::DeleteDocument { id }
+        | Command::PdfOcrNeededPages { id, .. }
+        | Command::CachePdfOcrPage { id, .. }
+            if id.is_empty() || id.len() > 256 || id.contains('\0') =>
+        {
             Err(Error::new(
                 "invalid_argument",
                 "Document ID must be nonempty and bounded",

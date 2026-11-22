@@ -26,7 +26,11 @@ pub fn merge(
     expected: u16,
     lines: &[OcrLine],
 ) -> Result<(String, Vec<Option<usize>>)> {
-    merge_page_text(text_pages(name, bytes, expected)?, lines)
+    let merged = merge_page_text(text_pages(name, bytes, expected)?, lines)?;
+    if merged.0.is_empty() {
+        return Err("У PDF не знайдено тексту".into());
+    }
+    Ok(merged)
 }
 
 pub(crate) fn merge_page_text(
@@ -81,9 +85,6 @@ pub(crate) fn merge_page_text(
         offsets.push(Some(utf16));
         utf16 += page.encode_utf16().count();
         text.push_str(&page);
-    }
-    if text.is_empty() {
-        return Err("У PDF не знайдено тексту".into());
     }
     Ok((text, offsets))
 }

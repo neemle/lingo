@@ -6,7 +6,8 @@ use crate::{
     backup_limits::{LimitedReader, LimitedWriter},
     document_layout,
     document_revisions::DocumentRevision,
-    file_originals, pdf_layers, Backup, BackupInspection, BackupResource, Document, Original,
+    file_originals, pdf_layers, pdf_page_ocr, Backup, BackupInspection, BackupResource, Document,
+    Original,
     Result, Store, MAX_IMPORT,
 };
 use rusqlite::{params, TransactionBehavior};
@@ -38,6 +39,8 @@ struct OriginalEntry {
     size: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pdf_page_text: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ocr_completed_pages: Vec<u16>,
 }
 
 type Manifest = Backup<Vec<OriginalEntry>>;
@@ -79,11 +82,17 @@ pub(crate) fn write(store: &Store, output: &mut File) -> Result<()> {
                 None,
             )
         };
+        let ocr_completed_pages = if page_text.is_some() {
+            pdf_page_ocr::completed_pages(&tx, &doc.id)?
+        } else {
+            Vec::new()
+        };
         sources.push(OriginalEntry {
             document_id: doc.id.clone(),
             name,
             size,
             pdf_page_text: page_text,
+            ocr_completed_pages,
         });
         paths.push(path);
     }
@@ -162,6 +171,9 @@ pub(crate) fn restore(store: &mut Store, file: File) -> Result<Vec<BackupResourc
                 params![id, entry.name, entry.size as i64, content],
             )
             .map_err(archive_error)?;
+            for &page in &entry.ocr_completed_pages {
+                pdf_page_ocr::mark_completed(&tx, &id, page)?;
+            }
             file_originals::verify_root(root)?;
             let path = file_originals::original_path(root, &id)?;
             staged.persist_noclobber(&path).map_err(archive_error)?;
@@ -265,10 +277,14 @@ fn validate_manifest(backup: &Manifest) -> Result<()> {
                 || !uuid::Uuid::parse_str(&doc.id).is_ok_and(|id| id.to_string() == doc.id)
                 || u16::try_from(pages.len()).ok() != doc.ocr_pdf_pages
                 || pages.is_empty()
+                || entry.ocr_completed_pages.windows(2).any(|pair| pair[0] >= pair[1])
+                || entry.ocr_completed_pages.iter().any(|&page| {
+                    !pages.get(usize::from(page)).is_some_and(|text| text.trim().is_empty())
+                })
             {
                 return Err("Некоректний запис великого PDF у резервній копії.".into());
             }
-        } else if entry.size > MAX_IMPORT as u64 {
+        } else if entry.size > MAX_IMPORT as u64 || !entry.ocr_completed_pages.is_empty() {
             return Err("Оригінал у резервній копії перевищує допустимий розмір.".into());
         }
     }
