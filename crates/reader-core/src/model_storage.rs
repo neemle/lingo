@@ -6,6 +6,34 @@ use std::{
     path::Path,
 };
 
+pub(crate) fn write_verified_package_zip<'a>(
+    path: &Path,
+    limit: u64,
+    assets: impl IntoIterator<Item = &'a str>,
+    mut copy: impl FnMut(usize, &str, &mut dyn io::Write) -> Result<()>,
+) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or("Виберіть теку для архіву моделі.")?;
+    crate::space::ensure_capacity([(parent, limit)])?;
+    let mut output = tempfile::NamedTempFile::new_in(parent).map_err(model_error)?;
+    let mut zip = zip::ZipWriter::new(output.as_file_mut());
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (index, asset) in assets.into_iter().enumerate() {
+        zip.start_file(asset, options).map_err(model_error)?;
+        copy(index, asset, &mut zip)?;
+    }
+    let file = zip.finish().map_err(model_error)?;
+    if file.metadata().map_err(model_error)?.len() > limit {
+        return Err("Архів моделі завеликий.".into());
+    }
+    file.sync_all().map_err(model_error)?;
+    output.persist_noclobber(path).map_err(model_error)?;
+    Ok(())
+}
+
 pub(crate) fn package_directory(path: &Path) -> Result<bool> {
     match path.symlink_metadata() {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(true),

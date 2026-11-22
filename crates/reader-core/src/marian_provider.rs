@@ -16,7 +16,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::{
     model_storage::{
         activate_verified_package, copy_and_hash, copy_and_hash_checked, lock_package, model_error,
-        package_directory, remove_package_directory,
+        package_directory, remove_package_directory, write_verified_package_zip,
     },
     resources::RESOURCES,
     space::{ensure_capacity, PACKAGE_OVERHEAD},
@@ -240,6 +240,27 @@ impl TranslationPackageFiles {
         remove_package_directory(&removed)
             .map_err(|error| format!("Пакет відключено. Не вдалося прибрати всі файли. {error}"))?;
         Ok(true)
+    }
+
+    pub fn export(&self, source: &str, target: &str, archive_path: &Path) -> Result<()> {
+        let package = catalog::PACKAGES
+            .iter()
+            .find(|package| package.source == source && package.target == target)
+            .ok_or("Для цієї мовної пари немає пакета.")?;
+        if !package_directory(&self.directory)? {
+            return Err("Пакет перекладу не встановлено.".into());
+        }
+        let provider = MarianProvider::interactive(&self.directory);
+        let _lock = provider.lock(package, false)?;
+        let installed = provider.read_path(package);
+        if !package_directory(&installed)? {
+            return Err("Пакет перекладу не встановлено.".into());
+        }
+
+        let limit = (package.sizes.iter().sum::<u64>() + PACKAGE_OVERHEAD).min(MAX_ARCHIVE_BYTES);
+        write_verified_package_zip(archive_path, limit, ASSETS, |index, asset, output| {
+            copy_verified_asset(&installed, package, index, asset, output, &|| Ok(()))
+        })
     }
 
     pub fn install(&self, archive_path: &Path) -> Result<String> {
@@ -1063,22 +1084,32 @@ fn verify_files(
     assets: &[&str],
     checkpoint: &impl Fn() -> Result<()>,
 ) -> Result<()> {
-    for ((asset, expected_size), expected_hash) in
-        assets.iter().zip(package.sizes).zip(package.hashes)
-    {
-        let path = directory.join(asset);
-        let read_error =
-            |error| format!("Не вдалося прочитати файл мовного пакета {asset}: {error}");
-        let metadata = fs::symlink_metadata(&path).map_err(read_error)?;
-        if !metadata.is_file() || metadata.len() != expected_size {
-            return Err(format!("Файл мовного пакета пошкоджений: {asset}"));
-        }
-        let file = File::open(path).map_err(read_error)?;
-        let (size, actual) = copy_and_hash_checked(file, io::sink(), expected_size, checkpoint)
-            .map_err(|error| format!("{asset}: {error}"))?;
-        if size != expected_size || actual != expected_hash {
-            return Err(format!("Файл мовного пакета пошкоджений: {asset}"));
-        }
+    for (index, asset) in assets.iter().take(ASSETS.len()).enumerate() {
+        copy_verified_asset(directory, package, index, asset, io::sink(), checkpoint)?;
+    }
+    Ok(())
+}
+
+fn copy_verified_asset(
+    directory: &Path,
+    package: &Package,
+    index: usize,
+    asset: &str,
+    output: impl io::Write,
+    checkpoint: &impl Fn() -> Result<()>,
+) -> Result<()> {
+    let path = directory.join(asset);
+    let expected_size = package.sizes[index];
+    let read_error = |error| format!("Не вдалося прочитати файл мовного пакета {asset}: {error}");
+    let metadata = fs::symlink_metadata(&path).map_err(read_error)?;
+    if !metadata.is_file() || metadata.len() != expected_size {
+        return Err(format!("Файл мовного пакета пошкоджений: {asset}"));
+    }
+    let file = File::open(path).map_err(read_error)?;
+    let (size, actual) = copy_and_hash_checked(file, output, expected_size, checkpoint)
+        .map_err(|error| format!("{asset}: {error}"))?;
+    if size != expected_size || actual != package.hashes[index] {
+        return Err(format!("Файл мовного пакета пошкоджений: {asset}"));
     }
     Ok(())
 }

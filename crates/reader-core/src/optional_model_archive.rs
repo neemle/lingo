@@ -2,8 +2,10 @@ use super::{
     install_optional_model_candidate, model, probe_optional_model, verify_asset, Model, ModelPaths,
 };
 use crate::{
-    model_storage::{copy_and_hash, lock_package, model_error, package_directory},
-    space::{ensure_capacity, PACKAGE_OVERHEAD},
+    model_storage::{
+        copy_and_hash, lock_package, model_error, package_directory, write_verified_package_zip,
+    },
+    space::PACKAGE_OVERHEAD,
     Result, Store,
 };
 use std::{
@@ -13,8 +15,7 @@ use std::{
 };
 use zip::{
     read::{ArchiveOffset, Config},
-    write::SimpleFileOptions,
-    CompressionMethod, ZipArchive, ZipWriter,
+    CompressionMethod, ZipArchive,
 };
 
 const EOCD_SIZE: usize = 22;
@@ -53,10 +54,6 @@ fn byte_limit(model: &Model) -> u64 {
 }
 
 fn export(root: &Path, model: &Model, path: &Path) -> Result<()> {
-    let parent = path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .ok_or("Виберіть теку для архіву моделі.")?;
     let paths = ModelPaths::new(root, model.id);
     if !package_directory(root)? {
         return Err("Модель відсутня.".into());
@@ -67,21 +64,12 @@ fn export(root: &Path, model: &Model, path: &Path) -> Result<()> {
         return Err("Модель відсутня.".into());
     }
 
-    ensure_capacity([(parent, byte_limit(model))])?;
-    let mut output = tempfile::NamedTempFile::new_in(parent).map_err(model_error)?;
-    let mut zip = ZipWriter::new(output.as_file_mut());
-    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-    for asset in model.assets {
-        zip.start_file(asset.name, options).map_err(model_error)?;
-        verify_asset(&installed.join(asset.name), asset, &mut zip)?;
-    }
-    let file = zip.finish().map_err(model_error)?;
-    if file.metadata().map_err(model_error)?.len() > byte_limit(model) {
-        return Err("Архів моделі завеликий.".into());
-    }
-    file.sync_all().map_err(model_error)?;
-    output.persist_noclobber(path).map_err(model_error)?;
-    Ok(())
+    write_verified_package_zip(
+        path,
+        byte_limit(model),
+        model.assets.iter().map(|asset| asset.name),
+        |index, name, output| verify_asset(&installed.join(name), &model.assets[index], output),
+    )
 }
 
 fn stage_archive(model: &Model, path: &Path, destination: &Path) -> Result<()> {
@@ -163,6 +151,7 @@ fn check_directory(file: &mut File, model: &Model) -> Result<()> {
 mod tests {
     use super::*;
     use crate::{optional_models::Asset, resources::ModelBudget};
+    use zip::{write::SimpleFileOptions, ZipWriter};
 
     const FIXTURE: Model = Model {
         id: "fixture",

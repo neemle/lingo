@@ -178,6 +178,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         } => value(store.lookup_word(&language, &word, context.as_ref())),
         Command::SuggestOcr { language, text } => value(store.suggest_ocr(&language, &text)),
         Command::InstallTranslationPackage { .. }
+        | Command::ExportTranslationPackage { .. }
         | Command::RemoveTranslationPackage { .. }
         | Command::VerifyTranslationPackage { .. }
         | Command::ValidateTranslationPackage { .. } => Err(Error::new(

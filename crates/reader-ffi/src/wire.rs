@@ -201,6 +201,11 @@ pub enum Command {
     InstallTranslationPackage {
         path: String,
     },
+    ExportTranslationPackage {
+        source: String,
+        target: String,
+        path: String,
+    },
     VerifyTranslationPackage {
         source: String,
         target: String,
