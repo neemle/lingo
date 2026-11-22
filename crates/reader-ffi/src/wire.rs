@@ -574,6 +574,11 @@ pub enum Command {
         sentence_id: String,
         target: String,
     },
+    TranslateDictionaryGloss {
+        id: String,
+        source: String,
+        gloss: String,
+    },
     TranslateSelection {
         id: String,
         target: String,

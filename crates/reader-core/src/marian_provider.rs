@@ -450,6 +450,12 @@ impl StoreWorker {
             .translate_installed_sentence(document_id, sentence_id, target)
     }
 
+    pub fn translate_dictionary_gloss(
+        self, id: &str, source: &str, gloss: &str,
+    ) -> Result<Option<AlignedTranslation>> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?.translate_dictionary_gloss(id, source, gloss)
+    }
+
     pub fn translate_selection(
         self, id: &str, target: &str, selection: &TranslationSelection,
     ) -> Result<Option<SelectedTranslation>> {
@@ -789,6 +795,22 @@ impl Store {
         let provider = MarianProvider::interactive(&self.model_directory);
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
         route_readiness(&catalog, &provider.installed_models()?, source, target)
+    }
+
+    pub fn translate_dictionary_gloss(
+        &mut self, id: &str, source: &str, gloss: &str,
+    ) -> Result<Option<AlignedTranslation>> {
+        crate::valid_language(source)?;
+        let gloss = gloss.trim();
+        if gloss.is_empty() || gloss.len() > 4096 || gloss.contains('\0') {
+            return Err("Некоректний розмір словникового визначення.".into());
+        }
+        if !self.connection.query_row("SELECT EXISTS(SELECT 1 FROM documents WHERE id=?1)",
+            [id], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?
+        {
+            return Err("Документ не знайдено.".into());
+        }
+        self.translate_machine_sentence(id, source, "uk", gloss.to_owned(), Vec::new())
     }
 
     pub fn translate_selected_text(

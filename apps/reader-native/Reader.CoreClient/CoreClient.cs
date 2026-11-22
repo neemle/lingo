@@ -445,6 +445,8 @@ public sealed class CoreClient : IDisposable
 
     public MachineTranslation? TranslateSentence(string id, string sentenceId, string target) =>
         CallIndependent<MachineTranslation?>(new { version = 1, operation = "translate_sentence", id, sentenceId, target });
+    public MachineTranslation? TranslateDictionaryGloss(string id, string source, string gloss) =>
+        CallIndependent<MachineTranslation?>(new { version = 1, operation = "translate_dictionary_gloss", id, source, gloss });
     public MachineTranslation? TranslateSelection(string id, string target, string revisionId, int startUtf16, string text,
         int? page = null) => CallIndependent<MachineTranslation?>(new
         {

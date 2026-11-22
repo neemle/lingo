@@ -117,6 +117,9 @@ public partial class ReadingPage
         var part = new VerticalStackLayout { Spacing = 4 };
         part.Children.Add(new Label { Text = $"{meaning.Lemma} · {meaning.PartOfSpeech}", FontAttributes = FontAttributes.Bold });
         part.Children.Add(new Label { Text = $"{meaning.Gloss} · {DocumentLanguages.Name(meaning.GlossLanguage)}" });
+        if (meaning.GlossLanguage != "uk" && AppState.Session.Document is { } document)
+            AddGlossTranslation(part, document.Id, meaning);
+
         var evidence = meaning.Confidence switch
         {
             "contextual" => $"Підтримане контекстом · {meaning.ContextMatches}",
@@ -143,4 +146,35 @@ public partial class ReadingPage
         else part.Children.Add(new Label { Text = $"{meaning.SourceName} · {meaning.SourceLicense}", FontSize = 12 });
         return part;
     }
+    private static void AddGlossTranslation(VerticalStackLayout part, string documentId, WordMeaning meaning)
+    {
+        var translated = new Label { IsVisible = false };
+        var button = new Button { Text = "Перекласти українською", HorizontalOptions = LayoutOptions.Start };
+        button.Clicked += async (_, _) =>
+        {
+            button.IsEnabled = false;
+            translated.Text = "Перекладаємо офлайн…";
+            translated.IsVisible = true;
+            try
+            {
+                var result = await AppState.Session.TranslateDictionaryGlossAsync(documentId, meaning.GlossLanguage, meaning.Gloss);
+                if (result is null)
+                {
+                    translated.Text = "Потрібен мовний пакет для перекладу українською в розділі «Мови та ресурси».";
+                    return;
+                }
+
+                var route = result.PivotLanguage is { } pivot
+                    ? $" · {DocumentLanguages.PivotRoute(meaning.GlossLanguage, pivot, "uk")}"
+                    : "";
+                translated.Text = $"{result.Text}{Environment.NewLine}Офлайн-переклад українською{route}";
+                button.IsVisible = false;
+            }
+            catch (Exception error) { translated.Text = error.Message; }
+            finally { button.IsEnabled = true; }
+        };
+        part.Children.Add(button);
+        part.Children.Add(translated);
+    }
+
 }
