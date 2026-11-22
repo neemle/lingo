@@ -259,9 +259,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         return Read();
     });
 
-    public Task SetVocabularyVariantsAsync(string id, string[] acceptedTranslations) => RunAsync(() =>
+    public Task SetVocabularyVariantsAsync(string id, string[] acceptedTranslations, string? translation = null) => RunAsync(() =>
     {
-        client.SetVocabularyVariants(id, acceptedTranslations);
+        client.SetVocabularyVariants(id, acceptedTranslations, translation);
         return Read();
     });
 

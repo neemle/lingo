@@ -125,9 +125,9 @@
          <Label Text="{Binding Reverse.Reviews, StringFormat='Зворотний · {0}'}" HorizontalTextAlignment="End"
           SemanticProperties.Description="{Binding Reverse.Reviews, StringFormat='Повторень у зворотному напрямі: {0}'}"
           TextColor="{StaticResource Muted}" FontSize="11" />
-         <Button Text="Варіанти" FontSize="11" HorizontalOptions="End" Style="{StaticResource OutlineButton}"
-          Clicked="EditVariantsClicked" CommandParameter="{Binding .}"
-          SemanticProperties.Description="{Binding Word, StringFormat='Редагувати варіанти перекладу для {0}'}" />
+         <Button Text="Редагувати" FontSize="11" HorizontalOptions="End" Style="{StaticResource OutlineButton}"
+          Clicked="EditCardClicked" CommandParameter="{Binding .}"
+          SemanticProperties.Description="{Binding Word, StringFormat='Редагувати переклад для {0}'}" />
          <Button Text="Історія" FontSize="11" HorizontalOptions="End" Style="{StaticResource OutlineButton}"
           Clicked="ReviewHistoryClicked" CommandParameter="{Binding .}"
           SemanticProperties.Description="{Binding Word, StringFormat='Історія повторень картки {0}'}" />

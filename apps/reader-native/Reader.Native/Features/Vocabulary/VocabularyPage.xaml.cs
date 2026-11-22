@@ -23,7 +23,7 @@ public partial class VocabularyPage : ContentPage
     private int queryRevision;
 
     private bool sharingCard;
-    private bool editingVariants;
+    private bool editingCard;
 
     private CollectionChoice ActiveCollection =>
         CollectionPicker.SelectedIndex >= 0 && CollectionPicker.SelectedIndex < choices.Length
@@ -247,11 +247,13 @@ public partial class VocabularyPage : ContentPage
         }
     }
 
-    private async void EditVariantsClicked(object? sender, EventArgs args)
+    private async void EditCardClicked(object? sender, EventArgs args)
     {
-        if (editingVariants || transferring ||
+        if (editingCard || transferring ||
             sender is not Button { CommandParameter: VocabularyCard selected } ||
             entries.FirstOrDefault(entry => entry.Id == selected.Id) is not { } card) return;
+        var primary = new Entry { Text = card.Translation, MaxLength = 2000, ReturnType = ReturnType.Next };
+        SemanticProperties.SetDescription(primary, "Основний переклад");
         var editor = new Editor
         {
             Text = string.Join(Environment.NewLine, card.AcceptedTranslations),
@@ -259,10 +261,10 @@ public partial class VocabularyPage : ContentPage
             HeightRequest = 150,
         };
         SemanticProperties.SetDescription(editor, "Підтверджені варіанти перекладу");
-        var save = new Button { Text = "Зберегти варіанти" };
+        var save = new Button { Text = "Зберегти" };
         var cancel = new Button { Text = "Скасувати" };
         var body = new VerticalStackLayout { Padding = 24, Spacing = 12 };
-        body.Children.Add(new Label { Text = $"{card.Word} → {card.Translation}", FontSize = 24 });
+        body.Children.Add(new Label { Text = card.Word, FontSize = 24 });
         if (card.Sense is { } sense)
         {
             body.Children.Add(new Label { Text = sense.Gloss });
@@ -280,11 +282,14 @@ public partial class VocabularyPage : ContentPage
             }
             else body.Children.Add(new Label { Text = attribution });
         }
-        body.Children.Add(new Label { Text = "Додайте переклади, які підходять саме цій картці. Один варіант на рядок." });
+        body.Children.Add(new Label { Text = "Основний переклад" });
+        body.Children.Add(primary);
+        body.Children.Add(new Label { Text = "Прийнятні варіанти · один на рядок" });
+        primary.Completed += (_, _) => editor.Focus();
         body.Children.Add(editor);
         body.Children.Add(save);
         body.Children.Add(cancel);
-        var page = new ContentPage { Title = "Варіанти перекладу", Content = new ScrollView { Content = body } };
+        var page = new ContentPage { Title = "Редагувати переклад", Content = new ScrollView { Content = body } };
         cancel.Clicked += async (_, _) =>
         {
             if (body.IsEnabled && Navigation.ModalStack.LastOrDefault() == page)
@@ -302,10 +307,12 @@ public partial class VocabularyPage : ContentPage
                 var variants = (editor.Text ?? "").Split(new[] { '\r', '\n' },
                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 var session = AppState.Session;
-                await session.SetVocabularyVariantsAsync(card.Id, variants);
+                var translation = primary.Text ?? "";
+                await session.SetVocabularyVariantsAsync(card.Id, variants,
+                    translation == card.Translation ? null : translation);
                 if (session.Error.Length > 0)
                 {
-                    await page.DisplayAlertAsync("Варіанти перекладу", session.Error, "Гаразд");
+                    await page.DisplayAlertAsync("Редагувати переклад", session.Error, "Гаразд");
                     return;
                 }
                 if (Navigation.ModalStack.LastOrDefault() == page)
@@ -314,12 +321,12 @@ public partial class VocabularyPage : ContentPage
             }
             finally { body.IsEnabled = true; }
         };
-        page.Disappearing += (_, _) => editingVariants = false;
-        editingVariants = true;
+        page.Disappearing += (_, _) => editingCard = false;
+        editingCard = true;
         try { await Navigation.PushModalAsync(page); }
         catch (Exception error)
         {
-            editingVariants = false;
+            editingCard = false;
             ShowArchiveStatus(error.Message);
         }
     }
