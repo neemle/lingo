@@ -1,6 +1,6 @@
 use super::{
-    application::{validate_input, IntakeRepository, StoredIntake, ValidatedAsset},
-    IntakeInput, IntakeItem, IntakeKind, IntakePayload, Metadata,
+    application::{validate_article_draft, validate_input, IntakeRepository, StoredIntake, ValidatedAsset},
+    ArticleDraft, IntakeInput, IntakeItem, IntakeKind, IntakePayload, Metadata,
 };
 use crate::{file_originals, Result, Store};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
@@ -111,6 +111,29 @@ impl Store {
         }).collect()
     }
 
+    pub fn intake_article(&self, id: &str) -> Result<Option<ArticleDraft>> {
+        load_article(&self.connection, id)
+    }
+
+    pub fn save_intake_article(&mut self, id: &str, draft: ArticleDraft) -> Result<ArticleDraft> {
+        validate_article_draft(&draft)?;
+        let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(intake_error)?;
+        if let Some(saved) = load_article(&tx, id)? {
+            return Ok(saved);
+        }
+        let body = serde_json::to_vec(&draft).map_err(intake_error)?;
+        let changed = tx.execute(
+            "UPDATE intake SET payload=?2 WHERE id=?1 AND document_id IS NULL",
+            params![id, body],
+        ).map_err(intake_error)?;
+        if changed == 0 {
+            return Err("Матеріал уже імпортовано.".into());
+        }
+        tx.commit().map_err(intake_error)?;
+        Ok(draft)
+    }
+
     pub fn intake_payload(&self, id: &str) -> Result<IntakePayload> {
         self.load_for_import(id)?.payload.ok_or_else(|| "Матеріал уже імпортовано.".into())
     }
@@ -164,6 +187,24 @@ impl Store {
     }
 }
 
+fn load_article(db: &Connection, id: &str) -> Result<Option<ArticleDraft>> {
+    let item = intake_item(db, id)?.ok_or("Вхідний матеріал не знайдено.")?;
+    if !matches!(item.metadata.kind, IntakeKind::Link) {
+        return Err("Цей матеріал не є вебпосиланням.".into());
+    }
+    if item.document_id.is_some() {
+        return Ok(None);
+    }
+    let body: Option<Vec<u8>> = db.query_row(
+        "SELECT payload FROM intake WHERE id=?1", [id], |row| row.get(0),
+    ).optional().map_err(intake_error)?.flatten();
+    decode_article(body.as_deref())
+}
+
+fn decode_article(body: Option<&[u8]>) -> Result<Option<ArticleDraft>> {
+    body.map(|body| serde_json::from_slice(body).map_err(intake_error)).transpose()
+}
+
 fn intake_item(db: &Connection, id: &str) -> Result<Option<IntakeItem>> {
     let row: Option<(String, Option<String>)> = db.query_row(
         "SELECT metadata,document_id FROM intake WHERE id=?1", [id],
@@ -178,6 +219,7 @@ fn intake_item(db: &Connection, id: &str) -> Result<Option<IntakeItem>> {
 impl IntakeRepository for Store {
     fn load_for_import(&self, id: &str) -> Result<StoredIntake> {
         let (item, bytes) = self.load_intake(id)?;
+        let mut article = None;
         let payload = if item.document_id.is_some() {
             None
         } else {
@@ -185,15 +227,16 @@ impl IntakeRepository for Store {
                 IntakeKind::Pdf => IntakePayload::File {
                     path: self.intake_pdf_path(id, item.metadata.bytes)?,
                 },
-                IntakeKind::Link => IntakePayload::Link {
-                    url: item.metadata.name.clone(),
+                IntakeKind::Link => {
+                    article = decode_article(bytes.as_deref())?;
+                    IntakePayload::Link { url: item.metadata.name.clone() }
                 },
                 _ => IntakePayload::Bytes {
                     bytes: bytes.ok_or("Відсутній вміст матеріалу.")?,
                 },
             })
         };
-        Ok(StoredIntake { item, payload })
+        Ok(StoredIntake { item, payload, article })
     }
 
     fn record_imported(&self, item: &IntakeItem) -> Result<()> {

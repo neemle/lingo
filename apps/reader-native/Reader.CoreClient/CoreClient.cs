@@ -99,6 +99,15 @@ public sealed class CoreClient : IDisposable
     public string ReadIntakeLink(string id) =>
         Call<IntakeLink>(new { version = 1, operation = "intake_payload", id }).Url;
 
+    public IntakeArticleDraft? IntakeArticle(string id) =>
+        Call<IntakeArticleDraft?>(new { version = 1, operation = "intake_article", id });
+
+    public IntakeArticleDraft SaveIntakeArticle(string id, IntakeArticleDraft draft) =>
+        Call<IntakeArticleDraft>(new { version = 1, operation = "save_intake_article", id, draft });
+
+    public IntakeItem CompleteStagedArticleIntake(string id, string language) =>
+        CompleteIntake(id, new { kind = "stagedArticle", language });
+
     public IntakeItem CompletePdfIntake(string id, string language, string[] pageTexts, int? deferredFrom = null) =>
         CompleteIntake(id, new { kind = "pdf", language, pageTexts, deferredFrom });
 

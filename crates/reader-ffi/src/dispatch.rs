@@ -45,6 +45,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::IntakeItem { id } => value(store.intake_item(&id)),
         Command::FindIntake { id } => value(store.intake_item_for_request(&id)),
         Command::IntakePayload { id } => value(store.intake_payload(&id)),
+        Command::IntakeArticle { id } => value(store.intake_article(&id)),
+        Command::SaveIntakeArticle { id, draft } => value(store.save_intake_article(&id, draft)),
         Command::CompleteIntake { id, result } => value(store.complete_intake(&id, result)),
         Command::DiscardIntake { id } => value(store.discard_intake(&id)),
         Command::ReaderPreferences => value(store.reader_preferences()),

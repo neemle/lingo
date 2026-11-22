@@ -40,16 +40,21 @@ public partial class LibraryPage
             }
             case "extractArticle":
             {
-                var url = await session.ReadIntakeLinkAsync(item.Id);
-                var address = WebArticles.Address(url) ?? throw new InvalidDataException("Збережене вебпосилання недійсне.");
-                ImportStatus.Text = "Завантажуємо статтю…";
-                var article = await Task.Run(() => WebArticles.DownloadAsync(address));
+                var article = await session.IntakeArticleAsync(item.Id);
+                if (article is null)
+                {
+                    var url = await session.ReadIntakeLinkAsync(item.Id);
+                    var address = WebArticles.Address(url) ?? throw new InvalidDataException("Збережене вебпосилання недійсне.");
+                    ImportStatus.Text = "Завантажуємо статтю…";
+                    var downloaded = await Task.Run(() => WebArticles.DownloadAsync(address));
+                    article = await session.SaveIntakeArticleAsync(item.Id,
+                        new IntakeArticleDraft(downloaded.Title, downloaded.Text, downloaded.Address.AbsoluteUri));
+                }
                 ImportStatus.Text = "";
                 var language = await ChooseAsync(() => session.DetectLanguageAsync(article.Text));
                 if (language is null) return null;
                 await session.WaitUntilIdleAsync();
-                await session.CompleteArticleIntakeAsync(item.Id, article.Title + ".txt", article.Text, language,
-                    article.Address.AbsoluteUri);
+                await session.CompleteStagedArticleIntakeAsync(item.Id, language);
                 break;
             }
 #if MACCATALYST

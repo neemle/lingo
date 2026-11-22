@@ -1,4 +1,4 @@
-use super::{IntakeImport, IntakeInput, IntakeItem, IntakeKind, IntakePayload};
+use super::{ArticleDraft, IntakeImport, IntakeInput, IntakeItem, IntakeKind, IntakePayload};
 use crate::{ocr, Result, MAX_IMPORT};
 use std::path::{Path, PathBuf};
 
@@ -14,6 +14,7 @@ pub(super) trait DocumentImporter {
 pub(super) struct StoredIntake {
     pub item: IntakeItem,
     pub payload: Option<IntakePayload>,
+    pub article: Option<ArticleDraft>,
 }
 
 pub(super) enum ImportMaterial {
@@ -28,7 +29,7 @@ pub(super) fn complete(
     id: &str,
     result: IntakeImport,
 ) -> Result<IntakeItem> {
-    let StoredIntake { mut item, payload } = ports.load_for_import(id)?;
+    let StoredIntake { mut item, payload, article } = ports.load_for_import(id)?;
     if item.document_id.is_some() {
         return Ok(item);
     }
@@ -50,6 +51,16 @@ pub(super) fn complete(
             validate_article_url(&url)?;
             ImportMaterial::Article {
                 name: text_name(&name)?, bytes: text_bytes(text)?, url, language,
+            }
+        }
+        (IntakeKind::Link, IntakePayload::Link { .. }, IntakeImport::StagedArticle { language }) => {
+            let draft = article.ok_or("Завантажений текст статті відсутній.")?;
+            validate_article_draft(&draft)?;
+            ImportMaterial::Article {
+                name: text_name(&draft.title)?,
+                bytes: draft.text.into_bytes(),
+                url: draft.source_url,
+                language,
             }
         }
         (IntakeKind::Photo, IntakePayload::Bytes { bytes }, IntakeImport::Photo { lines, language }) => {
@@ -153,11 +164,22 @@ fn validate_article_url(url: &str) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn validate_article_draft(draft: &ArticleDraft) -> Result<()> {
+    text_name(&draft.title)?;
+    validate_article_url(&draft.source_url)?;
+    validate_text(&draft.text)
+}
+
 fn text_bytes(text: String) -> Result<Vec<u8>> {
+    validate_text(&text)?;
+    Ok(text.into_bytes())
+}
+
+fn validate_text(text: &str) -> Result<()> {
     if text.trim().is_empty() || text.len() > MAX_IMPORT {
         return Err("Потрібне непорожнє текстове джерело до 20 МіБ.".into());
     }
-    Ok(text.into_bytes())
+    Ok(())
 }
 
 fn text_name(name: &str) -> Result<String> {

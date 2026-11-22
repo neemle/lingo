@@ -29,6 +29,7 @@ pub enum IntakeImport {
         #[serde(rename = "sourceUrl")]
         source_url: Option<String>,
     },
+    StagedArticle { language: Option<String> },
     Photo { lines: Vec<ocr::OcrLine>, language: Option<String> },
     Pdf {
         #[serde(rename = "pageTexts")]
@@ -37,6 +38,14 @@ pub enum IntakeImport {
         deferred_from: Option<u16>,
         language: String,
     },
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ArticleDraft {
+    pub title: String,
+    pub text: String,
+    pub source_url: String,
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]

@@ -36,6 +36,13 @@ pub enum Command {
     IntakePayload {
         id: String,
     },
+    IntakeArticle {
+        id: String,
+    },
+    SaveIntakeArticle {
+        id: String,
+        draft: reader_core::intake::ArticleDraft,
+    },
     CompleteIntake {
         id: String,
         result: reader_core::intake::IntakeImport,
