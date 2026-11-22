@@ -245,6 +245,7 @@ pub(crate) fn translate_paragraph(
 pub(crate) fn cached_translation(
     store: &Store,
     installed: &[ModelEdge],
+    catalog: &[ModelEdge],
     document: &crate::Document,
     selected: usize,
     target: &str,
@@ -253,35 +254,96 @@ pub(crate) fn cached_translation(
         result: mut paragraph,
         pending,
     } = paragraph_plan(document, selected, target)?;
-    let mut sentence = None;
-    if let Some(route) = resolve_route(installed, &document.language, target)? {
-        paragraph.pivot_language = route.pivot_language().map(str::to_owned);
-        for (index, text) in pending {
-            paragraph.units[index].translation = store
-                .cached_segments(&unit_cache_key(&route, &text)?, 1)?
-                .map(|mut segments| segments.remove(0));
-        }
+    let source = &document.language;
+    let preferred = resolve_route(installed, source, target)?;
+    paragraph.pivot_language = preferred
+        .as_ref()
+        .and_then(Route::pivot_language)
+        .map(str::to_owned);
 
-        let active_id = &document.sentences[selected].id;
-        if !paragraph
-            .units
-            .iter()
-            .any(|unit| unit.translation.is_some() && unit.sentence_ids.contains(active_id))
-        {
-            let (text, joined_lines) = input_for_sentence(document, selected);
-            if let Some(segments) = store.cached_segments(&unit_cache_key(&route, &text)?, 1)? {
-                sentence = Some(AlignedTranslation {
-                    route,
-                    segments,
-                    joined_lines,
-                });
+    let active_id = &document.sentences[selected].id;
+    let active_reviewed = paragraph
+        .units
+        .iter()
+        .any(|unit| unit.reviewed && unit.sentence_ids.contains(active_id));
+    let standalone = (!active_reviewed).then(|| input_for_sentence(document, selected));
+    let routes = preferred.iter().cloned().chain(
+        catalog_routes(catalog, source, target).filter(|route| Some(route) != preferred.as_ref()),
+    );
+    let mut best = None;
+    for route in routes {
+        let mut units = Vec::new();
+        let mut active_hit = false;
+        for (index, text) in &pending {
+            if let Some(mut segments) = store.cached_segments(&unit_cache_key(&route, text)?, 1)? {
+                active_hit |= paragraph.units[*index].sentence_ids.contains(active_id);
+                units.push((*index, segments.remove(0)));
             }
         }
+
+        let mut sentence = None;
+        if !active_hit {
+            if let Some((text, joined_lines)) = standalone
+                .as_ref()
+                .filter(|(text, _)| text.len() <= MAX_BATCH_BYTES)
+            {
+                if let Some(segments) = store.cached_segments(&unit_cache_key(&route, text)?, 1)? {
+                    sentence = Some(AlignedTranslation {
+                        route: route.clone(),
+                        segments,
+                        joined_lines: *joined_lines,
+                    });
+                }
+            }
+        }
+        // Prefer the first route with the active result. If no route has it, retain the
+        // first partial window. Never merge machine output from different routes.
+        if active_hit || sentence.is_some() {
+            best = Some((route, units, sentence));
+            break;
+        }
+        if best.is_none() && !units.is_empty() {
+            best = Some((route, units, sentence));
+        }
+    }
+
+    let mut sentence = None;
+    if let Some((route, units, active_sentence)) = best {
+        paragraph.pivot_language = route.pivot_language().map(str::to_owned);
+        for (index, translation) in units {
+            paragraph.units[index].translation = Some(translation);
+        }
+        sentence = active_sentence;
     }
     Ok(CachedTranslation {
         paragraph,
         sentence,
     })
+}
+
+fn catalog_routes<'a>(
+    catalog: &'a [ModelEdge],
+    source: &'a str,
+    target: &'a str,
+) -> impl Iterator<Item = Route> + 'a {
+    let direct = catalog
+        .iter()
+        .filter(move |edge| edge.source == source && edge.target == target)
+        .cloned()
+        .map(Route::Direct);
+    let pivots = catalog
+        .iter()
+        .filter(move |first| first.source == source && first.target != target)
+        .flat_map(move |first| {
+            catalog
+                .iter()
+                .filter(move |second| second.source == first.target && second.target == target)
+                .map(move |second| Route::Pivot {
+                    first: first.clone(),
+                    second: second.clone(),
+                })
+        });
+    direct.chain(pivots)
 }
 
 fn paragraph_plan(
@@ -525,6 +587,18 @@ mod tests {
             quality: None,
         };
         let route = Route::Direct(edge.clone());
+        let first_leg = ModelEdge {
+            target: "de".into(),
+            ..edge.clone()
+        };
+        let second_leg = ModelEdge {
+            source: "de".into(),
+            ..edge.clone()
+        };
+        let pivot = Route::Pivot {
+            first: first_leg.clone(),
+            second: second_leg.clone(),
+        };
         let selected = 1;
         let first = &document.sentences[selected].text;
         let fourth = &document.sentences[3].text;
@@ -548,14 +622,19 @@ mod tests {
                     unit_cache_key(&route, fourth).unwrap(),
                     &["Quatre.".into()][..],
                 ),
+                (
+                    unit_cache_key(&pivot, fourth).unwrap(),
+                    &["Quatrième.".into()][..],
+                ),
             ])
             .unwrap();
         drop(store);
 
-        let store = Store::open(&path).unwrap();
+        let mut store = Store::open(&path).unwrap();
         let cached = cached_translation(
             &store,
             std::slice::from_ref(&edge),
+            &[],
             &document,
             selected,
             "fr",
@@ -569,8 +648,36 @@ mod tests {
         );
         assert_eq!(cached.sentence.unwrap().segments, ["Deux."]);
 
+        let installed = [first_leg, second_leg];
+        let catalog = [edge.clone(), installed[0].clone(), installed[1].clone()];
+        for route in [&installed[..], &[]] {
+            let recovered =
+                cached_translation(&store, route, &catalog, &document, selected, "fr").unwrap();
+            assert_eq!(recovered.paragraph.pivot_language, None);
+            assert_eq!(
+                recovered.paragraph.units[1].translation.as_deref(),
+                Some("Quatre.")
+            );
+            assert_eq!(recovered.sentence.unwrap().segments, ["Deux."]);
+        }
+
+        store
+            .save_cached_segments([(
+                unit_cache_key(&pivot, first).unwrap(),
+                &["Seconde.".into()][..],
+            )])
+            .unwrap();
+        let preferred =
+            cached_translation(&store, &installed, &catalog, &document, selected, "fr").unwrap();
+        assert_eq!(preferred.paragraph.pivot_language.as_deref(), Some("de"));
+        assert_eq!(
+            preferred.paragraph.units[1].translation.as_deref(),
+            Some("Quatrième.")
+        );
+        assert_eq!(preferred.sentence.unwrap().segments, ["Seconde."]);
+
         edge.revision = "test-v2".into();
-        let stale = cached_translation(&store, &[edge], &document, selected, "fr").unwrap();
+        let stale = cached_translation(&store, &[], &[edge], &document, selected, "fr").unwrap();
         assert!(stale
             .paragraph
             .units

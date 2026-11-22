@@ -442,7 +442,8 @@ impl Store {
     ) -> Result<CachedTranslation> {
         let (document, selected) = self.translation_selection(document_id, sentence_id)?;
         let installed = MarianProvider::interactive(&self.model_directory).installed_models()?;
-        cached_translation(self, &installed, &document, selected, target)
+        let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
+        cached_translation(self, &installed, &catalog, &document, selected, target)
     }
 
     fn translation_selection(
