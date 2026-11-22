@@ -74,9 +74,10 @@ jobs:
           Export-Certificate -Cert $cert -FilePath $publicCert | Out-Null
           Import-Certificate -FilePath $publicCert -CertStoreLocation 'Cert:\LocalMachine\TrustedPeople' | Out-Null
 
+          # Windows App SDK appends the package folder name to AppxPackageDir.
           dotnet publish $project -f net10.0-windows10.0.19041.0 -c Release `
             -p:LingoMsix=true -p:RuntimeIdentifierOverride=win-x64 `
-            "-p:PackageCertificateThumbprint=$($cert.Thumbprint)" "-p:AppxPackageDir=$output" --nologo
+            "-p:PackageCertificateThumbprint=$($cert.Thumbprint)" "-p:AppxPackageDir=$output/" --nologo
           if ($LASTEXITCODE -ne 0) { throw "MSIX publish failed ($LASTEXITCODE)" }
 
           $packages = @(Get-ChildItem $output -Recurse -File -Filter *.msix |
