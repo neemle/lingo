@@ -35,6 +35,7 @@ public sealed class LocalSpeech : IDisposable
     internal Task<string?> PlayWaveAsync(SpeechAudio audio, int startAtMs, Action<int> started) => playback.PlayAsync(async token =>
     {
         if (audio.SampleRate is <= 0 or > 48_000 || audio.Samples <= 0 ||
+            !float.IsFinite(audio.PlaybackRate) || audio.PlaybackRate is < 0.5f or > 2 ||
             audio.Samples > audio.SampleRate * MaxModelAudioSeconds || audio.WavBytes.Length != 44 + audio.Samples * 2)
             throw new InvalidOperationException("Голосовий пакет повернув некоректне аудіо.");
         // Both packaged voice engines return a 44-byte mono PCM header and 16-bit samples.
@@ -53,7 +54,7 @@ public sealed class LocalSpeech : IDisposable
             wav[44 + index] = checked((byte)audio.WavBytes[44 + firstSample * 2 + index]);
         BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(4, 4), wav.Length - 8);
         BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(40, 4), payloadBytes);
-        await wave.PlayAsync(wav, () => started(startAtMs), token);
+        await wave.PlayAsync(wav, audio.PlaybackRate, () => started(startAtMs), token);
         return CompletedStatus;
     });
 

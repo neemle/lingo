@@ -230,9 +230,9 @@ pub struct TranslationSelection {
     pub(crate) text: String,
 }
 
-pub struct SelectedTranslation {
-    pub translation: AlignedTranslation,
-    pub source_text: String,
+pub enum SelectedTranslation {
+    Model { translation: AlignedTranslation, source_text: String },
+    Cardinal { text: String, source_text: String },
 }
 
 pub(crate) fn route_readiness(
@@ -876,6 +876,7 @@ fn paragraph_plan(
                 PageBoundaries::Canonical => with_adjacent_pdf_text(store, document, index, next - 1, target, input)?,
                 PageBoundaries::Projected => input,
             };
+            let input = normalize_cardinals(&document.language, target, input);
             pending.push((units.len(), input));
         }
         let mut unit = ParagraphUnit {
@@ -967,7 +968,15 @@ pub(crate) fn sentence_input(
         PageBoundaries::Projected => input,
     };
     let ids = document.sentences[range].iter().map(|sentence| sentence.id.clone()).collect();
-    Ok((input, ids))
+    Ok((normalize_cardinals(&document.language, target, input), ids))
+}
+
+pub(crate) fn normalize_cardinals(source: &str, target: &str, text: String) -> String {
+    if source == "fr" && target == "uk" {
+        crate::french_cardinals::digits_in_text(&text)
+    } else {
+        text
+    }
 }
 
 fn with_adjacent_pdf_text(

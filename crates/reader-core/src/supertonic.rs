@@ -90,16 +90,17 @@ impl MultilingualSpeechJob {
         } else {
             self.text.as_str().into()
         };
+        let synthesis_rate = crate::tts::model_synthesis_rate(self.rate);
         let cache = SpeechCacheKey::new(
             MODEL,
             self.model.revision(),
             &self.language,
             self.voice,
-            self.rate,
+            synthesis_rate,
             &spoken,
             SAMPLE_RATE,
         );
-        self.model.run_cached(
+        let mut rendered = self.model.run_cached(
             priority,
             |directory| cache.read(directory).map(|audio| RenderedSpeech { audio, cached: true }),
             |directory, should_yield| {
@@ -120,7 +121,7 @@ impl MultilingualSpeechJob {
                     let audio = engine.synthesize(
                         &chunk,
                         &self.language,
-                        self.rate,
+                        synthesis_rate,
                         remaining - pause,
                         should_yield,
                     )?;
@@ -131,7 +132,9 @@ impl MultilingualSpeechJob {
                 let cached = cache.write(directory, &audio);
                 Ok(RenderedSpeech { audio, cached })
             },
-        )
+        )?;
+        rendered.audio.playback_rate = self.rate / synthesis_rate;
+        Ok(rendered)
     }
 }
 

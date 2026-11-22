@@ -13,7 +13,7 @@ use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
 pub(crate) mod cache;
-mod uk_numbers;
+pub(crate) mod uk_numbers;
 
 const MODEL: &str = "piper-uk";
 const SAMPLE_RATE: u32 = 22_050;
@@ -29,6 +29,7 @@ pub struct SpeechAudio {
     pub sample_rate: u32,
     pub samples: u32,
     pub wav_bytes: Vec<u8>,
+    pub playback_rate: f32,
 }
 
 pub struct SpeechJob {
@@ -85,16 +86,17 @@ impl SpeechJob {
     fn render(self, priority: InferencePriority) -> Result<RenderedSpeech> {
         let normalized = uk_numbers::expand(&self.text);
         let spoken = ukrainian_stress(&normalized);
+        let synthesis_rate = model_synthesis_rate(self.rate);
         let cache = cache::SpeechCacheKey::new(
             MODEL,
             self.model.revision(),
             "uk",
             &self.speaker.to_string(),
-            self.rate,
+            synthesis_rate,
             &spoken,
             SAMPLE_RATE,
         );
-        self.model.run_cached(
+        let mut rendered = self.model.run_cached(
             priority,
             |directory| cache.read(directory).map(|audio| RenderedSpeech { audio, cached: true }),
             |directory, should_yield| {
@@ -102,15 +104,23 @@ impl SpeechJob {
                     directory,
                     &spoken,
                     self.speaker,
-                    self.rate,
+                    synthesis_rate,
                     MAX_SAMPLES,
                     should_yield,
                 )?;
                 let cached = cache.write(directory, &audio);
                 Ok(RenderedSpeech { audio, cached })
             },
-        )
+        )?;
+        rendered.audio.playback_rate = self.rate / synthesis_rate;
+        Ok(rendered)
     }
+}
+
+// Very long model durations can repeat sounds. The native player applies the
+// remaining slowdown after synthesis without lowering pitch.
+pub(crate) fn model_synthesis_rate(requested: f32) -> f32 {
+    requested.max(0.8)
 }
 
 impl SpeechAdapter for SpeechJob {
@@ -537,6 +547,7 @@ pub(crate) fn to_wav(samples: &[f32], sample_rate: u32) -> Result<SpeechAudio> {
         sample_rate,
         samples: samples.len() as u32,
         wav_bytes: wav,
+        playback_rate: 1.0,
     })
 }
 

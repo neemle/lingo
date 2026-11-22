@@ -114,6 +114,7 @@ impl SpeechCacheKey {
             sample_rate: self.sample_rate,
             samples: (pcm_len / 2) as u32,
             wav_bytes,
+            playback_rate: 1.0,
         })
     }
 }

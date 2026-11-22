@@ -90,7 +90,7 @@ pub(super) fn expand(text: &str) -> Cow<'_, str> {
     Cow::Owned(expanded)
 }
 
-fn cardinal(number: usize) -> String {
+pub(crate) fn cardinal(number: usize) -> String {
     let mut words = Vec::new();
     let millions = number / 1_000_000;
     if millions > 0 {

@@ -858,8 +858,14 @@ impl Store {
             )?;
             (document.language, projected.text.into_owned(), projected.context.into_owned())
         };
+        if language == "fr" && target == "uk" {
+            if let Some(number) = crate::french_cardinals::compound(&source) {
+                let text = crate::tts::uk_numbers::cardinal(number).replace('\'', "’");
+                return Ok(Some(SelectedTranslation::Cardinal { text, source_text: source }));
+            }
+        }
         let context = (context != source && context.len() <= 768).then_some(context.as_ref());
-        let input = [source.clone()];
+        let input = [crate::translation::normalize_cardinals(&language, target, source.clone())];
         let directory = self.model_directory.clone();
         let result = self.translate_aligned(
             &mut MarianProvider::interactive(&directory),
@@ -874,9 +880,9 @@ impl Store {
         let result = match result {
             Some(translation) => Some(translation),
             None => self.translation_cache_routes(&language, target)?
-                .cached_contextual_selection(self, &source, context, target)?,
+                .cached_contextual_selection(self, &input[0], context, target)?,
         };
-        Ok(result.map(|translation| SelectedTranslation { translation, source_text: source }))
+        Ok(result.map(|translation| SelectedTranslation::Model { translation, source_text: source }))
     }
 
     pub fn translation_routes(&self) -> Result<Vec<TranslationRouteStatus>> {
@@ -1333,6 +1339,13 @@ impl MarianProvider<'_> {
                                 }
                             }
                         }
+                    }
+                }
+                if package.source == "fr" && package.target == "uk" &&
+                    start == 0 && end == source_pieces.len() && units.len() == 1
+                {
+                    if let Some(text) = crate::marian_target_uk::repair_french_affirmative(segment, &translated) {
+                        translated = text;
                     }
                 }
                 if package.target == "uk" && crate::marian_target_uk::clearly_russian(&translated) {

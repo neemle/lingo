@@ -28,10 +28,15 @@ pub fn sentence_translation(
 pub fn selected_translation(
     result: reader_core::Result<Option<reader_core::translation::SelectedTranslation>>,
 ) -> Result<Value> {
-    value(result.map(|selected| selected.map(|selected| {
-        let mut response = sentence_translation_body(selected.translation);
-        response["sourceText"] = Value::String(selected.source_text);
-        response
+    use reader_core::translation::SelectedTranslation;
+    value(result.map(|selected| selected.map(|selected| match selected {
+        SelectedTranslation::Model { translation, source_text } => {
+            let mut response = sentence_translation_body(translation);
+            response["sourceText"] = Value::String(source_text);
+            response
+        }
+        SelectedTranslation::Cardinal { text, source_text } =>
+            serde_json::json!({ "text": text, "sourceText": source_text, "joinedLines": false }),
     })))
 }
 

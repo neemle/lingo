@@ -46,4 +46,7 @@ public sealed record DictionarySourceLocation(string DocumentId, string Title, s
     string RevisionId, int? Page, int Position, DictionarySourceSelection? Selection = null);
 public sealed record DictionaryImport(int AddedCards, int ExistingCards, int AddedReviews, bool RestoredPractice = false);
 
-public sealed record SpeechAudio(int SampleRate, int Samples, int[] WavBytes);
+public sealed record SpeechAudio(int SampleRate, int Samples, int[] WavBytes)
+{
+    public float PlaybackRate { get; init; } = 1;
+}

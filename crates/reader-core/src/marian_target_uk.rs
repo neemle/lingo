@@ -9,6 +9,30 @@ pub(super) fn clearly_ukrainian(text: &str) -> bool {
     distinguish(text) == Some(Lang::Ukr)
 }
 
+pub(super) fn repair_french_affirmative(source: &str, target: &str) -> Option<String> {
+    let trim_prefix = |ch: char| ch.is_whitespace() || matches!(ch, '–' | '—' | '-');
+    let source = source.trim_start_matches(trim_prefix).to_lowercase();
+    let tail = source.strip_prefix("oui,")?.trim_start();
+    let opening = target.trim_start_matches(trim_prefix);
+    let suffix = opening.strip_prefix("Да,").or_else(|| opening.strip_prefix("да,"))?;
+    let person = tail.strip_prefix("chez ").and_then(|rest|
+        rest.strip_prefix("l’").or_else(|| rest.strip_prefix("l'"))
+    ).map(|rest| rest.trim_end_matches(|ch: char| ch.is_whitespace() || matches!(ch, '.' | '!' | '?')));
+    let addressed = suffix.trim_start();
+    if let Some((preposition, noun)) = addressed.split_once(' ') {
+        let noun = noun.trim_end_matches(['.', '!', '?']);
+        if matches!(preposition, "в" | "у") && noun.ends_with("аторе") &&
+            noun.chars().all(char::is_alphabetic) &&
+            person.is_some_and(|word| word.ends_with("ateur") && word.chars().all(char::is_alphabetic))
+        {
+            return Some(format!("{}Так, в {}а{}", &target[..target.len() - opening.len()],
+                noun.trim_end_matches('е'), &addressed[preposition.len() + 1 + noun.len()..]));
+        }
+    }
+    let repaired = format!("{}Так,{suffix}", &target[..target.len() - opening.len()]);
+    (!clearly_russian(&repaired)).then_some(repaired)
+}
+
 fn distinguish(text: &str) -> Option<Lang> {
     let sample = outside_quotes(text);
     // An independent affirmative is distinctive even when the rest is made
