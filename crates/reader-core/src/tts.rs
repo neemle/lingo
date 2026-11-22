@@ -205,28 +205,56 @@ pub(crate) fn ukrainian_stress(text: &str) -> std::borrow::Cow<'_, str> {
     let mut spoken = String::new();
     let mut copied = 0;
     let mut previous = (0, "");
+    let mut before_previous = (0, "");
+    let phrase_space =
+        |gap: &str| gap.chars().all(char::is_whitespace) && gap.matches('\n').nth(1).is_none();
+    let cue = |word: &str| {
+        word.chars()
+            .filter(|&character| character != STRESS_MARK)
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
     for (offset, word) in text.unicode_word_indices() {
+        let (earlier_end, earlier_word) = before_previous;
         let (previous_end, previous_word) = previous;
+        before_previous = previous;
         previous = (offset + word.len(), word);
         if !word
             .chars()
             .flat_map(char::to_lowercase)
             .eq("вікна".chars())
-            || !text[previous_end..offset].chars().all(char::is_whitespace)
+            || !phrase_space(&text[previous_end..offset])
         {
             continue;
         }
 
-        let context: String = previous_word
-            .chars()
-            .filter(|&c| c != STRESS_MARK)
-            .flat_map(char::to_lowercase)
-            .collect();
-        // "Біля" requires the genitive, where this form is singular.
-        // "Відчинені" agrees with the nominative or accusative plural.
-        let stressed_end = match context.as_str() {
-            "біля" => word.len(),
-            "відчинені" => word.chars().take(2).map(char::len_utf8).sum(),
+        let earlier = if phrase_space(&text[earlier_end..previous_end - previous_word.len()]) {
+            cue(earlier_word)
+        } else {
+            String::new()
+        };
+        let prior = cue(previous_word);
+        // Two, three, and four retain the genitive singular stress in this plural form.
+        let count =
+            |token: &str| matches!(token, "два" | "обидва" | "три" | "чотири" | "2" | "3" | "4");
+        let plural_adjective = |token: &str| {
+            matches!(
+                token,
+                "відчинені" | "зачинені" | "великі" | "малі" | "нові" | "старі"
+            )
+        };
+        let stressed_end = match (earlier.as_str(), prior.as_str()) {
+            (_, "біля" | "поблизу" | "навколо" | "до" | "від" | "без")
+            | ("біля" | "поблизу" | "навколо", "цього" | "того" | "свого" | "якого") => {
+                word.len()
+            }
+            (_, token) if count(token) => word.len(),
+            (number, token) if count(number) && plural_adjective(token) => word.len(),
+            (_, token)
+                if plural_adjective(token) || matches!(token, "ці" | "ті" | "усі" | "всі") =>
+            {
+                word.chars().take(2).map(char::len_utf8).sum()
+            }
             _ => continue,
         } + offset;
         spoken.push_str(&text[copied..stressed_end]);
@@ -427,13 +455,18 @@ mod tests {
             ),
             (
                 "Усі вікна; біля, вікна; біля «Вікна».",
-                "Усі вікна; біля, вікна; біля «Вікна».",
+                "Усі ві́кна; біля, вікна; біля «Вікна».",
             ),
             ("біля ві́кна; відчинені вікна́", "біля ві́кна; відчинені вікна́"),
             (
                 "біля цього вікна; відчинені два вікна",
-                "біля цього вікна; відчинені два вікна",
+                "біля цього вікна́; відчинені два вікна́",
             ),
+            (
+                "Є чотири великі вікна, а ці вікна старі.",
+                "Є чотири великі вікна́, а ці ві́кна старі.",
+            ),
+            ("Є 3 вікна; біля\n\nВікна", "Є 3 вікна́; біля\n\nВікна"),
         ] {
             assert_eq!(ukrainian_stress(source), spoken, "{source}");
         }
