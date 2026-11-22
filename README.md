@@ -18,7 +18,7 @@ macOS, Apple Silicon:
 
 ```sh
 rustup target add aarch64-apple-ios-macabi
-CMAKE_OSX_SYSROOT="$(xcrun --sdk macosx --show-sdk-path)" \
+IPHONEOS_DEPLOYMENT_TARGET=26.0 CMAKE_OSX_SYSROOT="$(xcrun --sdk macosx --show-sdk-path)" \
   CFLAGS_aarch64_apple_ios_macabi="-target arm64-apple-ios26.0-macabi" \
   CXXFLAGS_aarch64_apple_ios_macabi="-target arm64-apple-ios26.0-macabi" \
   cargo rustc -p reader-ffi --release --locked --target aarch64-apple-ios-macabi --crate-type staticlib
