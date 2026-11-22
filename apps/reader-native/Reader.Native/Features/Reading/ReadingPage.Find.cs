@@ -7,6 +7,7 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage
 {
     private bool findingInDocument;
+    private sealed record DocumentFindSelection(int Position, bool Translation);
 
     private async void FindInDocumentClicked(object? sender, EventArgs args)
     {
@@ -15,13 +16,22 @@ public partial class ReadingPage
         findingInDocument = true;
         try
         {
-            if (await ShowDocumentFindAsync(session, document, TargetCode) is not { } position) return;
+            var target = TargetCode;
+            if (await ShowDocumentFindAsync(session, document, target) is not { } match) return;
             await session.WaitUntilIdleAsync();
+            var position = match.Position;
             if (!readingPageActive || session.Document is not { } current || current.Id != document.Id ||
-                current.CurrentRevisionId != document.CurrentRevisionId ||
+                current.CurrentRevisionId != document.CurrentRevisionId || current.Language != document.Language ||
+                (match.Translation && TargetCode != target) ||
                 position >= current.Sentences.Length || current.Sentences[position] != document.Sentences[position])
                 return;
 
+            if ((match.Translation && readingLayout == ReaderLayout.Source) ||
+                (!match.Translation && readingLayout == ReaderLayout.Translation))
+            {
+                readingLayout = ReaderLayout.Automatic;
+                ArrangeReadingColumns();
+            }
             StopSpeech();
             await session.SelectSentenceAsync(position);
         }
@@ -29,7 +39,7 @@ public partial class ReadingPage
         finally { findingInDocument = false; }
     }
 
-    private async Task<int?> ShowDocumentFindAsync(ReaderSession session, Document document, string? target)
+    private async Task<DocumentFindSelection?> ShowDocumentFindAsync(ReaderSession session, Document document, string? target)
     {
         var resources = Application.Current!.Resources;
         var outline = (Style)resources["OutlineButton"];
@@ -77,7 +87,7 @@ public partial class ReadingPage
         form.Add(resultsScroll, 0, 3);
         form.Add(actions, 0, 4);
         var page = new ContentPage { Title = "Пошук у документі", Content = form };
-        var closed = new TaskCompletionSource<int?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var closed = new TaskCompletionSource<DocumentFindSelection?>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var cancellation = new CancellationTokenSource();
         var earlierPages = new Stack<int>();
         var query = "";
@@ -147,7 +157,8 @@ public partial class ReadingPage
                     var text = inTranslation ? DocumentFind.MatchingExcerpt(match.Text, query) : match.Text;
                     var result = new Button { Text = BookmarkLabel(match.Position, text),
                         Style = outline, HorizontalOptions = LayoutOptions.Fill };
-                    result.Clicked += (_, _) => closed.TrySetResult(match.Position);
+                    var selection = new DocumentFindSelection(match.Position, inTranslation);
+                    result.Clicked += (_, _) => closed.TrySetResult(selection);
                     results.Children.Add(result);
                 }
                 await resultsScroll.ScrollToAsync(0, 0, animated: false);
