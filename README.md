@@ -9,7 +9,7 @@ Translation and grammar packages are optional and installed separately. The app 
 
 ## Build and run
 
-Use an installed .NET SDK that supports the `net10.0` targets, its compatible MAUI workload, and Rust.
+Use an installed .NET SDK that supports the `net10.0` targets, its compatible MAUI workload, and Rust 1.100 or newer.
 The Rust build also uses CMake and libclang for llama.cpp. Windows requires MSVC and the Windows SDK. Mac Catalyst requires full Xcode compatible with the installed
 .NET Apple workload; Command Line Tools alone cannot build or launch the app. No Node or browser runtime is used.
 Run commands from the repository root.
