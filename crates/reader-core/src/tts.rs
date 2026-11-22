@@ -233,7 +233,7 @@ pub fn ukrainian_stress(text: &str) -> std::borrow::Cow<'_, str> {
             continue;
         }
         let lower = word.to_lowercase();
-        if !matches!(lower.as_str(), "вікна" | "замок" | "руки") {
+        if !matches!(lower.as_str(), "вікна" | "замок" | "руки" | "ноги" | "голови" | "води") {
             continue;
         }
 
@@ -252,7 +252,7 @@ pub fn ukrainian_stress(text: &str) -> std::borrow::Cow<'_, str> {
         let vowel_index = match lower.as_str() {
             "вікна" => window_stress(&earlier, &prior, &next),
             "замок" => castle_or_lock_stress(&prior, &next),
-            "руки" => hands_stress(&earlier, &prior, &next),
+            "руки" | "ноги" | "голови" | "води" => feminine_noun_stress(&lower, &earlier, &prior, &next),
             _ => None,
         };
         let Some(vowel_index) = vowel_index else { continue };
@@ -273,13 +273,6 @@ fn window_stress(earlier: &str, prior: &str, next: &str) -> Option<usize> {
     // Two, three, and four retain the genitive singular stress in this plural form.
     let count =
         |token: &str| matches!(token, "два" | "обидва" | "три" | "чотири" | "2" | "3" | "4");
-    let genitive_preposition = |token: &str| {
-        matches!(
-            token,
-            "біля" | "поблизу" | "неподалік" | "навколо" | "до" | "від" | "без" | "коло"
-                | "після" | "з" | "із" | "зі"
-        )
-    };
     let plural_modifier = |token: &str| {
         matches!(
             token,
@@ -300,6 +293,8 @@ fn window_stress(earlier: &str, prior: &str, next: &str) -> Option<usize> {
                 | "ваші"
                 | "їхні"
                 | "інші"
+                | "відкриті"
+                | "закриті"
         )
     };
     let plural_predicate = |token: &str| {
@@ -321,7 +316,10 @@ fn window_stress(earlier: &str, prior: &str, next: &str) -> Option<usize> {
                 | "рама" | "рами" | "раму" | "рамі" | "рамою" | "скло" | "скла" | "склі"
                 | "стулка" | "стулки" | "стулку" | "стулок" | "підвіконня"
         ) => Some(4),
-        (_, token) if plural_modifier(token) => Some(1),
+        (_, token) if plural_modifier(token) || matches!(
+            token, "відчинив" | "відчинила" | "відчинили" | "зачинив" | "зачинила" | "зачинили"
+                | "відчини" | "зачини" | "помив" | "помила" | "помили" | "помий"
+        ) => Some(1),
         // At a clause boundary there is no preceding noun that can govern a genitive.
         (_, "") if plural_predicate(next) => Some(1),
         _ => None,
@@ -344,18 +342,33 @@ fn castle_or_lock_stress(prior: &str, next: &str) -> Option<usize> {
     }
 }
 
-fn hands_stress(earlier: &str, prior: &str, next: &str) -> Option<usize> {
-    let genitive_preposition = |token| matches!(token, "без" | "від" | "до" | "біля" | "з" | "із" | "зі");
+fn genitive_preposition(token: &str) -> bool {
+    matches!(
+        token,
+        "біля" | "поблизу" | "неподалік" | "навколо" | "до" | "від" | "без" | "коло"
+            | "після" | "з" | "із" | "зі"
+    )
+}
+
+fn feminine_noun_stress(noun: &str, earlier: &str, prior: &str, next: &str) -> Option<usize> {
+    let genitive_index = if noun == "голови" { 5 } else { 3 };
     if genitive_preposition(prior)
-        || matches!(prior, "моєї" | "твоєї" | "своєї" | "цієї" | "тієї" | "лівої" | "правої")
-        || (genitive_preposition(earlier) && prior.ends_with("ої"))
+        || matches!(prior, "моєї" | "твоєї" | "своєї" | "нашої" | "вашої" | "цієї" | "тієї" | "лівої" | "правої")
+        || (genitive_preposition(earlier) && (prior.ends_with("ої") || prior.ends_with("єї")))
+        || matches!((noun, prior), ("води", "склянка" | "склянку" | "літр" | "пляшка" | "пляшку" | "ковток"))
     {
-        Some(3)
-    } else if matches!(
+        return Some(genitive_index);
+    }
+    if matches!(
         prior,
-        "мої" | "твої" | "свої" | "наші" | "ваші" | "ці" | "ті" | "обидві"
-            | "підняв" | "підняла" | "підніми" | "помий" | "мити"
-    ) || (prior.is_empty() && matches!(next, "тремтять" | "змерзли" | "втомилися" | "опустилися")) {
+        "мої" | "твої" | "свої" | "наші" | "ваші" | "ці" | "ті" | "усі" | "всі"
+    ) || matches!((noun, prior),
+        ("руки" | "ноги", "обидві" | "підняв" | "підняла" | "підніми" | "помий" | "мити")
+        | ("води", "мінеральні" | "територіальні" | "підземні")
+    ) || (prior.is_empty() && matches!((noun, next),
+        ("руки" | "ноги", "тремтять" | "змерзли" | "втомилися" | "опустилися")
+        | ("голови", "схилилися" | "повернулися")
+    )) {
         Some(1)
     } else {
         None
