@@ -109,6 +109,14 @@ pub enum Command {
         direction: String,
         grade: u8,
     },
+    Practice,
+    SetPractice {
+        progress: reader_core::practice::PracticeProgress,
+    },
+    GradePractice {
+        revision: u64,
+        grade: u8,
+    },
     Original {
         id: String,
     },

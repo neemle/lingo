@@ -13,6 +13,7 @@ pub mod knowledge;
 mod marian_provider;
 pub mod ocr;
 pub mod pdf_layers;
+pub mod practice;
 pub mod translation;
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -176,6 +177,8 @@ pub struct Backup {
     pub originals: Vec<Original>,
     #[serde(default)]
     pub reviews: Vec<ReviewEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub practice: Option<practice::PracticeProgress>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -339,6 +342,8 @@ impl Store {
         let connection = Connection::open(path).map_err(|e| e.to_string())?;
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, body TEXT NOT NULL, source_hash TEXT UNIQUE NOT NULL); CREATE TABLE IF NOT EXISTS originals (document_id TEXT PRIMARY KEY REFERENCES documents(id), name TEXT NOT NULL, bytes BLOB NOT NULL); CREATE TABLE IF NOT EXISTS vocabulary (id TEXT PRIMARY KEY, word_key TEXT UNIQUE NOT NULL, body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS review_events (id INTEGER PRIMARY KEY, entry_id TEXT NOT NULL, direction TEXT NOT NULL, grade INTEGER NOT NULL, reviewed_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS translation_cache (key TEXT PRIMARY KEY, body TEXT NOT NULL); PRAGMA user_version=1;").map_err(|e| e.to_string())?;
         connection.execute("CREATE TABLE IF NOT EXISTS speech_resume (document_id TEXT PRIMARY KEY REFERENCES documents(id), body TEXT NOT NULL)", [])
+            .map_err(|e| e.to_string())?;
+        connection.execute("CREATE TABLE IF NOT EXISTS practice (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)", [])
             .map_err(|e| e.to_string())?;
         Ok(Self {
             connection,
@@ -823,14 +828,19 @@ impl Store {
         Ok(entry)
     }
     pub fn review(&mut self, id: &str, direction: &str, grade: u8) -> Result<()> {
-        if !["forward", "reverse"].contains(&direction) || grade > 3 {
-            return Err("Некоректна відповідь".into());
-        }
         let tx = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
-        let body: String = tx
+        Self::record_review(&tx, id, direction, grade)?;
+        tx.commit().map_err(|error| error.to_string())
+    }
+
+    fn record_review(connection: &Connection, id: &str, direction: &str, grade: u8) -> Result<()> {
+        if !["forward", "reverse"].contains(&direction) || grade > 3 {
+            return Err("Некоректна відповідь".into());
+        }
+        let body: String = connection
             .query_row("SELECT body FROM vocabulary WHERE id=?", [id], |r| r.get(0))
             .map_err(|e| e.to_string())?;
         let mut entry: Vocabulary = serde_json::from_str(&body).map_err(|e| e.to_string())?;
@@ -865,17 +875,18 @@ impl Store {
                 state.interval_days as i64 * 86400
             };
         state.reviews += 1;
-        tx.execute(
-            "UPDATE vocabulary SET body=? WHERE id=?",
-            params![serde_json::to_string(&entry).unwrap(), id],
-        )
-        .map_err(|e| e.to_string())?;
-        tx.execute(
+        connection
+            .execute(
+                "UPDATE vocabulary SET body=? WHERE id=?",
+                params![serde_json::to_string(&entry).unwrap(), id],
+            )
+            .map_err(|e| e.to_string())?;
+        connection.execute(
             "INSERT INTO review_events(entry_id,direction,grade,reviewed_at) VALUES (?1,?2,?3,?4)",
             params![id, direction, grade, time],
         )
         .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())
+        Ok(())
     }
     pub fn original(&self, id: &str) -> Result<Original> {
         self.connection
@@ -893,6 +904,10 @@ impl Store {
             .map_err(|e| e.to_string())
     }
     pub fn export(&self) -> Result<Backup> {
+        let tx = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|error| error.to_string())?;
         let snapshot = self.snapshot()?;
         let originals = snapshot
             .documents
@@ -915,12 +930,16 @@ impl Store {
             .map_err(|e| e.to_string())?
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
-        Ok(Backup {
+        let backup = Backup {
             version: 1,
             snapshot,
             originals,
             reviews,
-        })
+            practice: practice::read(&tx)?,
+        };
+        drop(stmt);
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(backup)
     }
     pub fn restore(&mut self, backup: Backup) -> Result<()> {
         if backup.version != 1 {
@@ -1039,6 +1058,9 @@ impl Store {
             if let Some(card_id) = review_cards.get(&r.entry_id) {
                 tx.execute("INSERT INTO review_events(entry_id,direction,grade,reviewed_at) SELECT ?1,?2,?3,?4 WHERE NOT EXISTS (SELECT 1 FROM review_events WHERE entry_id=?1 AND direction=?2 AND grade=?3 AND reviewed_at=?4)",params![card_id,r.direction,r.grade,r.reviewed_at]).map_err(|e|e.to_string())?;
             }
+        }
+        if let Some(progress) = backup.practice {
+            practice::restore_if_fresh(&tx, progress, &review_cards)?;
         }
         tx.commit().map_err(|e| e.to_string())
     }

@@ -1,54 +1,103 @@
+using Reader.Contracts;
 using Reader.Native.Services;
 using Reader.Presentation;
-using Entry = Reader.Contracts.Vocabulary;
 
 namespace Reader.Native.Features.Practice;
 
 public partial class PracticePage : ContentPage
 {
-    private Entry? current;
-    private PracticeQuestion? question;
-    private bool initialized;
+    private PracticeProgress? progress;
+    private bool renderingSettings;
     private bool grading;
-    private bool IsReverse => Direction.SelectedIndex == 1;
+    private bool visible;
 
-    public PracticePage()
-    {
-        InitializeComponent();
-        initialized = true;
-    }
+    public PracticePage() => InitializeComponent();
 
     protected override async void OnAppearing()
     {
         base.OnAppearing();
+        visible = true;
         BindingContext = AppState.Session;
         if (grading) return;
         await AppState.Session.RefreshAsync();
-        ShowNext();
+        if (visible) Reload();
     }
 
-    private void ShowNext()
+    protected override void OnDisappearing()
     {
-        var vocabulary = AppState.Session.Snapshot.Vocabulary;
+        visible = false;
+        base.OnDisappearing();
+    }
+
+    private void Reload()
+    {
+        try { OpenQuestion(AppState.Session.GetPractice()); }
+        catch (Exception error) { QueueStatus.Text = error.Message; }
+    }
+
+    private void OpenQuestion(PracticeProgress state, bool settingsChanged = false)
+    {
+        var session = AppState.Session;
+        var vocabulary = session.Snapshot.Vocabulary;
+        var reverse = state.Direction == "reverse";
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var due = vocabulary.Where(entry => (IsReverse ? entry.Reverse : entry.Forward).DueAt <= now).ToArray();
-        current = due.FirstOrDefault();
-        question = current is null ? null : PracticeQuestion.Create(current, vocabulary, IsReverse, Mode.SelectedIndex == 2);
-        Prompt.Text = question?.Prompt ?? "Немає карток для повторення";
+        var due = vocabulary.Where(card => (reverse ? card.Reverse : card.Forward).DueAt <= now).ToArray();
+        if (state.Question is null && due.FirstOrDefault() is { } card)
+        {
+            var question = PracticeQuestion.Create(card, vocabulary, reverse, state.Mode == 2);
+            state = session.SetPractice(state with
+            {
+                Question = new SavedQuestion(card.Id, question.Prompt, question.Answers, question.Options),
+            });
+        }
+        else if (settingsChanged) state = session.SetPractice(state);
+
+        progress = state;
+        Render(state, due.Length);
+    }
+
+    private void Render(PracticeProgress state, int due)
+    {
+        renderingSettings = true;
+        try
+        {
+            Direction.SelectedIndex = state.Direction == "reverse" ? 1 : 0;
+            Mode.SelectedIndex = state.Mode;
+        }
+        finally { renderingSettings = false; }
+
+        var saved = state.Question;
+        Prompt.Text = saved?.Prompt ?? "Немає карток для повторення";
         Answer.Text = "";
         TypedAnswer.Text = "";
         Feedback.IsVisible = false;
         Choices.Children.Clear();
-        Grades.IsVisible = false;
-        Reveal.IsVisible = question is not null && Mode.SelectedIndex == 0;
-        Choices.IsVisible = Mode.SelectedIndex == 2 && question is { Options.Length: > 0 };
-        Typing.IsVisible = question is not null && !Reveal.IsVisible && !Choices.IsVisible;
-        QueueStatus.Text = $"Готові до повторення: {due.Length}.";
-        if (Typing.IsVisible && Mode.SelectedIndex == 2)
+        QueueStatus.Text = $"Готові до повторення: {due}.";
+        Grades.IsVisible = saved?.Revealed == true;
+        Reveal.IsVisible = saved is { Revealed: false } && state.Mode == 0;
+        Choices.IsVisible = saved is { Revealed: false, Options.Length: > 0 } && state.Mode == 2;
+        Typing.IsVisible = saved is { Revealed: false } && !Reveal.IsVisible && !Choices.IsVisible;
+        if (Typing.IsVisible && state.Mode == 2)
             QueueStatus.Text += " Замало варіантів — введіть відповідь.";
 
-        if (!Choices.IsVisible || question is null) return;
-        foreach (var option in question.Options)
+        if (saved is null) return;
+        if (saved.Revealed)
+        {
+            Answer.Text = string.Join(" · ", saved.Answers);
+            if (saved.GivenAnswer is { } attempt)
+            {
+                var question = new PracticeQuestion(saved.Prompt, saved.Answers, saved.Options);
+                var result = question.Matches(attempt)
+                    ? "Відповідь збігається зі словником."
+                    : "Порівняйте свою відповідь зі словником і оцініть себе.";
+                Feedback.Text = $"Ваша відповідь: {attempt}\n{result}";
+                Feedback.IsVisible = true;
+            }
+            return;
+        }
+
+        if (!Choices.IsVisible) return;
+        foreach (var option in saved.Options)
         {
             var button = new Button { Text = option };
             button.Clicked += (_, _) => ShowAnswer(option);
@@ -61,38 +110,36 @@ public partial class PracticePage : ContentPage
     private void CheckTyped(object? sender, EventArgs args)
     {
         if (!Typing.IsVisible || string.IsNullOrWhiteSpace(TypedAnswer.Text)) return;
-        ShowAnswer(TypedAnswer.Text);
+        ShowAnswer(TypedAnswer.Text.Trim());
     }
 
     private void ShowAnswer(string? attempt)
     {
-        if (question is null || Grades.IsVisible) return;
-        Answer.Text = string.Join(" · ", question.Answers);
-        if (attempt is not null)
+        if (grading || progress is not { Question: { Revealed: false } question } state) return;
+        try
         {
-            var result = question.Matches(attempt)
-                ? "Відповідь збігається зі словником."
-                : "Порівняйте свою відповідь зі словником і оцініть себе.";
-            Feedback.Text = $"Ваша відповідь: {attempt}\n{result}";
-            Feedback.IsVisible = true;
+            var saved = AppState.Session.SetPractice(state with
+            {
+                Question = question with { Revealed = true, GivenAnswer = attempt },
+            });
+            OpenQuestion(saved);
         }
-
-        Reveal.IsVisible = false;
-        Typing.IsVisible = false;
-        Choices.IsVisible = false;
-        Grades.IsVisible = true;
+        catch (Exception error) { QueueStatus.Text = error.Message; }
     }
 
     private async void GradeClicked(object? sender, EventArgs args)
     {
-        if (current is null || grading || AppState.Session.Busy) return;
-        var grade = byte.Parse((string)((Button)sender!).CommandParameter);
+        var session = AppState.Session;
+        if (grading || session.Busy || progress is not { Question.Revealed: true } state ||
+            sender is not Button { CommandParameter: string value } || !byte.TryParse(value, out var grade))
+            return;
+
         grading = true;
         Grades.IsEnabled = Direction.IsEnabled = Mode.IsEnabled = false;
         try
         {
-            await AppState.Session.ReviewAsync(current.Id, IsReverse ? "reverse" : "forward", grade);
-            if (AppState.Session.Error.Length == 0) ShowNext();
+            await session.GradePracticeAsync(state.Revision, grade);
+            if (visible) Reload();
         }
         finally
         {
@@ -103,6 +150,20 @@ public partial class PracticePage : ContentPage
 
     private void PracticeSettingChanged(object? sender, EventArgs args)
     {
-        if (initialized && !grading) ShowNext();
+        if (renderingSettings || grading || progress is not { } state || Mode.SelectedIndex < 0) return;
+        try
+        {
+            OpenQuestion(state with
+            {
+                Direction = Direction.SelectedIndex == 1 ? "reverse" : "forward",
+                Mode = (byte)Mode.SelectedIndex,
+                Question = null,
+            }, settingsChanged: true);
+        }
+        catch (Exception error)
+        {
+            Reload();
+            QueueStatus.Text = error.Message;
+        }
     }
 }

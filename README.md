@@ -70,6 +70,9 @@ Headless interop has exercised document imports, original bytes, restart progres
 directions and backup/restore. Native C#/XAML compilation has passed locally for Catalyst; full local packaging is
 blocked by absent Xcode. Native CI builds and launched Windows/macOS selection, accessibility and speech checks
 remain separate gates. The explicit text/voice probe is available in Settings.
+Practice restores the active question, mode, direction, choice order, and submitted answer after reopening.
+Grading clears that question in the same transaction that records the review. A backup restores an unfinished
+question into a fresh library.
 
 Speech uses installed system voices, supports pause/resume, and can advance through sentences while saving progress.
 The reader remembers the voice per source language, speed, and continuous reading setting.

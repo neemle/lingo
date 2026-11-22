@@ -154,6 +154,15 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable
         return Read();
     });
 
+    public PracticeProgress GetPractice() => client.GetPractice();
+    public PracticeProgress SetPractice(PracticeProgress progress) => client.SetPractice(progress);
+
+    public Task GradePracticeAsync(ulong revision, byte grade) => RunAsync(() =>
+    {
+        client.GradePractice(revision, grade);
+        return Read();
+    });
+
     public Task<Backup> ExportAsync() => Task.Run(client.Export);
     public Task<Original> OriginalAsync(string id) => Task.Run(() => client.Original(id));
     public Task RestoreAsync(Backup backup) => RunAsync(() =>

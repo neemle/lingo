@@ -82,6 +82,12 @@ public sealed class CoreClient : IDisposable
         Call<Vocabulary>(new { version = 1, operation = "save_word", entry });
     public void Review(string id, string direction, byte grade) =>
         Call<JsonElement>(new { version = 1, operation = "review", id, direction, grade });
+    public PracticeProgress GetPractice() =>
+        Call<PracticeProgress>(new { version = 1, operation = "practice" });
+    public PracticeProgress SetPractice(PracticeProgress progress) =>
+        Call<PracticeProgress>(new { version = 1, operation = "set_practice", progress });
+    public void GradePractice(ulong revision, byte grade) =>
+        Call<PracticeProgress>(new { version = 1, operation = "grade_practice", revision, grade });
     public void Restore(Backup backup) => Call<JsonElement>(new { version = 1, operation = "restore", backup });
 
     private T Call<T>(object request)
