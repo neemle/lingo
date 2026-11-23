@@ -463,6 +463,13 @@ fn segment_pdf_lines(text: &str, id: &str, structured: bool, titles: bool) -> Ve
 }
 
 fn segment_with_boundaries(text: &str, boundary_text: &str, id: &str) -> Vec<Sentence> {
+    let mut masked = None;
+    for address in protected_translation::web_address_spans(text) {
+        masked.get_or_insert_with(|| boundary_text.as_bytes().to_vec())[address].fill(b'x');
+    }
+    let boundary_text = masked.as_deref().map_or(boundary_text, |bytes| {
+        std::str::from_utf8(bytes).expect("Masking whole character spans preserves UTF-8")
+    });
     let mut previous_end = 0;
     let mut utf16_end = 0;
     boundary_text.split_sentence_bound_indices()

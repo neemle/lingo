@@ -1113,11 +1113,11 @@ fn paragraph_plan(
     let reviews = document.reviewed_translations.get(target);
     let reviewed = |index: usize| reviews.and_then(|entries| entries.get(&sentences[index].id));
     let can_wrap = |left: usize, right: usize| {
-        (document.format == "pdf" || document.ocr_lines.is_some())
-            && !skip(left) && !skip(right)
+        !skip(left) && !skip(right)
             && reviewed(left).is_none()
             && reviewed(right).is_none()
-            && soft_wrap(document, left, right)
+            && (joins_web_address(document, left, right)
+                || (document.format == "pdf" || document.ocr_lines.is_some()) && soft_wrap(document, left, right))
     };
     if first > 0 && page_word_break(document, first - 1, first) && can_wrap(first - 1, first) {
         first -= 1;
@@ -1241,9 +1241,9 @@ fn sentence_span_input(
     if crate::document_layout::skip_in_translation(document, active) {
         return (String::new(), selected..=selected);
     }
-    if document.format != "pdf" && document.ocr_lines.is_none() {
-        return (active.text.clone(), selected..=selected);
-    }
+    let source_layout = document.format == "pdf" || document.ocr_lines.is_some();
+    let continues = |left, right| joins_web_address(document, left, right)
+        || source_layout && soft_wrap(document, left, right);
     let within_budget = |left: usize, right: usize| {
         right - left < MAX_FRAGMENTS
             && document.sentences[right]
@@ -1253,20 +1253,29 @@ fn sentence_span_input(
     };
     let mut start = selected;
     let mut end = selected;
-    while start > 0 && within_budget(start - 1, end) && soft_wrap(document, start - 1, start) {
+    while start > 0 && within_budget(start - 1, end) && continues(start - 1, start) {
         start -= 1;
     }
     while end + 1 < document.sentences.len()
         && within_budget(start, end + 1)
-        && soft_wrap(document, end, end + 1)
+        && continues(end, end + 1)
     {
         end += 1;
     }
-    if let Some(input) = inference_span(document, start, end) {
+    if !source_layout && start == end {
+        (active.text.clone(), selected..=selected)
+    } else if let Some(input) = inference_span(document, start, end) {
         (input, start..=end)
     } else {
         (active.text.clone(), selected..=selected)
     }
+}
+
+fn joins_web_address(document: &Document, left: usize, right: usize) -> bool {
+    let end = document.sentences[left].end_utf8;
+    end == document.sentences[right].start_utf8
+        && document.text.is_char_boundary(end)
+        && crate::protected_translation::web_address_crosses(&document.text, end)
 }
 
 pub(crate) fn sentence_input(
@@ -1600,6 +1609,31 @@ mod tests {
         assert_eq!(rows[1].translation.as_deref(), Some("Оновлене речення."));
         assert_eq!(rows[2].translation.as_deref(), Some("Збережене речення."));
         assert_eq!(provider.batches[1..], [vec!["Le marin part.".to_owned()], vec!["Le marin part.".to_owned()]]);
+    }
+
+    #[test]
+    fn old_document_boundaries_join_split_web_addresses_for_translation() {
+        let text = "Ouvrez https://example.org/édition?lang=fr&id=7 pour lire la suite.";
+        let split = text.find('?').unwrap() + 1;
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let mut document = store.import("Address.txt", text.as_bytes(), "fr").unwrap();
+        let mut left = document.sentences[0].clone();
+        let mut right = left.clone();
+        left.end_utf8 = split;
+        left.end_utf16 = text[..split].encode_utf16().count();
+        left.text = text[..split].to_owned();
+        right.start_utf8 = left.end_utf8;
+        right.start_utf16 = left.end_utf16;
+        right.id = format!("{}:{split}", document.id);
+        right.text = text[split..].to_owned();
+        document.sentences = vec![left, right];
+        for selected in 0..2 {
+            let (source, ids) = sentence_source(&store, &document, selected, "uk", PageBoundaries::Projected).unwrap();
+            assert_eq!(source, text);
+            assert_eq!(ids.len(), 2);
+            let plan = paragraph_plan(&store, &document, selected, "uk", PageBoundaries::Projected, UnitGrouping::Sentence).unwrap();
+            assert_eq!(plan.pending, [(0, text.to_owned())]);
+        }
     }
 
     #[test]

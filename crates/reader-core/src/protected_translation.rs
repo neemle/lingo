@@ -31,6 +31,21 @@ pub(crate) fn web_address_spans(text: &str) -> impl Iterator<Item = Range<usize>
     })
 }
 
+pub(crate) fn web_address_crosses(text: &str, offset: usize) -> bool {
+    if offset == 0 || offset == text.len()
+        || text[..offset].ends_with(char::is_whitespace)
+        || text[offset..].starts_with(char::is_whitespace)
+    {
+        return false;
+    }
+    let left = text[..offset].rfind(char::is_whitespace)
+        .map_or(0, |index| index + text[index..].chars().next().unwrap().len_utf8());
+    let right = text[offset..].find(char::is_whitespace)
+        .map_or(text.len(), |index| offset + index);
+    let relative = offset - left;
+    web_address_spans(&text[left..right]).any(|span| span.start < relative && relative < span.end)
+}
+
 pub(crate) fn transform_outside_web_addresses(text: &str, transform: impl Fn(&str) -> String) -> String {
     let mut spans = web_address_spans(text).peekable();
     if spans.peek().is_none() {
@@ -339,5 +354,20 @@ mod tests {
         let address = ProtectedText::new(url, "uk");
         assert!(address.only_protected());
         assert_eq!(address.restore(address.input().to_owned()).unwrap(), url);
+    }
+
+    #[test]
+    fn address_punctuation_does_not_end_a_sentence_or_shift_offsets() {
+        let text = "📖 Ouvrez https://example.org/édition?lang=fr&id=7. Revenez ensuite.";
+        let split = text.find('?').unwrap() + 1;
+        assert!(web_address_crosses(text, split));
+        for sentences in [crate::segment(text, "doc"), crate::segment_pdf_with_titles(text, "pdf")] {
+            assert_eq!(sentences.len(), 2);
+            assert_eq!(sentences[0].text, "📖 Ouvrez https://example.org/édition?lang=fr&id=7.");
+            let second = &sentences[1];
+            assert_eq!(second.text, "Revenez ensuite.");
+            assert_eq!(second.start_utf8, text.find("Revenez").unwrap());
+            assert_eq!(second.start_utf16, text[..second.start_utf8].encode_utf16().count());
+        }
     }
 }
