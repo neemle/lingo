@@ -90,7 +90,15 @@ impl Store {
         let chunks = pieces.into_iter()
             .map(|chunk| {
                 let text = chunk.text;
-                let example = format!("Translate from {source_name} into {target_name}.\n{text}");
+                let normalized;
+                let prompt_text = if language == "fr" && target == "uk" {
+                    // The output validator can then verify the exact cardinal value.
+                    normalized = crate::french_cardinals::digits_in_text(text);
+                    normalized.as_str()
+                } else {
+                    text
+                };
+                let example = format!("Translate from {source_name} into {target_name}.\n{prompt_text}");
                 let cache_kind = if complete_sentences(text) > 1 {
                     "qwen-passage-translation-v7"
                 } else {
@@ -537,6 +545,24 @@ mod tests {
             Ok(json(if sampled { complete } else { hybrid }))
         }).unwrap();
         assert_eq!(recovered.text, complete);
+    }
+
+    #[test]
+    fn french_passage_requires_the_original_compound_cardinal_in_ukrainian() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let source = "Je n’ai même pas dix-neuf ans, répond Dantès en rougissant.";
+        let document = store.import("Dialogue.txt", source.as_bytes(), "fr").unwrap();
+        let job = store.prepare_passage_translation(&document.id, None, &document.sentences[0].id, "uk", false).unwrap();
+        let [HintWork::Generate { example, .. }] = job.chunks.as_slice() else { panic!("expected an uncached chunk"); };
+        let (_, prompt_text) = example.split_once('\n').unwrap();
+        assert!(prompt_text.contains("19 ans"));
+        assert_eq!(job.source_text, source);
+        let response = |age| serde_json::to_vec(&TranslationChunk {
+            text: format!("Мені навіть не {age} років, — відповідає Дантес, червоніючи."),
+        }).unwrap();
+        assert!(parse(&response(18), "uk", prompt_text).is_err());
+        assert!(parse(&response(19), "uk", prompt_text).is_ok());
     }
 
     #[test]
