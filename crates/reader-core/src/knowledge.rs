@@ -551,13 +551,42 @@ impl WordContext {
         if language != "fr" {
             return None;
         }
-        let (_, next) = self.neighbors(selected)?;
-        match (selected, next.map(word_key).as_deref()) {
-            ("l'un", Some("des")) => Some(
-                "« l’un des … » означає «один із …». « L’un » виділяє одного з групи, яку названо після « des ». Наприклад, « l’un des plus riches » — «один із найбагатших»."
+        let parts: Vec<_> = self.parts().map(|(offset, part)| (offset, word_key(part))).collect();
+        let focus = parts.iter().position(|(offset, _)| *offset == self.start_utf16)?;
+        if selected.is_empty() || !selected.split_word_bounds()
+            .filter(|part| !part.trim().is_empty()).enumerate()
+            .all(|(index, part)| parts.get(focus + index).is_some_and(|(_, token)| token == part))
+        {
+            return None;
+        }
+        let start = (0..=focus).rev().take(4).find(|&index| {
+            matches!(parts[index].1.as_str(), "l'un" | "l'une")
+                && parts.get(index + 1).is_some_and(|(_, token)| token == "des")
+        })?;
+        let word_after_des = parts.get(start + 2).map(|(_, token)| token.as_str());
+        let superlative = match word_after_des {
+            Some(word @ ("plus" | "moins")) if parts.get(start + 3)
+                .is_some_and(|(_, token)| token.chars().any(char::is_alphabetic)) => Some(word),
+            _ => None,
+        };
+        if focus > start + 1 && superlative.is_none() {
+            return None;
+        }
+        match (parts[start].1.as_str(), superlative) {
+            ("l'un", Some("plus")) => Some(
+                "«l’un des plus …» означає «один із най…». «l’un» замінює іменник чоловічого роду, «des» (de + les) вводить групу, а «plus» утворює найвищий ступінь."
             ),
-            ("l'une", Some("des")) => Some(
-                "« l’une des … » означає «одна з …». « L’une » — форма жіночого роду. Після « des » названо групу, з якої виділяють одну."
+            ("l'une", Some("plus")) => Some(
+                "«l’une des plus …» означає «одна з най…». «l’une» замінює іменник жіночого роду, «des» (de + les) вводить групу, а «plus» утворює найвищий ступінь."
+            ),
+            (_, Some("moins")) => Some(
+                "«l’un / l’une des moins …» означає «один / одна з найменш …». «des» (de + les) вводить групу, а «moins» позначає найнижчий ступінь ознаки."
+            ),
+            ("l'un", _) => Some(
+                "«l’un des …» означає «один із …». «l’un» замінює іменник чоловічого роду, а «des» (de + les) вводить групу, з якої його виділяють."
+            ),
+            ("l'une", _) => Some(
+                "«l’une des …» означає «одна з …». «l’une» замінює іменник жіночого роду, а «des» (de + les) вводить групу, з якої її виділяють."
             ),
             _ => None,
         }
@@ -695,6 +724,22 @@ fn build_pack(path: &Path, input: impl BufRead) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn french_partitive_explains_the_selected_expression_and_its_members_without_a_pack() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let sentence = "« Il est l’un des plus riches du village. »";
+        for selected in ["l’un", "l’un des plus riches", "des plus riches", "plus", "riches"] {
+            let start = sentence.find(selected).unwrap();
+            let context = WordContext::at(sentence, sentence[..start].encode_utf16().count());
+            let lookup = store.lookup_word("fr", selected, Some(&context)).unwrap().unwrap();
+            assert!(lookup.syntax_hint.unwrap().contains("найвищий ступінь"), "{selected}");
+        }
+        let unrelated = WordContext::at(sentence, sentence.find("village").unwrap());
+        assert!(store.lookup_word("fr", "village", Some(&unrelated)).unwrap().is_none());
+        let punctuation = WordContext::at("L’un, des gens sont venus.", 0);
+        assert!(store.lookup_word("fr", "l’un", Some(&punctuation)).unwrap().is_none());
+    }
 
     #[test]
     fn lookup_keeps_ambiguous_readings_and_normalizes_unicode() {

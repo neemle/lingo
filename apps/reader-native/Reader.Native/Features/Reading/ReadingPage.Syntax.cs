@@ -80,10 +80,12 @@ public partial class ReadingPage
             if (!Current()) return;
             var parse = analysis?.SyntaxParse;
             var lines = new List<string>();
-            if (parse?.RootText is { } root)
-                lines.Add($"«{root}» — головне слово речення.");
-            if (parse is not null)
+            if (parse is { Links.Length: > 0 })
+            {
+                if (parse.RootText is { } root)
+                    lines.Add($"«{root}» — головне слово речення.");
                 lines.AddRange(parse.Links.Select(DescribeDependency).Distinct());
+            }
 
             if (lines.Count == 0)
             {
