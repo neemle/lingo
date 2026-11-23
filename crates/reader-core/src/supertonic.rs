@@ -13,9 +13,10 @@ use crate::{
 };
 use ort::session::Session;
 use ort::value::Tensor;
+use regex::{Captures, Regex};
 use serde::{de::DeserializeOwned, Deserialize};
 use sha2::{Digest, Sha256};
-use std::{fs::File, io::BufReader, path::Path};
+use std::{borrow::Cow, fs::File, io::BufReader, path::Path, sync::LazyLock};
 use unicode_segmentation::UnicodeSegmentation;
 
 const MODEL: &str = "supertonic-3";
@@ -92,9 +93,10 @@ impl MultilingualSpeechJob {
             "fr" => crate::tts::french::expand(&self.text),
             _ => self.text.as_str().into(),
         };
+        let spoken = canonical_dialogue(&spoken);
         let synthesis_rate = crate::tts::model_synthesis_rate(self.rate);
         let cache = SpeechCacheKey::new(
-            "supertonic-3-narration-v8",
+            "supertonic-3-narration-v9",
             self.model.revision(),
             &self.language,
             self.voice,
@@ -398,6 +400,27 @@ fn pause_punctuation(text: &str) -> Option<char> {
     text.trim_end_matches(['"', '\'', ')']).chars().next_back()
 }
 
+fn canonical_dialogue(text: &str) -> Cow<'_, str> {
+    static DASHES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s*([–—])\s*").expect("dialogue dashes"));
+    DASHES.replace_all(text, |captures: &Captures<'_>| {
+        let dash = captures.get(0).expect("matched dash");
+        let before = &text[..dash.start()];
+        let after = &text[dash.end()..];
+        if before.trim_matches(|ch: char| ch.is_whitespace() || matches!(ch, '«' | '“' | '„' | '"')).is_empty() {
+            ""
+        } else if &captures[1] == "–"
+            && before.ends_with(|ch: char| ch.is_ascii_digit())
+            && after.starts_with(|ch: char| ch.is_ascii_digit())
+        {
+            "-"
+        } else if ends_phrase(before) {
+            " "
+        } else {
+            ", "
+        }
+    })
+}
+
 fn text_chunks(text: &str, indexer: &[i64]) -> Result<Vec<SpeechChunk>> {
     let mut normalized = String::with_capacity(text.len());
     let mut quote_open = false;
@@ -573,6 +596,16 @@ mod tests {
         assert_eq!(text("— Dit-il — « Bonjour »"), "Dit-il, \"Bonjour.\"");
         assert_eq!(text("Il demande : « Pars-tu ? »"), "Il demande: \"Pars-tu?\"");
         assert_eq!(text("- 20 C"), "- 20 C.");
+    }
+
+    #[test]
+    fn canonical_dialogue_keeps_ocr_spacing_from_changing_the_model_input() {
+        assert_eq!(canonical_dialogue("—Bonjour !"), canonical_dialogue("— Bonjour !"));
+        assert_eq!(canonical_dialogue("Il répond —puis attend."), "Il répond, puis attend.");
+        assert_eq!(canonical_dialogue("« —Добрий день!»"), "«Добрий день!»");
+        assert_eq!(canonical_dialogue("Attends !— Puis écoute."), "Attends ! Puis écoute.");
+        assert_eq!(canonical_dialogue("10–12 personnes, est-elle là ?"), "10-12 personnes, est-elle là ?");
+        assert_eq!(canonical_dialogue("-20 °C"), "-20 °C");
     }
 
     #[test]
