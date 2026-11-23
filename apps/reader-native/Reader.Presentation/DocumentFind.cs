@@ -40,9 +40,11 @@ public static class DocumentFind
     }
 
     public static TextSelection? SourceMatch(Sentence sentence, string query) =>
-        MatchRange(sentence.Text, query) is { } range
-            ? new TextSelection(sentence.StartUtf16 + range.Start, range.End - range.Start,
-                sentence.Text[range.Start..range.End])
+        SourceMatch(sentence.Text, query, sentence.StartUtf16);
+
+    public static TextSelection? SourceMatch(string source, string query, int startUtf16 = 0) =>
+        MatchRange(source, query) is { } range
+            ? new TextSelection(startUtf16 + range.Start, range.End - range.Start, source[range.Start..range.End])
             : null;
 
     private static (int Start, int End)? MatchRange(string source, string query)

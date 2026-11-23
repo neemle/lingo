@@ -13,6 +13,10 @@ public partial class ReadingPage
     private sealed record DocumentFindFocus(string Document, string? Revision, int? Page,
         string Sentence, TextSelection Span);
     private DocumentFindFocus? documentFindFocus;
+#if MACCATALYST
+    private sealed record UnreadPdfFind(string Document, int Page, string Query);
+    private UnreadPdfFind? pendingUnreadPdfFind;
+#endif
     private sealed record DocumentFindCursor(int Position, int? PhysicalPage = null, bool UnreadLayer = false);
     private sealed record DocumentFindHit(string Text, DocumentFindSelection Selection);
     private sealed record DocumentFindPage(DocumentFindHit[] Matches, DocumentFindCursor? Next);
@@ -44,6 +48,12 @@ public partial class ReadingPage
                 await pdfWindowRead;
                 if (!readingPageActive || session.Document?.Id != document.Id) return;
                 await OpenPdfPageAsync(unreadPage);
+                if (match.SourceQuery is { } query && readingPageActive && session.Document?.Id == document.Id &&
+                    pdfWindow?.Center == unreadPage)
+                {
+                    pendingUnreadPdfFind = new(document.Id, unreadPage, query);
+                    ScheduleUnreadPdfFind();
+                }
                 return;
             }
             if (match.PhysicalPage is int page && match.SentenceId is { } sentenceId)
@@ -56,13 +66,8 @@ public partial class ReadingPage
                     await LoadDetachedSentenceAsync(address, match.Position, sentenceId);
                     if (ReferenceEquals(detachedAddress, address) && !loadingDetachedSentence &&
                         detachedSentence is { } found && found.Sentence.Id == sentenceId &&
-                        SetDocumentFindFocus(document.Id, found.RevisionId, page, found.Sentence, match.SourceQuery) is { } span)
-                    {
-                        DetachedPdfText.HighlightStart = span.StartUtf16;
-                        DetachedPdfText.HighlightLength = span.LengthUtf16;
-                        DetachedPdfText.RevealOffset(span.StartUtf16);
-                        UpdateInlinePdfHighlight();
-                    }
+                        match.SourceQuery is { } query && DocumentFind.SourceMatch(found.Sentence, query) is { } span)
+                        RevealDetachedFindSpan(address, found, span);
                     if (ReferenceEquals(detachedAddress, address) && !loadingDetachedSentence &&
                         detachedSentence is { } loaded && loaded.Sentence.Id == sentenceId &&
                         match.CachedMachine is { } cached && target is not null && TargetCode == target &&
@@ -112,6 +117,63 @@ public partial class ReadingPage
     private TextSelection? FindSourceFocus(string document, string? revision, Sentence sentence, int? page) =>
         documentFindFocus is { } focus && focus.Document == document && focus.Revision == revision &&
         focus.Sentence == sentence.Id && focus.Page == page ? focus.Span : null;
+
+#if MACCATALYST
+    private void ScheduleUnreadPdfFind()
+    {
+        if (pendingUnreadPdfFind is not { } find || pdfWindow?.Center != find.Page ||
+            pdfWindow.Pages.FirstOrDefault(page => page.Page == find.Page) is not { } page ||
+            page.State is "needsTextLayer" or "needsOcr" || page.RefreshPending && page.State == "empty")
+            return;
+        Dispatcher.Dispatch(async () =>
+        {
+            var session = AppState.Session;
+            if (!ReferenceEquals(pendingUnreadPdfFind, find) || !readingPageActive ||
+                pdfWindow?.Center != find.Page || session.Document is not { } document ||
+                !ReferenceEquals(pdfSnapshot, document) || document.Id != find.Document ||
+                !ReferenceEquals(pdfWindow.Pages.FirstOrDefault(item => item.Page == find.Page), page))
+                return;
+            pendingUnreadPdfFind = null;
+            try
+            {
+                if (page.State == "detached" && detachedAddress is { } address &&
+                    address.Document == find.Document && address.Page == find.Page &&
+                    DocumentFind.SourceMatch(address.Text, find.Query) is { } local)
+                {
+                    await LoadDetachedSentenceAsync(address, position: null, sourceOffset: local.StartUtf16);
+                    if (readingPageActive && ReferenceEquals(detachedAddress, address) && !loadingDetachedSentence &&
+                        detachedSentence is { } loaded && loaded.Sentence.StartUtf16 <= local.StartUtf16 &&
+                        local.StartUtf16 < loaded.Sentence.EndUtf16)
+                        RevealDetachedFindSpan(address, loaded, local);
+                    return;
+                }
+                if (page.Span is not { } range || document.CurrentRevisionId is not { } revision ||
+                    DocumentFind.SourceMatch(page.Text, find.Query, range.StartUtf16) is not { } original ||
+                    original.StartUtf16 > document.Text.Length - original.LengthUtf16 ||
+                    !document.Text.AsSpan(original.StartUtf16, original.LengthUtf16).SequenceEqual(original.Text))
+                    return;
+                var cursor = await session.AnchorReadingSelectionAsync(document.Id, revision, original);
+                if (cursor is null || !readingPageActive || session.Document is not { } current ||
+                    current.Id != document.Id || current.CurrentRevisionId != revision || pdfWindow?.Center != find.Page ||
+                    session.Sentence is not { } sentence || sentence.Id != cursor.SentenceId)
+                    return;
+                documentFindFocus = new(document.Id, revision, null, sentence.Id, original);
+                UpdateHighlight();
+                SourceText.RevealOffset(original.StartUtf16);
+            }
+            catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
+        });
+    }
+
+    private void RevealDetachedFindSpan(DetachedAddress address, DetachedPdfSentence sentence, TextSelection span)
+    {
+        documentFindFocus = new(address.Document, sentence.RevisionId, address.Page, sentence.Sentence.Id, span);
+        DetachedPdfText.HighlightStart = span.StartUtf16;
+        DetachedPdfText.HighlightLength = span.LengthUtf16;
+        DetachedPdfText.RevealOffset(span.StartUtf16);
+        UpdateInlinePdfHighlight();
+    }
+#endif
 
     private async Task<DocumentFindSelection?> ShowDocumentFindAsync(ReaderSession session, Document document, string? target)
     {

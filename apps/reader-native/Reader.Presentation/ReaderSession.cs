@@ -483,7 +483,11 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
             if (anchored is not { } cursor) return (snapshot, selectedId);
             var updated = (Document[])documents.Clone();
             updated[index] = documents[index] with { Position = cursor.Position, ReadingTokenUtf16 = cursor.SentenceStartUtf16 };
-            return (snapshot with { Documents = updated }, selectedId);
+            var result = snapshot with { Documents = updated };
+            if (updated[index].Format == "pdf" && client.PdfReadingPage(id) is int page &&
+                (!snapshot.PdfReadingPositions.TryGetValue(id, out var previous) || previous != page))
+                result = result with { PdfReadingPositions = new(snapshot.PdfReadingPositions) { [id] = page } };
+            return (result, selectedId);
         });
         return Error.Length == 0 ? anchored : null;
     }

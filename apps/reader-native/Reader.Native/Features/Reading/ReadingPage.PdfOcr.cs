@@ -87,6 +87,7 @@ public partial class ReadingPage
         CancelDetachedSpeechTravel();
 #if MACCATALYST
         pdfSnapshot = null;
+        pendingUnreadPdfFind = null;
         attemptedPdfTextOrderRepair = null;
         pdfWindow = null;
         pdfWindowLoading = false;
@@ -194,6 +195,7 @@ public partial class ReadingPage
                 }
                 UpdateTranslation();
             }
+            ScheduleUnreadPdfFind();
         }
         catch (Exception error)
         {
@@ -249,6 +251,7 @@ public partial class ReadingPage
             session.Document is not { } document || document.Id != pdfSnapshot?.Id) return;
         if (page == window.Center || page < 0 || page >= window.PageCount) return;
 
+        pendingUnreadPdfFind = null;
         movingPdfPage = true;
         StopDetachedPdfReader();
         StopAnalysisPrefetch();
