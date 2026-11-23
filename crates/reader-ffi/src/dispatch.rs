@@ -218,6 +218,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             correction,
             revision,
         } => value(store.correct_ocr_line_at_revision(&id, index, correction, revision.as_deref())),
+        Command::ApplyOcrPageReview { id, page, detached, revision_id, edits } =>
+            value(store.apply_ocr_page_review(&id, page, detached, &revision_id, edits)),
         Command::Position { id, position } => value(store.position(&id, position)),
         Command::ReadingCursor { id } => value(store.reading_cursor(&id)),
         Command::SetReadingCursor { id, sentence_id, revision_id, start_utf16, page } => {
@@ -273,6 +275,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         | Command::ReviewSentence { .. }
         | Command::ReviewOcrWord { .. }
         | Command::ReviewOcrLine { .. }
+        | Command::ReviewOcrPage { .. }
         | Command::TranslateWithModel { .. }
         | Command::CancelModelTranslation { .. }
         | Command::CancelPdfPageTranslation { .. }

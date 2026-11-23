@@ -75,6 +75,33 @@ impl OcrLine {
     }
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OcrLineEdit {
+    pub index: usize,
+    pub source: String,
+    pub replacement: String,
+}
+
+pub(crate) fn apply_reviewed_lines(lines: &mut [OcrLine], page: u16, edits: &[OcrLineEdit]) -> Result<bool> {
+    let mut indices = std::collections::HashSet::new();
+    if edits.is_empty() || edits.len() > 6 || edits.iter().any(|edit| {
+        !indices.insert(edit.index) || edit.replacement.trim().is_empty() ||
+            edit.replacement.len() > 1024 || edit.replacement.chars().any(char::is_control)
+    }) {
+        return Err("Некоректні виправлення OCR.".into());
+    }
+    for edit in edits {
+        if !lines.get(edit.index).is_some_and(|line| line.page == page && line.reading_text() == edit.source) {
+            return Err("Розпізнаний рядок змінився. Звірте сторінку знову.".into());
+        }
+    }
+    for edit in edits {
+        lines[edit.index].correction = Some(edit.replacement.trim().to_owned());
+    }
+    Ok(true)
+}
+
 impl crate::Store {
     pub fn reconcile_photo_ocr(&mut self, id: &str, revision: &str) -> Result<bool> {
         let document = self.translation_document(id)?;
@@ -703,6 +730,32 @@ pub(crate) fn update_transcript_with_edits(
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn reviewed_page_rejects_the_entire_batch_if_one_line_changed() {
+        let line = |text: &str, y| OcrLine {
+            page: 0, text: text.into(), x: 0.1, y, width: 0.8, height: 0.04,
+            confidence: Some(0.5), correction: None, words: vec![], source_span: None,
+        };
+        let mut store = crate::Store::open(Path::new(":memory:")).unwrap();
+        let document = store.import_image(
+            "scan.png", b"\x89PNG\r\n\x1a\n", "en",
+            vec![line("A rnagic book.", 0.1), line("A rnagic story.", 0.2)],
+        ).unwrap();
+        let revision = document.current_revision_id.as_deref().unwrap();
+        let corrections = |second: &str| vec![
+            OcrLineEdit { index: 0, source: "A rnagic book.".into(), replacement: "A magic book.".into() },
+            OcrLineEdit { index: 1, source: second.into(), replacement: "A magic story.".into() },
+        ];
+        assert!(store.apply_ocr_page_review(&document.id, 0, false, revision, corrections("A different line.")).is_err());
+        assert_eq!(store.token_document(&document.id).unwrap().text, document.text);
+        store.apply_ocr_page_review(&document.id, 0, false, revision, corrections("A rnagic story.")).unwrap();
+        let corrected = store.token_document(&document.id).unwrap();
+        assert!(corrected.text.contains("A magic book."));
+        assert!(corrected.text.contains("A magic story."));
+        assert_ne!(corrected.current_revision_id, document.current_revision_id);
+        assert_eq!(corrected.ocr_lines.unwrap()[0].text, "A rnagic book.");
+    }
 
     #[test]
     fn ocr_word_spans_track_scanned_pages_corrections_and_restored_provenance() {

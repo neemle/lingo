@@ -500,6 +500,23 @@ pub enum Command {
         #[serde(default, rename = "cachedOnly")]
         cached_only: bool,
     },
+    ReviewOcrPage {
+        id: String,
+        page: u16,
+        detached: bool,
+        #[serde(rename = "revisionId")]
+        revision_id: String,
+        #[serde(default, rename = "cachedOnly")]
+        cached_only: bool,
+    },
+    ApplyOcrPageReview {
+        id: String,
+        page: u16,
+        detached: bool,
+        #[serde(rename = "revisionId")]
+        revision_id: String,
+        edits: Vec<reader_core::ocr::OcrLineEdit>,
+    },
     ExplainWord {
         model: String,
         document: String,

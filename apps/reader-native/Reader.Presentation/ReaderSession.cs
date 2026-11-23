@@ -377,6 +377,20 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<OcrReview?> ReviewOcrLineAsync(string id, int? page, string revisionId, int index, bool cachedOnly = false) =>
         Task.Run(() => client.ReviewOcrLine(id, page, revisionId, index, cachedOnly));
 
+    public Task<OcrPageReview?> ReviewOcrPageAsync(string id, int page, bool detached, string revisionId, bool cachedOnly) =>
+        Task.Run(() => client.ReviewOcrPage(id, page, detached, revisionId, cachedOnly));
+
+    public async Task ApplyOcrPageReviewAsync(string id, int page, bool detached, string revisionId, OcrLineEdit[] edits)
+    {
+        await RunAsync(() =>
+        {
+            client.ApplyOcrPageReview(id, page, detached, revisionId, edits);
+            return Read();
+        });
+        if (Error.Length == 0 && Document is { Format: "pdf" } document && document.Id == id)
+            PdfOcrUpdated?.Invoke(id, page);
+    }
+
     public Task MoveAsync(int delta) => SelectSentenceAsync((Document?.Position ?? 0) + delta);
 
     public Task SetDocumentLanguageAsync(string id, string language) => RunAsync(() =>

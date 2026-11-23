@@ -238,6 +238,7 @@ fn validate(command: &Command) -> Result<()> {
             Err(Error::new("invalid_argument", "Invalid OCR word length"))
         }
         Command::ReviewOcrWord { id, revision_id, .. } | Command::ReviewOcrLine { id, revision_id, .. }
+        | Command::ReviewOcrPage { id, revision_id, .. } | Command::ApplyOcrPageReview { id, revision_id, .. }
             if !valid_token_address(id, revision_id)
                 || revision_id.len() != 64 || !revision_id.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
         {

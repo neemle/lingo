@@ -42,6 +42,7 @@ internal sealed class OriginalPage : ContentPage
     private readonly Button edit = new() { Text = "Виправити" };
     private readonly Button suggest = new() { Text = "Підказки" };
     private readonly Button reviewOcrLine = new() { Text = "Звірити рядок із Qwen" };
+    private readonly Button reviewOcrPage = new() { Text = "Звірити сторінку із Qwen" };
     private readonly Button reset = new() { Text = "Скинути" };
     private readonly Label editStatus = new();
     private int[] currentLineIndices = [];
@@ -120,20 +121,17 @@ internal sealed class OriginalPage : ContentPage
         edit.Clicked += async (_, _) => await CorrectAsync(LineAction.Edit);
         suggest.Clicked += async (_, _) => await CorrectAsync(LineAction.Suggest);
         reviewOcrLine.Clicked += async (_, _) => await ReviewOcrLineAsync();
+        reviewOcrPage.Clicked += async (_, _) => await ReviewOcrPageAsync();
         reset.Clicked += async (_, _) => await CorrectAsync(LineAction.Reset);
         var editButtons = new FlexLayout { Wrap = Microsoft.Maui.Layouts.FlexWrap.Wrap };
-        foreach (var button in new[] { suggest, reviewOcrLine, edit, reset })
+        foreach (var button in new[] { suggest, reviewOcrLine, reviewOcrPage, edit, reset })
         {
             button.Margin = new Thickness(0, 0, 8, 5);
             editButtons.Children.Add(button);
         }
-        editor = new Grid { ColumnSpacing = 8, ColumnDefinitions = new ColumnDefinitionCollection
-        {
-            new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Auto),
-        }};
-        Grid.SetColumn(editButtons, 1);
-        editor.Children.Add(lineButton);
-        editor.Children.Add(editButtons);
+        editor = new Grid { RowSpacing = 5, RowDefinitions = { new(GridLength.Auto), new(GridLength.Auto) } };
+        editor.Add(lineButton);
+        editor.Add(editButtons, 0, 1);
 
         var content = new Grid
         {
@@ -597,6 +595,7 @@ internal sealed class OriginalPage : ContentPage
         edit.IsEnabled = canInteract && index >= 0;
         suggest.IsEnabled = edit.IsEnabled;
         reviewOcrLine.IsEnabled = edit.IsEnabled && !session.Busy;
+        reviewOcrPage.IsEnabled = canInteract && !session.Busy && currentLineIndices.Length > 0;
         reset.IsEnabled = edit.IsEnabled && lines[index].Correction is not null;
     }
 
@@ -701,8 +700,57 @@ internal sealed class OriginalPage : ContentPage
         }
     }
 
-    private async Task<OcrReview?> ReadOcrReviewAsync(Func<bool, Task<OcrReview?>> review, Func<bool> isCurrent,
-        string loadingMessage)
+    private async Task ReviewOcrPageAsync()
+    {
+        if (!reviewOcrPage.IsEnabled || session.Document is not { } document || document.Id != documentId)
+            return;
+        var page = pageIndex;
+        var detached = detachedOcr is not null;
+        var revision = detachedOcr?.Revision ?? document.CurrentRevisionId;
+        if (revision is null) return;
+        bool IsCurrent() => visible && page == pageIndex && detached == (detachedOcr is not null) &&
+            session.Document is { } current && current.Id == documentId &&
+            (detachedOcr?.Revision ?? current.CurrentRevisionId) == revision;
+
+        editing = true;
+        UpdateEditButtons();
+        try
+        {
+            var review = await ReadOcrReviewAsync(
+                cachedOnly => session.ReviewOcrPageAsync(documentId, page, detached, revision, cachedOnly),
+                IsCurrent, "Qwen перевіряє рядки з низькою впевненістю OCR…");
+            if (review is null || !IsCurrent()) return;
+            if (review.Corrections.Length == 0)
+            {
+                editStatus.Text = review.CheckedLines == 0 ? "Немає рядків із низькою впевненістю OCR."
+                    : $"Перевірено рядків: {review.CheckedLines}. Виправлень немає.";
+                return;
+            }
+            var preview = string.Join("\n\n", review.Corrections.Select(edit => $"{edit.Source}\n→ {edit.Replacement}"));
+            var apply = await DisplayAlertAsync("Застосувати виправлення OCR?", preview, "Застосувати", "Залишити");
+            if (!IsCurrent() || !apply || session.Busy) return;
+            await session.ApplyOcrPageReviewAsync(documentId, page, detached, revision, review.Corrections);
+            if (!visible || page != pageIndex || session.Document?.Id != documentId) return;
+            if (session.Error.Length > 0)
+            {
+                editStatus.Text = session.Error;
+                return;
+            }
+            activeWord = null;
+            focus = detached ? null : SentenceRange();
+            ApplyOcrLines(detached ? await session.DetachedPdfOcrAsync(documentId, page) : null);
+            editStatus.Text = $"Виправлено рядків: {review.Corrections.Length}.";
+        }
+        catch (Exception error) { if (visible && page == pageIndex) editStatus.Text = error.Message; }
+        finally
+        {
+            editing = false;
+            UpdateEditButtons();
+        }
+    }
+
+    private async Task<T?> ReadOcrReviewAsync<T>(Func<bool, Task<T?>> review, Func<bool> isCurrent,
+        string loadingMessage) where T : class
     {
         editStatus.Text = "Шукаємо збережену перевірку…";
         var hint = await review(true);

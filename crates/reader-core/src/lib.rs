@@ -927,6 +927,37 @@ impl Store {
         correction: Option<String>,
         revision: Option<&str>,
     ) -> Result<()> {
+        self.edit_ocr_lines(id, revision, |lines| {
+            let line = lines.get_mut(index).ok_or("Розпізнаний рядок не знайдено")?;
+            let correction = correction.map(|text| text.trim().to_owned());
+            if line.correction == correction {
+                return Ok(None);
+            }
+            line.correction = correction;
+            Ok(Some(Vec::new()))
+        })
+    }
+
+    pub fn apply_ocr_page_review(
+        &mut self, id: &str, page: u16, detached: bool, revision: &str, edits: Vec<ocr::OcrLineEdit>,
+    ) -> Result<()> {
+        if detached {
+            let document = self.translation_document(id)?;
+            self.reconcile_detached_pdf_ocr(id, page, revision, &document.language,
+                |lines| ocr::apply_reviewed_lines(lines, page, &edits))?;
+            return Ok(());
+        }
+        self.edit_ocr_lines(id, Some(revision), |lines| {
+            let previous: Vec<_> = lines.iter().map(|line| line.reading_text().to_owned()).collect();
+            ocr::apply_reviewed_lines(lines, page, &edits)?;
+            Ok(Some(ocr::line_transcript_edits(lines, &previous)?))
+        })
+    }
+
+    fn edit_ocr_lines(
+        &mut self, id: &str, revision: Option<&str>,
+        edit: impl FnOnce(&mut [ocr::OcrLine]) -> Result<Option<Vec<ocr::TranscriptEdit>>>,
+    ) -> Result<()> {
         let native_pages = self.native_pdf_page_text(id)?;
         let original = if native_pages.is_none() {
             Some(self.original(id)?)
@@ -941,14 +972,9 @@ impl Store {
                 .ocr_lines
                 .as_mut()
                 .ok_or("У документа немає розпізнаних рядків")?;
-            let line = lines
-                .get_mut(index)
-                .ok_or("Розпізнаний рядок не знайдено")?;
-            let correction = correction.map(|text| text.trim().to_owned());
-            if line.correction == correction {
+            let Some(edits) = edit(lines)? else {
                 return Ok(false);
-            }
-            line.correction = correction;
+            };
             let parsed = if let Some(pages) = native_pages {
                 let (text, starts) = pdf_layers::merge_page_text(pages, lines)?;
                 document_layout::from_transcript(text, Some(starts))
@@ -970,7 +996,11 @@ impl Store {
                 }
             };
             let text_changed = document.text != parsed.text;
-            ocr::update_transcript(document, parsed.text)?;
+            if edits.is_empty() {
+                ocr::update_transcript(document, parsed.text)?;
+            } else {
+                ocr::update_transcript_with_edits(document, parsed.text, parsed.pdf_page_starts.as_deref(), &edits)?;
+            }
             document.pdf_page_starts = parsed.pdf_page_starts;
             document.blocks = parsed.blocks;
             ocr::refresh_provenance(document);

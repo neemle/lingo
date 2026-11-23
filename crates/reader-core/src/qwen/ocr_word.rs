@@ -1,9 +1,10 @@
-use super::{review_note, HintWork, PositionedWordExample, HINT_GENERATION_MODEL};
+use super::{generate, prompt_checkpoint, review_note, with_prompt_context, HintWork, PositionedWordExample, HINT_GENERATION_MODEL};
 use crate::{
-    ocr::{byte_at_utf16, differs_by_one_glyph, OcrLine},
+    ocr::{byte_at_utf16, differs_by_one_glyph, OcrLine, OcrLineEdit},
     Result, Store,
 };
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
 
 const SYSTEM: &str = concat!(
     "<|im_start|>system\n",
@@ -40,7 +41,7 @@ edit ::= "{" ws "\"index\"" ws ":" ws ("0" | [1-9] [0-9]?) ws "," ws "\"replacem
 ws ::= [ \t]{0,2}
 "#;
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct OcrSpelling {
     #[serde(deserialize_with = "review_note")]
@@ -61,6 +62,17 @@ pub struct ReviewOcrWordJob {
 pub struct ReviewOcrLineJob {
     work: HintWork<OcrSpelling>,
     text: String,
+}
+
+pub struct ReviewOcrPageJob {
+    lines: Vec<(usize, ReviewOcrLineJob)>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrPageReview {
+    checked_lines: usize,
+    corrections: Vec<OcrLineEdit>,
 }
 
 #[derive(Deserialize)]
@@ -120,7 +132,28 @@ impl Store {
     ) -> Result<ReviewOcrLineJob> {
         let (language, lines) = self.ocr_review_lines(id, page, revision)?;
         let line = lines.get(index).ok_or("Розпізнаний рядок не знайдено.")?;
-        let text = line.reading_text();
+        self.prepare_ocr_line_hint(id, &language, line.reading_text(), cached_only)
+    }
+
+    pub fn prepare_ocr_page_review(
+        &self, id: &str, physical_page: u16, detached: bool, revision: &str, cached_only: bool,
+    ) -> Result<ReviewOcrPageJob> {
+        let (language, lines) = self.ocr_review_lines(id, detached.then_some(physical_page), revision)?;
+        let mut candidates: Vec<_> = lines.iter().enumerate().filter(|(_, line)|
+            line.page == physical_page && line.correction.is_none() && line.needs_proofreading()
+                && reviewable_line(line.reading_text())).collect();
+        candidates.sort_by(|(_, left), (_, right)| left.confidence.partial_cmp(&right.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal));
+        let mut checked = candidates.into_iter().take(6).map(|(index, line)| {
+            self.prepare_ocr_line_hint(id, &language, line.reading_text(), cached_only).map(|job| (index, job))
+        }).collect::<Result<Vec<_>>>()?;
+        checked.sort_by_key(|(index, _)| *index);
+        Ok(ReviewOcrPageJob { lines: checked })
+    }
+
+    fn prepare_ocr_line_hint(
+        &self, id: &str, language: &str, text: &str, cached_only: bool,
+    ) -> Result<ReviewOcrLineJob> {
         let words: Vec<_> = crate::document_tokens::word_parts(text).map(|(_, _, word)| word).collect();
         if text.len() > 600 || words.len() > 48 {
             return Err("Розпізнаний рядок задовгий для перевірки Qwen.".into());
@@ -157,6 +190,10 @@ impl Store {
     }
 }
 
+fn reviewable_line(text: &str) -> bool {
+    text.len() <= 600 && (1..=48).contains(&crate::document_tokens::word_parts(text).take(49).count())
+}
+
 fn apply_line_edits(text: &str, mut edits: Vec<LineEdit>) -> Option<String> {
     if edits.is_empty() || edits.len() > 4 { return None; }
     edits.sort_unstable_by_key(|edit| edit.index);
@@ -175,13 +212,73 @@ fn apply_line_edits(text: &str, mut edits: Vec<LineEdit>) -> Option<String> {
 impl ReviewOcrLineJob {
     pub fn run(self) -> Result<Option<OcrReview>> {
         let text = self.text;
-        let result = self.work.run(LINE_SYSTEM, LINE_GRAMMAR, |output| {
-            let error = "Qwen не повернув перевірку рядка у правильному форматі.";
-            let edits: LineEdits = serde_json::from_str(super::json_output(output).ok_or(error)?)
-                .map_err(|_| error)?;
-            Ok(OcrSpelling { replacement: apply_line_edits(&text, edits.edits) })
-        })?;
+        let result = self.work.run(LINE_SYSTEM, LINE_GRAMMAR, |output| parse_line_review(&text, output))?;
         Ok(result.map(|(hint, cached)| OcrReview { replacement: hint.replacement, cached }))
+    }
+}
+
+fn parse_line_review(text: &str, output: &[u8]) -> Result<OcrSpelling> {
+    let error = "Qwen не повернув перевірку рядка у правильному форматі.";
+    let edits: LineEdits = serde_json::from_str(super::json_output(output).ok_or(error)?)
+        .map_err(|_| error)?;
+    Ok(OcrSpelling { replacement: apply_line_edits(text, edits.edits) })
+}
+
+impl ReviewOcrPageJob {
+    pub fn run(self) -> Result<Option<OcrPageReview>> {
+        let read_cache = || -> Result<Option<Vec<OcrSpelling>>> {
+            let results = self.lines.iter().map(|(_, job)| match &job.work {
+                HintWork::Cached(result) => Ok(result.clone()),
+                HintWork::Generate { cache, .. } => cache.load(),
+            }).collect::<Result<Vec<_>>>()?;
+            Ok(results.into_iter().collect::<Option<Vec<OcrSpelling>>>())
+        };
+        let model = self.lines.iter().find_map(|(_, job)| match &job.work {
+            HintWork::Generate { model, .. } => Some(model),
+            HintWork::Cached(_) => None,
+        });
+        let Some(model) = model else {
+            return Ok(read_cache()?.map(|results| self.merge(results)));
+        };
+        model.run_requested_with_cache(
+            None,
+            || Ok(read_cache()?.map(|results| Some(self.merge(results)))),
+            |directory, should_yield| {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                with_prompt_context(directory, || prompt_checkpoint(should_yield, deadline), |model, context| {
+                    let mut results = Vec::with_capacity(self.lines.len());
+                    for (_, job) in &self.lines {
+                        match &job.work {
+                            HintWork::Cached(Some(review)) => results.push(review.clone()),
+                            HintWork::Cached(None) => return Ok(None),
+                            HintWork::Generate { example, cache, .. } => {
+                                let review = if let Some(review) = cache.load()? {
+                                    review
+                                } else {
+                                    let deadline = Instant::now() + Duration::from_secs(20);
+                                    let check = || prompt_checkpoint(should_yield, deadline);
+                                    check()?;
+                                    context.clear_kv_cache();
+                                    let output = generate(model, context, LINE_SYSTEM, example, LINE_GRAMMAR, check)?;
+                                    let review = parse_line_review(&job.text, &output)?;
+                                    cache.save(&review)?;
+                                    review
+                                };
+                                results.push(review);
+                            }
+                        }
+                    }
+                    Ok(Some(self.merge(results)))
+                })
+            },
+        )
+    }
+
+    fn merge(&self, results: Vec<OcrSpelling>) -> OcrPageReview {
+        let corrections = self.lines.iter().zip(results).filter_map(|((index, job), hint)|
+            hint.replacement.map(|replacement| OcrLineEdit { index: *index, source: job.text.clone(), replacement })
+        ).collect();
+        OcrPageReview { checked_lines: self.lines.len(), corrections }
     }
 }
 
@@ -278,6 +375,23 @@ impl ReviewOcrWordJob {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_review_limits_work_to_the_six_least_confident_unedited_lines() {
+        let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let lines = (0..9).map(|index| OcrLine {
+            page: 0, text: format!("A rnagic line {index}."), x: 0.1, y: 0.05 + f64::from(index) * 0.07,
+            width: 0.8, height: 0.04,
+            confidence: Some(0.9 - f64::from(index) * 0.03),
+            correction: (index == 8).then(|| "A magic line 8.".to_owned()),
+            words: vec![], source_span: None,
+        }).collect();
+        let document = store.import_image("scan.png", b"\x89PNG\r\n\x1a\n", "en", lines).unwrap();
+        let revision = document.current_revision_id.as_deref().unwrap();
+        let job = store.prepare_ocr_page_review(&document.id, 0, false, revision, true).unwrap();
+        assert_eq!(job.lines.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [2, 3, 4, 5, 6, 7]);
+        assert!(job.run().unwrap().is_none());
+    }
 
     #[test]
     fn line_review_keeps_spacing_and_punctuation_and_rejects_unrelated_edits() {
