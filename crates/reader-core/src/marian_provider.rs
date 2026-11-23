@@ -139,6 +139,7 @@ struct MarianProvider<'a> {
     directory: &'a Path,
     background: bool,
     canceled: &'a dyn Fn() -> bool,
+    automatic: Option<crate::qwen::hy_translation::AutomaticTranslation>,
 }
 
 /// An installed translation package integrity check independent of the store connection.
@@ -817,13 +818,10 @@ impl Store {
         background: bool, boundaries: PageBoundaries, canceled: &dyn Fn() -> bool,
     ) -> std::result::Result<ParagraphTranslation, TranslationBatchError> {
         let directory = self.model_directory.clone();
+        let mut provider = self.reader_translation_provider(&directory, &document.language, target, background, canceled)?;
         let translated = translate_paragraph(
             self,
-            &mut MarianProvider {
-                directory: &directory,
-                background,
-                canceled,
-            },
+            &mut provider,
             document, selected, target, boundaries,
         )?;
         if translated.units.iter().any(|unit| !unit.reviewed && unit.translation.is_some()) {
@@ -840,7 +838,7 @@ impl Store {
         target: &str,
     ) -> Result<CachedTranslation> {
         let (document, selected) = self.translation_selection(document_id, sentence_id)?;
-        let installed = MarianProvider::interactive(&self.model_directory).installed_models()?;
+        let installed = self.installed_reader_routes(&document.language, target)?;
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
         cached_translation(self, &installed, &catalog, &document, selected, target)
     }
@@ -850,7 +848,8 @@ impl Store {
         boundaries: PageBoundaries, background: bool, canceled: &dyn Fn() -> bool,
     ) -> std::result::Result<Vec<ParagraphUnit>, TranslationBatchError> {
         let directory = self.model_directory.clone();
-        translate_pdf_page(self, &mut MarianProvider { directory: &directory, background, canceled },
+        let mut provider = self.reader_translation_provider(&directory, &document.language, target, background, canceled)?;
+        translate_pdf_page(self, &mut provider,
             document, physical, target, boundaries, canceled)
     }
 
@@ -859,7 +858,8 @@ impl Store {
         boundaries: PageBoundaries, canceled: &dyn Fn() -> bool,
     ) -> Result<()> {
         let directory = self.model_directory.clone();
-        regenerate_pdf_sentence(self, &mut MarianProvider { directory: &directory, background: false, canceled },
+        let mut provider = self.reader_translation_provider(&directory, &document.language, target, false, canceled)?;
+        regenerate_pdf_sentence(self, &mut provider,
             document, selected, target, boundaries)
     }
 
@@ -871,7 +871,7 @@ impl Store {
         start: usize,
     ) -> Result<TranslationSearchPage> {
         let document = self.translation_document(document_id)?;
-        let installed = MarianProvider::interactive(&self.model_directory).installed_models()?;
+        let installed = self.installed_reader_routes(&document.language, target)?;
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
         search_cached_translation(self, &installed, &catalog, &document, target, query, start)
     }
@@ -879,9 +879,20 @@ impl Store {
     pub(crate) fn translation_cache_routes(
         &self, source: &str, target: &str,
     ) -> Result<crate::translation::CacheRoutes> {
-        let installed = MarianProvider::interactive(&self.model_directory).installed_models()?;
+        let installed = self.installed_reader_routes(source, target)?;
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
         crate::translation::CacheRoutes::resolve(&installed, &catalog, source, target)
+    }
+
+    fn reader_translation_provider<'a>(
+        &self, directory: &'a Path, source: &str, target: &str, background: bool, canceled: &'a dyn Fn() -> bool,
+    ) -> Result<MarianProvider<'a>> {
+        let automatic = crate::qwen::hy_translation::AutomaticTranslation::prepare(self, source, target)?;
+        Ok(MarianProvider { directory, background, canceled, automatic })
+    }
+
+    fn installed_reader_routes(&self, source: &str, target: &str) -> Result<Vec<ModelEdge>> {
+        self.reader_translation_provider(&self.model_directory, source, target, false, &|| false)?.installed_models()
     }
 
     fn translation_selection(
@@ -917,9 +928,8 @@ impl Store {
         source: &str,
         target: &str,
     ) -> Result<TranslationReadiness> {
-        let provider = MarianProvider::interactive(&self.model_directory);
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
-        route_readiness(&catalog, &provider.installed_models()?, source, target)
+        route_readiness(&catalog, &self.installed_reader_routes(source, target)?, source, target)
     }
 
     pub(crate) fn background_translation_route(
@@ -927,7 +937,7 @@ impl Store {
         source: &str,
         target: &str,
     ) -> Result<(String, Option<Vec<crate::translation::TranslationPair>>)> {
-        let installed = MarianProvider::interactive(&self.model_directory).installed_models()?;
+        let installed = self.installed_reader_routes(source, target)?;
         let routes = crate::translation::ranked_routes(&installed, source, target)?;
         if !routes.is_empty() {
             let routes: Vec<_> = routes.iter().map(crate::translation::Route::without_quality).collect();
@@ -1099,7 +1109,11 @@ impl Store {
                 if source == target {
                     continue;
                 }
-                let readiness = route_readiness(&catalog, &installed, source, target)?;
+                let readiness = if (source, target) == ("fr", "uk") {
+                    route_readiness(&catalog, &self.installed_reader_routes(source, target)?, source, target)?
+                } else {
+                    route_readiness(&catalog, &installed, source, target)?
+                };
                 if readiness.ready || !readiness.missing.is_empty() {
                     routes.push(TranslationRouteStatus {
                         source: source.to_owned(),
@@ -1125,8 +1139,9 @@ impl Store {
         if text.trim().is_empty() { return Ok(None); }
         let directory = self.model_directory.clone();
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
+        let mut provider = self.reader_translation_provider(&directory, source, target, false, &|| false)?;
         let result = self.translate_aligned_with_cache_policy(
-            &mut MarianProvider::interactive(&directory),
+            &mut provider,
             TranslationRequest {
                 source,
                 target,
@@ -1190,6 +1205,7 @@ impl<'a> MarianProvider<'a> {
             directory,
             background: false,
             canceled: &|| false,
+            automatic: None,
         }
     }
 
@@ -1276,7 +1292,8 @@ impl<'a> MarianProvider<'a> {
 
 impl TranslationProvider for MarianProvider<'_> {
     fn installed_models(&self) -> Result<Vec<ModelEdge>> {
-        Ok(catalog::PACKAGES
+        let automatic = self.automatic.iter().map(|model| model.edge());
+        let packages = catalog::PACKAGES
             .iter()
             .filter(|model| self.files_present(model))
             .map(|model| {
@@ -1284,8 +1301,8 @@ impl TranslationProvider for MarianProvider<'_> {
                 edge.quality = probe_evidence::read(&self.read_path(model), model)
                     .and_then(|validation| validation.quality);
                 edge
-            })
-            .collect())
+            });
+        Ok(automatic.chain(packages).collect())
     }
 
     fn allow_alternative_routes(&self) -> bool {
@@ -1310,6 +1327,9 @@ impl TranslationProvider for MarianProvider<'_> {
     ) -> std::result::Result<Vec<Result<String>>, TranslationBatchError> {
         if !(1..=8).contains(&settings.beam_size) {
             return Err(TranslationBatchError::Failed("Некоректні параметри декодування перекладу".into()));
+        }
+        if let Some(model) = self.automatic.as_ref().filter(|model| model.edge().revision == edge.revision) {
+            return model.translate(segments, settings.beam_size == 6, self.background, self.canceled);
         }
         let package = catalog::PACKAGES
             .iter()

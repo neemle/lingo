@@ -402,7 +402,7 @@ impl OptionalModelJob {
         Ok(cached(installed))
     }
 
-    fn run_checked<T>(
+    pub(crate) fn run_checked<T>(
         &self,
         inference: impl FnOnce(&Path, &dyn Fn() -> bool) -> Result<T>,
         requested_yield: &dyn Fn() -> bool,

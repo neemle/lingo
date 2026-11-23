@@ -48,6 +48,15 @@
       <Switch Grid.Column="1" x:Name="BackgroundTranslationSwitch" Toggled="BackgroundTranslationChanged"
        SemanticProperties.Description="Перекладати у фоні" VerticalOptions="Center" />
      </Grid>
+     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" IsVisible="{OnPlatform Default=False, MacCatalyst=True}">
+      <VerticalStackLayout Spacing="4">
+       <Label Text="Hy-MT2 для автоперекладу французької" FontAttributes="Bold" />
+       <Label Text="Використовує встановлену Hy-MT2 1.8B для перекладу українською в читанні та у фоні."
+        Style="{StaticResource ResourceDetail}" />
+      </VerticalStackLayout>
+      <Switch Grid.Column="1" x:Name="HyAutoTranslationSwitch" Toggled="HyAutoTranslationChanged"
+       SemanticProperties.Description="Hy-MT2 для автоперекладу французької" VerticalOptions="Center" />
+     </Grid>
      <Grid x:Name="BackgroundStatus" ColumnDefinitions="Auto,*" ColumnSpacing="8" IsVisible="False">
       <ActivityIndicator x:Name="BackgroundActivity" WidthRequest="18" HeightRequest="18" IsVisible="False" />
       <Label x:Name="BackgroundStatusText" Grid.Column="1" Style="{StaticResource ResourceDetail}"

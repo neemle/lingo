@@ -39,6 +39,8 @@ pub struct ReaderPreferences {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_translation: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub hy_auto_translation: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub continuous_speech: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speech_rate_percent: Option<u16>,
@@ -58,6 +60,7 @@ pub enum ReaderPreferenceChange {
     PdfShowOriginal { value: bool },
     AutoTranslate { value: bool },
     BackgroundTranslation { value: bool },
+    HyAutoTranslation { value: bool },
     ContinuousSpeech { value: bool },
     SpeechRatePercent { value: u16 },
     SpeechPlayback {
@@ -82,6 +85,7 @@ impl ReaderPreferences {
             && self.pdf_show_original.is_none()
             && self.auto_translate.is_none()
             && self.background_translation.is_none()
+            && self.hy_auto_translation.is_none()
             && self.continuous_speech.is_none()
             && self.speech_rate_percent.is_none()
             && self.translation_targets.is_empty()
@@ -127,6 +131,7 @@ impl ReaderPreferences {
             ReaderPreferenceChange::PdfShowOriginal { value } => self.pdf_show_original = Some(value),
             ReaderPreferenceChange::AutoTranslate { value } => self.auto_translate = Some(value),
             ReaderPreferenceChange::BackgroundTranslation { value } => self.background_translation = Some(value),
+            ReaderPreferenceChange::HyAutoTranslation { value } => self.hy_auto_translation = Some(value),
             ReaderPreferenceChange::ContinuousSpeech { value } => self.continuous_speech = Some(value),
             ReaderPreferenceChange::SpeechRatePercent { value } => self.speech_rate_percent = Some(value),
             ReaderPreferenceChange::SpeechPlayback { rate_percent, continuous } => {

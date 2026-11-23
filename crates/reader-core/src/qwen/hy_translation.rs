@@ -2,16 +2,103 @@ use super::{
     backend, context_parameters, decode_prompt, load_model, runtime_error, BATCH, CONTEXT_TOKENS,
     GENERATION_INPUT_TOO_LONG, RESPONSE_BYTES,
 };
-use crate::{Result, Store};
+use crate::{
+    optional_models::OptionalModelJob,
+    protected_translation::ProtectedText,
+    resources::RESOURCES,
+    translation::{ModelEdge, TranslationBatchError},
+    Result, Store,
+};
 use llama_cpp_2::{
     context::LlamaContext, llama_batch::LlamaBatch, model::LlamaModel, sampling::LlamaSampler,
 };
-use std::path::Path;
+use std::{cell::Cell, path::Path, time::{Duration, Instant}};
 
 pub(crate) const LARGE_MODEL_ID: &str = "hy-mt2-7b";
 pub(crate) const SMALL_MODEL_ID: &str = "hy-mt2-1.8b";
 pub(super) const PROMPT: &str = "Translate the following text into Ukrainian. Note that you should only output the translated result without any additional explanation:";
 const NUMBERED_PROMPT: &str = "Translate the following text into Ukrainian and preserve all digits. Output only the translated result:";
+const AUTO_REVISION_PREFIX: &str = "hy-mt2-1.8b-auto-v1/";
+
+pub(crate) struct AutomaticTranslation(OptionalModelJob);
+
+impl AutomaticTranslation {
+    pub(crate) fn prepare(store: &Store, source: &str, target: &str) -> Result<Option<Self>> {
+        if (source, target) != ("fr", "uk") || store.reader_preferences()?.hy_auto_translation != Some(true)
+            || !store.has_optional_model_files(SMALL_MODEL_ID)
+        {
+            return Ok(None);
+        }
+        store.prepare_optional_model(SMALL_MODEL_ID).map(Self).map(Some)
+    }
+
+    pub(crate) fn edge(&self) -> ModelEdge {
+        ModelEdge {
+            source: "fr".into(), target: "uk".into(),
+            revision: format!("{AUTO_REVISION_PREFIX}{}", self.0.revision()),
+            quality: None,
+        }
+    }
+
+    pub(crate) fn matches(edge: &ModelEdge) -> bool {
+        edge.source == "fr" && edge.target == "uk" && edge.revision.starts_with(AUTO_REVISION_PREFIX)
+    }
+
+    pub(crate) fn translate(
+        &self, segments: &[String], regenerate: bool, background: bool, canceled: &dyn Fn() -> bool,
+    ) -> std::result::Result<Vec<Result<String>>, TranslationBatchError> {
+        let mut completed = Vec::with_capacity(segments.len());
+        let deferred = Cell::new(false);
+        let inference = |directory: &Path, should_yield: &dyn Fn() -> bool| {
+            let interrupt = || {
+                if canceled() || should_yield() {
+                    deferred.set(true);
+                    return Err("Переклад відкладено або скасовано.".into());
+                }
+                Ok(())
+            };
+            with_context(directory, interrupt, |model, context| {
+                for source in segments {
+                    interrupt()?;
+                    let protected = ProtectedText::new(source, "uk");
+                    let text = if protected.only_protected() {
+                        protected.restore(protected.input().to_owned())
+                    } else {
+                        context.clear_kv_cache();
+                        let until = Instant::now() + Duration::from_secs(30);
+                        translate(Model::Small, model, context, protected.input(), regenerate, || {
+                            interrupt()?;
+                            if Instant::now() >= until {
+                                return Err("Час перекладу Hy-MT2 вичерпано.".into());
+                            }
+                            Ok(())
+                        }).and_then(|text| protected.restore(text))
+                            .and_then(|text| super::passage_translation::validate_hy_output(text, source))
+                    };
+                    interrupt()?;
+                    completed.push(text);
+                }
+                Ok(())
+            })
+        };
+        let result = if background {
+            let permit = RESOURCES.optional().map_err(TranslationBatchError::deferred)?;
+            self.0.run_checked(inference, &|| {
+                let yield_now = canceled() || permit.should_yield();
+                if yield_now { deferred.set(true); }
+                yield_now
+            })
+        } else {
+            self.0.run_requested_with_cache(Some(canceled), || Ok(None), inference)
+        };
+        match result {
+            Ok(()) => Ok(completed),
+            Err(message) if deferred.get() || canceled() =>
+                Err(TranslationBatchError::Deferred { message, completed }),
+            Err(message) => Err(TranslationBatchError::Failed(message)),
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(super) enum Model {

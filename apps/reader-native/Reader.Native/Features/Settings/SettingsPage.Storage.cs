@@ -87,8 +87,10 @@ public partial class SettingsPage
         {
             if (automaticStorageRefresh is { } pending) await pending;
             var session = AppState.Session;
-            var backgroundEnabled = session.GetReaderPreferences().BackgroundTranslation == true;
+            var preferences = session.GetReaderPreferences();
+            var backgroundEnabled = preferences.BackgroundTranslation == true;
             BackgroundTranslationSwitch.IsToggled = backgroundEnabled;
+            HyAutoTranslationSwitch.IsToggled = preferences.HyAutoTranslation == true;
             if (syncWorker) AppState.TranslationWorker?.SetEnabled(backgroundEnabled);
             await RefreshStorageTotalsAsync(automatic: false);
         }
@@ -152,6 +154,24 @@ public partial class SettingsPage
     {
         AppState.Session.UpdateReaderPreference(ReaderPreferenceChange.BackgroundTranslation(enabled));
         AppState.TranslationWorker?.SetEnabled(enabled);
+    }
+
+    private void HyAutoTranslationChanged(object? sender, ToggledEventArgs args)
+    {
+        if (loadingStorage || changingStorage) return;
+        try
+        {
+            AppState.Session.UpdateReaderPreference(ReaderPreferenceChange.HyAutoTranslation(args.Value));
+            AppState.TranslationWorker?.TranslationRoutesChanged();
+            StorageStatus.Text = "";
+        }
+        catch (Exception error)
+        {
+            loadingStorage = true;
+            HyAutoTranslationSwitch.IsToggled = !args.Value;
+            loadingStorage = false;
+            StorageStatus.Text = error.Message;
+        }
     }
 
     private bool ResourceOperationActive => activeDownload is not null || changingTranslationFiles

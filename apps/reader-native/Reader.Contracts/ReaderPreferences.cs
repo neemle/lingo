@@ -11,6 +11,7 @@ public sealed record ReaderPreferences
     public bool? PdfTranslationLayout { get; init; }
     public bool? AutoTranslate { get; init; }
     public bool? BackgroundTranslation { get; init; }
+    public bool? HyAutoTranslation { get; init; }
     public bool? ContinuousSpeech { get; init; }
     public int? SpeechRatePercent { get; init; }
     public Dictionary<string, string?> TranslationTargets { get; init; } = new(StringComparer.Ordinal);
@@ -36,6 +37,7 @@ public sealed record ReaderPreferenceChange(string Field)
     public static ReaderPreferenceChange PdfTranslationLayout(bool value) => new("pdfTranslationLayout") { Value = value };
     public static ReaderPreferenceChange AutoTranslate(bool value) => new("autoTranslate") { Value = value };
     public static ReaderPreferenceChange BackgroundTranslation(bool value) => new("backgroundTranslation") { Value = value };
+    public static ReaderPreferenceChange HyAutoTranslation(bool value) => new("hyAutoTranslation") { Value = value };
     public static ReaderPreferenceChange SpeechRate(int ratePercent) => new("speechRatePercent") { Value = ratePercent };
     public static ReaderPreferenceChange ContinuousSpeech(bool value) => new("continuousSpeech") { Value = value };
     public static ReaderPreferenceChange TranslationTarget(string source, string target) =>

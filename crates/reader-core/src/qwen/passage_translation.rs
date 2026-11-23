@@ -405,6 +405,11 @@ fn parse(bytes: &[u8], target: &str, source_text: &str) -> Result<TranslationChu
     Ok(TranslationChunk { text: text.into() })
 }
 
+pub(super) fn validate_hy_output(text: String, source: &str) -> Result<String> {
+    let bytes = serde_json::to_vec(&TranslationChunk { text }).map_err(|error| error.to_string())?;
+    parse(&bytes, "uk", source).map(|translation| translation.text)
+}
+
 fn language_name(language: &str) -> Result<&'static str> {
     Ok(match language {
         "uk" => "Ukrainian",

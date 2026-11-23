@@ -190,6 +190,10 @@ pub enum Route {
 }
 
 impl Route {
+    fn uses_automatic_hy(&self) -> bool {
+        matches!(self, Self::Direct(edge) if crate::qwen::hy_translation::AutomaticTranslation::matches(edge))
+    }
+
     pub fn pivot_language(&self) -> Option<&str> {
         match self {
             Self::Direct(_) => None,
@@ -245,10 +249,10 @@ fn direct_french_ukrainian(source: &str, target: &str, preferred: Option<&Route>
 
 fn compare_routes(left: &Route, right: &Route) -> Ordering {
     match (left, right) {
-        (Route::Direct(left), Route::Direct(right)) => left
-            .quality
-            .cmp(&right.quality)
-            .then_with(|| right.revision.cmp(&left.revision)),
+        (Route::Direct(left_edge), Route::Direct(right_edge)) => left.uses_automatic_hy()
+            .cmp(&right.uses_automatic_hy())
+            .then_with(|| left_edge.quality.cmp(&right_edge.quality))
+            .then_with(|| right_edge.revision.cmp(&left_edge.revision)),
         (Route::Direct(_), Route::Pivot { .. }) => Ordering::Greater,
         (Route::Pivot { .. }, Route::Direct(_)) => Ordering::Less,
         (
@@ -774,7 +778,7 @@ impl CacheRoutes {
         if text.len() > MAX_BATCH_BYTES {
             return Ok(None);
         }
-        let cached = self.cached_aligned(store, &[text], context, target, TranslationSettings::default())?;
+        let cached = self.cached_aligned(store, &[text], context, target, TranslationSettings::default(), false)?;
         Ok(cached.map(|(translation, _)| translation))
     }
 
@@ -785,8 +789,10 @@ impl CacheRoutes {
         context: Option<&str>,
         target: &str,
         settings: TranslationSettings,
+        computing: bool,
     ) -> Result<Option<(AlignedTranslation, String)>> {
-        for route in &self.candidates {
+        let prefer_hy = computing && self.preferred.as_ref().is_some_and(Route::uses_automatic_hy);
+        for route in self.candidates.iter().take(if prefer_hy { 1 } else { self.candidates.len() }) {
             let key = cache_key(route, input, context, settings)?;
             if let Some(segments) = store.cached_segments(&key, input.len(), target)? {
                 return Ok(Some((AlignedTranslation::from_route(route.clone(), segments), key)));
@@ -2551,7 +2557,7 @@ impl Store {
         let context = context.filter(|text| !text.trim().is_empty());
         let routes = CacheRoutes::resolve(&provider.installed_models()?, catalog, source, target)?;
         if !regenerate {
-            if let Some((translation, key)) = routes.cached_aligned(self, segments, context, target, settings)? {
+            if let Some((translation, key)) = routes.cached_aligned(self, segments, context, target, settings, true)? {
                 if let Some(document) = document {
                     self.link_translation_cache_keys(document, std::iter::once(key.as_str()))?;
                 }
@@ -2590,22 +2596,17 @@ impl Store {
         let mut segments = vec![None; input.len()];
         let mut failures = vec![None; input.len()];
         let preferred_pivot = routes.first().and_then(Route::pivot_language).map(str::to_owned);
+        let prefer_hy = routes.first().is_some_and(Route::uses_automatic_hy);
         let mut first_failure = None;
         // A cached fallback remains reusable even if the preferred package is present.
-        for route in &routes {
-            let mut used = Vec::new();
-            for (text, output) in input.iter().zip(&mut segments).filter(|(_, output)| output.is_none()) {
-                let key = unit_cache_key(route, text)?;
-                if let Some(mut value) = self.cached_segments(&key, 1, target)? {
-                    *output = value.pop().map(|text| UnitTranslation::from_route(text, route));
-                    used.push(key);
-                }
-            }
-            if !used.is_empty() {
-                self.link_translation_cache_keys(document, used.iter().map(String::as_str))?;
-            }
+        for route in routes.iter().take(if prefer_hy { 1 } else { routes.len() }) {
+            self.reuse_unit_cache(document, target, route, input, &mut segments)?;
         }
         for route in &routes {
+            // When Hy is selected, give it a chance before using the saved Marian fallback.
+            if prefer_hy && !route.uses_automatic_hy() {
+                self.reuse_unit_cache(document, target, route, input, &mut segments)?;
+            }
             let pending: Vec<_> = segments.iter().enumerate()
                 .filter_map(|(index, value)| value.is_none().then_some(index)).collect();
             if pending.is_empty() {
@@ -2651,6 +2652,24 @@ impl Store {
             }
         }
         Ok(UnitsTranslation { segments, failures, preferred_pivot })
+    }
+
+    fn reuse_unit_cache(
+        &mut self, document: &str, target: &str, route: &Route,
+        input: &[String], segments: &mut [Option<UnitTranslation>],
+    ) -> Result<()> {
+        let mut used = Vec::new();
+        for (text, output) in input.iter().zip(segments).filter(|(_, output)| output.is_none()) {
+            let key = unit_cache_key(route, text)?;
+            if let Some(mut value) = self.cached_segments(&key, 1, target)? {
+                *output = value.pop().map(|text| UnitTranslation::from_route(text, route));
+                used.push(key);
+            }
+        }
+        if !used.is_empty() {
+            self.link_translation_cache_keys(document, used.iter().map(String::as_str))?;
+        }
+        Ok(())
     }
 
     fn cached_segments(

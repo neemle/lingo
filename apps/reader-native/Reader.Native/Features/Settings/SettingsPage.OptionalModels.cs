@@ -26,8 +26,11 @@ public partial class SettingsPage
         try
         {
             var previous = SelectedOptionalModel?.Id;
+            var hadHy = HasAutomaticHyModel;
             optionalModels = (await AppState.Session.OptionalModelsAsync())
                 .Where(model => model.Id != "qwen-0.8b" || model.HasLocalFiles).ToArray();
+            if (hadHy != HasAutomaticHyModel && AppState.Session.GetReaderPreferences().HyAutoTranslation == true)
+                AppState.TranslationWorker?.TranslationRoutesChanged();
             optionalInventoryRead = true;
             OptionalModelChoice.ItemsSource = optionalModels.Select(model =>
                 $"{model.Name} · {model.Assets.Sum(asset => asset.Bytes) / 1_000_000d:F0} МБ · {model.License} · " +
@@ -46,6 +49,8 @@ public partial class SettingsPage
             UpdateCapabilityMatrix();
         }
     }
+
+    private bool HasAutomaticHyModel => optionalModels.Any(model => model.Id == "hy-mt2-1.8b" && model.FilesPresent);
 
     private async void OptionalModelChanged(object? sender, EventArgs args)
     {
