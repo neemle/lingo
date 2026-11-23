@@ -53,7 +53,7 @@ internal static class PdfScan
             cancellation.ThrowIfCancellationRequested();
             using var pagePool = new NSAutoreleasePool();
             using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
-            var text = page.Text?.Trim() ?? "";
+            var text = TextLayer(page, out _).Text;
             if (text.Length > 0) totalBytes += Encoding.UTF8.GetByteCount(text) + 2L;
             if (totalBytes > Client.MaxImportBytes)
             {
@@ -82,7 +82,7 @@ internal static class PdfScan
                 cancellation.ThrowIfCancellationRequested();
                 using var pagePool = new NSAutoreleasePool();
                 using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
-                var text = page.Text?.Trim() ?? "";
+                var text = TextLayer(page, out _).Text;
                 if (!DocumentFind.Contains(text, query)) continue;
                 var excerpt = new System.Globalization.StringInfo(DocumentFind.MatchingExcerpt(text, query));
                 matches.Add((index, excerpt.LengthInTextElements > 240
@@ -101,7 +101,7 @@ internal static class PdfScan
             if (document.PageCount != expectedPages)
                 throw new InvalidDataException("Кількість сторінок PDF змінилася.");
             using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
-            return page.Text?.Trim() ?? "";
+            return TextLayer(page, out _).Text;
         }, cancellation);
 
     internal static Task<string[]> ReadLanguageSamplesAsync(string path, bool optical, int skip = 0, int count = 5) => Task.Run(() =>
@@ -154,22 +154,22 @@ internal static class PdfScan
     });
 
     internal static Task<(PhotoPreview Image, string Text, OcrLine[] Boxes)> ReadingPreviewAsync(
-        string path, int index, bool textGeometry) => Task.Run(() =>
+        string path, int index, bool textGeometry, ReadOnlyMemory<char> expectedText = default) => Task.Run(() =>
     {
         using var pool = new NSAutoreleasePool();
         using var document = Open(path);
         var image = Render(document, index, 1800);
         if (!textGeometry) return (image, "", []);
         using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
-        var raw = page.Text ?? "";
-        var text = raw.Trim();
+        var layer = TextLayer(page, out var offset, expectedText);
+        var text = layer.Text;
         var crop = page.GetBoundsForBox(PdfDisplayBox.Crop);
         if (text.Length == 0 || crop.Width <= 0 || crop.Height <= 0) return (image, text, []);
-        var offset = raw.Length - raw.TrimStart().Length;
         var boxes = new List<OcrLine>();
         foreach (System.Text.RegularExpressions.Match word in System.Text.RegularExpressions.Regex.Matches(text, @"\S+"))
         {
-            using var selection = page.GetSelection(new NSRange(offset + word.Index, word.Length));
+            if (layer.OriginalOffset(word.Index, word.Length) is not { } originalOffset) continue;
+            using var selection = page.GetSelection(new NSRange(offset + originalOffset, word.Length));
             if (selection is null) continue;
             var box = selection.GetBoundsForPage(page);
             if (box.Width <= 0 || box.Height <= 0) continue;
@@ -189,6 +189,25 @@ internal static class PdfScan
         }
         return (image, text, boxes.ToArray());
     });
+
+    private static PdfOrderedText TextLayer(PdfPage page, out int offset, ReadOnlyMemory<char> expected = default)
+    {
+        var raw = page.Text ?? "";
+        var text = raw.Trim();
+        var nativeOffset = raw.Length - raw.TrimStart().Length;
+        offset = nativeOffset;
+        // Existing libraries may already be anchored to PDFKit's original order.
+        if (page.Rotation % 360 != 0 || expected.Span.StartsWith(text.AsSpan(), StringComparison.Ordinal))
+            return new(text);
+        return PdfOrderedText.Repair(text, (start, length) =>
+        {
+            using var selection = page.GetSelection(new NSRange(nativeOffset + start, length));
+            if (selection is null) return null;
+            var box = selection.GetBoundsForPage(page);
+            if (box.Width <= 0 || box.Height <= 0) return null;
+            return new((double)box.Left, (double)box.Right, (double)(box.Y + box.Height / 2), (double)box.Height);
+        });
+    }
 
     internal static Task RecognizeAsync(byte[] bytes, string language, int expectedPages, int[] pendingPages,
         Action<int, OcrLine[]> pageCompleted, CancellationToken cancellation) =>

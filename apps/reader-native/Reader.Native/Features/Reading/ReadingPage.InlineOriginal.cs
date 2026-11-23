@@ -128,8 +128,12 @@ public partial class ReadingPage
                     detachedLines = (await session.DetachedPdfOcrAsync(document.Id, page))?.Lines ?? [];
                 var canonicalGeometry = detachedText is null &&
                     document.OcrLines?.Any(line => line.Page == page && line.SourceSpan is not null) == true;
+                var textStart = document.PdfPageStarts?.ElementAtOrDefault(page)
+                    ?? document.Blocks.FirstOrDefault(block => block.Page == page)?.StartUtf16 ?? -1;
+                var expectedText = detachedText is not null ? detachedText.AsMemory()
+                    : textStart >= 0 && textStart <= document.Text.Length ? document.Text.AsMemory(textStart) : default;
                 (preview, nativeText, nativeBoxes) = await PdfScan.ReadingPreviewAsync(file.Path, page,
-                    !canonicalGeometry && detachedLines.Length == 0);
+                    !canonicalGeometry && detachedLines.Length == 0, expectedText);
             }
             else
 #endif
