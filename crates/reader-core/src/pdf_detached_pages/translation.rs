@@ -490,7 +490,8 @@ fn split_ocr_sentences(
                 let part_start = start + leading;
                 let part_start_utf16 = start_utf16 + part[..leading].encode_utf16().count();
                 units.push(Sentence {
-                    id: format!("{}:layout:{part_start}", sentence.id),
+                    id: format!("{}{marker}{part_start}", sentence.id,
+                        marker = crate::translation::PDF_LAYOUT_FRAGMENT_MARKER),
                     text: text.to_owned(),
                     start_utf8: part_start,
                     end_utf8: part_start + text.len(),

@@ -701,6 +701,13 @@ pub(crate) fn regenerate_pdf_sentences(
     store.link_translation_cache_keys(&document.id, keys.iter().map(String::as_str))
 }
 
+pub(crate) const PDF_LAYOUT_FRAGMENT_MARKER: &str = ":layout:";
+
+fn separates_pdf_layout(left: &crate::Sentence, right: &crate::Sentence) -> bool {
+    left.id.rsplit_once(PDF_LAYOUT_FRAGMENT_MARKER).zip(right.id.rsplit_once(PDF_LAYOUT_FRAGMENT_MARKER))
+        .is_some_and(|((left, _), (right, _))| left == right)
+}
+
 pub(crate) fn cached_translation(
     store: &Store,
     installed: &[ModelEdge],
@@ -1184,6 +1191,7 @@ fn paragraph_plan(
                 .end_utf8
                 .saturating_sub(sentences[index].start_utf8);
             let continues_context = grouping == UnitGrouping::LegacyContext && next - index < CONTEXT_GROUP
+                && !separates_pdf_layout(&sentences[next - 1], &sentences[next])
                 && (next - first) % CONTEXT_GROUP != 0
                 && bytes <= CONTEXT_BYTES;
             if !(continues_context || (bytes <= 1024 && can_wrap(next - 1, next))) {
@@ -1491,11 +1499,12 @@ fn soft_wrap(document: &crate::Document, left: usize, right: usize) -> bool {
     {
         return false;
     }
+    let previous = &document.sentences[left];
+    let next = &document.sentences[right];
+    if separates_pdf_layout(previous, next) { return false; }
     if page_word_break(document, left, right) {
         return true;
     }
-    let previous = &document.sentences[left];
-    let next = &document.sentences[right];
     let Some(gap) = document.text.get(previous.end_utf8..next.start_utf8) else {
         return false;
     };
@@ -1635,15 +1644,30 @@ mod tests {
         assert_eq!(rows[2].translation.as_deref(), Some("Збережене речення."));
         assert_eq!(provider.batches[1..], [vec!["Le marin part.".to_owned()], vec!["Le marin part.".to_owned()]]);
 
-        // A projected PDF sentence can have more than one independent unit.
+        // Layout cuts can divide a single reader sentence into independent translation units.
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let line = |text: &str, x, y, width| crate::ocr::OcrLine {
+            page: 0, text: text.into(), x, y, width, height: 0.036, rotation: None,
+            confidence: None, correction: None, block_start: false, words: Vec::new(), source_span: None,
+        };
+        let document = store.import_scanned_pdf("Page.pdf", b"%PDF-1.4\n", "fr", vec![
+            line("Le phare de Calvi est ouvert", 0.1, 0.15, 0.37),
+            line("et le gardien allume la lampe.", 0.52, 0.15, 0.39),
+            line("Le voilier approche du rivage.", 0.1, 0.24, 0.38),
+        ], 1).unwrap();
+        assert_eq!(document.sentences.len(), 2);
+        let document = crate::pdf_detached_pages::canonical_ocr_search_projection(&document, 0, "uk").unwrap();
+        assert_eq!(document.sentences.len(), 3);
         provider.fail = false;
-        regenerate_pdf_sentences(&mut store, &mut provider, &document, 1..3, "uk", PageBoundaries::Canonical).unwrap();
-        assert_eq!(provider.batches.last().unwrap(), &["Le marin part.", "Le port est ouvert."]);
+        translate_pdf_page(&mut store, &mut provider, &document, 0..3, "uk", PageBoundaries::Canonical, &|| false).unwrap();
+        regenerate_pdf_sentences(&mut store, &mut provider, &document, 0..2, "uk", PageBoundaries::Canonical).unwrap();
+        assert_eq!(provider.batches.last().unwrap(), &["Le phare de Calvi est ouvert", "et le gardien allume la lampe."]);
         provider.fail = true;
         let rows = translate_pdf_page(&mut store, &mut provider, &document, 0..3,
             "uk", PageBoundaries::Canonical, &|| false).unwrap();
-        assert_eq!(rows[0].translation.as_deref(), Some("Корабель прибуває."));
-        assert!(rows[1..].iter().all(|row| row.translation.as_deref() == Some("Оновлене речення.")));
+        assert!(rows[..2].iter().all(|row| row.translation.as_deref() == Some("Оновлене речення.")));
+        assert_eq!(rows[2].translation.as_deref(), Some("Збережене речення."));
     }
 
     #[test]
