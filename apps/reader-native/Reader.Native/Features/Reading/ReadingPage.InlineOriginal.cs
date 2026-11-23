@@ -159,6 +159,8 @@ public partial class ReadingPage
             if (request != inlinePdfRequest || !showInlineOriginal || !readingPageActive ||
                 session.Document is not { } current || current.Id != address.Document ||
                 current.CurrentRevisionId != address.Revision) return;
+            var changedPage = inlinePdfAddress is not { } previous ||
+                previous.Document != address.Document || previous.Page != address.Page;
             var source = ImageSource.FromStream(() => new MemoryStream(preview.Bytes, writable: false));
             InlinePdfImage.Source = DetachedInlinePdfImage.Source = PendingInlinePdfImage.Source = source;
             InlinePdfViewport.IsVisible = DetachedInlinePdfViewport.IsVisible = true;
@@ -173,12 +175,17 @@ public partial class ReadingPage
             lastInlinePdfFollow = null;
             InlinePdfFitToggle.IsVisible = true;
             UpdateInlinePdfFitLabel();
+            InlinePdfToggle.Text = "Розпізнаний текст";
             ResizeInlinePdf();
-            await ActiveInlinePdf().Viewport.ScrollToAsync(0, 0, animated: false);
-            if (request != inlinePdfRequest) return;
+            var viewport = ActiveInlinePdf().Viewport;
+            if (changedPage && viewport.ScrollY >= 1)
+            {
+                try { await viewport.ScrollToAsync(0, 0, animated: false).WaitAsync(TimeSpan.FromMilliseconds(350)); }
+                catch (Exception error) when (error is InvalidOperationException or OperationCanceledException or TimeoutException) { }
+            }
+            if (request != inlinePdfRequest || !readingPageActive) return;
             lastInlinePdfFollow = null;
             UpdateInlinePdfHighlight();
-            InlinePdfToggle.Text = "Розпізнаний текст";
         }
         catch (Exception error)
         {
