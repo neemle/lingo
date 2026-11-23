@@ -10,6 +10,7 @@ public sealed class CoreClient : IDisposable
     private readonly object sync = new();
     private readonly StoreHandle handle;
     private bool disposed;
+    private long nextModelTranslationRequest;
     public const int MaxImportBytes = 20 * 1024 * 1024;
     public const long MaxPdfBytes = 4L * 1024 * 1024 * 1024;
     public const int MaxBackupFileBytes = 1024 * 1024 * 1024;
@@ -479,8 +480,32 @@ public sealed class CoreClient : IDisposable
 
     public MachineTranslation? TranslateSentence(string id, string sentenceId, string target) =>
         CallIndependent<MachineTranslation?>(new { version = 1, operation = "translate_sentence", id, sentenceId, target });
-    public ModelPassageTranslation TranslateWithModel(string id, int? page, string sentenceId, string target, bool regenerate) =>
-        CallIndependent<ModelPassageTranslation>(new { version = 1, operation = "translate_with_model", id, page, sentenceId, target, regenerate });
+    public ModelPassageTranslation TranslateWithModel(string id, int? page, string sentenceId, string target,
+        bool regenerate, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        long? requestId = cancellationToken.CanBeCanceled
+            ? Interlocked.Increment(ref nextModelTranslationRequest) : null;
+        using var registration = cancellationToken.Register(() =>
+        {
+            try { CallIndependent<JsonElement>(new { version = 1, operation = "cancel_model_translation", requestId }); }
+            catch (ObjectDisposedException) { }
+            catch (CoreException error) { System.Diagnostics.Debug.WriteLine(error.Message); }
+        });
+        try
+        {
+            var result = CallIndependent<ModelPassageTranslation>(new
+            {
+                version = 1, operation = "translate_with_model", id, page, sentenceId, target, regenerate, requestId,
+            });
+            cancellationToken.ThrowIfCancellationRequested();
+            return result;
+        }
+        catch (CoreException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
+        }
+    }
     public ModelPassageTranslation? CachedModelTranslation(string id, int? page, string sentenceId, string target) =>
         CallIndependent<ModelPassageTranslation?>(new { version = 1, operation = "translate_with_model", id, page, sentenceId, target, cachedOnly = true });
     public MachineTranslation? TranslateDictionaryGloss(string id, string source, string gloss, string target = "uk") =>

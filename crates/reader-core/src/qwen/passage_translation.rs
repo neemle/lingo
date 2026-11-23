@@ -234,6 +234,17 @@ impl TranslatePassageJob {
     }
 
     pub fn run(self) -> Result<PassageTranslation> {
+        self.run_until_canceled(|| false)
+    }
+
+    pub fn run_until_canceled(self, canceled: impl Fn() -> bool) -> Result<PassageTranslation> {
+        let check = || -> Result<()> {
+            if canceled() {
+                return Err("Переклад скасовано.".into());
+            }
+            Ok(())
+        };
+        check()?;
         let Some(model) = self.chunks.iter().find_map(|item| match item {
             HintWork::Generate { model, .. } => Some(model),
             HintWork::Cached(_) => None,
@@ -241,7 +252,10 @@ impl TranslatePassageJob {
             return self.cached()?.ok_or_else(|| "Збережений переклад не знайдено.".into());
         };
 
-        model.run_requested_with_cache(|| self.cached(), |directory, should_yield| {
+        let result = model.run_requested_with_cache(Some(&canceled), || {
+            check()?;
+            self.cached()
+        }, |directory, should_yield| {
             let opening = Instant::now() + Duration::from_secs(25);
             with_prompt_context(
                 directory,
@@ -250,6 +264,7 @@ impl TranslatePassageJob {
                     let mut translated = Vec::with_capacity(self.chunks.len());
                     let mut updates = Vec::new();
                     for item in &self.chunks {
+                        check()?;
                         let value = match item {
                             HintWork::Cached(value) => {
                                 value.clone().ok_or("Збережений переклад не знайдено.")?
@@ -293,13 +308,16 @@ impl TranslatePassageJob {
                         };
                         translated.push(value);
                     }
+                    check()?;
                     for (cache, index) in updates {
                         cache.save(&translated[index])?;
                     }
                     Ok(self.combine(translated, false))
                 },
             )
-        })
+        });
+        check()?;
+        result
     }
 
     fn combine(&self, chunks: Vec<TranslationChunk>, cached: bool) -> PassageTranslation {

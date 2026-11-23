@@ -129,6 +129,30 @@ fn concurrent_close_and_use_complete_with_valid_responses() {
 }
 
 #[test]
+fn model_cancellation_can_arrive_first_and_is_scoped_to_the_store() {
+    let store = StoreFixture::new();
+    let other = StoreFixture::new();
+    let cancel = |request_id| {
+        call(store.handle, json!({
+            "version": 1, "operation": "cancel_model_translation", "requestId": request_id,
+        }))
+    };
+    let translate = |handle, request_id| {
+        call(handle, json!({
+            "version": 1, "operation": "translate_with_model", "requestId": request_id,
+            "id": "missing-document", "sentenceId": "missing-sentence", "target": "uk",
+        }))
+    };
+
+    assert_error(&cancel(0), "invalid_argument");
+    assert_eq!(cancel(2)["ok"], true);
+    assert_eq!(cancel(1)["ok"], true);
+    assert_error(&translate(store.handle, 2), "canceled");
+    assert_error(&translate(store.handle, 3), "core_error");
+    assert_error(&translate(other.handle, 2), "core_error");
+}
+
+#[test]
 fn bookmarks_are_idempotent_and_survive_restart_and_restore() {
     let mut store = StoreFixture::new();
     let imported = call(

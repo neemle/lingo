@@ -8,6 +8,7 @@ public partial class ReadingPage
     private sealed record ModelPassage(string Document, int? Page, string Sentence, string Revision,
         string SourceLanguage, string Target);
     private ModelPassage? runningPassage;
+    private CancellationTokenSource? passageCancellation;
     private (ModelPassage Address, ModelPassageTranslation Translation)? modelPassageResult;
     private ModelPassage? inspectingModelSource;
     private ModelPassage? requestedCachedPassage;
@@ -30,43 +31,67 @@ public partial class ReadingPage
 
     private async void TranslateWithModelClicked(object? sender, EventArgs args)
     {
-        if (runningPassage is not null || CurrentModelPassage() is not { } address) return;
+        if (CurrentModelPassage() is not { } address) return;
+        if (runningPassage is not null)
+        {
+            if (runningPassage == address)
+            {
+                CancelModelPassage();
+                UpdateModelTranslation();
+            }
+            return;
+        }
         var session = AppState.Session;
         var regenerate = CurrentModelTranslation(address) is not null;
         cachedPassageRequest++;
         modelPassageError = null;
         runningPassage = address;
+        using var cancellation = new CancellationTokenSource();
+        passageCancellation = cancellation;
         UpdateModelTranslation();
         try
         {
-            var result = await session.TranslateWithModelAsync(address.Document, address.Page, address.Sentence, address.Target, regenerate);
-            if (CurrentModelPassage() == address) modelPassageResult = (address, result);
+            var result = await session.TranslateWithModelAsync(address.Document, address.Page, address.Sentence,
+                address.Target, regenerate, cancellation.Token);
+            if (readingPageActive && !cancellation.IsCancellationRequested && CurrentModelPassage() == address)
+                modelPassageResult = (address, result);
         }
-        catch (Exception error)
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (Exception error) when (readingPageActive && CurrentModelPassage() == address)
         {
             modelPassageError = (address, error.Message);
         }
+        catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
         finally
         {
+            passageCancellation = null;
             runningPassage = null;
-            UpdateModelTranslation();
+            if (readingPageActive) UpdateModelTranslation();
         }
+    }
+
+    private void CancelModelPassage()
+    {
+        if (passageCancellation is { IsCancellationRequested: false } cancellation)
+            _ = cancellation.CancelAsync();
     }
 
     private void UpdateModelTranslation()
     {
         var address = CurrentModelPassage();
         var detached = address?.Page is not null;
-        var enabled = address is not null && runningPassage is null && !AppState.Session.Busy;
+        if (runningPassage is not null && runningPassage != address) CancelModelPassage();
+        var running = address is not null && runningPassage == address;
+        var canceling = passageCancellation?.IsCancellationRequested == true;
+        var enabled = running ? !canceling : address is not null && runningPassage is null && !AppState.Session.Busy;
         RestoreCachedModelTranslation(address);
         TranslateWithModel.IsEnabled = enabled && !detached;
         DetachedTranslateWithModel.IsEnabled = enabled && detached;
         var translation = CurrentModelTranslation(address);
-        TranslateWithModel.Text = DetachedTranslateWithModel.Text = translation is not null
+        TranslateWithModel.Text = DetachedTranslateWithModel.Text = running ? "Скасувати переклад" : translation is not null
             ? "Перегенерувати" : address is not null && modelPassageError?.Address == address
                 ? "Повторити переклад" : "Перекласти моделлю";
 
-        var running = address is not null && runningPassage == address;
         var result = translation is null ? null :
             $"{(translation.Cached ? "Збережений переклад Qwen" : "Переклад Qwen 2B")}{Environment.NewLine}{translation.Text}";
         if (modelPassageError is { } failure && failure.Address == address)
@@ -75,7 +100,7 @@ public partial class ReadingPage
         DetachedModelTranslationBusy.IsRunning = DetachedModelTranslationBusy.IsVisible = running && detached;
         ModelTranslationViewport.IsVisible = ModelTranslationResult.IsVisible = !detached && (running || result is not null);
         DetachedModelTranslationViewport.IsVisible = DetachedModelTranslationResult.IsVisible = detached && (running || result is not null);
-        var text = running ? "Qwen перекладає абзац…" : result ?? "";
+        var text = running ? canceling ? "Скасовуємо переклад…" : "Qwen перекладає абзац…" : result ?? "";
         var label = detached ? DetachedModelTranslationText : ModelTranslationText;
         var textChanged = label.Text != text;
         label.Text = text;

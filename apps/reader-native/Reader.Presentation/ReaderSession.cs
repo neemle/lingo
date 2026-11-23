@@ -604,8 +604,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
 
     public Task<MachineTranslation?> TranslateSentenceAsync(string id, string sentenceId, string target) =>
         Task.Run(() => client.TranslateSentence(id, sentenceId, target));
-    public Task<ModelPassageTranslation> TranslateWithModelAsync(string id, int? page, string sentenceId, string target, bool regenerate) =>
-        Task.Run(() => client.TranslateWithModel(id, page, sentenceId, target, regenerate));
+    public Task<ModelPassageTranslation> TranslateWithModelAsync(string id, int? page, string sentenceId, string target,
+        bool regenerate, CancellationToken cancellationToken = default) =>
+        Task.Run(() => client.TranslateWithModel(id, page, sentenceId, target, regenerate, cancellationToken), cancellationToken);
     public Task<ModelPassageTranslation?> CachedModelTranslationAsync(string id, int? page, string sentenceId, string target) =>
         Task.Run(() => client.CachedModelTranslation(id, page, sentenceId, target));
 

@@ -5,13 +5,31 @@ use crate::{
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
-    sync::{Mutex, OnceLock},
+    sync::{atomic::AtomicU64, Arc, Mutex, OnceLock},
 };
+
+#[derive(Default)]
+pub struct ModelCancellation(AtomicU64);
+
+impl ModelCancellation {
+    pub fn cancel_through(&self, request_id: u64) {
+        self.0.fetch_max(request_id, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_canceled(&self, request_id: u64) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed) >= request_id
+    }
+}
+
+struct OpenStore {
+    store: gateway::Store,
+    model_cancellation: Arc<ModelCancellation>,
+}
 
 #[derive(Default)]
 pub struct Registry {
     next: u64,
-    stores: HashMap<u64, gateway::Store>,
+    stores: HashMap<u64, OpenStore>,
     pub buffers: HashMap<u64, Box<[u8]>>,
 }
 
@@ -37,7 +55,7 @@ impl Registry {
             if let Command::Open { path } = command {
                 let store = gateway::open(&path)?;
                 let id = self.next_id()?;
-                self.stores.insert(id, store);
+                self.stores.insert(id, OpenStore { store, model_cancellation: Arc::default() });
                 return Ok(json!({ "handle": id }));
             }
         }
@@ -45,10 +63,18 @@ impl Registry {
             .stores
             .get_mut(&handle)
             .ok_or_else(|| Error::new("invalid_handle", "Store handle is missing or closed"))?;
-        dispatch::execute(store, command)
+        dispatch::execute(&mut store.store, command)
     }
 
     pub fn store(&self, handle: u64) -> Result<&gateway::Store> {
+        self.open_store(handle).map(|entry| &entry.store)
+    }
+
+    pub fn model_cancellation(&self, handle: u64) -> Result<Arc<ModelCancellation>> {
+        self.open_store(handle).map(|entry| Arc::clone(&entry.model_cancellation))
+    }
+
+    fn open_store(&self, handle: u64) -> Result<&OpenStore> {
         self.stores
             .get(&handle)
             .ok_or_else(|| Error::new("invalid_handle", "Store handle is missing or closed"))
@@ -62,6 +88,7 @@ impl Registry {
         self.stores
             .get_mut(&handle)
             .ok_or_else(|| Error::new("invalid_handle", "Store handle is missing or closed"))?
+            .store
             .import_pdf_file(prepared)
             .map_err(gateway::domain)
     }
@@ -73,11 +100,16 @@ impl Registry {
         self.stores
             .get_mut(&handle)
             .ok_or_else(|| Error::new("invalid_handle", "Store handle is missing or closed"))?
+            .store
             .insert_intake(prepared, request_id)
             .map_err(gateway::domain)
     }
 
     pub fn close(&mut self, handle: u64) -> bool {
-        self.stores.remove(&handle).is_some()
+        if let Some(entry) = self.stores.remove(&handle) {
+            entry.model_cancellation.cancel_through(u64::MAX);
+            return true;
+        }
+        false
     }
 }

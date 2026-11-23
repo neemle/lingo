@@ -300,17 +300,21 @@ impl OptionalModelJob {
 
     pub(crate) fn run_requested_with_cache<T>(
         &self,
+        canceled: Option<&dyn Fn() -> bool>,
         cached: impl Fn() -> Result<Option<T>>,
         inference: impl FnOnce(&Path, &dyn Fn() -> bool) -> Result<T>,
     ) -> Result<T> {
         if let Some(result) = cached()? {
             return Ok(result);
         }
-        let permit = RESOURCES.requested_model();
+        let permit = match canceled {
+            Some(canceled) => RESOURCES.requested_model_until(canceled).ok_or("Переклад скасовано.")?,
+            None => RESOURCES.requested_model(),
+        };
         if let Some(result) = cached()? {
             return Ok(result);
         }
-        self.run_checked(inference, &|| permit.should_yield())
+        self.run_checked(inference, &|| canceled.is_some_and(|check| check()) || permit.should_yield())
     }
 
     pub(crate) fn run_cached<T>(

@@ -53,6 +53,11 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         unsafe { std::slice::from_raw_parts(input, len as usize) }
     };
     let command = validation::decode(bytes)?;
+    if let Command::CancelModelTranslation { request_id } = &command {
+        // Cancellation must reach inference even when storage maintenance is waiting on it.
+        registry::lock()?.model_cancellation(handle)?.cancel_through(*request_id);
+        return Ok(serde_json::Value::Null);
+    }
     // Maintenance waits for independent worker connections as well as registry calls.
     static STORAGE_GATE: std::sync::RwLock<()> = std::sync::RwLock::new(());
     let exclusive = matches!(&command, Command::ClearStorage { .. });
@@ -291,14 +296,23 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
-        Command::TranslateWithModel { id, page, sentence_id, target, regenerate, cached_only } => {
+        Command::TranslateWithModel { id, page, sentence_id, target, regenerate, cached_only, request_id } => {
             if *cached_only {
                 return encode_job(registry::lock()?.store(handle)?
                     .cached_passage_translation(id, *page, sentence_id, target));
             }
-            let job = registry::lock()?.store(handle)?
+            let state = registry::lock()?;
+            let cancellation = state.model_cancellation(handle)?;
+            let canceled = || request_id.is_some_and(|id| cancellation.is_canceled(id));
+            let canceled_error = || Error::new("canceled", "Переклад скасовано.");
+            if canceled() {
+                return Err(canceled_error());
+            }
+            let job = state.store(handle)?
                 .prepare_passage_translation(id, *page, sentence_id, target, *regenerate).map_err(gateway::domain)?;
-            return encode_job(job.run());
+            drop(state);
+            let result = if request_id.is_some() { job.run_until_canceled(canceled) } else { job.run() };
+            return if canceled() { Err(canceled_error()) } else { encode_job(result) };
         }
         Command::ReviewSentence { model, document, page, sentence, focus, revision_id, cached_only } => {
             let job = registry::lock()?

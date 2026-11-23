@@ -119,6 +119,7 @@ public partial class ReadingPage : ContentPage
     protected override void OnDisappearing()
     {
         readingPageActive = false;
+        CancelModelPassage();
         RestoreCachedModelTranslation(null);
         dictionaryFocus = null;
         StopReaderPdf();

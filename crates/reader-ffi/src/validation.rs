@@ -19,6 +19,10 @@ pub fn decode(input: &[u8]) -> Result<Command> {
 
 fn validate(command: &Command) -> Result<()> {
     match command {
+        Command::CancelModelTranslation { request_id: 0 }
+        | Command::TranslateWithModel { request_id: Some(0), .. } => {
+            Err(Error::new("invalid_argument", "Model request ID must be positive"))
+        }
         Command::ModelTransfer {
             action: reader_core::model_transfer::TransferAction::AcceptRange { path, .. }, ..
         }

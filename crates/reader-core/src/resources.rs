@@ -57,6 +57,24 @@ impl ResourceGovernor {
         }
     }
 
+    pub(crate) fn requested_model_until(&self, canceled: &dyn Fn() -> bool) -> Option<OptionalJob<'_>> {
+        self.interactive_waiting.fetch_add(1, Ordering::SeqCst);
+        let work = loop {
+            if canceled() {
+                break None;
+            }
+            match self.work.try_lock() {
+                Ok(work) => break Some(work),
+                Err(TryLockError::Poisoned(error)) => break Some(error.into_inner()),
+                Err(TryLockError::WouldBlock) => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            }
+        };
+        self.interactive_waiting.fetch_sub(1, Ordering::SeqCst);
+        work.map(|_work| OptionalJob { governor: self, _work })
+    }
+
     pub(crate) fn optional(&self) -> Result<OptionalJob<'_>> {
         let busy = "Читай обробляє інший запит. Спробуйте ще раз.";
         if self.interactive_waiting.load(Ordering::SeqCst) != 0 {

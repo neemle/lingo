@@ -254,6 +254,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         | Command::ExplainDetachedWord { .. }
         | Command::ReviewSentence { .. }
         | Command::TranslateWithModel { .. }
+        | Command::CancelModelTranslation { .. }
         | Command::SemanticVocabulary { .. }
         | Command::InstallLexicalPackage { .. }
         | Command::ModelTransfer { .. }

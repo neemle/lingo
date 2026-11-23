@@ -426,6 +426,12 @@ pub enum Command {
         regenerate: bool,
         #[serde(default, rename = "cachedOnly")]
         cached_only: bool,
+        #[serde(rename = "requestId")]
+        request_id: Option<u64>,
+    },
+    CancelModelTranslation {
+        #[serde(rename = "requestId")]
+        request_id: u64,
     },
     ReviewSentence {
         model: String,
