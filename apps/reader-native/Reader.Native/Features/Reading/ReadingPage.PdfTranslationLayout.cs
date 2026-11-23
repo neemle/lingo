@@ -996,15 +996,20 @@ public partial class ReadingPage
                     text.Append(HasPdfTranslation(row) ? row.Text : "…");
                     fragments.Add(MakeFragment(row, start, text.Length, isActive));
                 }
-                var preferredSize = (float)(page.Height * region.PreferredFontHeight);
-                if (region.LimitFontByWidth) preferredSize = Math.Min(page.Width * 0.045f, preferredSize);
-                var minimumSize = Math.Max(2, preferredSize * 0.60f);
                 var area = Scale(region.Bounds, page);
+                var sideways = region.Rotation is 90 or 270;
+                var textArea = sideways
+                    ? new RectF(area.X + (area.Width - area.Height) / 2, area.Y + (area.Height - area.Width) / 2,
+                        area.Height, area.Width)
+                    : area;
+                var preferredSize = (float)((sideways ? page.Width : page.Height) * region.PreferredFontHeight);
+                if (region.LimitFontByWidth) preferredSize = Math.Min((sideways ? page.Height : page.Width) * 0.045f, preferredSize);
+                var minimumSize = Math.Max(2, preferredSize * 0.60f);
                 var translated = text.ToString();
                 var font = new Microsoft.Maui.Graphics.Font(appearance?.FontFamily ?? "Georgia", appearance?.Weight ?? 400,
                     appearance?.Italic == true ? FontStyleType.Italic : FontStyleType.Normal);
-                var fit = area.Width >= 2 && area.Height >= 2
-                    ? FitText(canvas, translated, font, area.Width, area.Height, preferredSize, minimumSize) : null;
+                var fit = textArea.Width >= 2 && textArea.Height >= 2
+                    ? FitText(canvas, translated, font, textArea.Width, textArea.Height, preferredSize, minimumSize) : null;
                 if (fit is null)
                 {
                     overflow.AddRange(fragments.Select(fragment => fragment.Source));
@@ -1016,7 +1021,8 @@ public partial class ReadingPage
                     canvas.FillRectangle(Scale(mask.Bounds, page));
                 }
                 var ink = appearance?.Ink ?? Color.FromArgb("#302D27");
-                foreground.Add(() => DrawText(canvas, translated, area, fragments, font, ink, fit, region.Alignment));
+                foreground.Add(() => DrawText(canvas, translated, textArea, fragments, font, ink, fit, region.Alignment,
+                    region.Rotation));
             }
             foreach (var index in layout.Pending)
                 DrawPendingFragment(canvas, page, rows[index], layout.Anchors[index]);
@@ -1120,7 +1126,7 @@ public partial class ReadingPage
                     : canvas.GetStringSize(text.Substring(start, length), font, size).Width);
 
         private void DrawText(ICanvas canvas, string text, RectF area, IReadOnlyList<Fragment> fragments,
-            Microsoft.Maui.Graphics.Font font, Color ink, PdfTextFit layout, string alignment = "left")
+            Microsoft.Maui.Graphics.Font font, Color ink, PdfTextFit layout, string alignment = "left", int rotation = 0)
         {
             var lightInk = ink.Red * 0.21f + ink.Green * 0.72f + ink.Blue * 0.07f > 0.55f;
             var size = layout.Size;
@@ -1129,6 +1135,9 @@ public partial class ReadingPage
             canvas.FontColor = ink;
             canvas.FontSize = size;
             canvas.SaveState();
+            var centerX = area.X + area.Width / 2;
+            var centerY = area.Y + area.Height / 2;
+            if (rotation != 0) canvas.Rotate(rotation, centerX, centerY);
             canvas.ClipRectangle(area.X, area.Y, area.Width, area.Height);
             var y = area.Top;
             foreach (var range in layout.Lines)
@@ -1146,9 +1155,10 @@ public partial class ReadingPage
                     var end = Math.Min(fragment.End, range.End) - range.Start;
                     if (start >= end) continue;
                     var bounds = BoundsFor(start, end);
-                    hitTargets.Add((bounds, fragment.Source));
+                    var sourceBounds = RotateBounds(bounds, centerX, centerY, rotation);
+                    hitTargets.Add((sourceBounds, fragment.Source));
                     if (!fragment.Active) continue;
-                    ActiveBounds = ActiveBounds is { } previous ? Union(previous, bounds) : bounds;
+                    ActiveBounds = ActiveBounds is { } previous ? Union(previous, sourceBounds) : sourceBounds;
                     canvas.FillColor = Color.FromArgb(lightInk ? "#4A391E" : "#FFF1CF");
                     canvas.FillRectangle(bounds);
                     if (fragment.Match is { } match)
@@ -1158,7 +1168,8 @@ public partial class ReadingPage
                         if (matchStart < matchEnd)
                         {
                             var matchBounds = BoundsFor(matchStart, matchEnd);
-                            MatchBounds = MatchBounds is { } previousMatch ? Union(previousMatch, matchBounds) : matchBounds;
+                            var sourceMatch = RotateBounds(matchBounds, centerX, centerY, rotation);
+                            MatchBounds = MatchBounds is { } previousMatch ? Union(previousMatch, sourceMatch) : sourceMatch;
                             canvas.FillColor = lightInk ? Color.FromArgb("#604321") : PdfSearchMatchColor;
                             canvas.FillRectangle(matchBounds);
                         }
@@ -1190,5 +1201,13 @@ public partial class ReadingPage
             }
             canvas.RestoreState();
         }
+
+        private static RectF RotateBounds(RectF bounds, float centerX, float centerY, int rotation) => rotation switch
+        {
+            90 => new(centerX + centerY - bounds.Bottom, centerY - centerX + bounds.Left, bounds.Height, bounds.Width),
+            180 => new(2 * centerX - bounds.Right, 2 * centerY - bounds.Bottom, bounds.Width, bounds.Height),
+            270 => new(centerX - centerY + bounds.Top, centerY + centerX - bounds.Right, bounds.Height, bounds.Width),
+            _ => bounds,
+        };
     }
 }

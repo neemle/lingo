@@ -149,6 +149,7 @@ fn project_row(
         bounds: None,
         ink_boxes: Vec::new(),
         line_height: 0.0,
+        rotation: Some(0),
         start_utf16: row.start_utf16,
         block_index: row.block_index,
         pending: row.pending,
@@ -158,7 +159,9 @@ fn project_row(
         return fragment;
     }
     let mut heights = Vec::new();
-    let mut include = |bounds: Bounds, span: Option<OcrSpan>| {
+    let mut direction = None;
+    let mut mixed = false;
+    let mut include = |bounds: Bounds, span: Option<OcrSpan>, rotation: u16| {
         if bounds.width <= 0.0 || bounds.height <= 0.0 {
             return;
         }
@@ -168,7 +171,7 @@ fn project_row(
                 .map_or(bounds, |previous| previous.union(bounds)),
         );
         fragment.ink_boxes.push(bounds);
-        heights.push(bounds.height);
+        heights.push(if rotation % 180 == 0 { bounds.height } else { bounds.width });
         if let Some(found) = span.and_then(|span| styles.get(&span.start_utf16).copied()) {
             let style = fragment.style.get_or_insert_with(|| found.clone());
             if style.ink.is_none() {
@@ -180,6 +183,12 @@ fn project_row(
         .iter()
         .filter(|line| intersects(&span, line.source_span))
     {
+        let rotation = line_rotation(line);
+        if let Some(rotation) = rotation {
+            mixed |= direction.is_some_and(|previous| previous != rotation);
+            direction = Some(rotation);
+        }
+        let rotation = rotation.unwrap_or_default();
         let mut has_words = false;
         for word in line
             .words
@@ -195,6 +204,7 @@ fn project_row(
                     height: word.height,
                 },
                 word.source_span,
+                rotation,
             );
         }
         if !has_words {
@@ -206,9 +216,11 @@ fn project_row(
                     height: line.height,
                 },
                 line.source_span,
+                rotation,
             );
         }
     }
+    fragment.rotation = (!mixed).then_some(direction.unwrap_or_default());
     if !heights.is_empty() {
         let middle = heights.len() / 2;
         fragment.line_height = *heights.select_nth_unstable_by(middle, f64::total_cmp).1;
@@ -220,6 +232,21 @@ fn project_row(
     }
 }
 
+fn line_rotation(line: &OcrLine) -> Option<u16> {
+    let mut words = line.words.iter().filter(|word| word.text.chars().any(char::is_alphabetic));
+    let first = words.next()?;
+    let last = words.next_back()?;
+    let dx = last.x + last.width * 0.5 - first.x - first.width * 0.5;
+    let dy = last.y + last.height * 0.5 - first.y - first.height * 0.5;
+    if dy.abs() > 2.0 * dx.abs() {
+        Some(if dy > 0.0 { 90 } else { 270 })
+    } else if dx.abs() > 2.0 * dy.abs() {
+        Some(if dx > 0.0 { 0 } else { 180 })
+    } else {
+        None
+    }
+}
+
 pub(super) fn different_color(a: [f64; 4], b: [f64; 4]) -> bool {
     (0..3).any(|channel| (a[channel] - b[channel]).abs() > 0.12)
 }
@@ -228,6 +255,48 @@ pub(super) fn different_color(a: [f64; 4], b: [f64; 4]) -> bool {
 mod tests {
     use super::*;
     use crate::ocr::OcrWord;
+
+    #[test]
+    fn preserves_four_rotations_and_keeps_masks_in_page_coordinates() {
+        let entries = [
+            (0, (0.1, 0.2), (0.3, 0.2)),
+            (90, (0.8, 0.1), (0.8, 0.3)),
+            (180, (0.7, 0.8), (0.5, 0.8)),
+            (270, (0.2, 0.8), (0.2, 0.5)),
+        ];
+        let mut rows = Vec::new();
+        let mut geometry = Vec::new();
+        for (index, (_, (x1, y1), (x2, y2))) in entries.into_iter().enumerate() {
+            let start = index * 10;
+            let span = |left, right| Some(OcrSpan {
+                start_utf8: start + left, end_utf8: start + right,
+                start_utf16: start + left, end_utf16: start + right,
+            });
+            let word = |text: &str, x, y, source_span| OcrWord {
+                text: text.into(), x, y, width: 0.03, height: 0.02,
+                raw_start_utf16: None, source_span,
+            };
+            rows.push(SourceRow {
+                start_utf16: start, end_utf16: start + 7, block_index: Some(0), pending: false,
+            });
+            geometry.push(OcrLine {
+                page: 0, text: "Un mot.".into(), x: f64::min(x1, x2), y: f64::min(y1, y2),
+                width: (x2 - x1).abs() + 0.03, height: (y2 - y1).abs() + 0.02,
+                confidence: None, correction: None, block_start: false, source_span: span(0, 7),
+                words: vec![word("Un", x1, y1, span(0, 2)), word("mot.", x2, y2, span(3, 7))],
+            });
+        }
+        let output = serde_json::to_value(project(&rows, &geometry, 0, &[], true).unwrap()).unwrap();
+        let regions = output["regions"].as_array().unwrap();
+        assert_eq!(regions.len(), 4);
+        for (index, (angle, _, _)) in entries.into_iter().enumerate() {
+            assert_eq!(regions[index]["rotation"], angle);
+            assert_eq!(regions[index]["masks"].as_array().unwrap().len(), 1);
+            assert_eq!(regions[index]["bounds"], output["anchors"][index]["bounds"]);
+        }
+        rows[0].end_utf16 = rows[1].end_utf16;
+        assert!(project(&rows[..1], &geometry, 0, &[], true).unwrap().layout.regions.is_empty());
+    }
 
     #[test]
     fn projects_page_local_words_and_keeps_heading_font_separate() {

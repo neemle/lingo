@@ -46,6 +46,7 @@ struct SourceFragment {
     bounds: Option<Bounds>,
     ink_boxes: Vec<Bounds>,
     line_height: f64,
+    rotation: Option<u16>,
     start_utf16: usize,
     block_index: Option<usize>,
     pending: bool,
@@ -57,6 +58,7 @@ struct SourceFragment {
 pub struct Region {
     bounds: Bounds,
     alignment: Alignment,
+    rotation: u16,
     line_height: f64,
     preferred_font_height: f64,
     limit_font_by_width: bool,
@@ -96,9 +98,14 @@ fn plan(fragments: &[SourceFragment]) -> Result<PageLayout> {
             page.overflow.push(index);
             continue;
         }
+        let Some(rotation) = fragment.rotation else {
+            page.overflow.push(index);
+            continue;
+        };
         let mut region = Region {
             bounds,
             alignment: Alignment::Left,
+            rotation,
             line_height: fragment.line_height,
             preferred_font_height: 0.0,
             limit_font_by_width: false,
@@ -126,7 +133,7 @@ fn plan(fragments: &[SourceFragment]) -> Result<PageLayout> {
         let font = region
             .style_fragment
             .and_then(|index| fragments[index].style.as_ref()?.font_height)
-            .filter(|height| *height > 0.0);
+            .filter(|height| *height > 0.0 && rotation % 180 == 0);
         region.preferred_font_height = font.map_or(region.line_height * 0.82, |height| {
             height.min(region.line_height * 0.90)
         });
@@ -149,6 +156,7 @@ fn plan(fragments: &[SourceFragment]) -> Result<PageLayout> {
     });
     remove_overlapping_regions(&mut page);
     for region in &mut page.regions {
+        if region.rotation != 0 { continue; }
         region.alignment = infer_alignment(
             region.fragments.iter().flat_map(|&index| fragments[index].ink_boxes.iter().copied()),
             region.line_height,
@@ -225,6 +233,9 @@ fn fits(
     block: Option<usize>,
     fragments: &[SourceFragment],
 ) -> bool {
+    if previous.rotation != region.rotation || region.rotation != 0 {
+        return false;
+    }
     if fragments[previous.fragments[0]].block_index != block {
         return false;
     }
@@ -263,6 +274,7 @@ mod tests {
             }),
             ink_boxes: Vec::new(),
             line_height: 0.02,
+            rotation: Some(0),
             start_utf16: position,
             block_index: Some(block),
             pending: false,

@@ -28,7 +28,7 @@ public sealed record PdfTranslationAnchor(PdfSampleBox? Bounds, PdfTranslationSo
     PdfTranslationMask[]? PendingMasks = null);
 public sealed record PdfTranslationMask(PdfSampleBox Bounds, double[] Background);
 public sealed record PdfTranslationRegion(PdfSampleBox Bounds, double PreferredFontHeight, bool LimitFontByWidth,
-    int[] Fragments, int? StyleFragment, PdfTranslationMask[] Masks, string Alignment = "left");
+    int[] Fragments, int? StyleFragment, PdfTranslationMask[] Masks, string Alignment = "left", int Rotation = 0);
 public sealed record PdfTranslationLayout(PdfTranslationRegion[] Regions, int[] Pending, int[] Overflow,
     PdfTranslationAnchor[] Anchors);
 public sealed record PdfTextLine(int Start, int End);
