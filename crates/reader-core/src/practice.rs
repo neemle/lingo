@@ -152,7 +152,7 @@ fn align_question(connection: &Connection, progress: &mut PracticeProgress) -> R
         .collection
         .as_ref()
         .map(|collection| collection.document_id.as_str());
-    let card =
+    let mut card =
         dictionary_transfer::collection_cards(connection, document_id, Some(&question.card_id))?
             .pop()
             .ok_or(if document_id.is_some() {
@@ -161,6 +161,11 @@ fn align_question(connection: &Connection, progress: &mut PracticeProgress) -> R
                 "Словникову картку не знайдено."
             })?;
     let reverse = progress.direction == "reverse";
+    if !reverse {
+        if let Some(id) = document_id {
+            dictionary_transfer::apply_collection_contexts(connection, id, std::slice::from_mut(&mut card))?;
+        }
+    }
     question.answers = question_answers(connection, &card, reverse)?;
     question.prompt = if reverse { card.translation } else { card.word };
     let correct_options = question
@@ -256,10 +261,10 @@ fn matches_prompt(card: &Vocabulary, reverse: bool, normalized: &str) -> bool {
 
 fn question_answers(db: &Connection, card: &Vocabulary, reverse: bool) -> Result<Vec<String>> {
     let mut answers = card.practice_answers(reverse);
-    if !reverse {
+    if !reverse && !card.context.trim().is_empty() {
         return Ok(answers);
     }
-    let key = answer_key(&card.translation);
+    let key = answer_key(prompt(card, reverse));
     let mut seen: BTreeSet<_> = answers.iter().map(|answer| answer_key(answer)).collect();
     let mut add_answer = |answer: String| {
         let trimmed = answer.trim();
@@ -267,8 +272,10 @@ fn question_answers(db: &Connection, card: &Vocabulary, reverse: bool) -> Result
             answers.push(trimmed.to_owned());
         }
     };
-    for surface in dictionary_transfer::observed_card_forms(db, &card.id)? {
-        add_answer(surface);
+    if reverse {
+        for surface in dictionary_transfer::observed_card_forms(db, &card.id)? {
+            add_answer(surface);
+        }
     }
     let mut query = db.prepare(
         "SELECT body FROM vocabulary WHERE id<>?1
@@ -280,11 +287,14 @@ fn question_answers(db: &Connection, card: &Vocabulary, reverse: bool) -> Result
     for body in rows {
         let other: Vocabulary = serde_json::from_str(&body.map_err(|error| error.to_string())?)
             .map_err(|error| error.to_string())?;
-        if matches_prompt(&other, true, &key) {
-            for answer in other.practice_answers(true).into_iter()
-                .chain(dictionary_transfer::observed_card_forms(db, &other.id)?)
-            {
+        if matches_prompt(&other, reverse, &key) {
+            for answer in other.practice_answers(reverse) {
                 add_answer(answer);
+            }
+            if reverse {
+                for surface in dictionary_transfer::observed_card_forms(db, &other.id)? {
+                    add_answer(surface);
+                }
             }
         }
     }
@@ -367,11 +377,28 @@ impl Store {
             if reverse { card.reverse.due_at } else { card.forward.due_at }
         };
         let now = crate::now();
-        let due = cards.iter().filter(|card| due_at(card) <= now);
+        let due = cards.iter().enumerate().filter(|(_, card)| due_at(card) <= now);
         let due_count = due.clone().count();
-        if progress.question.is_none() {
+        let selected = if let Some(question) = &progress.question {
+            cards.iter().position(|card| card.id == question.card_id)
+        } else {
             // Oldest scheduled reviews come before new cards in this direction.
-            if let Some(card) = due.min_by_key(|card| (due_at(card) == 0, due_at(card))) {
+            due.min_by_key(|(_, card)| (due_at(card) == 0, due_at(card)))
+                .map(|(index, _)| index)
+        };
+        let mut context = None;
+        if let Some(index) = selected {
+            if !reverse {
+                let card = &mut cards[index];
+                if let Some(id) = collection {
+                    dictionary_transfer::apply_collection_contexts(&tx, id, std::slice::from_mut(card))?;
+                }
+                if !card.context.trim().is_empty() {
+                    context = Some(card.context.clone());
+                }
+            }
+            if progress.question.is_none() {
+                let card = &cards[index];
                 let answers = question_answers(&tx, card, reverse)?;
                 let options = if progress.mode == 2 {
                     if collection.is_some() {
@@ -393,19 +420,6 @@ impl Store {
                     elapsed_ms: None,
                 });
                 changed = true;
-            }
-        }
-        let mut context = None;
-        if !reverse {
-            if let Some(card) = progress.question.as_ref()
-                .and_then(|question| cards.iter_mut().find(|card| card.id == question.card_id))
-            {
-                if let Some(id) = collection {
-                    dictionary_transfer::apply_collection_contexts(&tx, id, std::slice::from_mut(card))?;
-                }
-                if !card.context.trim().is_empty() {
-                    context = Some(card.context.clone());
-                }
             }
         }
         if changed {
@@ -546,6 +560,66 @@ pub(crate) fn restore_if_fresh(
 mod tests {
     use super::*;
     use crate::{ReviewState, Vocabulary};
+
+    #[test]
+    fn forward_practice_accepts_other_senses_only_without_context() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("reader.db");
+        let mut store = Store::open(&path).unwrap();
+        let document = store.import("livre.txt", "Le livre est sur la table.".as_bytes(), "fr").unwrap();
+        let book = Vocabulary {
+            id: String::new(),
+            word: "livre".into(),
+            translation: "книга".into(),
+            language: "fr".into(),
+            target_language: "uk".into(),
+            context: "Le livre est sur la table.".into(),
+            document_id: document.id,
+            forward: ReviewState::default(),
+            reverse: ReviewState::default(),
+            analysis: None,
+            expression: None,
+            sense: None,
+            accepted_translations: vec!["книжка".into()],
+        };
+        store.save_word(Vocabulary {
+            translation: "book".into(),
+            target_language: "en".into(),
+            accepted_translations: Vec::new(),
+            ..book.clone()
+        }).unwrap();
+        let book = store.save_word(book).unwrap();
+        let pound = store.save_word(Vocabulary {
+            id: String::new(),
+            translation: "фунт".into(),
+            context: String::new(),
+            document_id: String::new(),
+            accepted_translations: Vec::new(),
+            ..book.clone()
+        }).unwrap();
+
+        let queue = store.practice_queue(0, Some(PracticeSettings {
+            direction: "forward".into(), mode: 1, collection: None,
+        })).unwrap();
+        assert_eq!(queue.context, None);
+        let question = queue.progress.question.as_ref().unwrap();
+        assert_eq!(question.card_id, pound.id);
+        assert_eq!(question.answers, ["фунт", "книга", "книжка"]);
+
+        drop(store);
+        let mut store = Store::open(&path).unwrap();
+        let answer = store.answer_practice_question(queue.progress.revision, Some("КНИЖКА"), None).unwrap();
+        assert_eq!(answer.matches_dictionary, Some(true));
+        let progress = store.grade_practice(answer.progress.revision, 2).unwrap();
+
+        let queue = store.practice_queue(progress.revision, None).unwrap();
+        assert_eq!(queue.context.as_deref(), Some("Le livre est sur la table."));
+        let question = queue.progress.question.as_ref().unwrap();
+        assert_eq!(question.card_id, book.id);
+        assert_eq!(question.answers, ["книга", "книжка"]);
+        let answer = store.answer_practice_question(queue.progress.revision, Some("фунт"), None).unwrap();
+        assert_eq!(answer.matches_dictionary, Some(false));
+    }
 
     #[test]
     fn reverse_practice_accepts_and_retains_the_observed_form() {
