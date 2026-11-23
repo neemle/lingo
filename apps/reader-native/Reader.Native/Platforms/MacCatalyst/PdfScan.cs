@@ -107,12 +107,19 @@ internal static class PdfScan
     {
         using var pool = new NSAutoreleasePool();
         using var document = Open(path);
-        var pageCount = Math.Min(checked((int)document.PageCount), 2);
+        var pageCount = checked((int)document.PageCount);
+        var lastPage = pageCount - 1;
+        int[] probes = [0, Math.Min(1, lastPage), pageCount / 2, Math.Min(4, lastPage)];
         var sample = new StringBuilder();
-        for (var index = 0; index < pageCount; index++)
+        var letters = 0;
+        foreach (var index in probes.Distinct())
         {
             using var pagePool = new NSAutoreleasePool();
-            sample.AppendLine(PhotoOcr.ReadLanguageSample(Render(document, index, 1800).Bytes));
+            // A cover and title page may contain too little prose to identify a language.
+            var text = PhotoOcr.ReadLanguageSample(Render(document, index, 1800).Bytes);
+            sample.AppendLine(text);
+            letters += text.Count(char.IsLetter);
+            if (letters >= 200) break;
         }
         return sample.ToString();
     });
