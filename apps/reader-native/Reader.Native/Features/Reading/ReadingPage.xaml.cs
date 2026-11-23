@@ -915,15 +915,15 @@ public partial class ReadingPage : ContentPage
         catch (Exception error) { SpeechStatus.Text = $"Не вдалося зберегти позицію озвучення. {error.Message}"; }
     }
 
-    private async void SpeakClicked(object? sender, EventArgs args)
+    private async void RepeatSentenceClicked(object? sender, EventArgs args)
     {
         if (DetachedPdfReader.IsVisible)
         {
             if (speakingDetachedSentence) ClearDetachedSpeech();
-            await SpeakDetachedAsync(resumePlayback: false);
+            await SpeakDetachedAsync(resumePlayback: false, singleSentence: true);
             return;
         }
-        await SpeakAsync();
+        await SpeakAsync(singleSentence: true);
     }
 
     private async void ToggleSpeechClicked(object? sender, EventArgs args)
@@ -950,13 +950,13 @@ public partial class ReadingPage : ContentPage
         if (speechResume is { } resume) await SpeakAsync(resume);
     }
 
-    private async Task SpeakAsync(SpeechResume? resume = null)
+    private async Task SpeakAsync(SpeechResume? resume = null, bool singleSentence = false)
     {
         CancelDetachedSpeechTravel();
         var session = AppState.Session;
         if (PdfPageNotice.IsVisible || session.Busy || session.Document is not { } initial || session.Sentence is not { } sentence) return;
         StopWordDetail();
-        if (!ContinueSpeech.IsChecked && IsFootnote(initial, sentence))
+        if ((singleSentence || !ContinueSpeech.IsChecked) && IsFootnote(initial, sentence))
         {
             StopSpeech();
             SpeechStatus.Text = SkippedFootnote;
@@ -976,7 +976,7 @@ public partial class ReadingPage : ContentPage
         if (request != speechRequest || !IsSpeechSourceCurrent(session, source) || session.Busy) return;
         using var run = new CancellationTokenSource();
         modelSpeechRun = run;
-        try { await SpeakRunAsync(session, initial.Id, resume, request, run.Token); }
+        try { await SpeakRunAsync(session, initial.Id, resume, request, singleSentence, run.Token); }
         finally
         {
             if (ReferenceEquals(modelSpeechRun, run)) CancelModelSpeech();
@@ -984,7 +984,7 @@ public partial class ReadingPage : ContentPage
     }
 
     private async Task SpeakRunAsync(ReaderSession session, string documentId, SpeechResume? resume, int request,
-        CancellationToken token)
+        bool singleSentence, CancellationToken token)
     {
         var voice = SelectedVoice();
         var modelVoice = voice?.Engine is not null;
@@ -1021,7 +1021,8 @@ public partial class ReadingPage : ContentPage
                 status = LocalSpeech.CompletedStatus;
             else if (modelVoice)
             {
-                status = await PlayModelAsync(session, doc, sentence, voice!, ratePercent, startAtMs, textHash, request, token);
+                status = await PlayModelAsync(session, doc, sentence, voice!, ratePercent, startAtMs, textHash, request,
+                    singleSentence, token);
                 if (request != speechRequest) return;
                 if (status is not null && status != LocalSpeech.CompletedStatus)
                 {
@@ -1063,7 +1064,7 @@ public partial class ReadingPage : ContentPage
                 }
             }
             else SaveSpeechResume();
-            if (status != LocalSpeech.CompletedStatus || !ContinueSpeech.IsChecked) break;
+            if (status != LocalSpeech.CompletedStatus || singleSentence || !ContinueSpeech.IsChecked) break;
 
             int? boundary;
             try

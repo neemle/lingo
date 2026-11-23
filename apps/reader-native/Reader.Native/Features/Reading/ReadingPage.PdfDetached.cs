@@ -570,11 +570,9 @@ public partial class ReadingPage
         })) detachedTranslationScrollPending = false;
     }
 
-    private async void DetachedSpeakClicked(object? sender, EventArgs args) => await SpeakDetachedAsync(resumePlayback: false);
+    private async void DetachedSpeakClicked(object? sender, EventArgs args) => await SpeakDetachedAsync(resumePlayback: true);
 
-    private async void DetachedResumeSpeechClicked(object? sender, EventArgs args) => await SpeakDetachedAsync(resumePlayback: true);
-
-    private async Task SpeakDetachedAsync(bool resumePlayback)
+    private async Task SpeakDetachedAsync(bool resumePlayback, bool singleSentence = false)
     {
         CancelDetachedSpeechTravel();
         if (loadingDetachedSentence || detachedAddress is not { } address || detachedSentence is null) return;
@@ -610,15 +608,15 @@ public partial class ReadingPage
                         latest is null || latest.Position != sentence.Position) break;
                     detachedSentence = sentence = latest;
                 }
-                if (sentence.Footnote && !ContinueSpeech.IsChecked)
+                if (sentence.Footnote && (singleSentence || !ContinueSpeech.IsChecked))
                 {
                     DetachedSentenceStatus.Text = SkippedFootnote;
                     break;
                 }
                 var completed = sentence.Footnote || await PlayDetachedSentenceAsync(address, sentence,
-                    resumePlayback ? sentence.SpeechResume : null, token);
+                    resumePlayback ? sentence.SpeechResume : null, singleSentence, token);
                 resumePlayback = false;
-                if (!completed || !ContinueSpeech.IsChecked || !readingPageActive ||
+                if (!completed || singleSentence || !ContinueSpeech.IsChecked || !readingPageActive ||
                     !ReferenceEquals(detachedAudioCancellation, cancellation)) break;
 
                 var next = sentence.Position + 1;
@@ -647,7 +645,7 @@ public partial class ReadingPage
     }
 
     private async Task<bool> PlayDetachedSentenceAsync(DetachedAddress address, DetachedPdfSentence current,
-        SpeechResume? saved, CancellationToken token)
+        SpeechResume? saved, bool singleSentence, CancellationToken token)
     {
         var run = ++detachedAudioRun;
         var ratePercent = SpeechRatePercent;
@@ -720,7 +718,7 @@ public partial class ReadingPage
                         timer.Interval = TimeSpan.FromSeconds(2);
                         timer.Tick += (_, _) => { if (run == detachedAudioRun) checkpointDetachedSpeech?.Invoke(); };
                         timer.Start();
-                        if (ContinueSpeech.IsChecked)
+                        if (!singleSentence && ContinueSpeech.IsChecked)
                             _ = PrefetchNextAudioAsync(session, key, token, address.Page);
                     });
                 }
@@ -833,6 +831,7 @@ public partial class ReadingPage
         DetachedPrevious.IsEnabled = available && detachedSentence is { Position: > 0 };
         DetachedNext.IsEnabled = available && detachedSentence is { } current && current.Position + 1 < current.Total;
         DetachedSpeak.IsEnabled = available;
+        DetachedRepeatSpeech.IsEnabled = available && detachedSentence?.Footnote == false;
         DetachedEditSpeechText.IsEnabled = available && !AppState.Session.Busy;
         DetachedStopSpeech.IsVisible = speakingDetachedSentence;
         DetachedResumeSpeech.IsVisible = available && !speakingDetachedSentence && CanResumeDetachedSpeech();
@@ -865,6 +864,7 @@ public partial class ReadingPage
         DetachedShareTranslation.IsVisible = available && !translatingDetachedSentence && DisplayedDetachedTranslationPair() is not null;
         var playing = speakingDetachedSentence && !detachedPaused;
         DetachedSpeak.Text = playing ? "Ⅱ" : "▶";
-        SemanticProperties.SetDescription(DetachedSpeak, playing ? "Призупинити озвучення" : "Озвучити речення сторінки");
+        SemanticProperties.SetDescription(DetachedSpeak, playing ? "Призупинити озвучення"
+            : detachedPaused || DetachedResumeSpeech.IsVisible ? "Продовжити озвучення" : "Озвучити речення сторінки");
     }
 }

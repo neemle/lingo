@@ -130,7 +130,8 @@ public partial class ReadingPage
         source == SpeechSourceFor(document, sentence);
 
     private async Task<string?> PlayModelAsync(ReaderSession session, Document document, Sentence sentence,
-        VoiceChoice voice, int ratePercent, int startAtMs, string textHash, int request, CancellationToken token)
+        VoiceChoice voice, int ratePercent, int startAtMs, string textHash, int request, bool singleSentence,
+        CancellationToken token)
     {
         var source = SpeechSourceFor(document, sentence);
         var key = new ClipKey(source, voice.Engine!, voice.Speaker, ratePercent / 100f);
@@ -164,7 +165,7 @@ public partial class ReadingPage
                 timer.Start();
                 PauseSpeech.IsEnabled = true;
                 SpeechStatus.Text = "Озвучення поточного речення…";
-                if (ContinueSpeech.IsChecked)
+                if (!singleSentence && ContinueSpeech.IsChecked)
                     _ = PrefetchNextAudioAsync(session, key, token);
             });
         }
