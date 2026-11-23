@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 const RETRY_SECONDS: i64 = 15;
 const INTERACTIVE_RETRY_SECONDS: i64 = 2;
 const PDF_OCR_POLL_SECONDS: i64 = 15;
+const PAGE_TRANSLATION_REVISION: u32 = 1;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -384,16 +385,22 @@ impl Store {
                 ..progress
             });
         };
-        let source: Option<String> = self.connection.query_row(
-            "SELECT json_extract(body,'$.language') FROM documents
+        let source: Option<(String, bool)> = self.connection.query_row(
+            "SELECT json_extract(body,'$.language'),
+                    json_extract(body,'$.format')='pdf' OR coalesce(json_array_length(body,'$.ocrLines'),0)>0
+             FROM documents
              WHERE id=?1 AND json_extract(body,'$.currentRevisionId')=?2",
             params![id, revision],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional().map_err(database_error)?;
-        let Some(source) = source.filter(|source| source != target) else {
+        let Some((source, positioned)) = source.filter(|(source, _)| source != target) else {
             return Ok(progress);
         };
-        let (route_identity, missing_packages) = self.background_translation_route(&source, target)?;
+        let (mut route_identity, missing_packages) = self.background_translation_route(&source, target)?;
+        if positioned && missing_packages.is_none() {
+            route_identity = serde_json::to_string(&(PAGE_TRANSLATION_REVISION, route_identity))
+                .map_err(database_error)?;
+        }
         let now = crate::now();
         // Reserve before inference so concurrent OCR can invalidate the exact checkpoint.
         // A different route uses different cache keys, even for an unchanged document revision.
@@ -582,34 +589,15 @@ impl Store {
             let Some(page) = canonical.into_iter().chain(detached.map(usize::from)).min() else {
                 return Ok(done);
             };
-            let rows = self.pdf_page_translation_result_interruptible(
-                &document.id,
-                page as u16,
-                target,
-                false,
-                true,
-                None,
-                canceled,
-            );
-            if canceled() { return Err(canceled_error()); }
-            let deferred = matches!(&rows, Err(TranslationBatchError::Deferred { .. }));
-            let rows = if deferred {
-                self.pdf_page_translation_result(&document.id, page as u16, target, true, true)
-            } else { rows };
-            let translated_page = rows
-                .as_ref()
-                .ok()
-                .filter(|rows| rows.iter().any(|row| row.text.is_some()))
-                .map(|_| page as u16);
-            return Ok(TranslationWarmStep {
-                next: Some(if deferred { start } else { page + 1 }),
-                incomplete: rows.map_or(true, |rows| rows.iter().any(|row| row.text.is_none())),
-                deferred,
-                translated_page,
-                ..done
-            });
+            return self.warm_positioned_translation_page(&document.id, target, page as u16, start, page + 1, canceled);
         }
         if start >= document.sentences.len() {
+            // OCR photos also have a text-only view. Warm its sentences before the page layout.
+            if start == document.sentences.len() && document.format != "pdf" &&
+                document.ocr_lines.as_ref().is_some_and(|lines| !lines.is_empty())
+            {
+                return self.warm_positioned_translation_page(&document.id, target, 0, start, start + 1, canceled);
+            }
             return Ok(done);
         }
         let translated = match self.translate_document_paragraph_until_canceled(
@@ -657,6 +645,26 @@ impl Store {
             incomplete,
             translated_sentence_ids: translated_sentence_ids(translated),
             ..done
+        })
+    }
+
+    fn warm_positioned_translation_page(
+        &mut self, id: &str, target: &str, page: u16, start: usize, next: usize, canceled: &dyn Fn() -> bool,
+    ) -> Result<TranslationWarmStep> {
+        let rows = self.pdf_page_translation_result_interruptible(id, page, target, false, true, None, canceled);
+        if canceled() { return Err("Фоновий переклад скасовано.".into()); }
+        let deferred = matches!(&rows, Err(TranslationBatchError::Deferred { .. }));
+        let rows = if deferred {
+            self.pdf_page_translation_result(id, page, target, true, true)
+        } else { rows };
+        let translated_page = rows.as_ref().ok()
+            .filter(|rows| rows.iter().any(|row| row.text.is_some())).map(|_| page);
+        Ok(TranslationWarmStep {
+            next: Some(if deferred { start } else { next }),
+            incomplete: rows.map_or(true, |rows| rows.iter().any(|row| row.text.is_none())),
+            deferred,
+            translated_page,
+            translated_sentence_ids: Vec::new(),
         })
     }
 }

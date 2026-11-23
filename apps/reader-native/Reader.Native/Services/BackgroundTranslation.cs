@@ -361,7 +361,9 @@ internal sealed class BackgroundTranslation
             SetStatus(progress.MissingPackages is not null
                 ? $"Для «{title}» бракує офлайн-маршруту."
                 : progress.TranslatedPage is int page
-                    ? $"Переклад сторінки {page + 1} · «{title}»."
+                    ? work.Document.Format == "pdf"
+                        ? $"Переклад сторінки {page + 1} · «{title}»."
+                        : $"Переклад фото «{title}»."
                     : $"Перевірено кеш · «{title}».");
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)

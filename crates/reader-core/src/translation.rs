@@ -2230,6 +2230,53 @@ mod tests {
     }
 
     #[test]
+    fn background_layout_revision_revisits_completed_pdfs_and_warms_both_photo_views() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("library.sqlite")).unwrap();
+        let line = |text: &str, x| crate::ocr::OcrLine {
+            page: 0, text: text.into(), x, y: 0.15, width: 0.34, height: 0.036,
+            rotation: None, confidence: None, correction: None, block_start: false,
+            words: Vec::new(), source_span: None,
+        };
+        let left = "Le phare de Calvi est ouvert";
+        let right = "et le gardien allume la lampe.";
+        let lines = vec![line(left, 0.1), line(right, 0.53)];
+        let pdf = store.import_scanned_pdf("page.pdf", b"%PDF-1.4\n", "fr", lines.clone(), 1).unwrap();
+        let photo = store.import_image("photo.png", b"\x89PNG\r\n\x1a\n", "fr", lines).unwrap();
+        let text = store.import("reader.txt", b"Le voilier approche.", "fr").unwrap();
+        let route = french_uk_route_with_invalid_assets(&store);
+        store.update_reader_preference(
+            crate::reader_preferences::ReaderPreferenceChange::BackgroundTranslation { value: true },
+        ).unwrap();
+        let (legacy_identity, missing) = store.background_translation_route("fr", "uk").unwrap();
+        assert!(missing.is_none());
+        for document in [&text, &pdf, &photo] {
+            store.connection.execute(
+                "INSERT INTO background_translation_progress(document_id,target,revision_id,cursor,incomplete,resume_at,route_identity)
+                 VALUES (?1,'uk',?2,8,0,NULL,?3)",
+                params![document.id, document.current_revision_id.as_deref().unwrap(), legacy_identity],
+            ).unwrap();
+        }
+        let whole = sentence_input(&store, &photo, 0, "uk", PageBoundaries::Canonical).unwrap().0;
+        let fixtures = [(whole.as_str(), "Маяк і його охоронець."), (left, "Відкритий маяк Калві"),
+            (right, "А охоронець запалює лампу.")];
+        for (source, target) in fixtures {
+            store.save_cached_segments([(unit_cache_key(&route, source).unwrap(), &[target.to_owned()][..])]).unwrap();
+        }
+        let progress = |store: &mut Store, document: &Document| {
+            serde_json::to_value(store.advance_background_translation(
+                &document.id, document.current_revision_id.as_deref().unwrap(), "uk",
+            ).unwrap()).unwrap()
+        };
+        assert!(progress(&mut store, &text)["resumeAt"].is_null());
+        assert_eq!(progress(&mut store, &pdf)["translatedPage"], 0);
+        let text_view = progress(&mut store, &photo);
+        assert_eq!(text_view["translatedSentenceIds"], serde_json::json!([photo.sentences[0].id]));
+        assert_eq!(progress(&mut store, &photo)["translatedPage"], 0);
+        assert!(progress(&mut store, &photo)["resumeAt"].is_null());
+    }
+
+    #[test]
     fn readiness_prefers_a_working_pivot_and_identifies_only_missing_packages() {
         let edge = |source: &str, target: &str| ModelEdge {
             source: source.into(),
