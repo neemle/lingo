@@ -790,12 +790,18 @@ public partial class ReadingPage
             if (!preserveArtwork) canvas.FillRectangle(page);
             var regions = new List<Region>();
             var overflow = new List<PdfPageTranslationRow>();
+            var pending = new List<(RectF Bounds, PdfPageTranslationRow Source)>();
             foreach (var row in rows)
             {
                 var bounds = Bounds(row, page, out var lineHeight, out var style);
                 if (bounds is not { } rect)
                 {
                     overflow.Add(row);
+                    continue;
+                }
+                if (preserveArtwork && !HasPdfTranslation(row))
+                {
+                    pending.Add((rect, row));
                     continue;
                 }
                 var grouped = new List<PdfPageTranslationRow> { row };
@@ -818,7 +824,7 @@ public partial class ReadingPage
                 regions.Add(new(rect, lineHeight, grouped, style, row.SourceBlockIndex));
             }
 
-            if (rows.Length > 0 && regions.Count == 0)
+            if (rows.Length > 0 && regions.Count == 0 && pending.Count == 0)
             {
                 canvas.FillRectangle(page);
                 var reflowBounds = new RectF(page.X + (float)visibleWidth.Left * page.Width, page.Y,
@@ -830,6 +836,11 @@ public partial class ReadingPage
 
             foreach (var region in regions)
             {
+                if (pending.Any(item => OverlapsInk(region.Bounds, item.Bounds)))
+                {
+                    overflow.AddRange(region.Rows);
+                    continue;
+                }
                 var text = new StringBuilder();
                 var fragments = new List<Fragment>();
                 foreach (var row in region.Rows)
@@ -847,6 +858,17 @@ public partial class ReadingPage
                 if (!DrawFitted(canvas, text.ToString(), region.Bounds, fragments, gloss, preferredSize, minimumSize,
                     preserveArtwork ? () => MaskRegion(region.Rows) : null, region.Appearance))
                     overflow.AddRange(fragments.Select(fragment => fragment.Source));
+            }
+
+            foreach (var (bounds, row) in pending)
+            {
+                // Keep the original pixels visible and selectable until this row has a translation.
+                hitTargets.Add((bounds, row));
+                if (active is null || row.StartUtf16 >= active.EndUtf16 || row.EndUtf16 <= active.StartUtf16)
+                    continue;
+                ActiveBounds = ActiveBounds is { } previous ? Union(previous, bounds) : bounds;
+                canvas.FillColor = Color.FromRgba(255, 212, 122, 64);
+                canvas.FillRectangle(bounds);
             }
 
             OverflowChanged?.Invoke(overflow.OrderBy(row => row.StartUtf16).ToArray());
@@ -876,6 +898,10 @@ public partial class ReadingPage
                     (float)width * page.Width + 2, (float)height * page.Height + 2);
             }
         }
+
+        private static bool OverlapsInk(RectF first, RectF second) =>
+            Math.Min(first.Right, second.Right) - Math.Max(first.Left, second.Left) > 1 &&
+            Math.Min(first.Bottom, second.Bottom) - Math.Max(first.Top, second.Top) > 1;
 
         private static bool FitsRegion(Region region, RectF bounds, float lineHeight, int? sourceBlockIndex,
             PdfBoxAppearance? style)
