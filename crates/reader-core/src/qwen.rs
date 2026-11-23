@@ -39,6 +39,7 @@ pub(crate) const CPU_BUDGET: ModelBudget = ModelBudget {
     working_mib: 1024,
     minimum_total_mib: 6144,
 };
+#[cfg(target_vendor = "apple")]
 const METAL_BUDGET: ModelBudget = ModelBudget {
     working_mib: 2560,
     ..CPU_BUDGET
@@ -1187,7 +1188,11 @@ fn with_prompt_context<T>(
     let backend = backend()?;
     let path = directory.join("model.gguf");
     check()?;
-    if cfg!(target_vendor = "apple") && METAL_BUDGET.readiness().ready && backend.supports_gpu_offload() {
+    #[cfg(target_vendor = "apple")]
+    if METAL_BUDGET.readiness().ready && backend.supports_gpu_offload() {
+        // This can run on a managed worker thread. Drain any temporary Metal
+        // objects after the context and weights drop, even on cancellation.
+        let _pool = metal_autorelease::Pool::new();
         if let Ok(model) = load_model(backend, &path, 99) {
             if let Ok(mut context) = model.new_context(backend, context_parameters(true)) {
                 return run(&model, &mut context);
@@ -1199,6 +1204,33 @@ fn with_prompt_context<T>(
     let model = load_model(backend, &path, 0)?;
     let mut context = model.new_context(backend, context_parameters(false)).map_err(runtime_error)?;
     run(&model, &mut context)
+}
+
+#[cfg(target_vendor = "apple")]
+mod metal_autorelease {
+    use std::ffi::c_void;
+
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        fn objc_autoreleasePoolPush() -> *mut c_void;
+        fn objc_autoreleasePoolPop(pool: *mut c_void);
+    }
+
+    pub(super) struct Pool(*mut c_void);
+
+    impl Pool {
+        pub(super) fn new() -> Self {
+            // The opaque token belongs to the current thread and this scope.
+            Self(unsafe { objc_autoreleasePoolPush() })
+        }
+    }
+
+    impl Drop for Pool {
+        fn drop(&mut self) {
+            // The token is popped once on the same thread it was pushed from.
+            unsafe { objc_autoreleasePoolPop(self.0) };
+        }
+    }
 }
 
 /// One short CPU decode verifies the staged GGUF and runtime without generating an explanation.
