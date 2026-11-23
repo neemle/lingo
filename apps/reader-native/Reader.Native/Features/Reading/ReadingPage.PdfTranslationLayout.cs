@@ -21,7 +21,7 @@ public partial class ReadingPage
     private int pdfLayoutRequestId;
     private bool refreshingPdfLayout;
     private PdfAutoTranslation? pendingPdfAutoTranslation;
-    private PdfAutoTranslation? lastPdfAutoTranslation;
+    private (PdfAutoTranslation Request, int Attempts)? pdfAutoAttempts;
     private (VerticalStackLayout Panel, PdfPageTranslationRow[] Rows, Label[] Labels, Sentence? Active)? overflowContent;
 
     private (ScrollView Viewport, GraphicsView Surface) ActivePdfTranslationLayout() =>
@@ -42,8 +42,32 @@ public partial class ReadingPage
 
     private async void TranslatePdfPageClicked(object? sender, EventArgs args)
     {
-        if (pdfLayoutRequest is { } address && translatingPdfLayout is null)
+        if (PdfPageNeedsPackages)
+        {
+            await OpenTranslationPackagesAsync();
+            return;
+        }
+        if (pdfLayoutRequest is { } address && translatingPdfLayout is null && PdfPageRouteReady(address))
             await LoadPdfPageLayoutAsync(address, cachedOnly: false);
+    }
+
+    private bool PdfPageRouteReady(PdfLayoutAddress address) =>
+        readiness is { Ready: true } && AppState.Session.Document is { } document &&
+        readinessPair == (document.Language, address.Target);
+
+    private bool PdfPageNeedsPackages => PdfUsesPageTranslation && readiness is { Missing.Length: > 0 } &&
+        CurrentPdfLayoutAddress() is { } address && AppState.Session.Document is { } document &&
+        readinessPair == (document.Language, address.Target);
+
+    private void UpdateTranslationPackageActions()
+    {
+        var session = AppState.Session;
+        var missing = TargetCode is { } target && session.Document is { } document &&
+            readinessPair == (document.Language, target) && readiness is { Missing.Length: > 0 };
+        var showFooterAction = missing && !PdfPageNeedsPackages;
+        OpenTranslationPackages.IsVisible = showFooterAction && session.Document is { } source &&
+            session.Sentence is { } sentence && !IsFootnote(source, sentence);
+        DetachedOpenTranslationPackages.IsVisible = showFooterAction && DetachedReadiness.IsVisible;
     }
 
     private PdfLayoutAddress? CurrentPdfLayoutAddress() =>
@@ -73,13 +97,11 @@ public partial class ReadingPage
         TranslationViewport.IsVisible = !PdfTranslationViewport.IsVisible;
         DetachedTranslationViewport.IsVisible = !DetachedPdfTranslationViewport.IsVisible;
         var translatingPage = translatingPdfLayout == address && address is not null;
-        TranslatePdfPage.IsEnabled = DetachedTranslatePdfPage.IsEnabled = available && translatingPdfLayout is null;
-        TranslatePdfPage.Text = DetachedTranslatePdfPage.Text = translatingPage ? "Перекладаємо…" : "Перекласти сторінку";
         if (address != pdfLayoutRequest)
         {
             pdfLayoutRequest = address;
             pdfLayoutRequestId++;
-            lastPdfAutoTranslation = null;
+            pdfAutoAttempts = null;
             pdfLayoutRows = [];
             pdfLayoutGeometry = [];
             pdfLayoutSentence = null;
@@ -90,6 +112,8 @@ public partial class ReadingPage
         }
         else if (shown && address is not null && pdfLayoutRows.Length == 0 && pdfLayoutStatus is null)
             _ = LoadPdfPageLayoutAsync(address, cachedOnly: true);
+        UpdatePdfTranslationStatus(shown ? address : null, detached, translatingPage);
+        UpdateTranslationPackageActions();
         var hasRows = pdfLayoutRows.Any(row => !string.IsNullOrWhiteSpace(row.Text));
         ReadPdfTranslationText.IsVisible = shown && !detached && hasRows;
         DetachedReadPdfTranslationText.IsVisible = shown && detached && hasRows;
@@ -106,6 +130,35 @@ public partial class ReadingPage
         SchedulePdfAutoTranslation();
     }
 
+    private void UpdatePdfTranslationStatus(PdfLayoutAddress? address, bool detached, bool translatingPage)
+    {
+        var ready = address is not null && PdfPageRouteReady(address);
+        var needsPackages = address is not null && PdfPageNeedsPackages;
+        TranslatePdfPage.IsEnabled = DetachedTranslatePdfPage.IsEnabled =
+            (ready || needsPackages) && translatingPdfLayout is null && !AppState.Session.Busy;
+        TranslatePdfPage.Text = DetachedTranslatePdfPage.Text = translatingPage ? "Перекладаємо…"
+            : needsPackages ? "Мовні пакети" : "Перекласти сторінку";
+        string? text = null;
+        if (address is not null)
+        {
+            if (translatingPage) text = "Перекладаємо сторінку…";
+            else if (!ready && AppState.Session.Document is { } document)
+                text = readinessPair == (document.Language, address.Target)
+                    ? ReadinessMessage() : "Перевіряємо мовні пакети…";
+            else if (pdfLayoutStatus is { Length: > 0 }) text = pdfLayoutStatus;
+            else if (pdfLayoutRows.Any(row => row.Text is null))
+                text = pdfLayoutRows.Any(row => row.Text is not null)
+                    ? "Переклад сторінки частковий." : "Сторінка очікує перекладу.";
+        }
+
+        PdfLayoutStatusLabel.Text = DetachedPdfLayoutStatusLabel.Text = text;
+        PdfLayoutStatusLabel.IsVisible = !detached && text is not null;
+        DetachedPdfLayoutStatusLabel.IsVisible = detached && text is not null;
+    }
+
+    private int PdfAttemptCount(PdfAutoTranslation request) =>
+        pdfAutoAttempts is { } attempts && attempts.Request == request ? attempts.Attempts : 0;
+
     private PdfAutoTranslation? NextPdfAutoTranslation()
     {
         var session = AppState.Session;
@@ -117,7 +170,7 @@ public partial class ReadingPage
             return null;
 
         var request = new PdfAutoTranslation(address, readinessRequest);
-        return request == lastPdfAutoTranslation ? null : request;
+        return PdfAttemptCount(request) < 2 ? request : null;
     }
 
     private void SchedulePdfAutoTranslation()
@@ -130,7 +183,7 @@ public partial class ReadingPage
 
     private async Task TranslatePdfAfterNavigationAsync(PdfAutoTranslation request)
     {
-        await Task.Delay(350);
+        await Task.Delay(PdfAttemptCount(request) == 0 ? 350 : 2500);
         if (!ReferenceEquals(pendingPdfAutoTranslation, request)) return;
         pendingPdfAutoTranslation = null;
         if (NextPdfAutoTranslation() == request)
@@ -172,7 +225,8 @@ public partial class ReadingPage
         if (!cachedOnly)
         {
             translatingPdfLayout = address;
-            lastPdfAutoTranslation = new(address, readinessRequest);
+            var attempt = new PdfAutoTranslation(address, readinessRequest);
+            pdfAutoAttempts = (attempt, PdfAttemptCount(attempt) + 1);
         }
         RefreshPdfTranslationLayout();
         try
@@ -181,8 +235,8 @@ public partial class ReadingPage
                 address.Target, cachedOnly);
             if (request != pdfLayoutRequestId || CurrentPdfLayoutAddress() != address) return;
             pdfLayoutRows = rows;
-            pdfLayoutStatus = rows.Any(row => row.Text is not null)
-                ? "" : cachedOnly ? "Перекладіть сторінку, щоб заповнити її." : "Для цієї сторінки переклад недоступний.";
+            pdfLayoutStatus = rows.Length == 0 ? "На сторінці немає тексту для перекладу."
+                : !cachedOnly && rows.All(row => row.Text is null) ? "Переклад сторінки поки недоступний." : "";
         }
         catch (Exception error)
         {
@@ -327,7 +381,7 @@ public partial class ReadingPage
             ? (DetachedWordCard.IsVisible && detachedWordTranslation?.Target == TargetCode ? detachedWordTranslation?.Text : null)
             : (WordCard.IsVisible && wordTranslation?.Target == TargetCode ? wordTranslation?.Text : null);
         var drawing = new TranslatedPdfDrawing(pdfLayoutRows, pdfLayoutGeometry, pdfLayoutOffset,
-            pdfLayoutSentence, gloss, pdfLayoutStatus, background.IsVisible);
+            pdfLayoutSentence, gloss, background.IsVisible);
         var overflow = detached ? DetachedPdfTranslationOverflow : PdfTranslationOverflow;
         drawing.OverflowChanged = rows => Dispatcher.Dispatch(() =>
         {
@@ -434,7 +488,7 @@ public partial class ReadingPage
     }
 
     private sealed class TranslatedPdfDrawing(PdfPageTranslationRow[] rows, OcrLine[] geometry, int offset,
-        Sentence? active, string? gloss, string? status, bool preserveArtwork) : IDrawable
+        Sentence? active, string? gloss, bool preserveArtwork) : IDrawable
     {
         private sealed record Region(RectF Bounds, List<PdfPageTranslationRow> Rows);
         private readonly record struct Fragment(PdfPageTranslationRow Source, int Start, int End, bool Active);
@@ -519,10 +573,6 @@ public partial class ReadingPage
                     overflow.AddRange(fragments.Select(fragment => fragment.Source));
             }
 
-            var message = !string.IsNullOrWhiteSpace(status) ? status :
-                overflow.Count > 0 ? "Частина перекладу під сторінкою ↓" : null;
-            if (message is not null)
-                DrawFitted(canvas, message, new RectF(12, 8, Math.Max(1, page.Width - 24), 26));
             OverflowChanged?.Invoke(overflow.OrderBy(row => row.StartUtf16).ToArray());
         }
 

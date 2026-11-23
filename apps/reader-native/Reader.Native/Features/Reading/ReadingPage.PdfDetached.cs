@@ -835,7 +835,7 @@ public partial class ReadingPage
             && CurrentDetachedTranslation() is null;
         if (DetachedReadiness.IsVisible)
             DetachedReadiness.Text = detachedSentence?.Footnote == true ? "Виноски залишаються в оригіналі." : ReadinessMessage();
-        DetachedOpenTranslationPackages.IsVisible = DetachedReadiness.IsVisible && readiness is { Missing.Length: > 0 };
+        UpdateTranslationPackageActions();
         DetachedEditTranslation.IsEnabled = available && detachedSentence?.Footnote == false && !changingDetachedAnnotation && TargetCode is not null;
         DetachedEditTranslation.Text = ReviewedDetachedTranslation() is null ? "Свій переклад…" : "Редагувати переклад…";
         UpdateModelTranslation();

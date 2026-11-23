@@ -362,7 +362,6 @@ public partial class ReadingPage : ContentPage
                 || alignment is not null && !ReferenceEquals(unit, alignment.Value.Unit)
                 || document is not null && HasUntranslatedUnits(document, window));
         TranslateSentence.IsEnabled = active && !session.Busy && !translating && readiness?.Ready == true && text is null;
-        OpenTranslationPackages.IsVisible = active && readiness is { Missing.Length: > 0 };
         if (DetachedPdfReader.IsVisible) UpdateDetachedControls();
         else UpdateSentenceMenu();
         TargetLanguage.IsEnabled = (active || DetachedPdfReader.IsVisible) && !session.Busy;
@@ -413,7 +412,9 @@ public partial class ReadingPage : ContentPage
         if (DetachedPdfReader.IsVisible) _ = RestoreDetachedTranslationAsync();
     }
 
-    private async void OpenTranslationPackagesClicked(object? sender, EventArgs args)
+    private async void OpenTranslationPackagesClicked(object? sender, EventArgs args) => await OpenTranslationPackagesAsync();
+
+    private async Task OpenTranslationPackagesAsync()
     {
         if (readiness is not { Missing.Length: > 0 } state) return;
         try
@@ -423,7 +424,8 @@ public partial class ReadingPage : ContentPage
         }
         catch (Exception error)
         {
-            if (DetachedPdfReader.IsVisible) ShowDetachedTranslation(error.Message);
+            if (PdfUsesPageTranslation) await DisplayAlertAsync("Мовні пакети", error.Message, "Гаразд");
+            else if (DetachedPdfReader.IsVisible) ShowDetachedTranslation(error.Message);
             else TranslationNotice.Text = error.Message;
         }
     }
