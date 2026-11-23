@@ -19,12 +19,13 @@ internal static class ShareInbox
     private static readonly SemaphoreSlim Staging = new(1, 1);
     private static readonly Lazy<string> Storage = new(Initialize);
 
-    internal static async Task<ShareInboxItem> StageAsync(string kind, string name, Stream source, bool scanPdf = false)
+    internal static async Task<ShareInboxItem> StageAsync(string kind, string name, Stream source, bool scanPdf = false,
+        CancellationToken cancellation = default, IProgress<long>? progress = null)
     {
         var id = Guid.NewGuid();
         name = SafeName(name);
         var maximum = Limit(kind, name);
-        await Staging.WaitAsync().ConfigureAwait(false);
+        await Staging.WaitAsync(cancellation).ConfigureAwait(false);
         try
         {
             if (EntryFolders().Take(MaxItems).Count() == MaxItems)
@@ -39,11 +40,13 @@ internal static class ShareInbox
                 await using (var target = new FileStream(Path.Combine(temporary, "payload"),
                     FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.Asynchronous))
                 {
-                    await NativeFiles.CopyBoundedAsync(source, target, maximum).ConfigureAwait(false);
+                    await NativeFiles.CopyBoundedAsync(source, target, maximum, cancellation, progress).ConfigureAwait(false);
+                    cancellation.ThrowIfCancellationRequested();
                     length = target.Length;
                     if (length == 0) throw new InvalidDataException("Вхідний матеріал порожній.");
                     target.Flush(flushToDisk: true);
                 }
+                cancellation.ThrowIfCancellationRequested();
                 var item = new ShareInboxItem(id, kind, name, DateTimeOffset.UtcNow, length, ScanPdf: scanPdf);
                 WriteMetadata(Path.Combine(temporary, "item.json"), item);
                 Directory.Move(temporary, Folder(id));

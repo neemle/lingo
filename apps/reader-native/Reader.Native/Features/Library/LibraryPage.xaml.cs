@@ -10,6 +10,7 @@ public partial class LibraryPage : ContentPage
 {
     private const int MaxDocumentTitleLength = 240;
     private bool importing;
+    private CancellationTokenSource? pickerCopyCancellation;
     private bool choosingImportSource;
     private bool changingLanguage;
     private bool editingDocument;
@@ -167,13 +168,16 @@ public partial class LibraryPage : ContentPage
     {
         if (importing || changingLanguage || AppState.Session.Busy || !DesktopImport.Gate.Wait(0)) return;
         importing = true;
+        pauseExternalBatch = false;
+        PauseExternalBatch.IsEnabled = true;
+        var staged = new List<ShareInboxItem>();
+        using var copying = new CancellationTokenSource();
         try
         {
             var options = new PickOptions { PickerTitle = scanPdf ? "Виберіть сканований PDF" : "Додати документи або фотографії" };
             IEnumerable<FileResult?> selected = scanPdf
                 ? await FilePicker.Default.PickAsync(options) is { } pdf ? [pdf] : []
                 : await FilePicker.Default.PickMultipleAsync(options);
-            var staged = new List<ShareInboxItem>();
             var rejected = 0;
             string? firstIssue = null;
             string? capacityIssue = null;
@@ -181,17 +185,24 @@ public partial class LibraryPage : ContentPage
             async Task ProcessBatchAsync()
             {
                 ImportStatus.Text = "";
-                foreach (var item in staged)
+                for (var index = 0; index < staged.Count && !pauseExternalBatch; index++)
                 {
+                    var item = staged[index];
+                    PauseExternalBatch.IsVisible = index + 1 < staged.Count;
                     try { lastDocument = await ImportInboxItemAsync(item) ?? lastDocument; }
-                    catch (Exception error) { await DisplayAlertAsync(item.Name, error.Message, "Гаразд"); }
+                    catch (Exception error)
+                    {
+                        rejected++;
+                        firstIssue ??= $"{item.Name} · {error.Message}";
+                    }
                 }
+                PauseExternalBatch.IsVisible = false;
                 staged.Clear();
             }
 
             foreach (var file in selected.OfType<FileResult>())
             {
-                while (true)
+                while (!pauseExternalBatch && !copying.IsCancellationRequested)
                 {
                     try
                     {
@@ -200,11 +211,10 @@ public partial class LibraryPage : ContentPage
                         if (!DesktopFile.Supports(file.FileName))
                             throw new InvalidDataException("Формат файлу не підтримується.");
 
-                        ImportStatus.Text = "Зберігаємо локальні копії для імпорту…";
-                        await using var source = await file.OpenReadAsync();
-                        staged.Add(await ShareInbox.StageAsync("file", file.FileName, source, scanPdf));
+                        staged.Add(await StageSelectedFileAsync(file, scanPdf, copying));
                         break;
                     }
+                    catch (OperationCanceledException) when (copying.IsCancellationRequested) { break; }
                     catch (ShareInboxFullException) when (staged.Count > 0)
                     {
                         // Committed imports release slots before we retry the same file.
@@ -222,26 +232,64 @@ public partial class LibraryPage : ContentPage
                         break;
                     }
                 }
-                if (capacityIssue is not null) break;
+                if (capacityIssue is not null || pauseExternalBatch || copying.IsCancellationRequested) break;
             }
-            ImportStatus.Text = "";
+            if (!pauseExternalBatch && !copying.IsCancellationRequested) await ProcessBatchAsync();
             if (firstIssue is not null || capacityIssue is not null)
             {
-                var failed = firstIssue is null ? "" : $"Не збережено файлів: {rejected}. {firstIssue}";
+                var failed = firstIssue is null ? "" : $"Не вдалося додати файлів: {rejected}. {firstIssue}";
                 await DisplayAlertAsync("Імпорт", $"{failed} {capacityIssue}".Trim(), "Гаразд");
             }
 
-            await ProcessBatchAsync();
-            if (lastDocument is not null) await AppState.OpenAsync(lastDocument);
+            if (!pauseExternalBatch && !copying.IsCancellationRequested && lastDocument is not null)
+                await AppState.OpenAsync(lastDocument);
         }
         catch (Exception error) { await DisplayAlertAsync("Імпорт", error.Message, "Гаразд"); }
         finally
         {
             importing = false;
-            ImportStatus.Text = "";
+            PauseExternalBatch.IsVisible = false;
+            ImportStatus.Text = copying.IsCancellationRequested
+                ? staged.Count > 0 ? "Копіювання зупинено. Готові копії доступні у вхідних матеріалах." : "Копіювання зупинено."
+                : pauseExternalBatch ? "Імпорт призупинено. Решта добірки доступна у вхідних матеріалах." : "";
             DesktopImport.Gate.Release();
             await RefreshShareInboxAsync();
         }
+    }
+
+    private async Task<ShareInboxItem> StageSelectedFileAsync(FileResult file, bool scanPdf, CancellationTokenSource copying)
+    {
+        var reporting = true;
+        pickerCopyCancellation = copying;
+        CancelImportCopy.IsVisible = CancelImportCopy.IsEnabled = true;
+        ImportStatus.Text = $"Копіюємо «{file.FileName}»…";
+        try
+        {
+            await using var source = await file.OpenReadAsync();
+            var total = source.CanSeek ? source.Length - source.Position : 0;
+            var progress = new Progress<long>(bytes =>
+            {
+                if (!reporting || copying.IsCancellationRequested) return;
+                var copied = $"{bytes / 1048576d:0.#}";
+                ImportStatus.Text = $"Копіюємо «{file.FileName}» · {copied}" +
+                    (total > 0 ? $" / {total / 1048576d:0.#} МіБ" : " МіБ");
+            });
+            return await ShareInbox.StageAsync("file", file.FileName, source, scanPdf, copying.Token, progress);
+        }
+        finally
+        {
+            reporting = false;
+            pickerCopyCancellation = null;
+            CancelImportCopy.IsVisible = false;
+        }
+    }
+
+    private void CancelImportCopyClicked(object? sender, EventArgs args)
+    {
+        if (pickerCopyCancellation is not { } copying) return;
+        CancelImportCopy.IsEnabled = false;
+        ImportStatus.Text = "Зупиняємо копіювання…";
+        copying.Cancel();
     }
 
 #if !MACCATALYST

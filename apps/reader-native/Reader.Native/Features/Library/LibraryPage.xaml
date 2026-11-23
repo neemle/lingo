@@ -40,6 +40,8 @@
      Clicked="OpenShareInboxClicked" IsVisible="False" IsEnabled="{Binding CanInteract}" />
     <Button x:Name="PauseExternalBatch" Text="Призупинити добірку" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
      Clicked="PauseExternalBatchClicked" IsVisible="False" SemanticProperties.Description="Призупинити імпорт після поточного матеріалу" />
+    <Button x:Name="CancelImportCopy" Text="Зупинити копіювання" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
+     Clicked="CancelImportCopyClicked" IsVisible="False" />
     <Button x:Name="ResumePdf" Text="Продовжити OCR" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
      Clicked="ResumePdfClicked" IsVisible="False" IsEnabled="{Binding CanInteract}" />
     <Button x:Name="PausePdf" Text="Призупинити OCR" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
