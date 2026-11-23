@@ -9,6 +9,7 @@ use unicode_normalization::UnicodeNormalization;
 
 const MAX_BATCH_BYTES: usize = 64 * 1024;
 const CACHE_ROWS: i64 = 128;
+const LIVE_CACHE_ROWS: i64 = 100_000;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -81,7 +82,7 @@ pub(crate) fn restore_cache(db: &Connection, entries: Vec<TranslationCacheEntry>
         .map_err(|error| error.to_string())?
         .collect::<rusqlite::Result<HashSet<_>>>()
         .map_err(|error| error.to_string())?;
-    let available = (CACHE_ROWS as usize).saturating_sub(existing.len());
+    let available = (LIVE_CACHE_ROWS as usize).saturating_sub(existing.len());
     let chosen: Vec<_> = entries.iter()
         .filter(|entry| !existing.contains(&entry.key))
         .take(available)
@@ -1739,7 +1740,7 @@ impl Store {
             "DELETE FROM translation_cache WHERE rowid IN (
                 SELECT rowid FROM translation_cache ORDER BY rowid DESC LIMIT -1 OFFSET ?1
             )",
-            [CACHE_ROWS],
+            [LIVE_CACHE_ROWS],
         )
         .map_err(|error| error.to_string())?;
         tx.commit().map_err(|error| error.to_string())

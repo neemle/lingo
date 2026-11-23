@@ -37,6 +37,8 @@ public partial class AppShell : Shell
             trackedSession = AppState.Session;
             var id = Preferences.Get("lastDocument", "");
             if (id.Length > 0) await trackedSession.SelectAsync(id);
+            else await trackedSession.RefreshAsync();
+            if (!stopped) AppState.StartTranslationWorker(Dispatcher);
             if (!stopped && !DesktopImport.HasIncoming && previousRoute != LibraryRoute)
             {
                 await GoToAsync(previousRoute);

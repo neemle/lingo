@@ -22,6 +22,15 @@ public sealed class CoreClient : IDisposable
     }
 
     public Snapshot Snapshot() => Call<Snapshot>(new { version = 1, operation = "snapshot" });
+    public StorageUsage StorageUsage() =>
+        Call<StorageUsage>(new { version = 1, operation = "storage_usage" });
+
+    public void ClearStorage(string scope) =>
+        CallIndependent<JsonElement>(new { version = 1, operation = "clear_storage", scope });
+
+    public TranslationWarmStep WarmTranslationStep(string id, string revision, string target, int start) =>
+        CallIndependent<TranslationWarmStep>(new { version = 1, operation = "warm_translation_step", id, revision, target, start });
+
     public ReaderPreferences ReaderPreferences() =>
         Call<ReaderPreferences>(new { version = 1, operation = "reader_preferences" });
 

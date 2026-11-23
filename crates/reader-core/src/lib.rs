@@ -54,6 +54,7 @@ pub mod speech;
 pub mod supertonic;
 pub mod translation;
 pub mod translation_queue;
+pub mod storage_management;
 pub mod tts;
 
 pub type Result<T> = std::result::Result<T, String>;

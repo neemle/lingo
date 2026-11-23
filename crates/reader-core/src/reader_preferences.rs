@@ -21,6 +21,8 @@ pub struct ReaderPreferences {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_translate: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_translation: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub continuous_speech: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speech_rate_percent: Option<u16>,
@@ -35,6 +37,7 @@ pub struct ReaderPreferences {
 pub enum ReaderPreferenceChange {
     Layout { value: ReaderLayout },
     AutoTranslate { value: bool },
+    BackgroundTranslation { value: bool },
     ContinuousSpeech { value: bool },
     SpeechRatePercent { value: u16 },
     SpeechPlayback {
@@ -54,6 +57,7 @@ impl ReaderPreferences {
     pub(crate) fn is_empty(&self) -> bool {
         self.layout.is_none()
             && self.auto_translate.is_none()
+            && self.background_translation.is_none()
             && self.continuous_speech.is_none()
             && self.speech_rate_percent.is_none()
             && self.translation_targets.is_empty()
@@ -88,6 +92,7 @@ impl ReaderPreferences {
         match change {
             ReaderPreferenceChange::Layout { value } => self.layout = Some(value),
             ReaderPreferenceChange::AutoTranslate { value } => self.auto_translate = Some(value),
+            ReaderPreferenceChange::BackgroundTranslation { value } => self.background_translation = Some(value),
             ReaderPreferenceChange::ContinuousSpeech { value } => self.continuous_speech = Some(value),
             ReaderPreferenceChange::SpeechRatePercent { value } => self.speech_rate_percent = Some(value),
             ReaderPreferenceChange::SpeechPlayback { rate_percent, continuous } => {
@@ -149,6 +154,7 @@ pub(crate) fn restore(db: &Connection, incoming: ReaderPreferences) -> Result<()
     let mut local = read(db)?;
     local.layout = local.layout.or(incoming.layout);
     local.auto_translate = local.auto_translate.or(incoming.auto_translate);
+    local.background_translation = local.background_translation.or(incoming.background_translation);
     local.continuous_speech = local.continuous_speech.or(incoming.continuous_speech);
     local.speech_rate_percent = local.speech_rate_percent.or(incoming.speech_rate_percent);
     for (source, target) in incoming.translation_targets {

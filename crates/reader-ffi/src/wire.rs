@@ -18,6 +18,16 @@ pub enum Command {
         path: String,
     },
     Snapshot,
+    StorageUsage,
+    ClearStorage {
+        scope: reader_core::storage_management::StorageScope,
+    },
+    WarmTranslationStep {
+        id: String,
+        revision: String,
+        target: String,
+        start: usize,
+    },
     StageIntake {
         input: reader_core::intake::IntakeInput,
         #[serde(rename = "requestId")]

@@ -38,7 +38,7 @@ pub(super) struct PageProjection {
 pub struct PdfPageTranslationRow {
     start_utf16: usize,
     end_utf16: usize,
-    text: Option<String>,
+    pub(crate) text: Option<String>,
 }
 
 impl PageProjection {
@@ -64,6 +64,12 @@ impl Store {
     pub fn pdf_page_translation(
         &mut self, id: &str, page: u16, target: &str, cached_only: bool,
     ) -> Result<Vec<PdfPageTranslationRow>> {
+        self.pdf_page_translation_with_priority(id, page, target, cached_only, false)
+    }
+
+    pub(crate) fn pdf_page_translation_with_priority(
+        &mut self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
+    ) -> Result<Vec<PdfPageTranslationRow>> {
         let (document, physical, offsets, boundaries) = if let Some(cached) = self.detached_pdf_sentences(id, page)? {
             let spans = cached.sentences.iter().map(|s| (s.start_utf16, s.end_utf16)).collect::<Vec<_>>();
             let projection = self.project_pdf_translation_page(id, page, target, cached.text, cached.sentences, cached.language)?;
@@ -86,7 +92,7 @@ impl Store {
             Some((first, local.last().unwrap_or(first)))
         };
         if !cached_only {
-            let generated = self.translate_document_page(&document, physical.clone(), target, boundaries)?;
+            let generated = self.translate_document_page(&document, physical.clone(), target, boundaries, background)?;
             if generated.iter().any(|unit| !unit.reviewed && unit.translation.is_some()) {
                 return Ok(generated.into_iter().filter_map(|unit| {
                     let (first, last) = page_range(&unit)?;

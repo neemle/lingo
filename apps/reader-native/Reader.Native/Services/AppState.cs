@@ -7,11 +7,19 @@ namespace Reader.Native.Services;
 public static class AppState
 {
     private static ReaderSession? session;
+    internal static BackgroundTranslation? TranslationWorker { get; private set; }
+    internal static int StorageRevision { get; private set; }
+    internal static void InvalidateReaderCache() => StorageRevision++;
+
+    internal static void StartTranslationWorker(IDispatcher dispatcher) =>
+        TranslationWorker ??= new BackgroundTranslation(Session, dispatcher);
     public static ReaderSession Session => session ??=
         new ReaderSession(Path.Combine(FileSystem.AppDataDirectory, "reader-native.db"));
 
     public static void Close()
     {
+        TranslationWorker?.Stop();
+        TranslationWorker = null;
         session?.Dispose();
         session = null;
     }

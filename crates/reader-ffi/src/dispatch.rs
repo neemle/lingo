@@ -55,6 +55,10 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
     match command {
         Command::Open { .. } => Err(Error::new("invalid_handle", "Open requires handle zero")),
         Command::Snapshot => value(store.snapshot()),
+        Command::StorageUsage => value(store.storage_usage()),
+        Command::ClearStorage { scope } => value(store.clear_storage(scope)),
+        Command::WarmTranslationStep { id, revision, target, start } =>
+            value(store.warm_translation_step(&id, &revision, &target, start)),
         Command::StageIntake { .. } => Err(Error::new("invalid_state", "Intake needs staging")),
         Command::ListIntake { start } => value(store.list_intake(start)),
         Command::IntakeItem { id } => value(store.intake_item(&id)),

@@ -71,6 +71,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         nativeCapabilities = null;
         capabilityReport = null;
         ExportCapabilities.IsEnabled = false;
+        await RefreshStorageAsync();
         await RefreshTranslationPackagesAsync();
         await RefreshKnowledgePackagesAsync();
         await RefreshLexicalPackagesAsync();

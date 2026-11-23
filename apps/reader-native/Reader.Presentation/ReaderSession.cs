@@ -30,6 +30,11 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public ReaderSession(string path) => client = new Client(path);
 
     public Task RefreshAsync() => RunAsync(Read);
+    public Task<StorageUsage> StorageUsageAsync() => Task.Run(client.StorageUsage);
+    public Task ClearStorageAsync(string scope) => Task.Run(() => client.ClearStorage(scope));
+    public Task<TranslationWarmStep> WarmTranslationStepAsync(string id, string revision, string target, int start) =>
+        Task.Run(() => client.WarmTranslationStep(id, revision, target, start));
+
     public ReaderPreferences GetReaderPreferences() => client.ReaderPreferences();
     public ReaderPreferences MergeReaderPreferences(ReaderPreferences preferences) =>
         client.MergeReaderPreferences(preferences);

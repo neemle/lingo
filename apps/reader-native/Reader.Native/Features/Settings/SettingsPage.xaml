@@ -39,6 +39,31 @@
    </VerticalStackLayout>
 
    <Border Style="{StaticResource ResourceCard}">
+    <VerticalStackLayout x:Name="StorageControls" Spacing="10" IsEnabled="False">
+     <Label Text="Фоновий переклад і сховище" Style="{StaticResource ResourceTitle}" SemanticProperties.HeadingLevel="Level2" />
+     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+      <VerticalStackLayout Spacing="4">
+       <Label Text="Перекладати в фоні" FontAttributes="Bold" />
+       <Label Text="Поступово перекладає бібліотеку, поки застосунок відкритий. Для PDF використовує доступний розпізнаний текст."
+        Style="{StaticResource ResourceDetail}" />
+      </VerticalStackLayout>
+      <Switch Grid.Column="1" x:Name="BackgroundTranslationSwitch" Toggled="BackgroundTranslationChanged"
+       SemanticProperties.Description="Перекладати в фоні" VerticalOptions="Center" />
+     </Grid>
+     <BoxView HeightRequest="1" Color="{StaticResource BorderTone}" />
+     <Label x:Name="StorageTotal" Text="Обчислюємо зайняте місце…" FontAttributes="Bold" />
+     <Label x:Name="StorageBreakdown" Style="{StaticResource ResourceDetail}" />
+     <FlexLayout Wrap="Wrap">
+      <Button Text="Оновити розмір" Clicked="RefreshStorageClicked" />
+      <Button Text="Очистити кеш…" Clicked="ClearStorageClicked" CommandParameter="cache" />
+      <Button Text="Видалити завантаження…" Clicked="ClearStorageClicked" CommandParameter="downloads" />
+      <Button Text="Видалити всі локальні дані…" TextColor="#A53426" Clicked="ClearStorageClicked" CommandParameter="all" />
+     </FlexLayout>
+     <Label x:Name="StorageStatus" Style="{StaticResource ResourceDetail}" />
+    </VerticalStackLayout>
+   </Border>
+
+   <Border Style="{StaticResource ResourceCard}">
     <VerticalStackLayout Spacing="8">
      <Label Text="Мовні можливості" Style="{StaticResource ResourceTitle}" SemanticProperties.HeadingLevel="Level2" />
      <Label Text="Каталог і ресурси цього пристрою. Докладніше про кожен стан — у підказці комірки."

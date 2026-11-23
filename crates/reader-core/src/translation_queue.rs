@@ -187,3 +187,61 @@ impl Store {
 fn database_error(error: impl std::fmt::Display) -> String {
     format!("Помилка черги перекладу. {error}")
 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationWarmStep {
+    next: Option<usize>,
+    incomplete: bool,
+}
+
+impl Store {
+    pub fn warm_translation_step(
+        &mut self, id: &str, revision: &str, target: &str, start: usize,
+    ) -> Result<TranslationWarmStep> {
+        let done = TranslationWarmStep { next: None, incomplete: false };
+        if self.reader_preferences()?.background_translation != Some(true) {
+            return Ok(done);
+        }
+        let document = self.translation_document(id)?;
+        if document.current_revision_id.as_deref() != Some(revision) || document.language == target {
+            return Ok(done);
+        }
+        let page_count = document.pdf_page_starts.as_ref().map(Vec::len)
+            .or(document.ocr_pdf_pages.map(usize::from)).unwrap_or(0);
+        if document.format == "pdf" && page_count > 0 {
+            let canonical = (start..page_count).find(|&page| {
+                u16::try_from(page).ok().is_some_and(|page| {
+                    crate::pdf_reading_position::page_bounds(&document, page).is_some()
+                })
+            });
+            let detached: Option<u16> = self.connection.query_row(
+                "SELECT min(page) FROM pdf_detached_pages WHERE document_id=?1 AND page>=?2",
+                params![id, i64::try_from(start).unwrap_or(i64::MAX)],
+                |row| row.get(0),
+            ).map_err(database_error)?;
+            let Some(page) = canonical.into_iter().chain(detached.map(usize::from)).min() else { return Ok(done); };
+            return Ok(TranslationWarmStep {
+                next: Some(page + 1),
+                incomplete: self.pdf_page_translation_with_priority(id, page as u16, target, false, true)
+                    .map_or(true, |rows| rows.iter().any(|row| row.text.is_none())),
+            });
+        }
+        if start >= document.sentences.len() {
+            return Ok(done);
+        }
+        let translated = self.translate_document_paragraph(
+            &document, start, target, true, crate::translation::PageBoundaries::Canonical,
+        );
+        let Ok(translated) = translated else {
+            return Ok(TranslationWarmStep { next: Some(start + 1), incomplete: true });
+        };
+        let next = document.sentences[start..].iter().take(16).take_while(|sentence| {
+            translated.units.iter().any(|unit| unit.sentence_ids.contains(&sentence.id))
+        }).count().max(1) + start;
+        Ok(TranslationWarmStep {
+            next: Some(next),
+            incomplete: translated.units.iter().any(|unit| unit.translation.is_none()),
+        })
+    }
+}

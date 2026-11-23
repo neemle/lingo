@@ -489,6 +489,12 @@ impl StoreWorker {
         self.open(flags)?.detached_pdf_passage(id, page, sentence_id, target, cached_only, background)
     }
 
+    pub fn warm_translation_step(
+        self, id: &str, revision: &str, target: &str, start: usize,
+    ) -> Result<crate::translation_queue::TranslationWarmStep> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?.warm_translation_step(id, revision, target, start)
+    }
+
     pub fn pdf_page_translation(
         self, id: &str, page: u16, target: &str, cached_only: bool,
     ) -> Result<Vec<crate::pdf_detached_pages::PdfPageTranslationRow>> {
@@ -755,10 +761,11 @@ impl Store {
     }
 
     pub(crate) fn translate_document_page(
-        &mut self, document: &crate::Document, physical: std::ops::Range<usize>, target: &str, boundaries: PageBoundaries,
+        &mut self, document: &crate::Document, physical: std::ops::Range<usize>, target: &str,
+        boundaries: PageBoundaries, background: bool,
     ) -> Result<Vec<ParagraphUnit>> {
         let directory = self.model_directory.clone();
-        translate_pdf_page(self, &mut MarianProvider::interactive(&directory), document, physical, target, boundaries)
+        translate_pdf_page(self, &mut MarianProvider { directory: &directory, background }, document, physical, target, boundaries)
     }
 
     pub fn find_translation_page(

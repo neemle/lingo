@@ -53,6 +53,17 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         unsafe { std::slice::from_raw_parts(input, len as usize) }
     };
     let command = validation::decode(bytes)?;
+    // Maintenance waits for independent worker connections as well as registry calls.
+    static STORAGE_GATE: std::sync::RwLock<()> = std::sync::RwLock::new(());
+    let exclusive = matches!(&command, Command::ClearStorage { .. });
+    let _write = exclusive.then(|| STORAGE_GATE.write().unwrap_or_else(|error| error.into_inner()));
+    let _read = (!exclusive).then(|| STORAGE_GATE.read().unwrap_or_else(|error| error.into_inner()));
+    if let Command::WarmTranslationStep { id, revision, target, start } = &command {
+        let worker = registry::lock()?.store(handle)?.prepare_translation_worker();
+        if let Some(worker) = worker {
+            return encode_job(worker.warm_translation_step(id, revision, target, *start));
+        }
+    }
     if let Command::StageIntake { input, request_id } = command {
         let root = {
             let state = registry::lock()?;

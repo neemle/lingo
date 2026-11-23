@@ -63,9 +63,23 @@ public partial class ReadingPage : ContentPage
         DetachedModelTranslationText.PropertyChanged += PopupTranslationTextChanged;
     }
 
+    private int storageRevision;
+
     protected override void OnAppearing()
     {
         base.OnAppearing();
+        if (storageRevision != AppState.StorageRevision)
+        {
+            storageRevision = AppState.StorageRevision;
+            translationWindows.Clear();
+            prefetchAttempts.Clear();
+            pdfLayoutRequestId++;
+            pdfLayoutRequest = null;
+            translatingPdfLayout = null;
+            pdfLayoutRows = [];
+            lastCacheRestore = null;
+            detachedMachineTranslation = null;
+        }
         LoadReaderPreferences();
         readingLayout = Enum.TryParse<ReaderLayout>(readerPreferences.Layout, ignoreCase: true, out var storedLayout)
             && Enum.IsDefined(storedLayout) ? storedLayout : ReaderLayout.Automatic;
