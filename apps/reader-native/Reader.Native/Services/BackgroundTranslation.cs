@@ -1,3 +1,4 @@
+using Reader.Contracts;
 using Reader.Presentation;
 
 namespace Reader.Native.Services;
@@ -6,11 +7,14 @@ internal sealed class BackgroundTranslation
 {
     private readonly ReaderSession session;
     private readonly IDispatcherTimer timer;
-    private readonly Dictionary<JobKey, long> deadlines = [];
+    private readonly Dictionary<JobKey, BackgroundTranslationProgress> jobs = [];
     private Task pending = Task.CompletedTask;
     private DateTimeOffset retryAt;
     private bool enabled;
     private bool paused;
+    internal string Status { get; private set; } = "";
+    internal bool Running { get; private set; }
+    internal event Action? StatusChanged;
 
     private sealed record JobKey(string Document, string Revision, string Target);
 
@@ -26,14 +30,16 @@ internal sealed class BackgroundTranslation
     internal void SetEnabled(bool value)
     {
         enabled = value;
-        if (!value) deadlines.Clear();
+        if (!value) jobs.Clear();
         UpdateTimer();
+        SetStatus(value ? "Перевіряємо чергу перекладу…" : "");
     }
 
     internal async Task PauseAsync()
     {
         paused = true;
         UpdateTimer();
+        if (enabled) SetStatus("Фоновий переклад призупинено.");
         await pending;
     }
 
@@ -41,11 +47,12 @@ internal sealed class BackgroundTranslation
     {
         if (clearProgress)
         {
-            deadlines.Clear();
+            jobs.Clear();
             retryAt = default;
         }
         paused = false;
         UpdateTimer();
+        if (enabled) SetStatus("Перевіряємо чергу перекладу…");
     }
 
     internal void Stop()
@@ -60,12 +67,25 @@ internal sealed class BackgroundTranslation
         if ((!enabled || paused) && timer.IsRunning) timer.Stop();
     }
 
+    private void SetStatus(string text, bool running = false)
+    {
+        if (Status == text && Running == running) return;
+        Status = text;
+        Running = running;
+        StatusChanged?.Invoke();
+    }
+
     private void Tick(object? sender, EventArgs args)
     {
-        if (enabled && !paused && !session.Busy && pending.IsCompleted &&
-            retryAt <= DateTimeOffset.UtcNow && session.Snapshot.Documents.Length > 0)
-            pending = RunStepAsync();
+        if (!enabled || paused || session.Busy || !pending.IsCompleted || retryAt > DateTimeOffset.UtcNow)
+            return;
+        if (session.Snapshot.Documents.Length == 0)
+            SetStatus("У бібліотеці ще немає документів.");
+        else pending = RunStepAsync();
     }
+
+    private static string PairName(string source, string target) =>
+        $"{DocumentLanguages.Name(source)} → {DocumentLanguages.Name(target)}";
 
     private async Task RunStepAsync()
     {
@@ -75,7 +95,9 @@ internal sealed class BackgroundTranslation
             var preferences = session.GetReaderPreferences();
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var live = new HashSet<JobKey>();
-            JobKey? candidate = null;
+            (JobKey Key, string Title)? candidate = null;
+            string? missing = null;
+            var waiting = false;
             foreach (var document in session.Snapshot.Documents.OrderByDescending(doc => doc.Id == current))
             {
                 if (document.CurrentRevisionId is not { } revision) continue;
@@ -84,19 +106,38 @@ internal sealed class BackgroundTranslation
                 if (target == document.Language) continue;
                 var key = new JobKey(document.Id, revision, target);
                 live.Add(key);
-                if (candidate is null && deadlines.GetValueOrDefault(key) <= now)
-                    candidate = key;
+                if (!jobs.TryGetValue(key, out var job) || job.ResumeAt is { } deadline && deadline <= now)
+                    candidate ??= (key, document.Title);
+                else if (job.MissingPackages is { } packages)
+                    missing ??= packages.Length == 0
+                        ? $"Офлайн-маршрут недоступний · {PairName(document.Language, target)}."
+                        : $"Потрібні мовні пакети · {string.Join(", ", packages.Select(pair => PairName(pair.Source, pair.Target)))}.";
+                else if (job.ResumeAt is not null)
+                    waiting = true;
             }
-            foreach (var key in deadlines.Keys.Where(key => !live.Contains(key)).ToArray()) deadlines.Remove(key);
-            if (candidate is not { } work) return;
+            foreach (var key in jobs.Keys.Where(key => !live.Contains(key)).ToArray()) jobs.Remove(key);
+            if (candidate is not { } work)
+            {
+                SetStatus(missing ?? (waiting ? "Очікує на доступний текст PDF або повторну спробу."
+                    : "Чергу перекладу опрацьовано."));
+                return;
+            }
 
-            var progress = await session.AdvanceBackgroundTranslationAsync(work.Document, work.Revision, work.Target);
-            if (enabled && !paused) deadlines[work] = progress.ResumeAt ?? long.MaxValue;
+            SetStatus($"Опрацьовуємо «{work.Title}»…", running: true);
+            var progress = await session.AdvanceBackgroundTranslationAsync(work.Key.Document, work.Key.Revision, work.Key.Target);
+            if (!enabled || paused) return;
+            jobs[work.Key] = progress;
+            SetStatus(progress.MissingPackages is not null
+                ? $"Для «{work.Title}» бракує офлайн-маршруту."
+                : progress.TranslatedPage is int page
+                    ? $"Переклад сторінки {page + 1} · «{work.Title}»."
+                    : $"Перевірено кеш · «{work.Title}».");
         }
         catch (Exception error)
         {
             System.Diagnostics.Debug.WriteLine(error);
             retryAt = DateTimeOffset.UtcNow.AddSeconds(10);
+            if (enabled && !paused) SetStatus("Фоновий переклад повторить спробу.");
         }
     }
 }

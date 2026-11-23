@@ -213,6 +213,8 @@ pub struct BackgroundTranslationProgress {
     resume_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     translated_page: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    missing_packages: Option<Vec<crate::translation::TranslationPair>>,
 }
 
 impl Store {
@@ -226,6 +228,7 @@ impl Store {
         let done = BackgroundTranslationProgress {
             resume_at: None,
             translated_page: None,
+            missing_packages: None,
         };
         if self.reader_preferences()?.background_translation != Some(true) {
             return Ok(done);
@@ -263,14 +266,19 @@ impl Store {
             .map_err(database_error)?
             .unwrap_or((0, false, Some(0)));
         let now = crate::now();
-        if resume_at.is_none_or(|deadline| deadline > now) {
-            return Ok(BackgroundTranslationProgress { resume_at, ..done });
+        if resume_at.is_none() {
+            return Ok(done);
         }
-        let (cursor, incomplete, resume_at, translated_page) = if cursor == 0
-            && !self
-                .translation_readiness(&document.language, target)?
-                .ready
-        {
+        let missing_packages = if cursor == 0 {
+            let readiness = self.translation_readiness(&document.language, target)?;
+            (!readiness.ready).then_some(readiness.missing)
+        } else {
+            None
+        };
+        if resume_at.is_some_and(|deadline| deadline > now) {
+            return Ok(BackgroundTranslationProgress { resume_at, missing_packages, ..done });
+        }
+        let (cursor, incomplete, resume_at, translated_page) = if missing_packages.is_some() {
             (0, false, Some(now + 30), None)
         } else {
             let step = self.warm_document_translation_step(&document, target, cursor as usize)?;
@@ -298,6 +306,7 @@ impl Store {
         Ok(BackgroundTranslationProgress {
             resume_at,
             translated_page,
+            missing_packages,
         })
     }
 

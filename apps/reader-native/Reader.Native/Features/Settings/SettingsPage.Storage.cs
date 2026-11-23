@@ -7,6 +7,33 @@ public partial class SettingsPage
 {
     private bool loadingStorage;
     private bool changingStorage;
+    private BackgroundTranslation? monitoredWorker;
+
+    private void MonitorBackgroundTranslation()
+    {
+        var worker = AppState.TranslationWorker;
+        if (worker != monitoredWorker)
+        {
+            StopMonitoringBackgroundTranslation();
+            monitoredWorker = worker;
+            if (worker is not null) worker.StatusChanged += ShowBackgroundTranslationStatus;
+        }
+        ShowBackgroundTranslationStatus();
+    }
+
+    private void StopMonitoringBackgroundTranslation()
+    {
+        if (monitoredWorker is { } worker) worker.StatusChanged -= ShowBackgroundTranslationStatus;
+        monitoredWorker = null;
+    }
+
+    private void ShowBackgroundTranslationStatus()
+    {
+        var status = monitoredWorker?.Status ?? "";
+        BackgroundStatusText.Text = status;
+        BackgroundStatus.IsVisible = status.Length > 0;
+        BackgroundActivity.IsVisible = BackgroundActivity.IsRunning = monitoredWorker?.Running == true;
+    }
 
     private static readonly string[] TemporaryDownloads =
         ["model-transport", "translation-downloads", "knowledge-downloads", "lexical-downloads", "optional-model-downloads"];
@@ -49,6 +76,7 @@ public partial class SettingsPage
         try
         {
             AppState.StartTranslationWorker(Dispatcher);
+            MonitorBackgroundTranslation();
             SetBackgroundTranslation(args.Value);
             StorageStatus.Text = "";
         }
