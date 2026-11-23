@@ -299,6 +299,8 @@ pub struct TranslationWarmStep {
     next: Option<usize>,
     incomplete: bool,
     #[serde(skip)]
+    deferred: bool,
+    #[serde(skip)]
     translated_page: Option<u16>,
     #[serde(skip)]
     translated_sentence_ids: Vec<String>,
@@ -398,29 +400,25 @@ impl Store {
         let (cursor, incomplete, resume_at) = if missing_packages.is_some() {
             (0, false, Some(now + 30))
         } else {
-            match self.warm_document_translation_step(&document, target, cursor as usize) {
-                Err(TranslationBatchError::Deferred { .. }) =>
-                    (cursor as usize, incomplete, Some(crate::now() + INTERACTIVE_RETRY_SECONDS)),
-                Err(error) => return Err(error.into()),
-                Ok(step) => {
-                    progress.translated_page = step.translated_page;
-                    progress.translated_sentence_ids = step.translated_sentence_ids;
-                    if let Some(next) = step.next {
-                        (next, incomplete || step.incomplete, Some(0))
-                    } else {
-                        if document.format == "pdf" {
-                            progress.pending_pdf_text_page = self.next_background_pdf_text_page(id)?;
-                        }
-                        if progress.pending_pdf_text_page.is_some() {
-                            (cursor as usize, incomplete, Some(crate::now() + PDF_OCR_POLL_SECONDS))
-                        } else if incomplete {
-                            (0, false, Some(crate::now() + 300))
-                        } else {
-                            progress.waiting_for_pdf_ocr = document.format == "pdf"
-                                && self.pdf_has_unprocessed_pages(&document)?;
-                            (cursor as usize, false, None)
-                        }
-                    }
+            let step = self.warm_document_translation_step(&document, target, cursor as usize)?;
+            progress.translated_page = step.translated_page;
+            progress.translated_sentence_ids = step.translated_sentence_ids;
+            if step.deferred {
+                (cursor as usize, incomplete, Some(crate::now() + INTERACTIVE_RETRY_SECONDS))
+            } else if let Some(next) = step.next {
+                (next, incomplete || step.incomplete, Some(0))
+            } else {
+                if document.format == "pdf" {
+                    progress.pending_pdf_text_page = self.next_background_pdf_text_page(id)?;
+                }
+                if progress.pending_pdf_text_page.is_some() {
+                    (cursor as usize, incomplete, Some(crate::now() + PDF_OCR_POLL_SECONDS))
+                } else if incomplete {
+                    (0, false, Some(crate::now() + 300))
+                } else {
+                    progress.waiting_for_pdf_ocr = document.format == "pdf"
+                        && self.pdf_has_unprocessed_pages(&document)?;
+                    (cursor as usize, false, None)
                 }
             }
         };
@@ -485,6 +483,7 @@ impl Store {
         let done = TranslationWarmStep {
             next: None,
             incomplete: false,
+            deferred: false,
             translated_page: None,
             translated_sentence_ids: Vec::new(),
         };
@@ -496,7 +495,7 @@ impl Store {
         {
             return Ok(done);
         }
-        self.warm_document_translation_step(&document, target, start).map_err(String::from)
+        self.warm_document_translation_step(&document, target, start)
     }
 
     fn warm_document_translation_step(
@@ -504,10 +503,11 @@ impl Store {
         document: &Document,
         target: &str,
         start: usize,
-    ) -> std::result::Result<TranslationWarmStep, TranslationBatchError> {
+    ) -> Result<TranslationWarmStep> {
         let done = TranslationWarmStep {
             next: None,
             incomplete: false,
+            deferred: false,
             translated_page: None,
             translated_sentence_ids: Vec::new(),
         };
@@ -534,24 +534,26 @@ impl Store {
             let Some(page) = canonical.into_iter().chain(detached.map(usize::from)).min() else {
                 return Ok(done);
             };
-            let rows = match self.pdf_page_translation_result(
+            let rows = self.pdf_page_translation_result(
                 &document.id,
                 page as u16,
                 target,
                 false,
                 true,
-            ) {
-                Err(error @ TranslationBatchError::Deferred { .. }) => return Err(error),
-                result => result,
-            };
+            );
+            let deferred = matches!(&rows, Err(TranslationBatchError::Deferred { .. }));
+            let rows = if deferred {
+                self.pdf_page_translation_result(&document.id, page as u16, target, true, true)
+            } else { rows };
             let translated_page = rows
                 .as_ref()
                 .ok()
                 .filter(|rows| rows.iter().any(|row| row.text.is_some()))
                 .map(|_| page as u16);
             return Ok(TranslationWarmStep {
-                next: Some(page + 1),
+                next: Some(if deferred { start } else { page + 1 }),
                 incomplete: rows.map_or(true, |rows| rows.iter().any(|row| row.text.is_none())),
+                deferred,
                 translated_page,
                 ..done
             });
@@ -567,7 +569,17 @@ impl Store {
             crate::translation::PageBoundaries::Canonical,
         ) {
             Ok(translated) => translated,
-            Err(error @ TranslationBatchError::Deferred { .. }) => return Err(error),
+            Err(TranslationBatchError::Deferred { .. }) => {
+                let routes = self.translation_cache_routes(&document.language, target)?;
+                let cache = routes.cached_window(self, document, start, target, crate::translation::PageBoundaries::Canonical)?;
+                return Ok(TranslationWarmStep {
+                    next: Some(start),
+                    incomplete: true,
+                    deferred: true,
+                    translated_sentence_ids: translated_sentence_ids(cache.paragraph),
+                    ..done
+                });
+            }
             Err(TranslationBatchError::Failed(_)) => return Ok(TranslationWarmStep {
                 next: Some(start + 1),
                 incomplete: true,
@@ -587,15 +599,18 @@ impl Store {
             .max(1)
             + start;
         let incomplete = translated.units.iter().any(|unit| unit.translation.is_none());
-        let translated_sentence_ids = translated.units.into_iter()
-            .filter(|unit| !unit.reviewed && unit.translation.is_some())
-            .flat_map(|unit| unit.sentence_ids)
-            .collect();
         Ok(TranslationWarmStep {
             next: Some(next),
             incomplete,
-            translated_sentence_ids,
+            translated_sentence_ids: translated_sentence_ids(translated),
             ..done
         })
     }
+}
+
+fn translated_sentence_ids(paragraph: ParagraphTranslation) -> Vec<String> {
+    paragraph.units.into_iter()
+        .filter(|unit| !unit.reviewed && unit.translation.is_some())
+        .flat_map(|unit| unit.sentence_ids)
+        .collect()
 }

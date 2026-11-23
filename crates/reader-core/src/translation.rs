@@ -1763,18 +1763,27 @@ mod tests {
         use crate::{ocr::OcrLine, reader_preferences::ReaderPreferenceChange, resources::RESOURCES};
         let root = tempfile::tempdir().unwrap();
         let mut store = Store::open(&root.path().join("library.sqlite")).unwrap();
-        let text = store.import("page.txt", b"Le bateau arrive.", "fr").unwrap();
+        let source = "Le bateau arrive. Le marin part.";
+        let text = store.import("page.txt", source.as_bytes(), "fr").unwrap();
         let pdf = store.import_scanned_pdf("page.pdf", b"%PDF-1.4\n", "fr", vec![OcrLine {
-            page: 0, text: "Le bateau arrive.".into(), x: 0.1, y: 0.1, width: 0.5, height: 0.05,
+            page: 0, text: source.into(), x: 0.1, y: 0.1, width: 0.5, height: 0.05,
             confidence: None, correction: None, words: Vec::new(), source_span: None,
         }], 1).unwrap();
-        let _route = french_uk_route_with_invalid_assets(&store);
+        let route = french_uk_route_with_invalid_assets(&store);
+        store.save_cached_segments([(unit_cache_key(&route, "Le bateau arrive.").unwrap(),
+            &["Корабель прибуває.".into()][..])]).unwrap();
         store.update_reader_preference(ReaderPreferenceChange::BackgroundTranslation { value: true }).unwrap();
         let before = crate::now();
         let _foreground = RESOURCES.interactive();
         for document in [&text, &pdf] {
             let revision = document.current_revision_id.as_deref().unwrap();
-            store.advance_background_translation(&document.id, revision, "uk").unwrap();
+            let progress = store.advance_background_translation(&document.id, revision, "uk").unwrap();
+            let progress = serde_json::to_value(progress).unwrap();
+            if document.format == "pdf" {
+                assert_eq!(progress["translatedPage"], 0);
+            } else {
+                assert_eq!(progress["translatedSentenceIds"], serde_json::json!([document.sentences[0].id]));
+            }
             let (cursor, incomplete, resume_at): (u32, bool, i64) = store.connection.query_row(
                 "SELECT cursor,incomplete,resume_at FROM background_translation_progress WHERE document_id=?1",
                 [&document.id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -1782,6 +1791,9 @@ mod tests {
             assert_eq!((cursor, incomplete), (0, false));
             assert!((before + 2..=crate::now() + 2).contains(&resume_at));
         }
+        let visible = store.pdf_page_translation_with_priority(&pdf.id, 0, "uk", false, true).unwrap();
+        assert_eq!(visible[0].text.as_deref(), Some("Корабель прибуває."));
+        assert!(visible[1].text.is_none());
     }
 
     #[test]

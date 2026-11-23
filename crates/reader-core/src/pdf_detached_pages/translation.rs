@@ -74,7 +74,11 @@ impl Store {
     pub fn pdf_page_translation_with_priority(
         &mut self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
     ) -> Result<Vec<PdfPageTranslationRow>> {
-        self.pdf_page_translation_result(id, page, target, cached_only, background).map_err(String::from)
+        match self.pdf_page_translation_result(id, page, target, cached_only, background) {
+            Err(TranslationBatchError::Deferred { .. }) if background && !cached_only =>
+                self.pdf_page_translation_result(id, page, target, true, background).map_err(String::from),
+            result => result.map_err(String::from),
+        }
     }
 
     pub(crate) fn pdf_page_translation_result(
