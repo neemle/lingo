@@ -26,6 +26,7 @@ public partial class ReadingPage
     private PdfLayoutAddress? translatingPdfLayout;
     private CancellationTokenSource? pdfLayoutTranslationCancellation;
     private PdfPageTranslationRow[] pdfLayoutRows = [];
+    private (PdfPageTranslationRow[] Rows, PdfSourceLayout? Source, bool PreserveArtwork, PdfDrawingPlan Plan)? pdfDrawingPlan;
     private PdfSourceLayout? pdfSourceLayout;
     private Sentence? pdfLayoutSentence => pdfSourceLayout is { } source && source.Matches(pdfLayoutRequest)
         ? source.Sentence : null;
@@ -621,9 +622,16 @@ public partial class ReadingPage
         var gloss = (detached ? DetachedWordCard : WordCard).IsVisible ? PopupGloss(detached) : null;
         QueueGlossAlignment(gloss, pdfLayoutRows.Select(row => row.Text));
         var query = PdfTranslationFindQuery();
+        if (pdfDrawingPlan is not { } cached || cached.Rows != pdfLayoutRows || cached.Source != source ||
+            cached.PreserveArtwork != background.IsVisible)
+        {
+            cached = (pdfLayoutRows, source, background.IsVisible,
+                PdfDrawingPlan.Create(pdfLayoutRows, source, background.IsVisible));
+            pdfDrawingPlan = cached;
+        }
         var drawing = new TranslatedPdfDrawing(pdfLayoutRows, source?.Lines ?? [], source?.Offset ?? 0,
             pdfLayoutSentence, text => GlossRanges(text, gloss), background.IsVisible, query,
-            PdfReadingHorizontalBounds(), source?.Appearance);
+            PdfReadingHorizontalBounds(), source?.Appearance, cached.Plan);
         var overflow = detached ? DetachedPdfTranslationOverflow : PdfTranslationOverflow;
         drawing.OverflowChanged = rows => Dispatcher.Dispatch(() =>
         {
@@ -758,12 +766,33 @@ public partial class ReadingPage
         });
     }
 
+    private sealed record PdfDrawingPlan(PdfTranslationLayout Layout, PdfTranslationFragment[] Fragments,
+        PdfBoxAppearance?[] Styles)
+    {
+        internal static PdfDrawingPlan Create(PdfPageTranslationRow[] rows, PdfSourceLayout? source, bool preserveArtwork)
+        {
+            var fragments = new PdfTranslationFragment[rows.Length];
+            var styles = new PdfBoxAppearance?[rows.Length];
+            for (var index = 0; index < rows.Length; index++)
+            {
+                var row = rows[index];
+                var bounds = TranslatedPdfDrawing.SourceBounds(row, source, out var lineHeight, out var style);
+                styles[index] = style;
+                fragments[index] = new(bounds, lineHeight, row.StartUtf16, row.SourceBlockIndex,
+                    preserveArtwork && !HasPdfTranslation(row), Rgb(style?.Background), Rgb(style?.Ink),
+                    style?.RelativeFontSize);
+            }
+            return new(CoreClient.CoreClient.PlanPdfTranslationLayout(fragments), fragments, styles);
+
+            static double[]? Rgb(Color? color) => color is null ? null : [color.Red, color.Green, color.Blue];
+        }
+    }
+
     private sealed class TranslatedPdfDrawing(PdfPageTranslationRow[] rows, OcrLine[] geometry, int offset,
         Sentence? active, Func<string, IEnumerable<(int Start, int End)>> glossRanges, bool preserveArtwork, string? query,
-        (double Left, double Right) visibleWidth, IReadOnlyDictionary<int, PdfBoxAppearance>? appearance) : IDrawable
+        (double Left, double Right) visibleWidth, IReadOnlyDictionary<int, PdfBoxAppearance>? appearance,
+        PdfDrawingPlan plan) : IDrawable
     {
-        private sealed record Region(RectF Bounds, float LineHeight, List<PdfPageTranslationRow> Rows,
-            PdfBoxAppearance? Appearance, int? SourceBlockIndex);
         private readonly record struct Fragment(PdfPageTranslationRow Source, int Start, int End, bool Active, TextSelection? Match);
         private readonly record struct WrappedLine(int Start, int End);
         private readonly List<(RectF Bounds, PdfPageTranslationRow Source)> hitTargets = [];
@@ -771,7 +800,11 @@ public partial class ReadingPage
         internal RectF? ActiveBounds { get; private set; }
         internal RectF? MatchBounds { get; private set; }
 
-        internal double? SourceTop(PdfPageTranslationRow row) => Bounds(row, new RectF(0, 0, 1, 1), out _, out _)?.Top;
+        internal double? SourceTop(PdfPageTranslationRow row)
+        {
+            var index = Array.IndexOf(rows, row);
+            return index >= 0 ? plan.Fragments[index].Bounds?.Y : null;
+        }
 
         internal PdfPageTranslationRow? HitTest(Point point)
         {
@@ -790,43 +823,10 @@ public partial class ReadingPage
             canvas.FillColor = Colors.White;
             if (page.Width <= 0 || page.Height <= 0) return;
             if (!preserveArtwork) canvas.FillRectangle(page);
-            var regions = new List<Region>();
-            var overflow = new List<PdfPageTranslationRow>();
-            var pending = new List<(RectF Bounds, PdfPageTranslationRow Source)>();
-            foreach (var row in rows)
-            {
-                var bounds = Bounds(row, page, out var lineHeight, out var style);
-                if (bounds is not { } rect)
-                {
-                    overflow.Add(row);
-                    continue;
-                }
-                if (preserveArtwork && !HasPdfTranslation(row))
-                {
-                    pending.Add((rect, row));
-                    continue;
-                }
-                var grouped = new List<PdfPageTranslationRow> { row };
-                var styleStart = row.StartUtf16;
-                while (regions.FindLastIndex(region => FitsRegion(region, rect, lineHeight, row.SourceBlockIndex, style))
-                    is var index && index >= 0)
-                {
-                    var previous = regions[index];
-                    if (previous.Appearance is not null && (style is null || previous.Rows[0].StartUtf16 < styleStart))
-                    {
-                        style = previous.Appearance;
-                        styleStart = previous.Rows[0].StartUtf16;
-                    }
-                    grouped.AddRange(previous.Rows);
-                    rect = Union(previous.Bounds, rect);
-                    lineHeight = Math.Min(lineHeight, previous.LineHeight);
-                    regions.RemoveAt(index);
-                }
-                grouped.Sort((left, right) => left.StartUtf16.CompareTo(right.StartUtf16));
-                regions.Add(new(rect, lineHeight, grouped, style, row.SourceBlockIndex));
-            }
-
-            if (rows.Length > 0 && regions.Count == 0 && pending.Count == 0)
+            var layout = plan.Layout;
+            var overflow = layout.Overflow.Select(index => rows[index]).ToList();
+            if (rows.Length > 0 && layout.Regions.Length == 0 && layout.Pending.Length == 0 &&
+                (!preserveArtwork || plan.Fragments.All(fragment => fragment.Bounds is null)))
             {
                 canvas.FillRectangle(page);
                 var reflowBounds = new RectF(page.X + (float)visibleWidth.Left * page.Width, page.Y,
@@ -836,16 +836,13 @@ public partial class ReadingPage
                 return;
             }
 
-            foreach (var region in regions)
+            foreach (var region in layout.Regions)
             {
-                if (pending.Any(item => OverlapsInk(region.Bounds, item.Bounds)))
-                {
-                    overflow.AddRange(region.Rows);
-                    continue;
-                }
+                var regionRows = Array.ConvertAll(region.Fragments, index => rows[index]);
+                var appearance = region.StyleFragment is { } style ? plan.Styles[style] : null;
                 var text = new StringBuilder();
                 var fragments = new List<Fragment>();
-                foreach (var row in region.Rows)
+                foreach (var row in regionRows)
                 {
                     var isActive = active is not null && row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16;
                     if (text.Length > 0) text.Append(' ');
@@ -853,17 +850,18 @@ public partial class ReadingPage
                     text.Append(HasPdfTranslation(row) ? row.Text : "…");
                     fragments.Add(MakeFragment(row, start, text.Length, isActive));
                 }
-                var preferredSize = region.Appearance is { RelativeFontSize: > 0 } styled
-                    ? Math.Min((float)(page.Height * styled.RelativeFontSize), region.LineHeight * 0.90f)
-                    : Math.Min(page.Width * 0.045f, region.LineHeight * 0.82f);
+                var preferredSize = (float)(page.Height * region.PreferredFontHeight);
+                if (region.LimitFontByWidth) preferredSize = Math.Min(page.Width * 0.045f, preferredSize);
                 var minimumSize = Math.Max(2, preferredSize * 0.60f);
-                if (!DrawFitted(canvas, text.ToString(), region.Bounds, fragments, preferredSize, minimumSize,
-                    preserveArtwork ? () => MaskRegion(region.Rows) : null, region.Appearance))
+                if (!DrawFitted(canvas, text.ToString(), Scale(region.Bounds, page), fragments, preferredSize, minimumSize,
+                    preserveArtwork ? () => MaskRegion(regionRows) : null, appearance))
                     overflow.AddRange(fragments.Select(fragment => fragment.Source));
             }
 
-            foreach (var (bounds, row) in pending)
+            foreach (var index in layout.Pending)
             {
+                var row = rows[index];
+                var bounds = Scale(plan.Fragments[index].Bounds!, page);
                 // Keep the original pixels visible and selectable until this row has a translation.
                 hitTargets.Add((bounds, row));
                 if (active is null || row.StartUtf16 >= active.EndUtf16 || row.EndUtf16 <= active.StartUtf16)
@@ -875,7 +873,7 @@ public partial class ReadingPage
 
             OverflowChanged?.Invoke(overflow.OrderBy(row => row.StartUtf16).ToArray());
 
-            void MaskRegion(List<PdfPageTranslationRow> region)
+            void MaskRegion(PdfPageTranslationRow[] region)
             {
                 foreach (var line in geometry)
                 {
@@ -901,32 +899,9 @@ public partial class ReadingPage
             }
         }
 
-        private static bool OverlapsInk(RectF first, RectF second) =>
-            Math.Min(first.Right, second.Right) - Math.Max(first.Left, second.Left) > 1 &&
-            Math.Min(first.Bottom, second.Bottom) - Math.Max(first.Top, second.Top) > 1;
-
-        private static bool FitsRegion(Region region, RectF bounds, float lineHeight, int? sourceBlockIndex,
-            PdfBoxAppearance? style)
-        {
-            if (region.SourceBlockIndex != sourceBlockIndex) return false;
-            if (region.Appearance is { } previous && style is { } current &&
-                (DifferentColor(previous.Background, current.Background) ||
-                 previous.Ink is { } priorInk && current.Ink is { } currentInk && DifferentColor(priorInk, currentInk)))
-                return false;
-            var horizontalOverlap = Math.Min(region.Bounds.Right, bounds.Right) - Math.Max(region.Bounds.Left, bounds.Left);
-            if (horizontalOverlap <= 0) return false;
-            var verticalGap = Math.Max(region.Bounds.Top, bounds.Top) - Math.Min(region.Bounds.Bottom, bounds.Bottom);
-            if (verticalGap < -1) return true;
-            // Several sentences in one paragraph can occupy consecutive physical rows.
-            return sourceBlockIndex is not null &&
-                horizontalOverlap >= 0.4f * Math.Min(region.Bounds.Width, bounds.Width) &&
-                verticalGap <= 0.9f * Math.Min(region.LineHeight, lineHeight);
-        }
-
-        private static bool DifferentColor(Color first, Color second) =>
-            Math.Abs(first.Red - second.Red) > 0.12f ||
-            Math.Abs(first.Green - second.Green) > 0.12f ||
-            Math.Abs(first.Blue - second.Blue) > 0.12f;
+        private static RectF Scale(PdfSampleBox bounds, RectF page) =>
+            new(page.X + (float)bounds.X * page.Width, page.Y + (float)bounds.Y * page.Height,
+                (float)bounds.Width * page.Width, (float)bounds.Height * page.Height);
 
         private PdfPageTranslationRow[] DrawReflowedPage(ICanvas canvas, RectF page)
         {
@@ -961,12 +936,16 @@ public partial class ReadingPage
         private PdfBoxAppearance? AppearanceFor(OcrSpan? span) => span is { } range
             ? appearance?.GetValueOrDefault(range.StartUtf16) : null;
 
-        private RectF? Bounds(PdfPageTranslationRow row, RectF page, out float lineHeight, out PdfBoxAppearance? style)
+        internal static PdfSampleBox? SourceBounds(PdfPageTranslationRow row, PdfSourceLayout? source,
+            out float lineHeight, out PdfBoxAppearance? style)
         {
+            lineHeight = 0;
+            style = null;
+            if (source is null) return null;
             RectF? result = null;
             PdfBoxAppearance? firstStyle = null;
             var heights = new List<float>();
-            foreach (var line in geometry)
+            foreach (var line in source.Lines)
             {
                 if (!Intersects(line.SourceSpan)) continue;
                 var words = line.Words?.Where(word => Intersects(word.SourceSpan)).ToArray();
@@ -979,16 +958,15 @@ public partial class ReadingPage
             heights.Sort();
             lineHeight = heights.Count > 0 ? heights[heights.Count / 2] : 0;
             style = firstStyle;
-            return result;
+            return result is { } bounds ? new(bounds.X, bounds.Y, bounds.Width, bounds.Height) : null;
 
             bool Intersects(OcrSpan? span) => span is { } range &&
-                range.StartUtf16 + offset < row.EndUtf16 && range.EndUtf16 + offset > row.StartUtf16;
+                range.StartUtf16 + source.Offset < row.EndUtf16 && range.EndUtf16 + source.Offset > row.StartUtf16;
             void Include(double x, double y, double width, double height, OcrSpan? span)
             {
-                var box = new RectF(page.X + (float)x * page.Width, page.Y + (float)y * page.Height,
-                    (float)width * page.Width, (float)height * page.Height);
+                var box = new RectF((float)x, (float)y, (float)width, (float)height);
                 if (box.Width <= 0 || box.Height <= 0) return;
-                var candidate = AppearanceFor(span);
+                var candidate = span is { } range ? source.Appearance?.GetValueOrDefault(range.StartUtf16) : null;
                 firstStyle ??= candidate;
                 if (firstStyle is { Ink: null } && candidate?.Ink is { } measured)
                     firstStyle = firstStyle with { Ink = measured };

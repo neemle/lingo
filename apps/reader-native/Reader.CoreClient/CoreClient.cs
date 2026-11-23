@@ -88,6 +88,8 @@ public sealed class CoreClient : IDisposable
         Invoke<PdfSampleColors[]>(0, new { version = 1, operation = "sample_pdf_backgrounds", width, height, rgba, boxes, withInk = true });
     public static PdfLayoutEdit[] SeparatePdfBlocks(string text, PdfLayoutWord[] words, double pageWidth) =>
         Invoke<PdfLayoutEdit[]>(0, new { version = 1, operation = "separate_pdf_blocks", text, words, pageWidth });
+    public static PdfTranslationLayout PlanPdfTranslationLayout(PdfTranslationFragment[] fragments) =>
+        Invoke<PdfTranslationLayout>(0, new { version = 1, operation = "plan_pdf_translation_layout", fragments });
     public static PdfLigatureJoin[] FindPdfLigatureJoins(string text, PdfLayoutWord[] words) =>
         Invoke<PdfLigatureJoin[]>(0, new { version = 1, operation = "find_pdf_ligature_joins", text, words });
     public static OcrLine[] ParseOcrTsv(string tsv, int width, int height, string? sparseTsv = null) =>

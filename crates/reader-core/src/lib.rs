@@ -38,6 +38,7 @@ mod onnx_runtime;
 pub mod optional_models;
 pub mod pdf_layers;
 pub mod pdf_appearance;
+pub mod pdf_translation_layout;
 pub mod pdf_text_blocks;
 mod ocr_layout;
 mod pdf_page_ocr;

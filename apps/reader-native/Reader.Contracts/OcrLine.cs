@@ -20,3 +20,8 @@ public sealed record OcrWord(string Text, double X, double Y, double Width, doub
 public sealed record OcrSpan(int StartUtf8, int EndUtf8, int StartUtf16, int EndUtf16);
 public sealed record PdfSampleBox(double X, double Y, double Width, double Height);
 public sealed record PdfSampleColors(uint Background, uint? Ink);
+public sealed record PdfTranslationFragment(PdfSampleBox? Bounds, double LineHeight, int StartUtf16,
+    int? BlockIndex, bool Pending, double[]? Background, double[]? Ink, double? FontHeight);
+public sealed record PdfTranslationRegion(PdfSampleBox Bounds, double PreferredFontHeight, bool LimitFontByWidth,
+    int[] Fragments, int? StyleFragment);
+public sealed record PdfTranslationLayout(PdfTranslationRegion[] Regions, int[] Pending, int[] Overflow);

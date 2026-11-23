@@ -64,6 +64,9 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
     if let Command::SeparatePdfBlocks { text, words, page_width } = command {
         return encode_job(reader_core::pdf_text_blocks::separate_blocks(&text, &words, page_width));
     }
+    if let Command::PlanPdfTranslationLayout { fragments } = command {
+        return encode_job(reader_core::pdf_translation_layout::plan(&fragments));
+    }
     if let Command::FindPdfLigatureJoins { text, words } = command {
         return encode_job(reader_core::pdf_text_blocks::ligature_joins(&text, &words));
     }

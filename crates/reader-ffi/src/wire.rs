@@ -39,6 +39,9 @@ pub enum Command {
         #[serde(rename = "pageWidth")]
         page_width: f64,
     },
+    PlanPdfTranslationLayout {
+        fragments: Vec<reader_core::pdf_translation_layout::SourceFragment>,
+    },
     FindPdfLigatureJoins {
         text: String,
         words: Vec<reader_core::pdf_text_blocks::PositionedWord>,
