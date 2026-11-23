@@ -935,7 +935,7 @@ public partial class ReadingPage
                     canvas.FillRectangle(Scale(mask.Bounds, page));
                 }
                 var ink = appearance?.Ink ?? Color.FromArgb("#302D27");
-                foreground.Add(() => DrawText(canvas, translated, area, fragments, font, ink, fit));
+                foreground.Add(() => DrawText(canvas, translated, area, fragments, font, ink, fit, region.Alignment));
             }
             foreach (var paint in foreground) paint();
 
@@ -1011,7 +1011,7 @@ public partial class ReadingPage
                     : canvas.GetStringSize(text.Substring(start, length), font, size).Width);
 
         private void DrawText(ICanvas canvas, string text, RectF area, IReadOnlyList<Fragment> fragments,
-            Microsoft.Maui.Graphics.Font font, Color ink, PdfTextFit layout)
+            Microsoft.Maui.Graphics.Font font, Color ink, PdfTextFit layout, string alignment = "left")
         {
             var lightInk = ink.Red * 0.21f + ink.Green * 0.72f + ink.Blue * 0.07f > 0.55f;
             var size = layout.Size;
@@ -1025,6 +1025,12 @@ public partial class ReadingPage
             foreach (var range in layout.Lines)
             {
                 var line = text[range.Start..range.End];
+                var x = area.Left;
+                if (alignment is "center" or "right")
+                {
+                    var slack = Math.Max(0, area.Width - canvas.GetStringSize(line, font, size).Width);
+                    x += alignment == "center" ? slack * 0.5f : slack;
+                }
                 foreach (var fragment in fragments)
                 {
                     var start = Math.Max(fragment.Start, range.Start) - range.Start;
@@ -1062,7 +1068,7 @@ public partial class ReadingPage
                 }
                 // Core Text can reject a line whose frame is exactly its measured height.
                 // Give the platform room for font leading and clip to the source region.
-                canvas.DrawString(line, area.Left, y, area.Width + 2, lineHeight + Math.Max(2, size * 0.5f),
+                canvas.DrawString(line, x, y, area.Right - x + 2, lineHeight + Math.Max(2, size * 0.5f),
                     HorizontalAlignment.Left, VerticalAlignment.Top, TextFlow.OverflowBounds);
                 y += lineHeight;
 
@@ -1070,7 +1076,7 @@ public partial class ReadingPage
                 {
                     var left = canvas.GetStringSize(line[..start], font, size).Width;
                     var width = canvas.GetStringSize(line[start..end], font, size).Width;
-                    return new RectF(area.Left + left, y, width, lineHeight);
+                    return new RectF(x + left, y, width, lineHeight);
                 }
             }
             canvas.RestoreState();

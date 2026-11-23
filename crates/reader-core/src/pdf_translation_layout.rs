@@ -44,6 +44,7 @@ impl Bounds {
 
 struct SourceFragment {
     bounds: Option<Bounds>,
+    ink_boxes: Vec<Bounds>,
     line_height: f64,
     start_utf16: usize,
     block_index: Option<usize>,
@@ -55,12 +56,21 @@ struct SourceFragment {
 #[serde(rename_all = "camelCase")]
 pub struct Region {
     bounds: Bounds,
+    alignment: Alignment,
     line_height: f64,
     preferred_font_height: f64,
     limit_font_by_width: bool,
     fragments: Vec<usize>,
     style_fragment: Option<usize>,
     masks: Vec<masks::BackgroundMask>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum Alignment {
+    Left,
+    Center,
+    Right,
 }
 
 #[derive(Default, Serialize)]
@@ -88,6 +98,7 @@ fn plan(fragments: &[SourceFragment]) -> Result<PageLayout> {
         }
         let mut region = Region {
             bounds,
+            alignment: Alignment::Left,
             line_height: fragment.line_height,
             preferred_font_height: 0.0,
             limit_font_by_width: false,
@@ -137,9 +148,54 @@ fn plan(fragments: &[SourceFragment]) -> Result<PageLayout> {
         !covers_pending
     });
     remove_overlapping_regions(&mut page);
+    for region in &mut page.regions {
+        region.alignment = infer_alignment(
+            region.fragments.iter().flat_map(|&index| fragments[index].ink_boxes.iter().copied()),
+            region.line_height,
+        );
+    }
     page.overflow
         .sort_unstable_by_key(|&index| (fragments[index].start_utf16, index));
     Ok(page)
+}
+
+fn infer_alignment(boxes: impl Iterator<Item = Bounds>, line_height: f64) -> Alignment {
+    let center = |bounds: Bounds| bounds.x + bounds.width * 0.5;
+    let baseline = |bounds: Bounds| bounds.y + bounds.height * 0.5;
+    let mut boxes: Vec<_> = boxes.filter(|bounds| bounds.height >= line_height * 0.55).collect();
+    boxes.sort_unstable_by(|a, b| baseline(*a).total_cmp(&baseline(*b)));
+    let mut lines: Vec<Bounds> = Vec::new();
+    for bounds in boxes {
+        if let Some(line) = lines.last_mut().filter(|line| {
+            (baseline(**line) - baseline(bounds)).abs() <= 0.45 * line_height
+        }) {
+            *line = line.union(bounds);
+        } else {
+            lines.push(bounds);
+        }
+    }
+    let mut lines = lines.into_iter().filter(|line| line.width >= 1.5 * line_height);
+    let Some(first) = lines.next() else { return Alignment::Left; };
+    let (mut left, mut right, mut middle) = (
+        (first.x, first.x),
+        (first.right(), first.right()),
+        (center(first), center(first)),
+    );
+    for line in lines {
+        left = (left.0.min(line.x), left.1.max(line.x));
+        right = (right.0.min(line.right()), right.1.max(line.right()));
+        middle = (middle.0.min(center(line)), middle.1.max(center(line)));
+    }
+    let tolerance = (line_height * 0.25).max(0.004);
+    let (left_drift, right_drift, center_drift) = (left.1 - left.0, right.1 - right.0, middle.1 - middle.0);
+    if left_drift <= tolerance { return Alignment::Left; }
+    if right_drift <= tolerance && left_drift >= 2.0 * tolerance { return Alignment::Right; }
+    if right_drift > tolerance && center_drift <= tolerance &&
+        center_drift <= 0.5 * left_drift.min(right_drift)
+    {
+        return Alignment::Center;
+    }
+    Alignment::Left
 }
 
 fn remove_overlapping_regions(page: &mut PageLayout) {
@@ -205,6 +261,7 @@ mod tests {
                 width: 0.3,
                 height: 0.02,
             }),
+            ink_boxes: Vec::new(),
             line_height: 0.02,
             start_utf16: position,
             block_index: Some(block),
@@ -249,5 +306,15 @@ mod tests {
         .unwrap();
         assert_eq!(page.overflow, [0, 1]);
         assert_eq!(page.regions[0].fragments, [2]);
+    }
+
+    #[test]
+    fn aligns_translated_lines_to_stable_source_margins() {
+        let bounds = |x, y, width| Bounds { x, y, width, height: 0.04 };
+        let first = bounds(0.2, 0.1, 0.5);
+        assert_eq!(infer_alignment([first, bounds(0.4, 0.17, 0.3)].into_iter(), 0.04), Alignment::Right);
+        assert_eq!(infer_alignment([first, bounds(0.3, 0.17, 0.3)].into_iter(), 0.04), Alignment::Center);
+        assert_eq!(infer_alignment([first, bounds(0.2, 0.17, 0.3)].into_iter(), 0.04), Alignment::Left);
+        assert_eq!(infer_alignment([first].into_iter(), 0.04), Alignment::Left);
     }
 }

@@ -136,6 +136,7 @@ fn project_row(
     let span = row.page_span(offset);
     let mut fragment = SourceFragment {
         bounds: None,
+        ink_boxes: Vec::new(),
         line_height: 0.0,
         start_utf16: row.start_utf16,
         block_index: row.block_index,
@@ -155,6 +156,7 @@ fn project_row(
                 .bounds
                 .map_or(bounds, |previous| previous.union(bounds)),
         );
+        fragment.ink_boxes.push(bounds);
         heights.push(bounds.height);
         if let Some(found) = span.and_then(|span| styles.get(&span.start_utf16).copied()) {
             let style = fragment.style.get_or_insert_with(|| found.clone());
