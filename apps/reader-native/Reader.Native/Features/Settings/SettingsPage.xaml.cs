@@ -244,7 +244,10 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
             var routes = await AppState.Session.TranslationRoutesAsync();
             if (translationRoutes is null || !translationRoutes.SequenceEqual(routes) ||
                 !InstalledPackageRevisions(translationInventory ?? []).SequenceEqual(InstalledPackageRevisions(packages)))
+            {
+                AppState.InvalidateReaderCache();
                 AppState.TranslationWorker?.TranslationRoutesChanged();
+            }
             translationRoutes = routes;
             translationInventory = packages;
             TranslationPackages.Text = string.Join(Environment.NewLine, packages.Select(package =>
@@ -288,7 +291,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         var busy = activeDownload is not null || changingTranslationFiles;
         var requested = RequestedMissingPackages(requestedPackages, translationInventory ?? []);
         RequestedTranslation.IsVisible = requested.Length > 0;
-        RequestedTranslation.Text = requested.Length > 0 ? $"Потрібні пакети для напрямків {DescribeRoutes(requested)}." : "";
+        RequestedTranslation.Text = requested.Length > 0 ? $"Вибрані пакети для напрямків {DescribeRoutes(requested)}." : "";
         DownloadRequested.IsVisible = requested.DistinctBy(PackageKey).Count() > 1;
         DownloadRequested.IsEnabled = !busy && DownloadRequested.IsVisible;
         ModelChoice.IsEnabled = InstallTranslation.IsEnabled = !busy;

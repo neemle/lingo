@@ -451,11 +451,13 @@ public partial class ReadingPage : ContentPage
 
     private async Task OpenTranslationPackagesAsync()
     {
-        if (readiness is not { Missing.Length: > 0 } state) return;
+        if (readiness is not { } state) return;
+        var packages = state.DirectUpgrade is { } direct ? new[] { direct } : state.Missing;
+        if (packages.Length == 0) return;
         try
         {
             await Shell.Current.GoToAsync(AppShell.SettingsRoute,
-                new ShellNavigationQueryParameters { ["translationPackages"] = state.Missing });
+                new ShellNavigationQueryParameters { ["translationPackages"] = packages });
         }
         catch (Exception error)
         {

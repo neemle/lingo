@@ -280,6 +280,8 @@ pub struct TranslationReadiness {
     pub ready: bool,
     pub pivot_language: Option<String>,
     pub missing: Vec<TranslationPair>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direct_upgrade: Option<TranslationPair>,
 }
 
 #[derive(Debug, Serialize)]
@@ -312,26 +314,26 @@ pub(crate) fn route_readiness(
     source: &str,
     target: &str,
 ) -> Result<TranslationReadiness> {
+    let pair = |edge: &ModelEdge| TranslationPair {
+        source: edge.source.clone(),
+        target: edge.target.clone(),
+    };
+    let direct = catalog.iter().find(|edge| edge.source == source && edge.target == target);
     if let Some(route) = resolve_route(installed, source, target)? {
         return Ok(TranslationReadiness {
             ready: true,
             pivot_language: route.pivot_language().map(str::to_owned),
             missing: Vec::new(),
+            direct_upgrade: direct.filter(|_| route.pivot_language().is_some()).map(pair),
         });
     }
 
-    let pair = |edge: &ModelEdge| TranslationPair {
-        source: edge.source.clone(),
-        target: edge.target.clone(),
-    };
-    if let Some(edge) = catalog
-        .iter()
-        .find(|edge| edge.source == source && edge.target == target)
-    {
+    if let Some(edge) = direct {
         return Ok(TranslationReadiness {
             ready: false,
             pivot_language: None,
             missing: vec![pair(edge)],
+            direct_upgrade: None,
         });
     }
     let (pivot_language, missing) = catalog
@@ -364,6 +366,7 @@ pub(crate) fn route_readiness(
         ready: false,
         pivot_language,
         missing,
+        direct_upgrade: None,
     })
 }
 
@@ -2050,12 +2053,9 @@ mod tests {
         let via = route_readiness(&catalog, &installed, "fr", "uk").unwrap();
         assert!(via.ready && via.missing.is_empty());
         assert_eq!(via.pivot_language.as_deref(), Some("en"));
-        assert!(
-            route_readiness(&catalog, std::slice::from_ref(&direct), "fr", "uk")
-                .unwrap()
-                .pivot_language
-                .is_none()
-        );
+        assert_eq!(via.direct_upgrade, Some(TranslationPair { source: "fr".into(), target: "uk".into() }));
+        let native = route_readiness(&catalog, std::slice::from_ref(&direct), "fr", "uk").unwrap();
+        assert!(native.pivot_language.is_none() && native.direct_upgrade.is_none());
 
         let missing_direct =
             route_readiness(&catalog, std::slice::from_ref(&first), "fr", "uk").unwrap();

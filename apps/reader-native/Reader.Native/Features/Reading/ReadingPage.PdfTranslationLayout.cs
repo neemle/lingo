@@ -109,12 +109,15 @@ public partial class ReadingPage
     private void UpdateTranslationPackageActions()
     {
         var session = AppState.Session;
-        var missing = TargetCode is { } target && session.Document is { } document &&
-            readinessPair == (document.Language, target) && readiness is { Missing.Length: > 0 };
-        var showFooterAction = missing && !PdfPageNeedsPackages;
+        var current = TargetCode is { } target && session.Document is { } document &&
+            readinessPair == (document.Language, target) ? readiness : null;
+        var directUpgrade = current?.DirectUpgrade is not null;
+        var showFooterAction = directUpgrade || current is { Missing.Length: > 0 } && !PdfPageNeedsPackages;
+        OpenTranslationPackages.Text = DetachedOpenTranslationPackages.Text = directUpgrade
+            ? "Установити прямий переклад" : "Потрібні мовні пакети";
         OpenTranslationPackages.IsVisible = showFooterAction && session.Document is { } source &&
             session.Sentence is { } sentence && !IsFootnote(source, sentence);
-        DetachedOpenTranslationPackages.IsVisible = showFooterAction && DetachedReadiness.IsVisible;
+        DetachedOpenTranslationPackages.IsVisible = showFooterAction && (directUpgrade || DetachedReadiness.IsVisible);
     }
 
     private PdfLayoutAddress? CurrentPdfLayoutAddress() =>
