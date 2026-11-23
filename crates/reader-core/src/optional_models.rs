@@ -75,6 +75,23 @@ const MODELS: &[Model] = &[
             sha256: "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
         }],
     },
+    #[cfg(any(target_os = "macos", target_abi = "macabi"))]
+    Model {
+        id: crate::qwen::HY_TRANSLATION_MODEL,
+        name: "Hy-MT2 7B · FR → UK",
+        license: "Apache-2.0",
+        repo: "tencent/Hy-MT2-7B-GGUF",
+        revision: "ab8472660ac61fac25f1af43fac2599d52a8a775",
+        // CPU-only measurement on a 24 GiB Mac peaked at a 4.1 GiB footprint.
+        // The governor adds the reader's reserve separately.
+        budget: ModelBudget { working_mib: 4608, minimum_total_mib: 16384 },
+        assets: &[Asset {
+            name: "model.gguf",
+            remote_path: "Hy-MT2-7B-Q4_K_M.gguf",
+            bytes: 4_624_648_896,
+            sha256: "9f96256500f3fc1ab4d64336b58f52a949a95ad7516b0c229476eef782f9f77b",
+        }],
+    },
     Model {
         id: "multilingual-e5-small",
         name: "Multilingual E5 Small",
@@ -457,13 +474,14 @@ impl OptionalModelInstallJob {
 fn probe_optional_model(model: &Model, directory: &Path) -> Result<()> {
     let permit = RESOURCES.optional()?;
     check_memory(model)?;
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(if model.id == crate::qwen::HY_TRANSLATION_MODEL { 90 } else { 20 });
     let interrupted = || permit.should_yield() || Instant::now() >= deadline;
     if interrupted() {
         return Err("Контрольний запуск відкладено. Повторіть встановлення.".into());
     }
     match model.id {
         crate::qwen::HINT_GENERATION_MODEL => crate::qwen::smoke(directory, &interrupted)?,
+        crate::qwen::HY_TRANSLATION_MODEL => crate::qwen::smoke_hy_translation(directory, &interrupted)?,
         "multilingual-e5-small" => crate::e5::smoke(directory, &interrupted)?,
         "piper-uk" => crate::tts::smoke(directory, &interrupted)?,
         "supertonic-3" => crate::supertonic::smoke(directory, &interrupted)?,
@@ -476,6 +494,14 @@ fn probe_optional_model(model: &Model, directory: &Path) -> Result<()> {
 }
 
 impl Store {
+    pub(crate) fn has_optional_model_files(&self, id: &str) -> bool {
+        let Ok(model) = model(id) else { return false; };
+        let paths = ModelPaths::new(&self.optional_model_directory, id);
+        let directory = paths.installed();
+        package_directory(directory).unwrap_or(false) && model.assets.iter().all(|asset|
+            local_size(&directory.join(asset.name)) == Some(asset.bytes))
+    }
+
     pub fn prepare_optional_model(&self, id: &str) -> Result<OptionalModelJob> {
         let model = model(id)?;
         Ok(OptionalModelJob {

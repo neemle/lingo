@@ -1,8 +1,9 @@
 use super::{
-    generate_in_mode, json_output, prompt_checkpoint, with_prompt_context, GenerationMode,
+    generate_in_mode, hy_translation, json_output, prompt_checkpoint, with_prompt_context, GenerationMode,
     HintCache, HintCacheMode, HintWork, GENERATION_INPUT_TOO_LONG, GENERATION_TIMEOUT, HINT_GENERATION_MODEL,
 };
 use crate::{pdf_sentences::Layout, translation_passage::{join_translated_chunks, passage_chunks}, Result, Store};
+use llama_cpp_2::{context::LlamaContext, model::LlamaModel};
 use serde::{Deserialize, Serialize};
 use std::{
     time::{Duration, Instant},
@@ -44,6 +45,7 @@ pub struct PassageTranslation {
     pub text: String,
     pub source_text: String,
     pub cached: bool,
+    pub model_name: &'static str,
 }
 
 pub struct TranslatePassageJob {
@@ -51,6 +53,7 @@ pub struct TranslatePassageJob {
     source_text: String,
     target: String,
     regenerate: bool,
+    use_hy: bool,
     chunks: Vec<HintWork<TranslationChunk>>,
     separators: Vec<&'static str>,
 }
@@ -83,6 +86,7 @@ impl Store {
         if language == target {
             return Err("Виберіть іншу мову перекладу.".into());
         }
+        let use_hy = language == "fr" && target == "uk" && self.has_optional_model_files(hy_translation::MODEL_ID);
         // Read all chunk entries from the same generation while a refresh may be publishing.
         let snapshot = self.connection.unchecked_transaction().map_err(|error| error.to_string())?;
         let pieces = passage_chunks(&text)?;
@@ -98,17 +102,22 @@ impl Store {
                 } else {
                     text
                 };
-                let example = format!("Translate from {source_name} into {target_name}.\n{prompt_text}");
-                let cache_kind = if complete_sentences(text) > 1 {
-                    "qwen-passage-translation-v7"
+                let (model, prompt, example, cache_kind) = if use_hy {
+                    (hy_translation::MODEL_ID, hy_translation::PROMPT, format!("FR → UK\n{prompt_text}"), "hy-mt2-passage-v2")
                 } else {
-                    "qwen-passage-translation-v6"
+                    let example = format!("Translate from {source_name} into {target_name}.\n{prompt_text}");
+                    let cache_kind = if complete_sentences(text) > 1 {
+                        "qwen-passage-translation-v7"
+                    } else {
+                        "qwen-passage-translation-v6"
+                    };
+                    (HINT_GENERATION_MODEL, SYSTEM, example, cache_kind)
                 };
                 self.prepare_hint_work(
-                    HINT_GENERATION_MODEL,
+                    model,
                     id,
                     cache_kind,
-                    SYSTEM,
+                    prompt,
                     example,
                     mode,
                 )
@@ -120,6 +129,7 @@ impl Store {
             source_text: text,
             target: target.to_owned(),
             regenerate: matches!(mode, HintCacheMode::Refresh),
+            use_hy,
             chunks,
             separators,
         })
@@ -162,11 +172,9 @@ impl TranslatePassageJob {
             check()?;
             self.cached()
         }, |directory, should_yield| {
-            let opening = Instant::now() + Duration::from_secs(25);
-            with_prompt_context(
-                directory,
-                || prompt_checkpoint(should_yield, opening),
-                |model, context| {
+            let opening = Instant::now() + Duration::from_secs(if self.use_hy { 90 } else { 25 });
+            let opening_check = || prompt_checkpoint(should_yield, opening);
+            let run = |model: &LlamaModel, context: &mut LlamaContext<'_>| {
                     let mut translated: Vec<TranslationChunk> = Vec::with_capacity(self.chunks.len());
                     let mut updates: Vec<(&HintCache, usize)> = Vec::new();
                     for item in &self.chunks {
@@ -184,14 +192,19 @@ impl TranslatePassageJob {
                                     value
                                 } else {
                                     let (instruction, source_text) = example.split_once('\n')
-                                        .ok_or("Qwen не отримав текст уривка.")?;
-                                    let chunk_deadline = Instant::now() + CHUNK_TIMEOUT;
+                                        .ok_or("Модель не отримала текст уривка.")?;
+                                    let chunk_deadline = Instant::now() + if self.use_hy { Duration::from_secs(120) } else { CHUNK_TIMEOUT };
                                     let render = |fragment: &str, regenerate| {
+                                        context.clear_kv_cache();
+                                        if self.use_hy {
+                                            let text = hy_translation::translate(model, context, fragment, regenerate,
+                                                || prompt_checkpoint(should_yield, chunk_deadline))?;
+                                            return serde_json::to_vec(&TranslationChunk { text }).map_err(|error| error.to_string());
+                                        }
                                         let prompt = format!("{instruction}\n{fragment}");
                                         let seconds = if fragment == source_text { 25 } else { 16 };
                                         let finish = chunk_deadline.min(Instant::now() + Duration::from_secs(seconds));
                                         prompt_checkpoint(should_yield, finish)?;
-                                        context.clear_kv_cache();
                                         generate_in_mode(
                                             model,
                                             context,
@@ -222,8 +235,9 @@ impl TranslatePassageJob {
                     check()?;
                     HintCache::save_batch(updates.into_iter().map(|(cache, index)| (cache, &translated[index])))?;
                     Ok(self.combine(translated, false))
-                },
-            )
+            };
+            if self.use_hy { hy_translation::with_context(directory, opening_check, run) }
+            else { with_prompt_context(directory, opening_check, run) }
         });
         check()?;
         result
@@ -235,7 +249,8 @@ impl TranslatePassageJob {
         if self.source == "fr" && self.target == "uk" {
             crate::translation_dates::preserve_french_dates(&self.source_text, &mut text);
         }
-        PassageTranslation { text, source_text: self.source_text.clone(), cached }
+        let model_name = if self.use_hy { hy_translation::MODEL_NAME } else { "Qwen 2B" };
+        PassageTranslation { text, source_text: self.source_text.clone(), cached, model_name }
     }
 }
 
@@ -324,7 +339,7 @@ fn mixed_cyrillic_word(text: &str) -> bool {
 }
 
 fn parse(bytes: &[u8], target: &str, source_text: &str) -> Result<TranslationChunk> {
-    let error = "Qwen не повернув повного перекладу.";
+    let error = "Модель не повернула повного перекладу.";
     let result: TranslationChunk =
         serde_json::from_str(json_output(bytes).ok_or(error)?).map_err(|_| error)?;
     let text = result.text.trim();
@@ -356,7 +371,7 @@ fn parse(bytes: &[u8], target: &str, source_text: &str) -> Result<TranslationChu
         || (target == "uk" && crate::marian_target_uk::clearly_russian(text))
         || crate::language_detection::detect(text).is_some_and(|language| language != target)
     {
-        return Err("Qwen не повернув перекладу вибраною мовою.".into());
+        return Err("Модель не повернула перекладу вибраною мовою.".into());
     }
     Ok(TranslationChunk { text: text.into() })
 }

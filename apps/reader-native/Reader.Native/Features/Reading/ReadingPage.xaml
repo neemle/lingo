@@ -246,7 +246,7 @@
         <FlexLayout x:Name="ModelTranslationActions" IsVisible="False" Wrap="Wrap">
          <Button Text="Порівняти переклади" Clicked="CompareModelTranslationClicked"
           Style="{StaticResource PlayerButton}" Margin="0,0,6,0" />
-         <Button x:Name="ShareModelTranslation" Text="Поширити переклад Qwen" Clicked="ShareModelTranslationClicked"
+         <Button x:Name="ShareModelTranslation" Text="Поширити переклад моделі" Clicked="ShareModelTranslationClicked"
           Style="{StaticResource PlayerButton}" />
         </FlexLayout>
        </VerticalStackLayout>
@@ -366,7 +366,7 @@
           <FlexLayout x:Name="DetachedModelTranslationActions" IsVisible="False" Wrap="Wrap">
            <Button Text="Порівняти переклади" Clicked="CompareModelTranslationClicked"
             Style="{StaticResource PlayerButton}" Margin="0,0,6,0" />
-           <Button x:Name="DetachedShareModelTranslation" Text="Поширити переклад Qwen" Clicked="ShareModelTranslationClicked"
+           <Button x:Name="DetachedShareModelTranslation" Text="Поширити переклад моделі" Clicked="ShareModelTranslationClicked"
             Style="{StaticResource PlayerButton}" />
           </FlexLayout>
          </VerticalStackLayout>

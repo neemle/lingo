@@ -27,7 +27,9 @@ use std::{
 };
 
 mod passage_translation;
+mod hy_translation;
 mod ocr_word;
+pub(crate) use hy_translation::{smoke as smoke_hy_translation, MODEL_ID as HY_TRANSLATION_MODEL};
 pub use ocr_word::{OcrPageReview, OcrReview, ReviewOcrLineJob, ReviewOcrPageJob, ReviewOcrWordJob};
 pub use passage_translation::{PassageTranslation, TranslatePassageJob};
 
@@ -1167,7 +1169,7 @@ fn run_prompt<T: Serialize + serde::de::DeserializeOwned>(
     )
 }
 
-const GENERATION_TIMEOUT: &str = "Qwen не завершив локальний аналіз вчасно.";
+const GENERATION_TIMEOUT: &str = "Локальна модель не завершила обробку вчасно.";
 const GENERATION_INPUT_TOO_LONG: &str = "Текст задовгий для локальної моделі.";
 
 fn prompt_checkpoint(should_yield: &dyn Fn() -> bool, deadline: Instant) -> Result<()> {
@@ -1202,6 +1204,7 @@ fn with_prompt_context<T>(
     }
 
     let model = load_model(backend, &path, 0)?;
+    check()?;
     let mut context = model.new_context(backend, context_parameters(false)).map_err(runtime_error)?;
     run(&model, &mut context)
 }
@@ -1349,17 +1352,7 @@ fn generate_in_mode(
     let response_tokens = mode.response_budget(tokens.len())
         .ok_or(GENERATION_INPUT_TOO_LONG)?;
     let mut batch = LlamaBatch::new(BATCH, 1);
-    for (offset, chunk) in tokens.chunks(BATCH).enumerate() {
-        check()?;
-        batch.clear();
-        for (index, token) in chunk.iter().enumerate() {
-            let position = offset * BATCH + index;
-            batch
-                .add(*token, position as i32, &[0], position + 1 == tokens.len())
-                .map_err(runtime_error)?;
-        }
-        context.decode(&mut batch).map_err(runtime_error)?;
-    }
+    decode_prompt(context, &mut batch, &tokens, &check)?;
     let grammar = LlamaSampler::grammar(model, grammar, "root").map_err(runtime_error)?;
     let mut sampler = match mode {
         GenerationMode::Hint => LlamaSampler::chain_simple([grammar, LlamaSampler::greedy()]),
@@ -1396,6 +1389,22 @@ fn generate_in_mode(
     }
     check()?;
     Ok(output)
+}
+
+fn decode_prompt(
+    context: &mut LlamaContext<'_>, batch: &mut LlamaBatch<'_>,
+    tokens: &[llama_cpp_2::token::LlamaToken], check: &impl Fn() -> Result<()>,
+) -> Result<()> {
+    for (offset, chunk) in tokens.chunks(BATCH).enumerate() {
+        check()?;
+        batch.clear();
+        for (index, token) in chunk.iter().enumerate() {
+            let position = offset * BATCH + index;
+            batch.add(*token, position as i32, &[0], position + 1 == tokens.len()).map_err(runtime_error)?;
+        }
+        context.decode(batch).map_err(runtime_error)?;
+    }
+    Ok(())
 }
 
 fn json_output(bytes: &[u8]) -> Option<&str> {
@@ -1469,7 +1478,7 @@ fn word_context<'a>(sentence: &'a str, word: &str, start: usize) -> (&'a str, us
 }
 
 fn runtime_error(error: impl std::fmt::Display) -> String {
-    format!("Помилка локальної моделі Qwen. {error}")
+    format!("Помилка локальної мовної моделі. {error}")
 }
 
 #[cfg(test)]

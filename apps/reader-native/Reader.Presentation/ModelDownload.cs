@@ -174,12 +174,13 @@ public sealed class ModelDownload(HttpClient http)
 
     private static void ValidateOptionalModel(OptionalModel model)
     {
+        var maximumAssetBytes = model.Id == "hy-mt2-7b" ? 5_000_000_000L : 2_000_000_000L;
         if (!Hex(model.Revision, 40) || model.Assets.Length is < 1 or > 8 ||
             model.Assets.Select(asset => asset.Name).Distinct(StringComparer.Ordinal).Count() != model.Assets.Length ||
             model.Assets.Any(asset => asset.Name is not ("model.gguf" or "model.onnx" or "tokenizer.json" or "piper-uk.onnx" or "piper-uk.json"
                 or "duration_predictor.onnx" or "text_encoder.onnx" or "vector_estimator.onnx"
                 or "vocoder.onnx" or "tts.json" or "unicode_indexer.json" or "M1.json" or "F1.json") ||
-                asset.Bytes is <= 0 or > 2_000_000_000 || !Hex(asset.Sha256, 64) ||
+                asset.Bytes <= 0 || asset.Bytes > maximumAssetBytes || !Hex(asset.Sha256, 64) ||
                 !Uri.TryCreate(asset.DownloadUrl, UriKind.Absolute, out var url) ||
                 url.Scheme != Uri.UriSchemeHttps || url.Host != "huggingface.co" ||
                 !url.AbsolutePath.Contains($"/resolve/{model.Revision}/", StringComparison.Ordinal)))

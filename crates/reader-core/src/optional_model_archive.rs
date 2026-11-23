@@ -19,6 +19,8 @@ use zip::{
 };
 
 const EOCD_SIZE: usize = 22;
+const ZIP64_END_SIZE: usize = 56;
+const ZIP64_LOCATOR_SIZE: usize = 20;
 
 pub struct OptionalModelArchiveJob {
     model: &'static Model,
@@ -113,7 +115,7 @@ fn check_directory(file: &mut File, model: &Model) -> Result<()> {
         return Err("Архів моделі завеликий.".into());
     }
 
-    // Require a classic, single-disk footer before letting ZIP parse its metadata.
+    // Require a single-disk footer before letting ZIP parse its metadata.
     file.seek(SeekFrom::Start(footer_at)).map_err(model_error)?;
     let mut footer = [0; EOCD_SIZE];
     file.read_exact(&mut footer).map_err(model_error)?;
@@ -132,9 +134,20 @@ fn check_directory(file: &mut File, model: &Model) -> Result<()> {
         || footer[20..] != [0; 2]
         || count(8) != model.assets.len()
         || count(10) != model.assets.len()
-        || !(1..=PACKAGE_OVERHEAD).contains(&size)
-        || offset + size != footer_at
     {
+        return Err(invalid());
+    }
+    let (offset, size, directory_end) = if size == u64::from(u32::MAX) || offset == u64::from(u32::MAX) {
+        let (zip64_offset, zip64_size, end) = read_zip64_directory(file, footer_at, model.assets.len())?;
+        if u64::from(u32::MAX).min(zip64_offset) != offset
+            || (size != u64::from(u32::MAX) && zip64_size != size) {
+            return Err(invalid());
+        }
+        (zip64_offset, zip64_size, end)
+    } else {
+        (offset, size, footer_at)
+    };
+    if !(1..=PACKAGE_OVERHEAD).contains(&size) || offset.checked_add(size) != Some(directory_end) {
         return Err(invalid());
     }
     // If the final footer points at junk, do not let the library fall back to an embedded footer.
@@ -145,6 +158,24 @@ fn check_directory(file: &mut File, model: &Model) -> Result<()> {
         return Err(invalid());
     }
     file.rewind().map_err(model_error)
+}
+
+fn read_zip64_directory(file: &mut File, footer_at: u64, entries: usize) -> Result<(u64, u64, u64)> {
+    let invalid = || "Некоректне завершення ZIP64 моделі.".to_owned();
+    let locator_at = footer_at.checked_sub(ZIP64_LOCATOR_SIZE as u64).ok_or_else(invalid)?;
+    let end_at = locator_at.checked_sub(ZIP64_END_SIZE as u64).ok_or_else(invalid)?;
+    file.seek(SeekFrom::Start(end_at)).map_err(model_error)?;
+    let mut end = [0; ZIP64_END_SIZE];
+    let mut locator = [0; ZIP64_LOCATOR_SIZE];
+    file.read_exact(&mut end).map_err(model_error)?;
+    file.read_exact(&mut locator).map_err(model_error)?;
+    let integer = |bytes: &[u8], at| u64::from_le_bytes(bytes[at..at + 8].try_into().expect("eight bytes"));
+    if locator[..8] != *b"PK\x06\x07\0\0\0\0" || locator[16..] != [1, 0, 0, 0]
+        || integer(&locator, 8) != end_at || end[..4] != *b"PK\x06\x06" || integer(&end, 4) != 44
+        || end[16..24] != [0; 8] || integer(&end, 24) != entries as u64 || integer(&end, 32) != entries as u64 {
+        return Err(invalid());
+    }
+    Ok((integer(&end, 48), integer(&end, 40), end_at))
 }
 
 #[cfg(test)]

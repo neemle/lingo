@@ -103,13 +103,13 @@ public partial class ReadingPage
                 ? "Повторити переклад" : "Перекласти моделлю";
 
         var result = translation is null ? "" :
-            $"{(translation.Cached ? "Збережений переклад Qwen" : "Переклад Qwen 2B")}{Environment.NewLine}{translation.Text}";
+            $"{(translation.Cached ? "Збережений переклад" : "Переклад")} · {translation.ModelName}{Environment.NewLine}{translation.Text}";
         var failure = CurrentModelFailure(address);
         var status = failure is not null && translation is not null
             ? $"Попередній переклад збережено. {failure}" : failure;
         if (running)
             status = canceling ? "Скасовуємо переклад…" : translation is null
-                ? "Qwen перекладає абзац…" : "Qwen перегенеровує переклад…";
+                ? "Модель перекладає уривок…" : "Модель перекладає уривок заново…";
         var hasOutput = result.Length > 0 || status is not null;
         ModelTranslationBusy.IsRunning = ModelTranslationBusy.IsVisible = running && !detached;
         DetachedModelTranslationBusy.IsRunning = DetachedModelTranslationBusy.IsVisible = running && detached;
@@ -181,9 +181,10 @@ public partial class ReadingPage
                 source = await AppState.Session.PassageSourceAsync(address.Document, address.Page, address.Sentence);
             if (!readingPageActive || CurrentModelPassage() != address) return;
 
-            var qwen = translation?.Text;
-            if (failure is not null) qwen = qwen is null ? failure : $"{qwen}{Environment.NewLine}{failure}";
-            await ShowModelComparisonAsync(address, source, qwen ?? "Qwen не повернув перекладу.");
+            var modelText = translation?.Text;
+            if (failure is not null) modelText = modelText is null ? failure : $"{modelText}{Environment.NewLine}{failure}";
+            await ShowModelComparisonAsync(address, source, translation?.ModelName ?? "Локальна модель",
+                modelText ?? "Модель не повернула перекладу.");
         }
         catch (Exception error)
         {
@@ -193,12 +194,12 @@ public partial class ReadingPage
         finally { openingPassageComparison = false; }
     }
 
-    private async Task ShowModelComparisonAsync(ModelPassage address, string source, string qwen)
+    private async Task ShowModelComparisonAsync(ModelPassage address, string source, string modelName, string modelText)
     {
         var content = new VerticalStackLayout { Padding = new Thickness(22, 14), Spacing = 12 };
         AddPassageComparisonSection(content, "Оригінал", source);
         var (offlineHeading, offlineText) = AddPassageComparisonSection(content, "Офлайн-переклад", "Перекладаємо уривок…");
-        AddPassageComparisonSection(content, "Qwen", qwen);
+        AddPassageComparisonSection(content, modelName, modelText);
         var close = new Button { Text = "Закрити", HorizontalOptions = LayoutOptions.End, Margin = new Thickness(12) };
         var layout = new Grid { RowDefinitions = { new(GridLength.Auto), new(GridLength.Star) } };
         layout.Add(close);

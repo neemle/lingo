@@ -19,8 +19,9 @@ pub(crate) fn write_verified_package_zip<'a>(
     crate::space::ensure_capacity([(parent, limit)])?;
     let mut output = tempfile::NamedTempFile::new_in(parent).map_err(model_error)?;
     let mut zip = zip::ZipWriter::new(output.as_file_mut());
-    let options =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored)
+        .large_file(limit >= u64::from(u32::MAX));
     for (index, asset) in assets.into_iter().enumerate() {
         zip.start_file(asset, options).map_err(model_error)?;
         copy(index, asset, &mut zip)?;
