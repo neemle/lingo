@@ -249,7 +249,7 @@ impl Store {
 pub(crate) fn pdf_narration(document: &Document, sentence: &Sentence, text: &str) -> Option<String> {
     let masked = without_pdf_note_markers(document, sentence, text);
     let narration = masked.as_deref().unwrap_or(text);
-    if document.format == "pdf" && narration.contains('\n') {
+    if (document.format == "pdf" || document.ocr_lines.is_some()) && narration.contains('\n') {
         Some(crate::translation::normalize_ocr_input(document, narration, sentence.start_utf16))
     } else {
         masked

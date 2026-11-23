@@ -84,7 +84,7 @@ pub(crate) fn parser_version(document: &Document) -> &'static str {
         ("pdf", true, true) => "pdf-mixed-reflow/1",
         ("pdf", true, false) => "pdf-ocr-reflow/1",
         ("pdf", false, _) => "pdf-text-reflow/1",
-        (_, true, _) => "image-ocr-reflow/1",
+        (_, true, _) => "image-ocr-reflow/2",
         _ => "text-reflow/1",
     }
 }

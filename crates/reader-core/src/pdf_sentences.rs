@@ -42,7 +42,9 @@ impl Layout {
 }
 
 pub(crate) fn segment_document(document: &Document, text: &str) -> Vec<Sentence> {
-    if document.format == "pdf" && document.pdf_quote_boundaries {
+    if (document.format == "pdf" && document.pdf_quote_boundaries) ||
+        (document.format != "pdf" && document.ocr_lines.is_some())
+    {
         Layout::ClosingQuotes.segment(text, &document.id)
     } else if document.format == "pdf" && document.pdf_abbreviation_boundaries {
         crate::segment_pdf_with_titles(text, &document.id)

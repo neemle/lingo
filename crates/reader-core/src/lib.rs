@@ -839,7 +839,11 @@ impl Store {
             .and_then(|extension| extension.to_str())
             .unwrap_or("txt")
             .to_lowercase();
-        let sentences = if format == "pdf" { pdf_sentences::Layout::ClosingQuotes.segment(&text, &id) } else { segment(&text, &id) };
+        let sentences = if format == "pdf" || ocr_lines.is_some() {
+            pdf_sentences::Layout::ClosingQuotes.segment(&text, &id)
+        } else {
+            segment(&text, &id)
+        };
         let mut document = Document {
             sentences,
             id,
@@ -2169,6 +2173,25 @@ mod tests {
             assert!(clean.speech_resume(&doc.id).unwrap().is_none());
         }
     }
+    #[test]
+    fn photo_ocr_keeps_printed_line_wraps_and_french_titles_inside_sentences() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let line = |text: &str, y| ocr::OcrLine {
+            page: 0, text: text.into(), x: 0.1, y, width: 0.8, height: 0.02, confidence: None,
+            block_start: false, correction: None, words: Vec::new(), source_span: None,
+        };
+        let document = store.import_image("roman.png", b"\x89PNG\r\n\x1a\n", "fr", vec![
+            line("— Le marin dîne avec M. Morrel", 0.10),
+            line("en attendant le capitaine.", 0.13),
+            line("— Partons maintenant.", 0.16),
+        ]).unwrap();
+        let sentences: Vec<_> = document.sentences.iter().map(|sentence| sentence.text.as_str()).collect();
+        assert_eq!(sentences, ["— Le marin dîne avec M. Morrel\nen attendant le capitaine.", "— Partons maintenant."]);
+        assert!(document.blocks.iter().all(|block| block.page.is_none()));
+        let narration = speech::pdf_narration(&document, &document.sentences[0], sentences[0]).unwrap();
+        assert_eq!(narration, "— Le marin dîne avec M. Morrel en attendant le capitaine.");
+    }
+
     #[test]
     fn changing_recognized_sentence_discards_its_speech_checkpoint() {
         let mut db = Store::open(Path::new(":memory:")).unwrap();

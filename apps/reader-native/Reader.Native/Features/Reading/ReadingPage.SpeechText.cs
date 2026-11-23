@@ -35,8 +35,9 @@ public partial class ReadingPage
         return text;
     }
 
-    private static string PdfPronunciation(Document document, Sentence sentence, string speechText) =>
-        document.Format == "pdf" && (speechText.Contains('\n') || speechText.Any(char.IsNumber)) &&
+    private static string ReadingPronunciation(Document document, Sentence sentence, string speechText) =>
+        (document.Format == "pdf" || document.OcrLines is { Length: > 0 }) &&
+            (speechText.Contains('\n') || speechText.Any(char.IsNumber)) &&
             !document.SpeechTextOverrides.ContainsKey(sentence.Id)
             ? AppState.Session.GetSpeechNarration(document.Id, sentence.Id, pronunciationOnly: true) ?? speechText
             : speechText;

@@ -329,7 +329,8 @@ pub(crate) fn detached_pdf_document(
 
 /// Recover paragraph ranges from OCR geometry without changing the recognized text or its offsets.
 pub(crate) fn reflow_ocr_paragraphs(document: &mut Document) {
-    if document.format != "pdf" { return; }
+    let pdf = document.format == "pdf";
+    if !pdf && document.ocr_lines.is_none() { return; }
     if let Some(starts) = document.pdf_page_starts.as_deref() {
         let mut ranges = Vec::new();
         visit_page_ranges(&document.text, Some(starts), |range, page| {
@@ -402,7 +403,7 @@ pub(crate) fn reflow_ocr_paragraphs(document: &mut Document) {
             let last = geometry_breaks.partition_point(|&cut| cut < offset.end);
             for end in geometry_breaks[first..last].iter().copied().chain(std::iter::once(offset.end)) {
                 ranges.push(BlockRange {
-                    offset: begin..end, page: Some(page_number), heading,
+                    offset: begin..end, page: pdf.then_some(page_number), heading,
                     footnote: unnumbered_notes.contains(&begin)
                         || numbered_notes.iter().any(|note| note.contains(&begin)),
                     ..BlockRange::default()
@@ -414,7 +415,11 @@ pub(crate) fn reflow_ocr_paragraphs(document: &mut Document) {
 
     ranges.retain(|range| document.text.get(range.offset.clone()).is_some());
     let blocks = materialize_blocks(&document.text, ranges);
-    document.blocks.retain(|block| block.page.is_none_or(|page| !starts.contains(&page)));
+    if !pdf && !blocks.is_empty() {
+        document.blocks.clear();
+    } else {
+        document.blocks.retain(|block| block.page.is_none_or(|page| !starts.contains(&page)));
+    }
     document.blocks.extend(blocks);
     document.blocks.sort_by_key(|block| block.start_utf8);
 }

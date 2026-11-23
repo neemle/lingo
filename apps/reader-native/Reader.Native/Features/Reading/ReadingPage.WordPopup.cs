@@ -183,7 +183,7 @@ public partial class ReadingPage
             var sentence = Array.Find(document.Sentences, item =>
                 item.StartUtf16 <= selected.StartUtf16 && item.EndUtf16 > selected.StartUtf16);
             if (sentence is not null)
-                await SpeakWordDetailAsync(PdfPronunciation(document, sentence, EffectiveSpeechText(document, sentence)), document.Language);
+                await SpeakWordDetailAsync(ReadingPronunciation(document, sentence, EffectiveSpeechText(document, sentence)), document.Language);
         }
     }
 
