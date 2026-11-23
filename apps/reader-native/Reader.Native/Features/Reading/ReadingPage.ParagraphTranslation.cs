@@ -25,11 +25,14 @@ public partial class ReadingPage
     private long translationScrollSuppressedUntil;
     private bool sourceViewportSyncQueued;
     private long lastSourceViewportMovement;
+    private SourceViewportScope? sourceViewportMovement;
     private bool selectingPreviewRow;
     private bool restoringTranslationCache;
     private CachedWindowRequest? lastCacheRestore;
 
     private sealed record PreviewRow(int Position, VisualElement View);
+    private sealed record SourceViewportScope(VisualElement View, string Document, string? Revision, int? Page,
+        string? Sentence, string? Target, bool Detached, bool Inline);
 
     private sealed record TranslationKey(string Document, string Sentence, string Source, string Target, string Text);
     private sealed record TranslationScope(string Document, string Source, string Target);
@@ -40,18 +43,17 @@ public partial class ReadingPage
 
     private void InlinePdfViewportScrolled(object? sender, ScrolledEventArgs args)
     {
-        if (!showInlineOriginal) return;
-        if (ReferenceEquals(sender, ActiveInlinePdf().Viewport))
-        {
-            PositionWordPopup();
-            if (followingInlinePdf == 0) _ = FollowPdfTranslationScrollAsync(fromOriginal: true);
-        }
-        ScheduleSourceViewportSync();
+        var viewport = ActiveInlinePdf().Viewport;
+        if (!showInlineOriginal || !ReferenceEquals(sender, viewport)) return;
+        PositionWordPopup();
+        if (followingInlinePdf == 0) _ = FollowPdfTranslationScrollAsync(fromOriginal: true);
+        ScheduleSourceViewportSync(viewport);
     }
 
-    private async void ScheduleSourceViewportSync()
+    private async void ScheduleSourceViewportSync(VisualElement view)
     {
-        if (!CanSyncSourceViewport()) return;
+        if (CurrentSourceViewport() is not { } scope || !ReferenceEquals(view, scope.View)) return;
+        sourceViewportMovement = scope;
         lastSourceViewportMovement = Environment.TickCount64;
         if (sourceViewportSyncQueued) return;
         sourceViewportSyncQueued = true;
@@ -59,11 +61,10 @@ public partial class ReadingPage
         {
             while (Environment.TickCount64 - lastSourceViewportMovement < 220)
                 await Task.Delay(220);
-            if (!CanSyncSourceViewport()) return;
-            var detached = DetachedPdfReader.IsVisible;
-            var source = detached ? DetachedPdfText : SourceText;
-            var visible = showInlineOriginal ? VisibleInlinePdfOffsets() : source.VisibleOffsets?.Invoke();
-            if (detached)
+            if (sourceViewportMovement is not { } movement || movement != CurrentSourceViewport()) return;
+            var source = movement.Detached ? DetachedPdfText : SourceText;
+            var visible = movement.Inline ? VisibleInlinePdfOffsets() : source.VisibleOffsets?.Invoke();
+            if (movement.Detached)
             {
                 if (detachedAddress is { } address && detachedSentence?.Sentence is { } current &&
                     visible is { } page && (page.Start >= current.EndUtf16 || page.End <= current.StartUtf16))
@@ -76,14 +77,37 @@ public partial class ReadingPage
             if (visible is not { } range || (range.Start < active.EndUtf16 && range.End > active.StartUtf16)) return;
             var position = Array.FindIndex(document.Sentences,
                 sentence => sentence.EndUtf16 > range.Start && sentence.StartUtf16 < range.End);
-            if (position >= 0) await session.SelectSentenceAsync(position);
+            if (position >= 0) await session.SelectSentenceAsync(position, pdfPage: movement.Inline ? movement.Page : null);
         }
         finally { sourceViewportSyncQueued = false; }
     }
 
-    private bool CanSyncSourceViewport() => readingPageActive && TranslationVisible && SourcePane.IsVisible &&
-        !WordOverlay.IsVisible && !utteranceActive && !AppState.Session.Busy &&
-        (DetachedPdfReader.IsVisible ? !loadingDetachedSentence && !speakingDetachedSentence : !PdfPageNotice.IsVisible);
+    private SourceViewportScope? CurrentSourceViewport()
+    {
+        var session = AppState.Session;
+        if (!readingPageActive || !TranslationVisible || WordOverlay.IsVisible || utteranceActive ||
+            session.Busy || session.Document is not { } document) return null;
+#if MACCATALYST
+        if (movingPdfPage || pdfWindowLoading) return null;
+#endif
+        var detached = DetachedPdfReader.IsVisible;
+        if (detached ? !DetachedSourcePane.IsVisible || loadingDetachedSentence || speakingDetachedSentence
+            : !SourcePane.IsVisible || PdfPageNotice.IsVisible) return null;
+
+        var page = detached ? detachedAddress?.Page : CurrentNativePdfWindow(document.Id)?.Center;
+        VisualElement view = detached ? DetachedPdfText : SourceText;
+        if (showInlineOriginal)
+        {
+            var viewport = ActiveInlinePdf().Viewport;
+            if (!viewport.IsVisible || inlinePdfAddress is not { } image || image.Document != document.Id ||
+                image.Revision != document.CurrentRevisionId || (page is not null && image.Page != page)) return null;
+            page = document.Format == "pdf" ? image.Page : null;
+            view = viewport;
+        }
+        var revision = detached ? detachedSentence?.RevisionId : document.CurrentRevisionId;
+        var sentence = detached ? detachedSentence?.Sentence.Id : session.Sentence?.Id;
+        return new(view, document.Id, revision, page, sentence, TargetCode, detached, showInlineOriginal);
+    }
 
     private void SuppressTranslationViewportSync()
     {
@@ -95,7 +119,8 @@ public partial class ReadingPage
     {
         var detached = ReferenceEquals(sender, DetachedTranslationViewport);
         var viewport = detached ? DetachedTranslationViewport : TranslationViewport;
-        bool Current() => CanSyncSourceViewport() && !selectingPreviewRow && !translating &&
+        if (CurrentSourceViewport() is not { } source) return;
+        bool Current() => source == CurrentSourceViewport() && !selectingPreviewRow && !translating &&
             !translatingDetachedSentence && detached == DetachedPdfReader.IsVisible &&
             Environment.TickCount64 >= translationScrollSuppressedUntil && viewport.IsVisible;
         if (!Current()) return;

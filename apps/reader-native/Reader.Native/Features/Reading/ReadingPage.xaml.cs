@@ -54,8 +54,8 @@ public partial class ReadingPage : ContentPage
         WordCard.PropertyChanged += WordPopupVisibilityChanged;
         DetachedWordCard.PropertyChanged += WordPopupVisibilityChanged;
         SourceText.PropertyChanged += InlinePdfWordChanged;
-        SourceText.ViewportMoved += (_, _) => ScheduleSourceViewportSync();
-        DetachedPdfText.ViewportMoved += (_, _) => ScheduleSourceViewportSync();
+        SourceText.ViewportMoved += (_, _) => ScheduleSourceViewportSync(SourceText);
+        DetachedPdfText.ViewportMoved += (_, _) => ScheduleSourceViewportSync(DetachedPdfText);
         DetachedPdfText.PropertyChanged += InlinePdfWordChanged;
         SegmentTranslation.PropertyChanged += PopupTranslationTextChanged;
         ModelTranslationText.PropertyChanged += PopupTranslationTextChanged;
