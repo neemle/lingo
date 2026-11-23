@@ -22,8 +22,8 @@ use crate::{
     space::{ensure_capacity, PACKAGE_OVERHEAD},
     translation::{
         cached_translation, route_readiness, search_cached_translation, sentence_input,
-        translate_paragraph, AlignedTranslation, CachedTranslation, ModelEdge,
-        PageBoundaries, ParagraphTranslation, SelectedTranslation, TranslationProvider, TranslationReadiness, TranslationRequest,
+        translate_paragraph, translate_pdf_page, AlignedTranslation, CachedTranslation, ModelEdge,
+        PageBoundaries, ParagraphTranslation, ParagraphUnit, SelectedTranslation, TranslationProvider, TranslationReadiness, TranslationRequest,
         TranslationRouteStatus, TranslationSearchPage, TranslationSelection, TranslationSettings,
     },
     Result, Store,
@@ -752,6 +752,13 @@ impl Store {
         let installed = MarianProvider::interactive(&self.model_directory).installed_models()?;
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
         cached_translation(self, &installed, &catalog, &document, selected, target)
+    }
+
+    pub(crate) fn translate_document_page(
+        &mut self, document: &crate::Document, physical: std::ops::Range<usize>, target: &str, boundaries: PageBoundaries,
+    ) -> Result<Vec<ParagraphUnit>> {
+        let directory = self.model_directory.clone();
+        translate_pdf_page(self, &mut MarianProvider::interactive(&directory), document, physical, target, boundaries)
     }
 
     pub fn find_translation_page(

@@ -78,29 +78,38 @@ impl Store {
             (document, first..last, spans, PageBoundaries::Canonical)
         };
         if document.language == target { return Ok(Vec::new()); }
-        let routes = self.translation_cache_routes(&document.language, target)?;
         let indices: std::collections::HashMap<_, _> = document.sentences[physical.clone()].iter()
             .enumerate().map(|(i, sentence)| (sentence.id.as_str(), i)).collect();
+        let page_range = |unit: &crate::translation::ParagraphUnit| {
+            let mut local = unit.sentence_ids.iter().filter_map(|id| indices.get(id.as_str()).copied());
+            let first = local.next()?;
+            Some((first, local.last().unwrap_or(first)))
+        };
+        if !cached_only {
+            let generated = self.translate_document_page(&document, physical.clone(), target, boundaries)?;
+            if generated.iter().any(|unit| !unit.reviewed && unit.translation.is_some()) {
+                return Ok(generated.into_iter().filter_map(|unit| {
+                    let (first, last) = page_range(&unit)?;
+                    Some(PdfPageTranslationRow {
+                        start_utf16: offsets[first].0, end_utf16: offsets[last].1, text: unit.translation,
+                    })
+                }).collect());
+            }
+        }
+        let routes = self.translation_cache_routes(&document.language, target)?;
         let mut covered = vec![false; offsets.len()];
         let mut rows = BTreeMap::<usize, PdfPageTranslationRow>::new();
         for position in physical.clone() {
             if covered[position - physical.start] { continue; }
             let sentence = &document.sentences[position];
             if document_layout::sentence_in_footnote(&document.blocks, sentence) { continue; }
-            let (paragraph, standalone) = if cached_only {
-                let cached = routes.cached_window(self, &document, position, target, boundaries)?;
-                (cached.paragraph, cached.sentence)
-            } else {
-                (self.translate_document_paragraph(&document, position, target, false, boundaries)?, None)
-            };
-            for unit in paragraph.units {
-                let mut local = unit.sentence_ids.iter().filter_map(|id| indices.get(id.as_str()).copied());
-                let Some(first) = local.next() else { continue; };
-                let last = local.last().unwrap_or(first);
-                let text = unit.translation.or_else(|| standalone.as_ref()
+            let cached = routes.cached_window(self, &document, position, target, boundaries)?;
+            for unit in cached.paragraph.units {
+                let Some((first, last)) = page_range(&unit) else { continue; };
+                let text = unit.translation.or_else(|| cached.sentence.as_ref()
                     .filter(|_| first == last && first == position - physical.start)
                     .and_then(|result| result.segments.first().cloned()));
-                if !cached_only || text.is_some() { covered[first..=last].fill(true); }
+                if text.is_some() { covered[first..=last].fill(true); }
                 let row = rows.entry(first).or_insert(PdfPageTranslationRow {
                     start_utf16: offsets[first].0, end_utf16: offsets[last].1, text: None,
                 });

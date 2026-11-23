@@ -4,7 +4,7 @@ use crate::{pdf_detached_pages::word_break, valid_language, Document, Result, St
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{cmp::Ordering, collections::HashSet, ops::RangeInclusive};
+use std::{cmp::Ordering, collections::{HashMap, HashSet}, ops::{Range, RangeInclusive}};
 use unicode_normalization::UnicodeNormalization;
 
 const MAX_BATCH_BYTES: usize = 64 * 1024;
@@ -450,6 +450,64 @@ pub(crate) fn translate_paragraph(
         }
     }
     Ok(result)
+}
+
+pub(crate) fn translate_pdf_page(
+    store: &mut Store,
+    provider: &mut impl TranslationProvider,
+    document: &Document,
+    physical: Range<usize>,
+    target: &str,
+    boundaries: PageBoundaries,
+) -> Result<Vec<ParagraphUnit>> {
+    let positions: HashMap<_, _> = physical.clone()
+        .map(|index| (document.sentences[index].id.as_str(), index))
+        .collect();
+    let mut covered = HashSet::new();
+    let mut units = Vec::new();
+    let mut pending = Vec::new();
+    for selected in physical {
+        if covered.contains(&selected) { continue; }
+        let plan = paragraph_plan(store, document, selected, target, boundaries, UnitGrouping::Sentence)?;
+        let mut input: HashMap<_, _> = plan.pending.into_iter().collect();
+        for (index, unit) in plan.result.units.into_iter().enumerate() {
+            let mut unseen = false;
+            for id in &unit.sentence_ids {
+                if let Some(&position) = positions.get(id.as_str()) {
+                    unseen |= covered.insert(position);
+                }
+            }
+            if !unseen { continue; }
+            if let Some(text) = input.remove(&index).filter(|text| !text.trim().is_empty()) {
+                pending.push((units.len(), text));
+            }
+            units.push(unit);
+        }
+    }
+
+    // Length expansion in the target language must fit within the provider's response limit.
+    const PAGE_BATCH_BYTES: usize = MAX_BATCH_BYTES / 4;
+    let mut pending = pending.into_iter().peekable();
+    while pending.peek().is_some() {
+        let mut batch = Vec::new();
+        let mut indices = Vec::new();
+        let mut bytes = 0;
+        while let Some((_, text)) = pending.peek() {
+            if !batch.is_empty() && (batch.len() == 32 || bytes + text.len() > PAGE_BATCH_BYTES) {
+                break;
+            }
+            let (index, text) = pending.next().expect("pending page input");
+            bytes += text.len();
+            batch.push(text);
+            indices.push(index);
+        }
+        let Some(aligned) = store.translate_units(provider, &document.language, target, &batch)? else { break; };
+        store.record_translation_cache_use(&document.id, &aligned.route, &batch)?;
+        for (index, text) in indices.into_iter().zip(aligned.segments) {
+            units[index].set_translation(text);
+        }
+    }
+    Ok(units)
 }
 
 pub(crate) fn cached_translation(
@@ -1162,6 +1220,41 @@ fn soft_wrap(document: &crate::Document, left: usize, right: usize) -> bool {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn pdf_page_batches_missing_units_across_paragraphs_and_reuses_the_cache() {
+        #[derive(Default)]
+        struct Provider(Vec<Vec<String>>);
+
+        impl TranslationProvider for Provider {
+            fn installed_models(&self) -> Result<Vec<ModelEdge>> {
+                Ok(vec![ModelEdge {
+                    source: "fr".into(), target: "uk".into(), revision: "test".into(), quality: None,
+                }])
+            }
+
+            fn translate(&mut self, _: &ModelEdge, segments: &[String], _: Option<&str>,
+                _: TranslationSettings) -> Result<Vec<String>> {
+                self.0.push(segments.to_vec());
+                Ok(segments.iter().map(|_| "Збережене речення.".into()).collect())
+            }
+        }
+
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let document = store.import("Page.txt", "Le bateau arrive.\n\nLe marin part.\n\nLe port est ouvert.".as_bytes(), "fr").unwrap();
+        store.set_reviewed_translation(&document.id, &document.sentences[0].id,
+            "uk", "Корабель прибуває.").unwrap();
+        let document = store.translation_document(&document.id).unwrap();
+        let mut provider = Provider::default();
+        for _ in 0..2 {
+            let rows = translate_pdf_page(&mut store, &mut provider, &document, 0..3,
+                "uk", PageBoundaries::Canonical).unwrap();
+            assert_eq!(rows.len(), 3);
+            assert_eq!(rows[0].translation.as_deref(), Some("Корабель прибуває."));
+            assert!(rows.iter().all(|row| row.translation.is_some()));
+        }
+        assert_eq!(provider.0, [vec!["Le marin part.".to_owned(), "Le port est ouvert.".to_owned()]]);
+    }
 
     #[test]
     fn readiness_prefers_a_working_pivot_and_identifies_only_missing_packages() {
