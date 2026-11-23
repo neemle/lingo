@@ -49,7 +49,7 @@
     <NativeReference Include="../../../target/aarch64-apple-ios-macabi/release/libreader_ffi.a">
       <Kind>Static</Kind><SmartLink>false</SmartLink>
       <Frameworks>Accelerate Foundation Metal</Frameworks>
-      <LinkerFlags>-lc++ -u _reader_abi_version -u _reader_call -u _reader_close -u _reader_release</LinkerFlags>
+      <LinkerFlags>-lc++ -u _reader_abi_version -u _reader_call -u _reader_close -u _reader_release -u _reader_fit_pdf_text</LinkerFlags>
     </NativeReference>
     <NativeReference Include="$(OnnxRuntimePath)/runtimes/ios/native/onnxruntime.xcframework.zip">
       <Kind>Static</Kind><SmartLink>false</SmartLink>

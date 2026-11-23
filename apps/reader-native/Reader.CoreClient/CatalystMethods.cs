@@ -9,6 +9,9 @@ internal static class CatalystMethods
     [DllImport("__Internal", CallingConvention = CallingConvention.Cdecl)]
     internal static extern NativeBuffer reader_call(ulong handle, byte[] input, ulong length);
     [DllImport("__Internal", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern NativeBuffer reader_fit_pdf_text(byte[] input, ulong length, float width, float height,
+        float preferred, float minimum, nint context, nint measure);
+    [DllImport("__Internal", CallingConvention = CallingConvention.Cdecl)]
     internal static extern uint reader_close(ulong handle);
     [DllImport("__Internal", CallingConvention = CallingConvention.Cdecl)]
     internal static extern uint reader_release(ulong allocation);

@@ -651,6 +651,36 @@ pub unsafe extern "C" fn reader_call(handle: u64, input: *const u8, len: u64) ->
     catch_unwind(AssertUnwindSafe(|| publish(result).unwrap_or_default())).unwrap_or_default()
 }
 
+type FontMeasure = unsafe extern "C" fn(*mut std::ffi::c_void, u32, u32, f32) -> f32;
+
+/// # Safety
+/// Text and callback context must remain valid for the entire call, and the callback must not unwind.
+#[no_mangle]
+pub unsafe extern "C" fn reader_fit_pdf_text(
+    input: *const u8, len: u64, width: f32, height: f32, preferred: f32, minimum: f32,
+    context: *mut std::ffi::c_void, measure: Option<FontMeasure>,
+) -> ReaderBuffer {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let Some(measure) = measure else {
+            return Err(Error::new("invalid_argument", "A font measurement callback is required"));
+        };
+        if len == 0 || len > 65_536 {
+            return Ok(serde_json::Value::Null);
+        }
+        if input.is_null() {
+            return Err(Error::new("invalid_argument", "Missing PDF text buffer"));
+        }
+        let input = unsafe { std::slice::from_raw_parts(input, len as usize) };
+        let text = std::str::from_utf8(input)
+            .map_err(|_| Error::new("invalid_argument", "Invalid UTF-8 in PDF text"))?;
+        encode_job(Ok(reader_core::pdf_translation_layout::text::fit(
+            text, width, height, preferred, minimum,
+            |start, length, size| unsafe { measure(context, start, length, size) },
+        )))
+    })).unwrap_or_else(|_| Err(Error::new("internal_error", "PDF text fitting panicked")));
+    catch_unwind(AssertUnwindSafe(|| publish(result).unwrap_or_default())).unwrap_or_default()
+}
+
 #[no_mangle]
 pub extern "C" fn reader_close(handle: u64) -> u32 {
     catch_unwind(|| {

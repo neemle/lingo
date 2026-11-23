@@ -25,3 +25,5 @@ public sealed record PdfTranslationFragment(PdfSampleBox? Bounds, double LineHei
 public sealed record PdfTranslationRegion(PdfSampleBox Bounds, double PreferredFontHeight, bool LimitFontByWidth,
     int[] Fragments, int? StyleFragment);
 public sealed record PdfTranslationLayout(PdfTranslationRegion[] Regions, int[] Pending, int[] Overflow);
+public sealed record PdfTextLine(int Start, int End);
+public sealed record PdfTextFit(float Size, float LineHeight, PdfTextLine[] Lines);

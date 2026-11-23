@@ -13,6 +13,10 @@
 typedef struct { const uint8_t *data; uint64_t len; uint64_t allocation; } ReaderBuffer;
 uint32_t reader_abi_version(void);
 ReaderBuffer reader_call(uint64_t handle, const uint8_t *input, uint64_t len);
+/* Width of a UTF-16 range, or line height when length is zero. Invoked synchronously. */
+typedef float (*ReaderMeasureFont)(void *context, uint32_t start, uint32_t length, float size);
+ReaderBuffer reader_fit_pdf_text(const uint8_t *input, uint64_t len, float width, float height,
+    float preferred, float minimum, void *context, ReaderMeasureFont measure);
 uint32_t reader_close(uint64_t handle);
 uint32_t reader_release(uint64_t allocation);
 #endif

@@ -1,4 +1,6 @@
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using Reader.Contracts;
 
@@ -90,6 +92,32 @@ public sealed class CoreClient : IDisposable
         Invoke<PdfLayoutEdit[]>(0, new { version = 1, operation = "separate_pdf_blocks", text, words, pageWidth });
     public static PdfTranslationLayout PlanPdfTranslationLayout(PdfTranslationFragment[] fragments) =>
         Invoke<PdfTranslationLayout>(0, new { version = 1, operation = "plan_pdf_translation_layout", fragments });
+    public static unsafe PdfTextFit? FitPdfText(string text, float width, float height,
+        float preferred, float minimum, Func<int, int, float, float> measure)
+    {
+        var bytes = Encoding.UTF8.GetBytes(text);
+        var context = GCHandle.Alloc(measure);
+        try
+        {
+            delegate* unmanaged[Cdecl]<nint, uint, uint, float, float> callback = &MeasurePdfFont;
+            var result = NativeMethods.FitPdfText(bytes, (ulong)bytes.Length, width, height,
+                preferred, minimum, GCHandle.ToIntPtr(context), (nint)callback);
+            try { return Decode<PdfTextFit?>(result); }
+            finally { if (result.Allocation != 0) NativeMethods.reader_release(result.Allocation); }
+        }
+        finally { context.Free(); }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static float MeasurePdfFont(nint context, uint start, uint length, float size)
+    {
+        try
+        {
+            var measure = (Func<int, int, float, float>)GCHandle.FromIntPtr(context).Target!;
+            return measure((int)start, (int)length, size);
+        }
+        catch (Exception) { return float.NaN; }
+    }
     public static PdfLigatureJoin[] FindPdfLigatureJoins(string text, PdfLayoutWord[] words) =>
         Invoke<PdfLigatureJoin[]>(0, new { version = 1, operation = "find_pdf_ligature_joins", text, words });
     public static OcrLine[] ParseOcrTsv(string tsv, int width, int height, string? sparseTsv = null) =>

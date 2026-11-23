@@ -33,6 +33,11 @@ internal static class NativeMethods
     internal static uint reader_close(ulong handle) => OperatingSystem.IsMacCatalyst()
         ? CatalystMethods.reader_close(handle) : DesktopClose(handle);
 
+    internal static NativeBuffer FitPdfText(byte[] text, ulong length, float width, float height,
+        float preferred, float minimum, nint context, nint measure) => OperatingSystem.IsMacCatalyst()
+        ? CatalystMethods.reader_fit_pdf_text(text, length, width, height, preferred, minimum, context, measure)
+        : DesktopFitPdfText(text, length, width, height, preferred, minimum, context, measure);
+
     internal static uint reader_release(ulong allocation) => OperatingSystem.IsMacCatalyst()
         ? CatalystMethods.reader_release(allocation) : DesktopRelease(allocation);
 
@@ -40,6 +45,9 @@ internal static class NativeMethods
     private static extern uint DesktopVersion();
     [DllImport(Library, EntryPoint = "reader_call", CallingConvention = CallingConvention.Cdecl)]
     private static extern NativeBuffer DesktopCall(ulong handle, byte[] input, ulong length);
+    [DllImport(Library, EntryPoint = "reader_fit_pdf_text", CallingConvention = CallingConvention.Cdecl)]
+    private static extern NativeBuffer DesktopFitPdfText(byte[] input, ulong length, float width, float height,
+        float preferred, float minimum, nint context, nint measure);
     [DllImport(Library, EntryPoint = "reader_close", CallingConvention = CallingConvention.Cdecl)]
     private static extern uint DesktopClose(ulong handle);
     [DllImport(Library, EntryPoint = "reader_release", CallingConvention = CallingConvention.Cdecl)]

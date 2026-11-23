@@ -1,6 +1,8 @@
 use crate::Result;
 use serde::{Deserialize, Serialize};
 
+pub mod text;
+
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bounds {
