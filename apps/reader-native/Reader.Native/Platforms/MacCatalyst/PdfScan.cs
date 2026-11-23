@@ -227,6 +227,7 @@ internal static partial class PdfScan
         var attributes = string.Equals(attributed?.Value, page.Text, StringComparison.Ordinal) ? attributed : null;
         var rotation = (page.Rotation % 360 + 360) % 360;
         var pageHeight = (double)(rotation is 90 or 270 ? crop.Width : crop.Height);
+        using var inkSpace = CGColorSpace.CreateSrgb();
         // PDFKit emits U+FFFC for artwork. Its selection bounds can span the entire page.
         foreach (System.Text.RegularExpressions.Match word in System.Text.RegularExpressions.Regex.Matches(text, @"[^\s\uFFFC]+"))
         {
@@ -249,7 +250,7 @@ internal static partial class PdfScan
             };
             boxes.Add(new(word.Value, x, y, width, height, null, index,
                 SourceSpan: new(0, 0, word.Index, word.Index + word.Length)));
-            appearance[word.Index] = ReadAppearance(attributes, offset + original.Start, pageHeight);
+            appearance[word.Index] = ReadAppearance(attributes, offset + original.Start, pageHeight, inkSpace);
         }
         bitmap?.AddColors(boxes, appearance);
         return (image, text, boxes.ToArray(), appearance);

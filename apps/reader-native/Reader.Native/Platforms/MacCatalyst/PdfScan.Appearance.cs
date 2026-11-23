@@ -1,5 +1,6 @@
 using CoreGraphics;
 using Foundation;
+using ObjCRuntime;
 using Reader.Contracts;
 using System.Runtime.InteropServices;
 using UIKit;
@@ -9,21 +10,35 @@ namespace Reader.Native.Services;
 
 internal static partial class PdfScan
 {
-    private static PdfBoxAppearance ReadAppearance(NSAttributedString? text, int position, double pageHeight)
+    private static PdfBoxAppearance ReadAppearance(NSAttributedString? text, int position, double pageHeight,
+        CGColorSpace? inkSpace)
     {
         using var attributes = text?.GetAttributes(position, out _);
         var font = attributes?[UIStringAttributeKey.Font] as UIFont;
         var traits = font?.FontDescriptor.SymbolicTraits ?? 0;
         Color? ink = null;
-        if (attributes?[UIStringAttributeKey.ForegroundColor] is UIColor color)
+        if (inkSpace is not null && attributes?[UIStringAttributeKey.ForegroundColor] is UIColor color)
         {
-            color.GetRGBA(out var red, out var green, out var blue, out var alpha);
-            if (alpha > 0) ink = new Color((float)red, (float)green, (float)blue, (float)alpha);
+            using var source = color.CGColor;
+            if (source is not null)
+            {
+                // PDFKit exposes printer and indexed colors as well as RGB.
+                using var converted = Runtime.GetINativeObject<CGColor>(
+                    CGColorCreateCopyByMatchingToColorSpace(inkSpace.Handle, CGColorRenderingIntent.Default,
+                        source.Handle, IntPtr.Zero), owns: true);
+                if (converted?.Components is { Length: 4 } rgba && rgba[3] > 0)
+                    ink = new Color((float)rgba[0], (float)rgba[1], (float)rgba[2], (float)rgba[3]);
+                // The rendered preview supplies ink if the source space cannot be converted.
+            }
         }
         return new(font?.FamilyName, font is null ? 0 : (double)font.PointSize / pageHeight,
             traits.HasFlag(UIFontDescriptorSymbolicTraits.Bold) ? 700 : 400,
             traits.HasFlag(UIFontDescriptorSymbolicTraits.Italic), ink, Colors.White);
     }
+
+    [DllImport(Constants.CoreGraphicsLibrary)]
+    private static extern IntPtr CGColorCreateCopyByMatchingToColorSpace(IntPtr space,
+        CGColorRenderingIntent intent, IntPtr color, IntPtr options);
 
     internal sealed class PreviewColors
     {
