@@ -219,6 +219,7 @@ fn transcript_ranges(text: &str, range: Range<usize>, pdf: bool) -> Vec<(Range<u
 }
 
 fn inline_pdf_breaks(line: &str) -> impl Iterator<Item = usize> + '_ {
+    let dialogue_line = starts_dialogue(line, "");
     line.char_indices().filter_map(move |(index, ch)| {
         let possible_marker = matches!(ch, '–' | '—' | '-' | '«' | '“' | '„' | '"')
             || ch.is_ascii_digit();
@@ -230,15 +231,24 @@ fn inline_pdf_breaks(line: &str) -> impl Iterator<Item = usize> + '_ {
             return None;
         }
         let preceding = preceding.trim_end();
-        if !ends_sentence(preceding) {
-            return None;
-        }
+        let following = &line[index..];
+        let sentence_end = ends_sentence(preceding);
         // A text layer can collapse both the opening speech and the following
         // narration into the physical line holding the quotation.
-        if ch.is_uppercase() && preceding.ends_with(['»', '”', '›', '」', '』']) {
+        if ch.is_uppercase() && preceding.ends_with(['»', '”', '›', '」', '』'])
+            && (sentence_end || dialogue_line)
+        {
             return Some(index);
         }
-        let following = &line[index..];
+        // OCR can omit a turn's final punctuation. In an already marked
+        // dialogue, a spaced long dash followed by a capital can start the next turn.
+        if dialogue_line && matches!(ch, '—' | '–') &&
+            following[ch.len_utf8()..].starts_with(char::is_whitespace) &&
+            following[ch.len_utf8()..].trim_start().starts_with(char::is_uppercase)
+        {
+            return Some(index);
+        }
+        if !sentence_end { return None; }
         (possible_marker && (starts_dialogue(following, preceding) || footnote_start(following)))
             .then_some(index)
     })
@@ -822,6 +832,26 @@ fn parse_pdf(bytes: &[u8]) -> Result<Extracted> {
 mod tests {
     use super::*;
     use crate::ocr::{OcrLine, OcrSpan};
+
+    #[test]
+    fn flattened_ocr_keeps_unpunctuated_dialogue_turns_and_inline_asides() {
+        let raw = "— As-tu vu le bateau — Oui — dit-il — je rentre — Alors viens !\n« Je reste ici » Le marin descend.\n\nIl part — Paris l’attend.";
+        let document = detached_pdf_document(raw.into(), "fr", None);
+        let excerpts: Vec<_> = document.blocks.iter().map(|block| {
+            assert_eq!(block.start_utf16, raw[..block.start_utf8].encode_utf16().count());
+            assert_eq!(block.end_utf16, raw[..block.end_utf8].encode_utf16().count());
+            &raw[block.start_utf8..block.end_utf8]
+        }).collect();
+        assert_eq!(excerpts, [
+            "— As-tu vu le bateau",
+            "— Oui — dit-il — je rentre",
+            "— Alors viens !",
+            "« Je reste ici »",
+            "Le marin descend.",
+            "Il part — Paris l’attend.",
+        ]);
+        assert_eq!(document.text, raw);
+    }
 
     #[test]
     fn small_referenced_scan_footnotes_include_wrapped_lines_and_keep_offsets() {
