@@ -20,6 +20,7 @@ public partial class ReadingPage
     private bool syncingPdfTranslationScroll;
     private PdfLayoutAddress? pdfLayoutRequest;
     private PdfLayoutAddress? translatingPdfLayout;
+    private CancellationTokenSource? pdfLayoutTranslationCancellation;
     private PdfPageTranslationRow[] pdfLayoutRows = [];
     private PdfSourceLayout? pdfSourceLayout;
     private Sentence? pdfLayoutSentence => pdfSourceLayout is { } source && source.Matches(pdfLayoutRequest)
@@ -101,6 +102,9 @@ public partial class ReadingPage
         var available = address is not null;
         var detached = DetachedPdfReader.IsVisible;
         var shown = available && pdfTranslationLayout;
+        if (translatingPdfLayout is not null && (!shown || !TranslationVisible || !readingPageActive ||
+            translatingPdfLayout != address))
+            pdfLayoutTranslationCancellation?.Cancel();
         PdfTranslationMode.IsVisible = available && !detached;
         DetachedPdfTranslationMode.IsVisible = available && detached;
         PdfTranslationMode.Text = DetachedPdfTranslationMode.Text = shown ? "Список" : "Верстка";
@@ -246,10 +250,12 @@ public partial class ReadingPage
     private async Task LoadPdfPageLayoutAsync(PdfLayoutAddress address, bool cachedOnly)
     {
         var request = ++pdfLayoutRequestId;
+        using var cancellation = cachedOnly ? null : new CancellationTokenSource();
         pdfLayoutStatus = cachedOnly ? "Завантажуємо переклад…" : "Перекладаємо сторінку…";
         if (!cachedOnly)
         {
             translatingPdfLayout = address;
+            pdfLayoutTranslationCancellation = cancellation;
             var attempt = new PdfAutoTranslation(address, readinessRequest);
             pdfAutoAttempts = (attempt, PdfAttemptCount(attempt) + 1);
         }
@@ -257,7 +263,7 @@ public partial class ReadingPage
         try
         {
             var translation = AppState.Session.PdfPageTranslationAsync(address.Document, address.Page,
-                address.Target, cachedOnly);
+                address.Target, cachedOnly, cancellation?.Token ?? default);
             if (!cachedOnly) _ = FollowPdfTranslationBatchesAsync(address, request, translation);
             var rows = await translation;
             if (request != pdfLayoutRequestId || CurrentPdfLayoutAddress() != address) return;
@@ -265,13 +271,21 @@ public partial class ReadingPage
             pdfLayoutStatus = rows.Length == 0 ? "На сторінці немає тексту для перекладу."
                 : !cachedOnly && rows.All(row => row.Text is null) ? "Переклад сторінки поки недоступний." : "";
         }
+        catch (OperationCanceledException) when (cancellation?.IsCancellationRequested == true)
+        {
+            if (request == pdfLayoutRequestId) pdfLayoutStatus = null;
+        }
         catch (Exception error)
         {
             if (request == pdfLayoutRequestId) pdfLayoutStatus = error.Message;
         }
         finally
         {
-            if (!cachedOnly && translatingPdfLayout == address) translatingPdfLayout = null;
+            if (!cachedOnly && translatingPdfLayout == address)
+            {
+                translatingPdfLayout = null;
+                pdfLayoutTranslationCancellation = null;
+            }
             RefreshPdfTranslationLayout();
             if (!cachedOnly && CurrentPdfLayoutAddress() == address &&
                 (pendingPdfCacheRefresh == address || request != pdfLayoutRequestId))

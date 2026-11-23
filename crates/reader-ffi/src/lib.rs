@@ -56,6 +56,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
     let command = validation::decode(bytes)?;
     let cancellation = match &command {
         Command::CancelModelTranslation { request_id } => Some((ModelRequestKind::Passage, *request_id)),
+        Command::CancelPdfPageTranslation { request_id } => Some((ModelRequestKind::PdfPageTranslation, *request_id)),
         Command::CancelSpeech { request_id, prefetch } => Some((speech_request_kind(*prefetch), *request_id)),
         _ => None,
     };
@@ -208,10 +209,22 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 return encode_job(worker.detached_pdf_passage(id, *page, sentence_id, target, *cached_only, *background));
             }
         }
-        Command::PdfPageTranslation { id, page, target, cached_only, background } => {
-            let worker = registry::lock()?.store(handle)?.prepare_translation_worker();
+        Command::PdfPageTranslation { id, page, target, cached_only, background, request_id } => {
+            let state = registry::lock()?;
+            let cancellation = request_id.map(|request| {
+                state.model_cancellation(handle, ModelRequestKind::PdfPageTranslation)
+                    .map(|tag| (request, tag))
+            }).transpose()?;
+            let canceled = || cancellation.as_ref().is_some_and(|(request, tag)| tag.is_canceled(*request));
+            let canceled_error = || Error::new("canceled", "Переклад сторінки скасовано.");
+            if canceled() { return Err(canceled_error()); }
+            let worker = state.store(handle)?.prepare_translation_worker();
+            drop(state);
             if let Some(worker) = worker {
-                return encode_job(worker.pdf_page_translation_with_priority(id, *page, target, *cached_only, *background));
+                let result = worker.pdf_page_translation_until_canceled(
+                    id, *page, target, *cached_only, *background, &canceled,
+                );
+                return if canceled() { Err(canceled_error()) } else { encode_job(result) };
             }
         }
         Command::TranslateDetachedPdfSentence { id, page, sentence_id, target } => {

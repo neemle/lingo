@@ -572,6 +572,7 @@ pub(crate) fn translate_pdf_page(
     physical: Range<usize>,
     target: &str,
     boundaries: PageBoundaries,
+    canceled: &dyn Fn() -> bool,
 ) -> std::result::Result<Vec<ParagraphUnit>, TranslationBatchError> {
     let positions: HashMap<_, _> = physical.clone()
         .map(|index| (document.sentences[index].id.as_str(), index))
@@ -580,6 +581,9 @@ pub(crate) fn translate_pdf_page(
     let mut units = Vec::new();
     let mut pending = Vec::new();
     for selected in physical {
+        if canceled() {
+            return Err(TranslationBatchError::deferred("Переклад сторінки скасовано.".into()));
+        }
         if covered.contains(&selected) { continue; }
         let plan = paragraph_plan(store, document, selected, target, boundaries, UnitGrouping::Sentence)?;
         let mut input: HashMap<_, _> = plan.pending.into_iter().collect();
@@ -602,6 +606,9 @@ pub(crate) fn translate_pdf_page(
     const PAGE_BATCH_BYTES: usize = MAX_BATCH_BYTES / 4;
     let mut pending = pending.into_iter().peekable();
     while pending.peek().is_some() {
+        if canceled() {
+            return Err(TranslationBatchError::deferred("Переклад сторінки скасовано.".into()));
+        }
         let mut batch = Vec::new();
         let mut indices = Vec::new();
         let mut bytes = 0;
@@ -1460,7 +1467,7 @@ mod tests {
         let mut provider = Provider::default();
         for _ in 0..2 {
             let rows = translate_pdf_page(&mut store, &mut provider, &document, 0..3,
-                "uk", PageBoundaries::Canonical).unwrap();
+                "uk", PageBoundaries::Canonical, &|| false).unwrap();
             assert_eq!(rows.len(), 3);
             assert_eq!(rows[0].translation.as_deref(), Some("Корабель прибуває."));
             assert!(rows.iter().all(|row| row.translation.is_some()));

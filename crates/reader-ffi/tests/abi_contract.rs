@@ -29,6 +29,30 @@ fn malformed_requests_are_structured_errors() {
 }
 
 #[test]
+fn canceled_pdf_translation_does_not_cancel_a_later_page_request() {
+    let store = StoreFixture::new();
+    let imported = call(store.handle, json!({
+        "version": 1, "operation": "import_scanned_pdf", "name": "scan.pdf", "language": "fr",
+        "bytes": b"%PDF-1.4\n", "pages": 1,
+        "lines": [{"page": 0, "text": "Le bateau arrive.", "x": 0.1, "y": 0.2, "width": 0.8, "height": 0.1}],
+    }));
+    assert_eq!(imported["ok"], true, "{imported}");
+    let id = &imported["data"]["id"];
+    let cancel = call(store.handle, json!({
+        "version": 1, "operation": "cancel_pdf_page_translation", "requestId": 5,
+    }));
+    assert_eq!(cancel["ok"], true, "{cancel}");
+    let request = |request_id| call(store.handle, json!({
+        "version": 1, "operation": "pdf_page_translation", "id": id, "page": 0,
+        "target": "uk", "cachedOnly": true, "requestId": request_id,
+    }));
+    assert_error(&request(5), "canceled");
+    let current = request(6);
+    assert_eq!(current["ok"], true, "{current}");
+    assert_eq!(current["data"].as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn unsupported_versions_and_operations_are_rejected_explicitly() {
     for version in [0, 2, u32::MAX] {
         assert_error(

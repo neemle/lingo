@@ -155,7 +155,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             value(store.update_detached_pdf_annotation(&id, page, &sentence_id, change)),
         Command::DetachedPdfPassage { id, page, sentence_id, target, cached_only, background } =>
             value(store.detached_pdf_passage(&id, page, &sentence_id, &target, cached_only, background)),
-        Command::PdfPageTranslation { id, page, target, cached_only, background } =>
+        Command::PdfPageTranslation { id, page, target, cached_only, background, .. } =>
             value(store.pdf_page_translation_with_priority(&id, page, &target, cached_only, background)),
         Command::DetachedPdfTranslation { id, page, sentence_id, target, cached_only, background } =>
             value(store.detached_pdf_translation(&id, page, &sentence_id, &target, cached_only, background)),
@@ -273,6 +273,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         | Command::ReviewOcrWord { .. }
         | Command::TranslateWithModel { .. }
         | Command::CancelModelTranslation { .. }
+        | Command::CancelPdfPageTranslation { .. }
         | Command::CancelSpeech { .. }
         | Command::SemanticVocabulary { .. }
         | Command::InstallLexicalPackage { .. }

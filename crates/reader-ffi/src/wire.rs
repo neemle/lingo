@@ -670,6 +670,12 @@ pub enum Command {
         cached_only: bool,
         #[serde(default)]
         background: bool,
+        #[serde(rename = "requestId")]
+        request_id: Option<u64>,
+    },
+    CancelPdfPageTranslation {
+        #[serde(rename = "requestId")]
+        request_id: u64,
     },
     ScheduleTranslationWindow {
         id: String,

@@ -11,6 +11,7 @@ public sealed class CoreClient : IDisposable
     private readonly StoreHandle handle;
     private bool disposed;
     private long nextModelTranslationRequest;
+    private long nextPdfPageTranslationRequest;
     private long nextSpeechRequest;
     private long nextSpeechPrefetchRequest;
     public const int MaxImportBytes = 20 * 1024 * 1024;
@@ -226,11 +227,11 @@ public sealed class CoreClient : IDisposable
     public bool CacheBackgroundPdfTextLayer(string id, string revision, int page, string text) =>
         Call<bool>(new { version = 1, operation = "cache_background_pdf_text_layer", id, revision, page, text });
 
-    public PdfPageTranslationRow[] PdfPageTranslation(string id, int page, string target, bool cachedOnly, bool background = false) =>
-        CallIndependent<PdfPageTranslationRow[]>(new
-        {
-            version = 1, operation = "pdf_page_translation", id, page, target, cachedOnly, background,
-        });
+    public PdfPageTranslationRow[] PdfPageTranslation(string id, int page, string target, bool cachedOnly,
+        bool background = false, CancellationToken cancellationToken = default) =>
+        CallCancelable<PdfPageTranslationRow[]>(ref nextPdfPageTranslationRequest, cancellationToken,
+            requestId => new { version = 1, operation = "pdf_page_translation", id, page, target, cachedOnly, background, requestId },
+            requestId => new { version = 1, operation = "cancel_pdf_page_translation", requestId });
 
     public void CachePdfOcrPage(string id, PdfOcrRequest claim, OcrLine[] lines, string? textLayer = null) =>
         Call<JsonElement>(new

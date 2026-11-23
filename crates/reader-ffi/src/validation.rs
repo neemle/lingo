@@ -20,6 +20,8 @@ pub fn decode(input: &[u8]) -> Result<Command> {
 fn validate(command: &Command) -> Result<()> {
     match command {
         Command::CancelModelTranslation { request_id: 0 }
+        | Command::CancelPdfPageTranslation { request_id: 0 }
+        | Command::PdfPageTranslation { request_id: Some(0), .. }
         | Command::CancelSpeech { request_id: 0, .. }
         | Command::SynthesizeSpeech { request_id: Some(0), .. }
         | Command::SynthesizeSpeechText { request_id: Some(0), .. }

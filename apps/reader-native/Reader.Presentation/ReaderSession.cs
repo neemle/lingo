@@ -300,8 +300,10 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         BackgroundPdfTextCached?.Invoke(id, page);
     }
 
-    public Task<PdfPageTranslationRow[]> PdfPageTranslationAsync(string id, int page, string target, bool cachedOnly) =>
-        Task.Run(() => client.PdfPageTranslation(id, page, target, cachedOnly));
+    public Task<PdfPageTranslationRow[]> PdfPageTranslationAsync(string id, int page, string target, bool cachedOnly,
+        CancellationToken cancellationToken = default) =>
+        Task.Run(() => client.PdfPageTranslation(id, page, target, cachedOnly, cancellationToken: cancellationToken),
+            cancellationToken);
 
     public async Task<bool> PrefetchVisiblePdfTranslationAsync(BackgroundTranslatedPage address)
     {

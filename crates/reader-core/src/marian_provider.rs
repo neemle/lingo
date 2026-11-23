@@ -138,6 +138,7 @@ pub struct TranslationAsset {
 struct MarianProvider<'a> {
     directory: &'a Path,
     background: bool,
+    canceled: &'a dyn Fn() -> bool,
 }
 
 /// An installed translation package integrity check independent of the store connection.
@@ -547,8 +548,15 @@ impl StoreWorker {
     pub fn pdf_page_translation_with_priority(
         self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
     ) -> Result<Vec<crate::pdf_detached_pages::PdfPageTranslationRow>> {
+        self.pdf_page_translation_until_canceled(id, page, target, cached_only, background, &|| false)
+    }
+
+    pub fn pdf_page_translation_until_canceled(
+        self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
+        canceled: &dyn Fn() -> bool,
+    ) -> Result<Vec<crate::pdf_detached_pages::PdfPageTranslationRow>> {
         let flags = if cached_only { OpenFlags::SQLITE_OPEN_READ_ONLY } else { OpenFlags::SQLITE_OPEN_READ_WRITE };
-        self.open(flags)?.pdf_page_translation_with_priority(id, page, target, cached_only, background)
+        self.open(flags)?.pdf_page_translation_until_canceled(id, page, target, cached_only, background, canceled)
     }
 
     pub fn translate_detached_pdf_sentence(
@@ -788,6 +796,7 @@ impl Store {
             &mut MarianProvider {
                 directory: &directory,
                 background,
+                canceled: &|| false,
             },
             document, selected, target, boundaries,
         )?;
@@ -812,10 +821,11 @@ impl Store {
 
     pub(crate) fn translate_document_page(
         &mut self, document: &crate::Document, physical: std::ops::Range<usize>, target: &str,
-        boundaries: PageBoundaries, background: bool,
+        boundaries: PageBoundaries, background: bool, canceled: &dyn Fn() -> bool,
     ) -> std::result::Result<Vec<ParagraphUnit>, TranslationBatchError> {
         let directory = self.model_directory.clone();
-        translate_pdf_page(self, &mut MarianProvider { directory: &directory, background }, document, physical, target, boundaries)
+        translate_pdf_page(self, &mut MarianProvider { directory: &directory, background, canceled },
+            document, physical, target, boundaries, canceled)
     }
 
     pub fn find_translation_page(
@@ -1133,6 +1143,7 @@ impl<'a> MarianProvider<'a> {
         Self {
             directory,
             background: false,
+            canceled: &|| false,
         }
     }
 
@@ -1269,6 +1280,10 @@ impl TranslationProvider for MarianProvider<'_> {
             .map_err(TranslationBatchError::deferred)?;
         let yielded = Cell::new(false);
         let checkpoint = || {
+            if (self.canceled)() {
+                yielded.set(true);
+                return Err("Переклад сторінки скасовано.".into());
+            }
             if yielded.get() || optional.as_ref().is_some_and(|job| job.should_yield()) {
                 yielded.set(true);
                 return Err("Фоновий переклад поступився активному запиту.".into());
