@@ -269,10 +269,11 @@ internal static partial class PdfScan
         var accents = PdfOrderedText.Repair(text, Bounds);
         if (expected.Span.StartsWith(accents.Text.AsSpan(), StringComparison.Ordinal)) return accents;
         var joined = accents.JoinLigatures(Bounds);
-        if (expected.IsEmpty || expected.Span.StartsWith(joined.Text.AsSpan(), StringComparison.Ordinal)) return joined;
+        if (expected.Span.StartsWith(joined.Text.AsSpan(), StringComparison.Ordinal)) return joined;
         var width = page.GetBoundsForBox(PdfDisplayBox.Crop).Width;
         var layout = joined.SeparateBlocks(Bounds, width);
-        if (accents.Text == joined.Text || expected.Span.StartsWith(layout.Text.AsSpan(), StringComparison.Ordinal))
+        if (expected.IsEmpty || accents.Text == joined.Text ||
+            expected.Span.StartsWith(layout.Text.AsSpan(), StringComparison.Ordinal))
             return layout;
         var previousLayout = accents.SeparateBlocks(Bounds, width);
         if (expected.Span.StartsWith(previousLayout.Text.AsSpan(), StringComparison.Ordinal)) return previousLayout;

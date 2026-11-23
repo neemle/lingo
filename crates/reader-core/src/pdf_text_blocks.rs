@@ -122,9 +122,11 @@ fn separate_positioned_blocks(units: &[u16], words: &[PositionedWord], page_widt
     }
 
     let mut edits = Vec::new();
+    let mut surroundings = Vec::new();
     let mut index = 0;
     while index < lines.len() {
         if let Some((edit, line_count)) = parallel_lines(&lines[index..], units, page_width) {
+            isolate_block(units, edit.start, edit.end, &mut surroundings);
             edits.push(edit);
             index += line_count;
             continue;
@@ -137,17 +139,37 @@ fn separate_positioned_blocks(units: &[u16], words: &[PositionedWord], page_widt
                 let right = next[0];
                 let gap = &units[left.end..right.start];
                 let newlines = gap.iter().filter(|&&unit| unit == 10).count();
+                let parallel = newlines <= 1 && same_baseline(left, right) && wide_gap(left, right, page_width);
                 if !gap.is_empty() && whitespace(gap) &&
-                    (newlines <= 1 && same_baseline(left, right) && wide_gap(left, right, page_width) ||
+                    (parallel ||
                      newlines == 1 && column_transition(&lines, index, page_width))
                 {
                     edits.push(BlockEdit { start: left.end, end: right.start, slices: Vec::new() });
+                    if parallel {
+                        isolate_block(units, line[0].start, next.last().unwrap().end, &mut surroundings);
+                    }
                 }
             }
         }
         index += 1;
     }
+    edits.extend(surroundings);
+    edits.sort_by_key(|edit| (edit.start, edit.end));
+    edits.dedup_by_key(|edit| (edit.start, edit.end));
     Ok(edits)
+}
+
+fn isolate_block(units: &[u16], start: usize, end: usize, edits: &mut Vec<BlockEdit>) {
+    let before = units[..start].iter().rposition(|unit| !space(*unit)).map_or(0, |index| index + 1);
+    let after = units[end..].iter().position(|unit| !space(*unit)).map_or(units.len(), |index| end + index);
+    for (left, right) in [(before, start), (end, after)] {
+        let gap = &units[left..right];
+        let breaks = gap.iter().enumerate().filter(|&(index, &unit)|
+            unit == 13 || unit == 10 && (index == 0 || gap[index - 1] != 13)).count();
+        if left > 0 && right < units.len() && breaks == 1 {
+            edits.push(BlockEdit { start: left, end: right, slices: Vec::new() });
+        }
+    }
 }
 
 // Some OCR providers already emit all lines in the left column before the right column.
@@ -284,7 +306,11 @@ fn gutter_label(left: PositionedWord, label: PositionedWord, right: PositionedWo
 }
 
 fn whitespace(text: &[u16]) -> bool {
-    text.iter().all(|unit| char::from_u32(u32::from(*unit)).is_some_and(char::is_whitespace))
+    text.iter().all(|&unit| space(unit))
+}
+
+fn space(unit: u16) -> bool {
+    char::from_u32(u32::from(unit)).is_some_and(char::is_whitespace)
 }
 
 fn wide_gap(left: PositionedWord, right: PositionedWord, page_width: f64) -> bool {
@@ -378,14 +404,15 @@ mod tests {
             }
         });
         let edits = separate_blocks(text, &words, 420.0).unwrap();
-        assert_eq!(edits.len(), 2);
+        assert_eq!(edits.len(), 3);
         let units = text.encode_utf16().collect::<Vec<_>>();
         let reconstructed = edits[0].slices.iter().map(|part| format!(
             "{}{}", part.separator, String::from_utf16(&units[part.start..part.end]).unwrap(),
         )).collect::<String>();
         assert_eq!(reconstructed, "𐐷 One left\nSecond left\n\nOR\n\nOne right\nSecond right");
-        assert_eq!(edits[1].end - edits[1].start, 1);
-        assert!(edits[1].slices.is_empty());
+        assert_eq!(edits[1].start, edits[0].end);
+        assert_eq!(edits[2].end - edits[2].start, 1);
+        assert!(edits[2].slices.is_empty());
     }
 
     #[test]
@@ -406,12 +433,13 @@ mod tests {
                     }
                 }).collect::<Vec<_>>();
             let edits = separate_blocks(&text, &words, 320.0).unwrap();
-            assert_eq!(edits.len(), 1, "{top}");
+            assert_eq!(edits.len(), 2, "{top}");
             let edit = &edits[0];
             let reordered = edit.slices.iter()
                 .map(|part| format!("{}{}", part.separator, &text[part.start..part.end])).collect::<String>();
             assert_eq!(reordered, "Left option\nLeft detail\n\nOU\n\nRight option\nRight detail", "{top}");
             assert_eq!(&text[edit.end..], "\nSubsequent heading");
+            assert_eq!(edits[1].start..edits[1].end, edit.end..edit.end + 1);
             assert_eq!(edit.slices[2].start, text.find("OU").unwrap());
         }
     }
