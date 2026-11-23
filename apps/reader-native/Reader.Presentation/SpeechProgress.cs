@@ -7,6 +7,8 @@ namespace Reader.Presentation;
 
 public static class SpeechProgress
 {
+    private const int ModelSynthesisFloorPercent = 80;
+
     public static string TextHash(Sentence sentence, string? speechText = null) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(speechText ?? sentence.Text)));
 
@@ -20,4 +22,9 @@ public static class SpeechProgress
 
     public static bool Matches(Sentence sentence, SpeechResume resume, string? speechText = null) =>
         resume.SentenceId == sentence.Id && resume.TextHash == TextHash(sentence, speechText);
+
+    public static bool SameModelTimelineRate(int savedRatePercent, int requestedRatePercent) =>
+        // Below the Rust synthesis floor, only the native player's speed changes.
+        Math.Max(savedRatePercent, ModelSynthesisFloorPercent) ==
+        Math.Max(requestedRatePercent, ModelSynthesisFloorPercent);
 }

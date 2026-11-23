@@ -118,7 +118,8 @@ public partial class ReadingPage
     private static int? ModelResumePosition(SpeechResume? resume, VoiceChoice? voice, string language, int ratePercent) =>
         resume?.Model is { } model && voice?.Revision is not null &&
         model.Revision == ModelTimelineRevision(voice) &&
-        model.VoiceId == voice.Id && model.Language == language && model.RatePercent == ratePercent &&
+        model.VoiceId == voice.Id && model.Language == language &&
+        SpeechProgress.SameModelTimelineRate(model.RatePercent, ratePercent) &&
         model.PositionMs is > 0 and < LocalSpeech.MaxModelAudioSeconds * 1000
             ? model.PositionMs : null;
 
