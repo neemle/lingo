@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    cell::Cell,
     collections::{BTreeSet, HashMap},
     fs::{self, File},
     io,
@@ -23,7 +24,7 @@ use crate::{
     translation::{
         cached_translation, route_readiness, search_cached_translation, sentence_input,
         translate_paragraph, translate_pdf_page, AlignedTranslation, CachedTranslation, ModelEdge,
-        PageBoundaries, ParagraphTranslation, ParagraphUnit, SelectedTranslation, TranslationProvider, TranslationReadiness, TranslationRequest,
+        PageBoundaries, ParagraphTranslation, ParagraphUnit, SelectedTranslation, TranslationBatchError, TranslationProvider, TranslationReadiness, TranslationRequest,
         TranslationRouteStatus, TranslationSearchPage, TranslationSelection, TranslationSettings,
     },
     Result, Store,
@@ -867,8 +868,10 @@ impl Store {
         target: &str,
     ) -> Result<(String, Option<Vec<crate::translation::TranslationPair>>)> {
         let installed = MarianProvider::interactive(&self.model_directory).installed_models()?;
-        if let Some(route) = crate::translation::resolve_route(&installed, source, target)? {
-            let identity = serde_json::to_string(&route.without_quality()).map_err(|error| error.to_string())?;
+        let routes = crate::translation::ranked_routes(&installed, source, target)?;
+        if !routes.is_empty() {
+            let routes: Vec<_> = routes.iter().map(crate::translation::Route::without_quality).collect();
+            let identity = serde_json::to_string(&routes).map_err(|error| error.to_string())?;
             return Ok((identity, None));
         }
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
@@ -1191,9 +1194,9 @@ impl TranslationProvider for MarianProvider<'_> {
         edge: &ModelEdge,
         segments: &[String],
         settings: TranslationSettings,
-    ) -> Result<Vec<Result<String>>> {
+    ) -> std::result::Result<Vec<Result<String>>, TranslationBatchError> {
         if !(1..=8).contains(&settings.beam_size) {
-            return Err("Некоректні параметри декодування перекладу".into());
+            return Err(TranslationBatchError::Failed("Некоректні параметри декодування перекладу".into()));
         }
         let package = catalog::PACKAGES
             .iter()
@@ -1202,18 +1205,28 @@ impl TranslationProvider for MarianProvider<'_> {
                     && package.source == edge.source
                     && package.target == edge.target
             })
-            .ok_or("Невідомий мовний пакет")?;
+            .ok_or_else(|| TranslationBatchError::Failed("Невідомий мовний пакет".into()))?;
         let _interactive = (!self.background).then(|| RESOURCES.interactive());
         // A background job can wait for package management without owning the compute permit.
         let _lock = self.lock(package, false)?;
-        let optional = self.background.then(|| RESOURCES.optional()).transpose()?;
+        let optional = self.background.then(|| RESOURCES.optional()).transpose()
+            .map_err(TranslationBatchError::Deferred)?;
+        let yielded = Cell::new(false);
         let checkpoint = || {
-            if optional.as_ref().is_some_and(|job| job.should_yield()) {
+            if yielded.get() || optional.as_ref().is_some_and(|job| job.should_yield()) {
+                yielded.set(true);
                 return Err("Фоновий переклад поступився активному запиту.".into());
             }
             Ok(())
         };
         Self::translate_package(&self.read_path(package), package, segments, settings, checkpoint)
+            .map_err(|error| {
+                if yielded.get() {
+                    TranslationBatchError::Deferred(error)
+                } else {
+                    TranslationBatchError::Failed(error)
+                }
+            })
     }
 }
 

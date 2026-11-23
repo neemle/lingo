@@ -152,7 +152,7 @@ pub fn resolve_route(installed: &[ModelEdge], source: &str, target: &str) -> Res
     Ok(ranked_routes(installed, source, target)?.into_iter().next())
 }
 
-fn ranked_routes(installed: &[ModelEdge], source: &str, target: &str) -> Result<Vec<Route>> {
+pub(crate) fn ranked_routes(installed: &[ModelEdge], source: &str, target: &str) -> Result<Vec<Route>> {
     valid_language(source)?;
     valid_language(target)?;
     if source == target {
@@ -297,6 +297,26 @@ pub(crate) fn route_readiness(
     })
 }
 
+#[derive(Debug)]
+pub enum TranslationBatchError {
+    Deferred(String),
+    Failed(String),
+}
+
+impl From<String> for TranslationBatchError {
+    fn from(message: String) -> Self {
+        Self::Failed(message)
+    }
+}
+
+impl From<TranslationBatchError> for String {
+    fn from(error: TranslationBatchError) -> Self {
+        match error {
+            TranslationBatchError::Deferred(message) | TranslationBatchError::Failed(message) => message,
+        }
+    }
+}
+
 pub trait TranslationProvider {
     /// Inspect the local inventory without downloading or loading models for inference.
     fn installed_models(&self) -> Result<Vec<ModelEdge>>;
@@ -316,15 +336,16 @@ pub trait TranslationProvider {
         settings: TranslationSettings,
     ) -> Result<Vec<String>>;
 
-    /// Independent inputs may fail separately. An outer error interrupts the batch.
+    /// Independent inputs may fail separately. A deferral stops work across all routes.
     fn translate_independent(
         &mut self,
         model: &ModelEdge,
         segments: &[String],
         settings: TranslationSettings,
-    ) -> Result<Vec<Result<String>>> {
+    ) -> std::result::Result<Vec<Result<String>>, TranslationBatchError> {
         checked_inference(self, model, segments, None, settings)
             .map(|output| output.into_iter().map(Ok).collect())
+            .map_err(TranslationBatchError::Failed)
     }
 }
 
@@ -1312,6 +1333,7 @@ mod tests {
         #[derive(Default)]
         struct Provider {
             pivot_installed: bool,
+            deferred: bool,
             calls: Vec<(String, Vec<String>)>,
         }
 
@@ -1336,8 +1358,11 @@ mod tests {
             }
 
             fn translate_independent(&mut self, edge: &ModelEdge, input: &[String],
-                _: TranslationSettings) -> Result<Vec<Result<String>>> {
+                _: TranslationSettings) -> std::result::Result<Vec<Result<String>>, TranslationBatchError> {
                 self.calls.push((format!("{}-{}", edge.source, edge.target), input.to_vec()));
+                if self.deferred {
+                    return Err(TranslationBatchError::Deferred("foreground is waiting".into()));
+                }
                 Ok(input.iter().map(|text| match (edge.source.as_str(), edge.target.as_str(), text.as_str()) {
                     ("fr", "uk", "Le bateau arrive.") => Ok("Корабель прибуває.".into()),
                     ("fr", "uk", "Le marin part.") => Err("invalid target language".into()),
@@ -1360,6 +1385,12 @@ mod tests {
         assert_eq!(provider.calls.len(), 1);
         provider.calls.clear();
         provider.pivot_installed = true;
+        provider.deferred = true;
+        let deferred = translate_paragraph(&mut store, &mut provider, &document, 1, "uk", PageBoundaries::Canonical);
+        assert!(matches!(deferred, Err(message) if message == "foreground is waiting"));
+        assert_eq!(provider.calls, [("fr-uk".into(), vec!["Le marin part.".into()])]);
+        provider.calls.clear();
+        provider.deferred = false;
 
         let full = translate_paragraph(&mut store, &mut provider, &document, 1, "uk", PageBoundaries::Canonical).unwrap();
         assert_eq!(full.pivot_language.as_deref(), Some("en"));
@@ -1416,7 +1447,9 @@ mod tests {
         assert_eq!(rows[0]["endUtf16"], first.end_utf16);
         assert!(rows[1]["text"].is_null());
         assert!(rows[1].get("sourceText").is_none());
-        assert!(store.pdf_page_translation_with_priority(&document.id, 0, "uk", false, true).is_err());
+        let background = store.pdf_page_translation_with_priority(&document.id, 0, "uk", false, true).unwrap();
+        assert_eq!(background[0].text.as_deref(), Some("Корабель прибуває."));
+        assert!(background[1].text.is_none());
     }
 
     #[test]
@@ -1836,7 +1869,6 @@ impl Store {
         input: &[String],
     ) -> Result<UnitsTranslation> {
         let routes = ranked_routes(&provider.installed_models()?, source, target)?;
-        let allow_fallback = provider.allow_alternative_routes();
         let mut segments = vec![None; input.len()];
         let preferred_pivot = routes.first().and_then(Route::pivot_language).map(str::to_owned);
         let mut first_failure = None;
@@ -1854,8 +1886,7 @@ impl Store {
                 self.link_translation_cache_keys(document, used.iter().map(String::as_str))?;
             }
         }
-        let inference_count = if allow_fallback { routes.len() } else { 1 };
-        for route in routes.iter().take(inference_count) {
+        for route in &routes {
             let pending: Vec<_> = segments.iter().enumerate()
                 .filter_map(|(index, value)| value.is_none().then_some(index)).collect();
             if pending.is_empty() {
@@ -1864,8 +1895,8 @@ impl Store {
             let batch: Vec<_> = pending.iter().map(|&index| input[index].clone()).collect();
             let outcomes = match infer_independent_units(provider, route, &batch) {
                 Ok(outcomes) => outcomes,
-                Err(error) if !allow_fallback => return Err(error),
-                Err(error) => {
+                Err(TranslationBatchError::Deferred(error)) => return Err(error),
+                Err(TranslationBatchError::Failed(error)) => {
                     first_failure.get_or_insert(error);
                     continue;
                 }
@@ -2019,11 +2050,13 @@ fn infer_independent_units(
     provider: &mut impl TranslationProvider,
     route: &Route,
     input: &[String],
-) -> Result<Vec<Result<String>>> {
+) -> std::result::Result<Vec<Result<String>>, TranslationBatchError> {
     let mut infer = |edge: &ModelEdge, input: &[String]| {
         let mut outcomes = provider.translate_independent(edge, input, TranslationSettings::default())?;
         if outcomes.len() != input.len() {
-            return Err("Мовний пакет повернув некоректне вирівнювання перекладу".into());
+            return Err(TranslationBatchError::Failed(
+                "Мовний пакет повернув некоректне вирівнювання перекладу".into(),
+            ));
         }
         for outcome in &mut outcomes {
             if outcome.as_ref().is_ok_and(|text| {
