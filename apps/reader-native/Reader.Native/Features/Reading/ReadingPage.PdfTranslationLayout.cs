@@ -1,5 +1,7 @@
 using Reader.Contracts;
 using Reader.Native.Services;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Reader.Native.Features.Reading;
 
@@ -54,6 +56,9 @@ public partial class ReadingPage
         PdfTranslationMode.Text = DetachedPdfTranslationMode.Text = shown ? "Список" : "Верстка";
         PdfTranslationViewport.IsVisible = TranslatePdfPage.IsVisible = shown && !detached;
         DetachedPdfTranslationViewport.IsVisible = DetachedTranslatePdfPage.IsVisible = shown && detached;
+        var hasRows = pdfLayoutRows.Any(row => !string.IsNullOrWhiteSpace(row.Text));
+        ReadPdfTranslationText.IsVisible = shown && !detached && hasRows;
+        DetachedReadPdfTranslationText.IsVisible = shown && detached && hasRows;
         TranslationViewport.IsVisible = !PdfTranslationViewport.IsVisible;
         DetachedTranslationViewport.IsVisible = !DetachedPdfTranslationViewport.IsVisible;
         var translatingPage = translatingPdfLayout == address && address is not null;
@@ -76,6 +81,34 @@ public partial class ReadingPage
             ResizePdfTranslationLayout();
             DrawPdfTranslationLayout();
         }
+    }
+
+    private async void ReadPdfTranslationTextClicked(object? sender, EventArgs args)
+    {
+        var rows = pdfLayoutRows.Where(row => !string.IsNullOrWhiteSpace(row.Text)).ToArray();
+        if (rows.Length == 0 || pdfLayoutRequest is not { } address || CurrentPdfLayoutAddress() != address) return;
+        var text = new VerticalStackLayout { Padding = new Thickness(22, 10), Spacing = 9 };
+        var viewport = new ScrollView { Content = text };
+        Label? activeLabel = null;
+        foreach (var row in rows)
+        {
+            var label = new Label { Text = row.Text, FontFamily = "Georgia", FontSize = 20, LineHeight = 1.3 };
+            if (pdfLayoutSentence is { } sentence &&
+                row.StartUtf16 < sentence.EndUtf16 && row.EndUtf16 > sentence.StartUtf16)
+            {
+                label.BackgroundColor = Color.FromArgb("#FFF1CF");
+                activeLabel ??= label;
+            }
+            text.Children.Add(label);
+        }
+        var done = new Button { Text = "Закрити", HorizontalOptions = LayoutOptions.End, Margin = new Thickness(12) };
+        var layout = new Grid { RowDefinitions = { new(GridLength.Auto), new(GridLength.Star) } };
+        layout.Add(done);
+        layout.Add(viewport, 0, 1);
+        var page = new ContentPage { Title = $"Переклад сторінки {address.Page + 1}", Content = layout };
+        done.Clicked += async (_, _) => await Navigation.PopModalAsync();
+        await Navigation.PushModalAsync(page);
+        if (activeLabel is not null) await viewport.ScrollToAsync(activeLabel, ScrollToPosition.MakeVisible, animated: false);
     }
 
     private async Task LoadPdfPageLayoutAsync(PdfLayoutAddress address, bool cachedOnly)
@@ -186,6 +219,8 @@ public partial class ReadingPage
         Sentence? active, string? gloss, string? status, bool preserveArtwork) : IDrawable
     {
         private sealed record Region(RectF Bounds, List<PdfPageTranslationRow> Rows);
+        private readonly record struct TextRange(int Start, int End);
+        private readonly record struct WrappedLine(int Start, int End);
 
         public void Draw(ICanvas canvas, RectF page)
         {
@@ -207,29 +242,43 @@ public partial class ReadingPage
             {
                 var bounds = Bounds(row, page);
                 if (bounds is not { } rect) continue;
-                var index = regions.FindLastIndex(region =>
+                var grouped = new List<PdfPageTranslationRow> { row };
+                while (regions.FindLastIndex(region =>
                     region.Bounds.Top + 1 < rect.Bottom && rect.Top + 1 < region.Bounds.Bottom &&
-                    region.Bounds.Left < rect.Right && rect.Left < region.Bounds.Right);
-                if (index >= 0)
+                    region.Bounds.Left < rect.Right && rect.Left < region.Bounds.Right) is var index && index >= 0)
                 {
                     var previous = regions[index];
-                    previous.Rows.Add(row);
-                    regions[index] = previous with { Bounds = Union(previous.Bounds, rect) };
+                    grouped.AddRange(previous.Rows);
+                    rect = Union(previous.Bounds, rect);
+                    regions.RemoveAt(index);
                 }
-                else regions.Add(new(rect, [row]));
+                regions.Add(new(rect, grouped));
             }
 
             foreach (var region in regions)
             {
-                var text = string.Join(" ", region.Rows.Where(row => row.Text is not null).Select(row => row.Text));
-                var highlighted = active is not null && region.Rows.Any(row =>
-                    row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16);
-                if (highlighted)
+                var text = new StringBuilder();
+                var highlights = new List<TextRange>();
+                var untranslatedActive = false;
+                foreach (var row in region.Rows.OrderBy(row => row.StartUtf16))
+                {
+                    var isActive = active is not null && row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16;
+                    if (string.IsNullOrWhiteSpace(row.Text))
+                    {
+                        untranslatedActive |= isActive;
+                        continue;
+                    }
+                    if (text.Length > 0) text.Append(' ');
+                    var start = text.Length;
+                    text.Append(row.Text);
+                    if (isActive) highlights.Add(new TextRange(start, text.Length));
+                }
+                if (untranslatedActive && highlights.Count == 0)
                 {
                     canvas.FillColor = Color.FromArgb("#FFF1CF");
                     canvas.FillRoundedRectangle(region.Bounds, 3);
                 }
-                if (text.Length > 0) DrawFitted(canvas, text, region.Bounds, highlighted ? gloss : null);
+                if (text.Length > 0) DrawFitted(canvas, text.ToString(), region.Bounds, highlights, gloss);
             }
 
             var message = !string.IsNullOrWhiteSpace(status) ? status :
@@ -271,58 +320,78 @@ public partial class ReadingPage
             return new RectF(left, top, Math.Max(a.Right, b.Right) - left, Math.Max(a.Bottom, b.Bottom) - top);
         }
 
-        private static void DrawFitted(ICanvas canvas, string text, RectF area, string? gloss = null)
+        private static void DrawFitted(ICanvas canvas, string text, RectF area,
+            IReadOnlyList<TextRange>? highlights = null, string? gloss = null)
         {
             if (area.Width < 2 || area.Height < 2) return;
             var font = new Microsoft.Maui.Graphics.Font("Georgia");
             canvas.Font = font;
             canvas.FontColor = Color.FromArgb("#302D27");
             var size = Math.Min(21, area.Height * 0.78f);
-            List<string> lines;
+            var words = Regex.Matches(text, @"\S+");
+            if (words.Count == 0) return;
+            List<WrappedLine> lines;
             do
             {
                 lines = Wrap(size);
                 if (lines.Count * size * 1.16f <= area.Height &&
-                    lines.All(line => canvas.GetStringSize(line, font, size).Width <= area.Width)) break;
+                    lines.All(line => canvas.GetStringSize(text[line.Start..line.End], font, size).Width <= area.Width)) break;
                 size *= 0.84f;
             } while (size > 1);
             canvas.FontSize = size;
             var y = area.Top;
-            foreach (var line in lines)
+            foreach (var range in lines)
             {
-                if (!string.IsNullOrWhiteSpace(gloss))
+                if (y + size * 1.16f > area.Bottom + 0.01f) break;
+                var line = text[range.Start..range.End];
+                foreach (var active in highlights ?? [])
                 {
-                    var index = line.IndexOf(gloss, StringComparison.OrdinalIgnoreCase);
-                    var end = index + gloss.Length;
-                    if (index >= 0 && (index == 0 || !char.IsLetterOrDigit(line[index - 1])) &&
-                        (end == line.Length || !char.IsLetterOrDigit(line[end])))
+                    var start = Math.Max(active.Start, range.Start) - range.Start;
+                    var end = Math.Min(active.End, range.End) - range.Start;
+                    if (start >= end) continue;
+                    Highlight(start, end, "#FFF1CF");
+                    if (string.IsNullOrWhiteSpace(gloss)) continue;
+                    var search = start;
+                    while (search <= end - gloss.Length)
                     {
-                        var left = canvas.GetStringSize(line[..index], font, size).Width;
-                        var width = canvas.GetStringSize(line[index..end], font, size).Width;
-                        canvas.FillColor = Color.FromArgb("#FFE48B");
-                        canvas.FillRectangle(area.Left + left, y, width, size * 1.16f);
+                        var index = line.IndexOf(gloss, search, end - search, StringComparison.OrdinalIgnoreCase);
+                        if (index < 0) break;
+                        search = index + gloss.Length;
+                        if ((index == 0 || !char.IsLetterOrDigit(line[index - 1])) &&
+                            (search == line.Length || !char.IsLetterOrDigit(line[search])))
+                            Highlight(index, search, "#FFE48B");
                     }
                 }
                 canvas.DrawString(line, area.Left, y, area.Width, size * 1.16f,
                     HorizontalAlignment.Left, VerticalAlignment.Center);
                 y += size * 1.16f;
+
+                void Highlight(int start, int end, string color)
+                {
+                    var left = canvas.GetStringSize(line[..start], font, size).Width;
+                    var width = canvas.GetStringSize(line[start..end], font, size).Width;
+                    canvas.FillColor = Color.FromArgb(color);
+                    canvas.FillRectangle(area.Left + left, y, width, size * 1.16f);
+                }
             }
 
-            List<string> Wrap(float fontSize)
+            List<WrappedLine> Wrap(float fontSize)
             {
-                var result = new List<string>();
-                var current = "";
-                foreach (var word in text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+                var result = new List<WrappedLine>();
+                var start = words[0].Index;
+                var end = start + words[0].Length;
+                for (var i = 1; i < words.Count; i++)
                 {
-                    var combined = current.Length == 0 ? word : $"{current} {word}";
-                    if (current.Length > 0 && canvas.GetStringSize(combined, font, fontSize).Width > area.Width)
+                    var word = words[i];
+                    var next = word.Index + word.Length;
+                    if (canvas.GetStringSize(text[start..next], font, fontSize).Width > area.Width)
                     {
-                        result.Add(current);
-                        current = word;
+                        result.Add(new WrappedLine(start, end));
+                        start = word.Index;
                     }
-                    else current = combined;
+                    end = next;
                 }
-                if (current.Length > 0) result.Add(current);
+                result.Add(new WrappedLine(start, end));
                 return result;
             }
         }
