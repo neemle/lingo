@@ -1,5 +1,6 @@
 using Reader.Contracts;
 using Reader.Native.Services;
+using Reader.Presentation;
 using System.Text;
 using System.Text.RegularExpressions;
 
