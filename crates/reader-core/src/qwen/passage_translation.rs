@@ -87,7 +87,8 @@ impl Store {
         if language == target {
             return Err("Виберіть іншу мову перекладу.".into());
         }
-        let hy_model = if language == "fr" && target == "uk" {
+        let french_to_ukrainian = language == "fr" && target == "uk";
+        let mut hy_model = if french_to_ukrainian {
             hy_translation::Model::installed(self)
         } else {
             None
@@ -96,11 +97,11 @@ impl Store {
         let snapshot = self.connection.unchecked_transaction().map_err(|error| error.to_string())?;
         let pieces = passage_chunks(&text)?;
         let separators = pieces.iter().map(|chunk| chunk.separator).collect();
-        let chunks = pieces.into_iter()
-            .map(|chunk| {
+        let prepare = |hy_model: Option<hy_translation::Model>, mode| -> Result<Vec<HintWork<TranslationChunk>>> {
+            pieces.iter().map(|chunk| {
                 let text = chunk.text;
                 let normalized;
-                let prompt_text = if language == "fr" && target == "uk" {
+                let prompt_text = if french_to_ukrainian {
                     // The output validator can then verify the exact cardinal value.
                     normalized = protected_translation::transform_outside_web_addresses(
                         text, crate::french_cardinals::digits_in_text);
@@ -132,8 +133,25 @@ impl Store {
                     example,
                     mode,
                 )
-            })
-            .collect::<Result<Vec<_>>>()?;
+            }).collect()
+        };
+        let complete = |work: &[HintWork<TranslationChunk>]| work.iter()
+            .all(|chunk| matches!(chunk, HintWork::Cached(Some(_))));
+        let mut chunks = prepare(hy_model, mode)?;
+        if french_to_ukrainian && !matches!(mode, HintCacheMode::Refresh) && !complete(&chunks) {
+            use hy_translation::Model::{Large, Small};
+            // The recommended model may change with RAM or installed files.
+            // Keep a complete saved passage from one model instead of re-running it.
+            for alternative in [Some(Large), Some(Small), None] {
+                if alternative == hy_model { continue; }
+                let cached = prepare(alternative, HintCacheMode::ReadOnly)?;
+                if complete(&cached) {
+                    hy_model = alternative;
+                    chunks = cached;
+                    break;
+                }
+            }
+        }
         snapshot.commit().map_err(|error| error.to_string())?;
         Ok(TranslatePassageJob {
             source: language,
@@ -650,6 +668,38 @@ mod tests {
         assert_eq!(cached.text, "15 лютого 1815 року двері відчинені. Моряк заходить.");
         assert_eq!(cached.source_text, document.text);
         assert!(reopened.cached_passage_translation(&document.id, None, second, "de").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_cached_hy_passage_survives_a_change_of_preferred_model() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("reader.db");
+        let mut store = Store::open(&path).unwrap();
+        let source = "Le jeune marin attend ses amis sur le quai.";
+        let document = store.import("Texte.txt", source.as_bytes(), "fr").unwrap();
+        let sentence = &document.sentences[0].id;
+        let HintWork::Generate { cache, .. } = store.prepare_hint_work::<TranslationChunk>(
+            hy_translation::LARGE_MODEL_ID, &document.id, "hy-mt2-passage-v2", hy_translation::PROMPT,
+            format!("FR → UK\n{source}"), HintCacheMode::Refresh,
+        ).unwrap() else { panic!("expected writable Hy-MT cache"); };
+        let translated = "Молодий моряк чекає на друзів на пристані.";
+        cache.save(&TranslationChunk { text: translated.into() }).unwrap();
+        drop(store);
+
+        let reopened = Store::open(&path).unwrap();
+        let assert_hy = |result: PassageTranslation| {
+            assert!(result.cached);
+            assert_eq!(result.model_name, "Hy-MT2 7B");
+            assert_eq!(result.text, translated);
+            assert_eq!(result.source_text, source);
+        };
+        assert_hy(reopened.cached_passage_translation(&document.id, None, sentence, "uk").unwrap().unwrap());
+        let job = reopened.prepare_passage_translation(&document.id, None, sentence, "uk", false).unwrap();
+        assert_hy(job.run().unwrap());
+        let refresh = reopened.prepare_passage_translation(&document.id, None, sentence, "uk", true).unwrap();
+        assert!(refresh.hy_model.is_none());
+        assert!(refresh.cached().unwrap().is_none());
+        assert!(reopened.cached_passage_translation(&document.id, None, sentence, "de").unwrap().is_none());
     }
 
     #[test]

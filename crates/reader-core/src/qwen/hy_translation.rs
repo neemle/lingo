@@ -100,7 +100,7 @@ impl AutomaticTranslation {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Model {
     Large,
     Small,
