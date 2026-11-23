@@ -22,7 +22,7 @@ public partial class ReadingPage
     private bool refreshingPdfLayout;
     private PdfAutoTranslation? pendingPdfAutoTranslation;
     private PdfAutoTranslation? lastPdfAutoTranslation;
-    private (VerticalStackLayout Panel, PdfPageTranslationRow[] Rows, Sentence? Active)? overflowContent;
+    private (VerticalStackLayout Panel, PdfPageTranslationRow[] Rows, Label[] Labels, Sentence? Active)? overflowContent;
 
     private (ScrollView Viewport, GraphicsView Surface) ActivePdfTranslationLayout() =>
         DetachedPdfReader.IsVisible
@@ -282,7 +282,12 @@ public partial class ReadingPage
         var destination = fromOriginal ? translated : original;
         var sourceHeight = fromOriginal ? originalSurface.Height : translatedSurface.Height;
         var destinationHeight = fromOriginal ? translatedSurface.Height : originalSurface.Height;
-        var target = Math.Clamp(source.ScrollY * destinationHeight / sourceHeight, 0,
+        var sourcePosition = source.ScrollY * destinationHeight / sourceHeight;
+        if (!fromOriginal && translatedSurface.Drawable is TranslatedPdfDrawing drawing &&
+            OverflowRowAtScrollPosition(translated, translatedSurface.Height) is { } row &&
+            drawing.SourceTop(row) is { } top)
+            sourcePosition = top * destinationHeight - Math.Min(44, destination.Height * 0.12);
+        var target = Math.Clamp(sourcePosition, 0,
             Math.Max(0, destinationHeight - destination.Height));
         if (Math.Abs(destination.ScrollY - target) < 1) return;
 
@@ -290,6 +295,18 @@ public partial class ReadingPage
         try { await destination.ScrollToAsync(0, target, animated: false); }
         catch (Exception error) when (error is InvalidOperationException or OperationCanceledException) { }
         finally { syncingPdfTranslationScroll = false; }
+    }
+
+    private PdfPageTranslationRow? OverflowRowAtScrollPosition(ScrollView viewport, double paperHeight)
+    {
+        if (overflowContent is not { } overflow || overflow.Labels.Length == 0 || !overflow.Panel.IsVisible ||
+            !ReferenceEquals(overflow.Panel.Parent, viewport.Content) ||
+            viewport.ScrollY <= Math.Max(0, paperHeight - viewport.Height) + 1)
+            return null;
+
+        var offset = Math.Max(0, viewport.ScrollY - overflow.Panel.Y);
+        var index = Array.FindIndex(overflow.Labels, label => label.Height > 0 && label.Y + label.Height > offset);
+        return index >= 0 ? overflow.Rows[index] : null;
     }
 
     private void DrawPdfTranslationLayout()
@@ -325,25 +342,90 @@ public partial class ReadingPage
     private void ShowPdfTranslationOverflow(VerticalStackLayout panel, PdfPageTranslationRow[] rows)
     {
         var active = pdfLayoutSentence;
-        if (overflowContent is { } current && current.Panel == panel && current.Active == active &&
-            current.Rows.SequenceEqual(rows)) return;
-        overflowContent = (panel, rows, active);
-        panel.Children.Clear();
-        panel.IsVisible = rows.Length > 0;
-        if (rows.Length == 0) return;
-        var heading = new Label { Text = "Переклад під сторінкою", FontAttributes = FontAttributes.Bold };
-        SemanticProperties.SetHeadingLevel(heading, SemanticHeadingLevel.Level3);
-        panel.Children.Add(heading);
-        foreach (var row in rows)
+        var previous = overflowContent;
+        Label[] labels;
+        if (previous is { } current && current.Panel == panel && current.Rows.SequenceEqual(rows))
         {
-            var label = new Label { Text = row.Text, FontFamily = "Georgia", FontSize = 19 };
-            if (active is not null && row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16)
-                label.BackgroundColor = Color.FromArgb("#FFF1CF");
-            var tap = new TapGestureRecognizer();
-            tap.Tapped += async (_, _) => await SelectTranslatedPdfRowAsync(row);
-            label.GestureRecognizers.Add(tap);
-            panel.Children.Add(label);
+            if (current.Active == active) return;
+            labels = current.Labels;
         }
+        else
+        {
+            panel.Children.Clear();
+            panel.IsVisible = rows.Length > 0;
+            labels = new Label[rows.Length];
+            if (rows.Length > 0)
+            {
+                var heading = new Label { Text = "Переклад під сторінкою", FontAttributes = FontAttributes.Bold };
+                SemanticProperties.SetHeadingLevel(heading, SemanticHeadingLevel.Level3);
+                panel.Children.Add(heading);
+                for (var index = 0; index < rows.Length; index++)
+                {
+                    var row = rows[index];
+                    var label = new Label { Text = row.Text, FontFamily = "Georgia", FontSize = 19 };
+                    var tap = new TapGestureRecognizer();
+                    tap.Tapped += async (_, _) => await SelectTranslatedPdfRowAsync(row);
+                    label.GestureRecognizers.Add(tap);
+                    panel.Children.Add(label);
+                    labels[index] = label;
+                }
+            }
+        }
+        overflowContent = (panel, rows, labels, active);
+
+        Label? activeLabel = null;
+        for (var index = 0; index < labels.Length; index++)
+        {
+            var selected = active is not null && rows[index].StartUtf16 < active.EndUtf16 && rows[index].EndUtf16 > active.StartUtf16;
+            labels[index].BackgroundColor = selected ? Color.FromArgb("#FFF1CF") : Colors.Transparent;
+            if (selected) activeLabel ??= labels[index];
+        }
+        var previouslyInOverflow = active is not null && previous?.Rows.Any(row =>
+            row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16) == true;
+        if (previous?.Active != active || previous?.Panel != panel || previouslyInOverflow != (activeLabel is not null))
+            FollowOverflowSelection(panel, active, activeLabel);
+    }
+
+    private void FollowOverflowSelection(VerticalStackLayout panel, Sentence? active, Label? label)
+    {
+        if (active is null) return;
+        if (label is { Height: <= 0 })
+        {
+            EventHandler? measured = null;
+            measured = (_, _) =>
+            {
+                if (label.Height <= 0) return;
+                label.SizeChanged -= measured;
+                FollowOverflowSelection(panel, active, label);
+            };
+            label.SizeChanged += measured;
+            return;
+        }
+
+        Dispatcher.Dispatch(async () =>
+        {
+            var (viewport, surface) = ActivePdfTranslationLayout();
+            if (!viewport.IsVisible || syncingPdfTranslationScroll || overflowContent is not { } current ||
+                current.Panel != panel || current.Active != active || (label is not null && !current.Labels.Contains(label))) return;
+            if (label is null)
+            {
+                if (viewport.ScrollY <= Math.Max(0, surface.Height - viewport.Height) + 1) return;
+                if (inlinePdfFitWidth)
+                {
+                    await FollowPdfTranslationScrollAsync(fromOriginal: true);
+                    return;
+                }
+            }
+
+            syncingPdfTranslationScroll = true;
+            try
+            {
+                if (label is null) await viewport.ScrollToAsync(0, 0, animated: false);
+                else await viewport.ScrollToAsync(label, ScrollToPosition.MakeVisible, animated: false);
+            }
+            catch (Exception error) when (error is InvalidOperationException or OperationCanceledException) { }
+            finally { syncingPdfTranslationScroll = false; }
+        });
     }
 
     private sealed class TranslatedPdfDrawing(PdfPageTranslationRow[] rows, OcrLine[] geometry, int offset,
@@ -354,6 +436,8 @@ public partial class ReadingPage
         private readonly record struct WrappedLine(int Start, int End);
         private readonly List<(RectF Bounds, PdfPageTranslationRow Source)> hitTargets = [];
         internal Action<PdfPageTranslationRow[]>? OverflowChanged { get; set; }
+
+        internal double? SourceTop(PdfPageTranslationRow row) => Bounds(row, new RectF(0, 0, 1, 1))?.Top;
 
         internal PdfPageTranslationRow? HitTest(Point point)
         {
