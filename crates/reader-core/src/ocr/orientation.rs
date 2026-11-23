@@ -20,6 +20,10 @@ pub fn merge_rotated_lines(
         if primary.get(first).is_some_and(|line| line.text.trim() == candidate.text.trim())
             && overlaps.next().is_none()
         {
+            if candidate.is_rotated() {
+                primary[first].rotation = candidate.rotation;
+                primary[first].block_start = true;
+            }
             continue;
         }
         let removed_words = primary.iter().filter(|line| same_area(line, &candidate))
@@ -56,6 +60,7 @@ mod tests {
                 raw_start_utf16: None, source_span: None,
             }).collect();
         OcrLine {
+            rotation: None,
             page: 0, text: text.into(), x: first.0.min(last.0), y: first.1.min(last.1),
             width: (first.0 - last.0).abs() + 0.02, height: (first.1 - last.1).abs() + 0.02,
             confidence: Some(0.95), correction: None, block_start: false, words, source_span: None,
@@ -66,15 +71,18 @@ mod tests {
     fn keeps_upright_prose_and_anchors_for_three_rotated_directions() {
         let upright = row("Le bateau", (0.1, 0.1), (0.3, 0.1));
         let sideways = row("La bibliothèque", (0.8, 0.1), (0.8, 0.4));
+        let mut sideways_with_rotation = sideways.clone();
+        sideways_with_rotation.rotation = Some(90);
         let inverted = row("Le théâtre", (0.6, 0.7), (0.4, 0.7));
         let reverse_sideways = row("Notre jardin", (0.1, 0.8), (0.1, 0.5));
         let mut garbled = inverted.clone();
         garbled.text = "as tneIht".into();
         let merged = merge_rotated_lines(vec![upright.clone(), garbled, sideways.clone()],
-            vec![sideways, inverted, reverse_sideways]).unwrap();
+            vec![sideways_with_rotation, inverted, reverse_sideways]).unwrap();
         assert_eq!(merged.iter().map(|line| line.text.as_str()).collect::<Vec<_>>(),
             ["Le bateau", "Le théâtre", "La bibliothèque", "Notre jardin"]);
         assert_eq!((merged[1].words[0].x, merged[3].words[0].y), (0.6, 0.8));
         assert!(merged[1].block_start && merged[3].block_start);
+        assert_eq!(merged[2].rotation, Some(90));
     }
 }

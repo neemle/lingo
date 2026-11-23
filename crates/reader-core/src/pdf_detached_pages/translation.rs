@@ -622,6 +622,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut store = Store::open(&root.path().join("reader.db")).unwrap();
         let line = |text: &str, x, y, width, height| ocr::OcrLine {
+            rotation: None,
             page: 0, text: text.into(), x, y, width, height,
             confidence: None, correction: None, block_start: false, words: Vec::new(), source_span: None,
         };
@@ -645,6 +646,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut store = Store::open(&root.path().join("reader.db")).unwrap();
         let line = |text: &str, y, height| ocr::OcrLine {
+            rotation: None,
             page: 0, text: text.into(), x: 0.1, y, width: 0.8, height,
             confidence: None, correction: None, block_start: false, words: Vec::new(), source_span: None,
         };
@@ -674,6 +676,7 @@ mod tests {
         ).unwrap();
         let document = store.import_pdf_file(prepared).unwrap();
         let line = |page, text: &str, y, height| ocr::OcrLine {
+            rotation: None,
             block_start: false,
             page, text: text.into(), x: 0.1, y, width: 0.8, height,
             confidence: None, correction: None, words: vec![], source_span: None,

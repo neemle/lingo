@@ -648,6 +648,7 @@ mod tests {
         drop(input);
         let mut store = Store::open(&database).unwrap();
         let lines = vec![ocr::OcrLine {
+            rotation: None,
             block_start: false,
             page: 1,
             text: "Deuxième page.".into(),

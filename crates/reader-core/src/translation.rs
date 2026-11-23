@@ -1886,6 +1886,7 @@ mod tests {
         let document = store.import_scanned_pdf(
             "scan.pdf", b"%PDF-1.4\n", "fr",
             vec![crate::ocr::OcrLine {
+                rotation: None,
                 block_start: false,
                 page: 0, text: "Le bateau arrive. Le marin part.".into(),
                 x: 0.1, y: 0.8, width: 0.8, height: 0.1, confidence: Some(1.0),
@@ -1926,6 +1927,7 @@ mod tests {
         let document = store.import_scanned_pdf(
             "scan.pdf", b"%PDF-1.4\n", "fr",
             vec![crate::ocr::OcrLine {
+                rotation: None,
                 block_start: false,
                 page: 0, text: "Le bateau arrive. Le marin part.".into(),
                 x: 0.1, y: 0.1, width: 0.8, height: 0.1, confidence: None,
@@ -2018,6 +2020,7 @@ mod tests {
         let document = store.import_scanned_pdf(
             "scan.pdf", b"%PDF-1.4\n", "fr",
             vec![crate::ocr::OcrLine {
+                rotation: None,
                 block_start: false,
                 page: 0, text: "Le bateau arrive. Le marin part.".into(),
                 x: 0.1, y: 0.8, width: 0.8, height: 0.1, confidence: Some(1.0),
@@ -2053,6 +2056,7 @@ mod tests {
         let source = "Le bateau arrive. Le marin part.";
         let text = store.import("page.txt", source.as_bytes(), "fr").unwrap();
         let pdf = store.import_scanned_pdf("page.pdf", b"%PDF-1.4\n", "fr", vec![OcrLine {
+            rotation: None,
             block_start: false,
             page: 0, text: source.into(), x: 0.1, y: 0.1, width: 0.5, height: 0.05,
             confidence: None, correction: None, words: Vec::new(), source_span: None,
@@ -2126,6 +2130,7 @@ mod tests {
         assert_eq!(progress(&mut store, revision), waiting);
         let text = "Le bateau arrive.";
         let updated = store.cache_pdf_ocr_page(&document.id, 1, vec![crate::ocr::OcrLine {
+            rotation: None,
             block_start: false,
             page: 1, text: text.into(), x: 0.1, y: 0.8, width: 0.8, height: 0.1,
             confidence: Some(1.0), correction: None, words: vec![], source_span: None,

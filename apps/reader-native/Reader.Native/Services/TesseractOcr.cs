@@ -48,7 +48,7 @@ internal static class TesseractOcr
 
     internal static async Task<OcrLine[]> RecognizeAsync(Func<Task<OcrLine[]>> native,
         Func<Task<PhotoPreview>> prepareImage, string language, CancellationToken cancellation,
-        Func<Task<OcrLine[]>>? recoverRotatedText = null)
+        Func<OcrLine[], Task<OcrLine[]>>? recoverRotatedText = null)
     {
         cancellation.ThrowIfCancellationRequested();
         Exception? portableFailure = null;
@@ -81,7 +81,7 @@ internal static class TesseractOcr
                     if (recoverRotatedText is null) return lines;
                     try
                     {
-                        var crossCheck = await recoverRotatedText().ConfigureAwait(false);
+                        var crossCheck = await recoverRotatedText(lines).ConfigureAwait(false);
                         cancellation.ThrowIfCancellationRequested();
                         return crossCheck.Length == 0 ? lines : RustCoreClient.MergeRotatedOcr(lines, crossCheck);
                     }

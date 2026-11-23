@@ -76,6 +76,7 @@ fn parse_lines(tsv: &str, width: u32, height: u32, sparse: bool) -> Result<Vec<O
                 && matches!(group[0].0.text.as_str(), "[" | "]" | "[1" | "1]" | "[]" | "□" | "☐")
                 && group[1].0.text.starts_with(char::is_alphabetic);
             let mut line = OcrLine {
+                rotation: None,
                 page: 0,
                 text: String::new(),
                 x: 1.0,

@@ -2185,6 +2185,7 @@ mod tests {
     fn photo_ocr_keeps_printed_line_wraps_and_french_titles_inside_sentences() {
         let mut store = Store::open(Path::new(":memory:")).unwrap();
         let line = |text: &str, y| ocr::OcrLine {
+            rotation: None,
             page: 0, text: text.into(), x: 0.1, y, width: 0.8, height: 0.02, confidence: None,
             block_start: false, correction: None, words: Vec::new(), source_span: None,
         };
@@ -2209,6 +2210,7 @@ mod tests {
                 b"\x89PNG\r\n\x1a\n",
                 "en",
                 vec![ocr::OcrLine {
+                    rotation: None,
                     block_start: false,
                     page: 0,
                     text: "This is the original sentence.".into(),

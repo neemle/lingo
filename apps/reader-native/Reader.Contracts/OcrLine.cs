@@ -12,7 +12,8 @@ public sealed record OcrLine(
     string? Correction = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] OcrWord[]? Words = null,
     OcrSpan? SourceSpan = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool BlockStart = false);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool BlockStart = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Rotation = null);
 
 public sealed record OcrWord(string Text, double X, double Y, double Width, double Height,
     int? RawStartUtf16 = null, OcrSpan? SourceSpan = null);

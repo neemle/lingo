@@ -928,6 +928,7 @@ mod tests {
             let end = start + text.len();
             offset = end + 1;
             OcrLine {
+                rotation: None,
                 block_start: false,
                 page: 5, text: text.into(), x: 0.12, y, width: 0.72, height,
                 confidence: None, correction: None, words: Vec::new(),
@@ -976,6 +977,7 @@ mod tests {
             *offset += line.len();
             let last = first + line.trim_end().len();
             Some(OcrLine {
+                rotation: None,
                 block_start: false,
                 page: 0,
                 text: raw[first..last].into(),

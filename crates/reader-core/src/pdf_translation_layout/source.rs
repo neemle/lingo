@@ -233,6 +233,9 @@ fn project_row(
 }
 
 fn line_rotation(line: &OcrLine) -> Option<u16> {
+    if let Some(rotation @ (0 | 90 | 180 | 270)) = line.rotation {
+        return Some(rotation);
+    }
     let mut words = line.words.iter().filter(|word| word.text.chars().any(char::is_alphabetic));
     let first = words.next()?;
     let last = words.next_back()?;
@@ -280,6 +283,7 @@ mod tests {
                 start_utf16: start, end_utf16: start + 7, block_index: Some(0), pending: false,
             });
             geometry.push(OcrLine {
+                rotation: None,
                 page: 0, text: "Un mot.".into(), x: f64::min(x1, x2), y: f64::min(y1, y2),
                 width: (x2 - x1).abs() + 0.03, height: (y2 - y1).abs() + 0.02,
                 confidence: None, correction: None, block_start: false, source_span: span(0, 7),
@@ -296,6 +300,10 @@ mod tests {
         }
         rows[0].end_utf16 = rows[1].end_utf16;
         assert!(project(&rows[..1], &geometry, 0, &[], true).unwrap().layout.regions.is_empty());
+        geometry[3].words.clear();
+        geometry[3].rotation = Some(270);
+        let caption = project(&rows[3..], &geometry[3..], 0, &[], true).unwrap();
+        assert_eq!(caption.layout.regions[0].rotation, 270);
     }
 
     #[test]
@@ -309,6 +317,7 @@ mod tests {
             })
         };
         let line = |start, end, y, words| OcrLine {
+            rotation: None,
             page: 0,
             text: String::new(),
             x: 0.1,

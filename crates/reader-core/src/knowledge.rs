@@ -1014,6 +1014,7 @@ mod tests {
         ).as_bytes()).unwrap();
         let raw = "A maglc book.";
         let uncertain = OcrLine {
+            rotation: None,
             block_start: false,
             page: 0, text: raw.into(), x: 0.1, y: 0.1, width: 0.8, height: 0.1,
             confidence: Some(0.8), correction: None, source_span: None,
@@ -1059,6 +1060,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let mut store = Store::open(&temp.path().join("reader.db")).unwrap();
         let line = |text: &str, y| crate::ocr::OcrLine {
+            rotation: None,
             block_start: false,
             page: 0, text: text.into(), x: 0.1, y, width: 0.8, height: 0.1,
             confidence: Some(0.8), correction: None, words: vec![], source_span: None,
@@ -1107,6 +1109,7 @@ mod tests {
         let document = store.import_pdf_file(prepared).unwrap();
         let raw = "A rnagic book.";
         let line = |page| OcrLine {
+            rotation: None,
             block_start: false,
             page, text: raw.into(), x: 0.1, y: 0.1, width: 0.8, height: 0.1,
             confidence: Some(0.8), correction: None, words: vec![], source_span: None,

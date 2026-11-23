@@ -1498,6 +1498,7 @@ mod drop_cap_tests {
             ).unwrap();
         }
         let revised = store.cache_pdf_ocr_page(&document.id, 8, vec![ocr::OcrLine {
+            rotation: None,
             block_start: false,
             page: 8, text: "Le marin part.".into(), x: 0.1, y: 0.1, width: 0.5, height: 0.05,
             confidence: None, correction: None, words: Vec::new(), source_span: None,
@@ -1603,6 +1604,7 @@ mod drop_cap_tests {
     fn repairs_drop_cap_with_geometry_and_unique_text_layer_context() {
         let reference = "Le 15 février 1815, à Marseille.\nentre dans le port. Il revient.";
         let make_line = |text: &str, x, y, height| ocr::OcrLine {
+            rotation: None,
             block_start: false,
             page: 0, text: text.to_owned(), x, y, width: 0.7, height,
             confidence: None, correction: None, words: vec![], source_span: None,
@@ -1644,6 +1646,7 @@ mod note_punctuation_tests {
             "Avez-vous vu cette grande chaloupe?",
             "Parlez-vous souvent de cette autre chaloupe?",
         ].into_iter().map(|text| ocr::OcrLine {
+            rotation: None,
             block_start: false,
             page: 0, text: text.to_owned(), x: 0.1, y: 0.2, width: 0.7, height: 0.02,
             confidence: None, correction: None, words: vec![], source_span: None,

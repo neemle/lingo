@@ -22,6 +22,8 @@ pub struct OcrLine {
     pub height: f64,
     pub confidence: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correction: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub block_start: bool,
@@ -55,6 +57,10 @@ pub struct OcrSpan {
 }
 
 impl OcrLine {
+    pub(crate) fn is_rotated(&self) -> bool {
+        matches!(self.rotation, Some(90 | 180 | 270))
+    }
+
     pub(crate) fn needs_proofreading(&self) -> bool {
         self.confidence.is_some_and(|value| value < 0.92)
     }
@@ -272,6 +278,7 @@ pub(crate) fn recognized_lines(lines: &[OcrLine], pages: u16) -> Result<String> 
             || !valid_text(value)
             || !valid_box(line.x, line.y, line.width, line.height)
             || line.confidence.is_some_and(|confidence| !unit(confidence))
+            || line.rotation.is_some_and(|rotation| !matches!(rotation, 0 | 90 | 180 | 270))
             || line_count > 8192
             || word_count > 65_536
             || line.words.len() > line.text.len()
@@ -765,6 +772,7 @@ mod tests {
     #[test]
     fn reviewed_page_rejects_the_entire_batch_if_one_line_changed() {
         let line = |text: &str, y| OcrLine {
+            rotation: None,
             block_start: false,
             page: 0, text: text.into(), x: 0.1, y, width: 0.8, height: 0.04,
             confidence: Some(0.5), correction: None, words: vec![], source_span: None,
@@ -792,6 +800,7 @@ mod tests {
     #[test]
     fn ocr_word_spans_track_scanned_pages_corrections_and_restored_provenance() {
         let line = |page, text: &str, words: &[(&str, usize)]| OcrLine {
+            rotation: None,
             block_start: false,
             page,
             text: text.into(),

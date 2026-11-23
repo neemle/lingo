@@ -138,6 +138,7 @@ mod tests {
             source_span: span(start, end),
         };
         let geometry = [OcrLine {
+            rotation: None,
             page: 0,
             text: String::new(),
             x: 0.1,

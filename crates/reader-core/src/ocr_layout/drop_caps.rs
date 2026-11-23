@@ -100,6 +100,7 @@ pub(super) fn join(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
 
 /// Some engines report the initial and the rest of the word in the same OCR row.
 fn join_inline(line: &OcrLine) -> Option<OcrLine> {
+    if line.is_rotated() { return None; }
     let [cap, tail, ..] = line.words.as_slice() else { return None };
     if cap.raw_start_utf16 != Some(0) || !is_initial(&cap.text)
         || !tail.text.chars().next().is_some_and(char::is_lowercase)
@@ -139,7 +140,8 @@ fn distance(cap: &OcrLine, body: &OcrLine, aspect: f64) -> Option<f64> {
     let start = body.text.trim_start_matches(['’', '\'', 'ʼ']);
     let (x, y, height) = body.words.first().filter(|word| word.raw_start_utf16 == Some(0))
         .map_or((body.x, body.y, body.height), |word| (word.x, word.y, word.height));
-    if cap.page != body.page || !start.chars().next().is_some_and(char::is_lowercase)
+    if cap.is_rotated() || body.is_rotated()
+        || cap.page != body.page || !start.chars().next().is_some_and(char::is_lowercase)
         || body.text.chars().take(3).count() < 3 || body.text.len() + cap.text.len() > 8192
         || !close_to_initial((cap.x + cap.width) * aspect, cap.y, cap.height, x * aspect, y, height)
     {

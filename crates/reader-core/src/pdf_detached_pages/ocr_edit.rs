@@ -419,6 +419,7 @@ mod tests {
         ).unwrap();
         let document = store.import_pdf_file(prepared).unwrap();
         let mut first = ocr::OcrLine {
+            rotation: None,
             page: 0, text: "An erly paragraph.".into(), confidence: Some(0.95),
             x: 0.1, y: 0.1, width: 0.75, height: 0.04, correction: None,
             block_start: false, words: vec![], source_span: None,
@@ -468,6 +469,7 @@ mod tests {
         let initial = "A magc book has a magc cover and a story. A rnagic story follows.";
         let corrected = "A magic book has a magic cover and a story. A magic story follows.";
         let line = ocr::OcrLine {
+            rotation: None,
             block_start: false,
             page: 0, text: initial.into(),
             x: 0.1, y: 0.1, width: 0.8, height: 0.1, confidence: Some(0.6),

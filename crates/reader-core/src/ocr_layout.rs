@@ -127,8 +127,9 @@ fn reconstruct_page(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
     }
     let mut ordered = None;
     let mut start = 0;
-    for block in lines.chunk_by(|_, next| !next.block_start) {
-        if let Some(rebuilt) = reconstruct_columns(block) {
+    for block in lines.chunk_by(|previous, next| !next.block_start && previous.is_rotated() == next.is_rotated()) {
+        let rebuilt = if block[0].is_rotated() { None } else { reconstruct_columns(block) };
+        if let Some(rebuilt) = rebuilt {
             ordered.get_or_insert_with(|| lines[..start].to_vec()).extend(rebuilt);
         } else if let Some(ordered) = &mut ordered {
             ordered.extend_from_slice(block);
@@ -136,7 +137,11 @@ fn reconstruct_page(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
         start += block.len();
     }
     let starts = ordered.as_deref().unwrap_or(lines).windows(2).enumerate()
-        .filter_map(|(index, pair)| (vertical_block_break(&pair[0], &pair[1])).then_some(index + 1))
+        .filter_map(|(index, pair)| {
+            (pair[0].is_rotated() != pair[1].is_rotated()
+                || (!pair[0].is_rotated() && vertical_block_break(&pair[0], &pair[1])))
+                .then_some(index + 1)
+        })
         .collect::<Vec<_>>();
     if !starts.is_empty() {
         let ordered = ordered.get_or_insert_with(|| lines.to_vec());
@@ -355,6 +360,7 @@ mod tests {
 
     fn caption_line() -> OcrLine {
         OcrLine {
+            rotation: None,
             page: 0, text: "Left caption Right caption".into(), x: 0.12, y: 0.3, width: 0.68, height: 0.02,
             confidence: None, correction: None, block_start: false, source_span: None,
             words: [("Left", 0, 0.12), ("caption", 5, 0.17), ("Right", 13, 0.60), ("caption", 19, 0.66)]
@@ -370,6 +376,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut store = crate::Store::open(&root.path().join("reader.db")).unwrap();
         let line = |text: &str, y: f64, height: f64| OcrLine {
+            rotation: None,
             page: 0, text: text.into(), x: 0.15, y, width: 0.68, height,
             confidence: None, correction: None, block_start: false, source_span: None, words: Vec::new(),
         };
