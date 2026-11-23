@@ -2,6 +2,8 @@ use crate::ocr::{byte_at_utf16, OcrLine, TranscriptEdit};
 use crate::pdf_text_blocks::{separate_blocks, PositionedWord};
 use std::ops::Range;
 
+mod drop_caps;
+
 /// Applies shared page-layout decisions before recognition results acquire canonical anchors.
 pub(crate) fn reconstruct_blocks(lines: &mut Vec<OcrLine>) {
     let mut result = Vec::with_capacity(lines.len());
@@ -12,7 +14,7 @@ pub(crate) fn reconstruct_blocks(lines: &mut Vec<OcrLine>) {
         while let Some(line) = input.next_if(|line| line.page == page_number) {
             page.push(line);
         }
-        result.extend(reconstruct_page(&page).unwrap_or(page));
+        result.extend(reconstruct_with_drop_caps(&page).unwrap_or(page));
     }
     *lines = result;
 }
@@ -20,7 +22,7 @@ pub(crate) fn reconstruct_blocks(lines: &mut Vec<OcrLine>) {
 pub(crate) fn upgrade_cached_page(lines: &[OcrLine], text: &str) -> Option<(Vec<OcrLine>, String, Vec<TranscriptEdit>)> {
     let pages = lines.first()?.page.checked_add(1)?;
     if crate::ocr::recognized_lines(lines, pages).ok()? != text { return None; }
-    let lines = reconstruct_page(lines)?;
+    let lines = reconstruct_with_drop_caps(lines)?;
     let revised = crate::ocr::recognized_lines(&lines, pages).ok()?;
     if revised == text { return None; }
     let edits = layout_edits(text, &revised);
@@ -72,7 +74,9 @@ pub(crate) fn supplement_page(
     }
     // Corrections inhibit the generic reorder pass. Their blocks and word
     // coordinates stay attached to the original lines.
-    reconstruct_blocks(&mut merged);
+    if let Some(reconstructed) = reconstruct_page(&merged) {
+        merged = reconstructed;
+    }
     let mut edits = Vec::new();
     let mut old_end = 0;
     let mut rows = merged.iter().enumerate();
@@ -106,6 +110,14 @@ pub(crate) fn supplement_page(
 
 fn separator_width(index: usize, line: &OcrLine) -> usize {
     if index == 0 { 0 } else { 1 + usize::from(line.block_start) }
+}
+
+fn reconstruct_with_drop_caps(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
+    if lines.iter().any(|line| line.correction.is_some()) { return None; }
+    match drop_caps::join(lines) {
+        Some(joined) => Some(reconstruct_page(&joined).unwrap_or(joined)),
+        None => reconstruct_page(lines),
+    }
 }
 
 fn reconstruct_page(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
@@ -284,6 +296,30 @@ fn slice_line(line: &OcrLine, start: usize, end: usize) -> Option<OcrLine> {
 mod tests {
     use super::*;
     use crate::ocr::OcrWord;
+
+    #[test]
+    fn scanned_drop_cap_joins_word_and_updates_geometry() {
+        let mut cap = caption_line();
+        cap.text = "L".into();
+        cap.x = 0.08;
+        cap.y = 0.295;
+        cap.width = 0.035;
+        cap.height = 0.046;
+        cap.words.clear();
+        let mut body = caption_line();
+        body.text = "e bateau".into();
+        body.words.truncate(2);
+        body.words[0].text = "e".into();
+        body.words[1].text = "bateau".into();
+        body.words[1].raw_start_utf16 = Some(2);
+        let mut lines = vec![body, cap];
+        reconstruct_blocks(&mut lines);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "Le bateau");
+        assert_eq!(lines[0].words[0].text, "Le");
+        assert_eq!(lines[0].words[0].x, 0.08);
+        assert_eq!(lines[0].words[1].raw_start_utf16, Some(3));
+    }
 
     fn caption_line() -> OcrLine {
         OcrLine {

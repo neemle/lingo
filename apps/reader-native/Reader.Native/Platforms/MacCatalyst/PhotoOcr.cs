@@ -125,68 +125,6 @@ internal static class PhotoOcr
             }
             lines.Add(line with { Words = words.ToArray() });
         }
-        return JoinDropCaps(lines);
-    }
-
-    private static OcrLine[] JoinDropCaps(List<OcrLine> lines)
-    {
-        var removed = new HashSet<int>();
-        for (var index = 0; index < lines.Count; index++)
-        {
-            var cap = lines[index];
-            if (cap.Text.Length != 1 || !char.IsUpper(cap.Text[0])) continue;
-
-            var nearest = -1;
-            var best = double.PositiveInfinity;
-            for (var next = 0; next < lines.Count; next++)
-            {
-                var line = lines[next];
-                if (line.Text.Length < 3 || !char.IsLetter(line.Text[0]) ||
-                    cap.Height < 1.35 * line.Height || cap.Height > 5 * line.Height) continue;
-                var right = cap.X + cap.Width;
-                var gap = line.X - right;
-                if (gap < -0.15 * line.Height || gap > 0.55 * line.Height ||
-                    line.Y < cap.Y - 0.20 * line.Height || line.Y > cap.Y + 0.85 * line.Height) continue;
-                var distance = Math.Abs(gap) + Math.Abs(line.Y - cap.Y);
-                if (distance >= best) continue;
-                best = distance;
-                nearest = next;
-            }
-            if (nearest < 0) continue;
-
-            var body = lines[nearest];
-            var left = Math.Min(cap.X, body.X);
-            var top = Math.Min(cap.Y, body.Y);
-            var rightEdge = Math.Max(cap.X + cap.Width, body.X + body.Width);
-            var bottom = Math.Max(cap.Y + cap.Height, body.Y + body.Height);
-            var words = new List<OcrWord>();
-            foreach (var word in body.Words ?? [])
-            {
-                if (word.RawStartUtf16 == 0)
-                {
-                    var wordLeft = Math.Min(cap.X, word.X);
-                    var wordTop = Math.Min(cap.Y, word.Y);
-                    var wordRight = Math.Max(cap.X + cap.Width, word.X + word.Width);
-                    var wordBottom = Math.Max(cap.Y + cap.Height, word.Y + word.Height);
-                    words.Add(new(cap.Text + word.Text, wordLeft, wordTop, wordRight - wordLeft,
-                        wordBottom - wordTop, 0));
-                }
-                else
-                {
-                    words.Add(word with { RawStartUtf16 = word.RawStartUtf16 + cap.Text.Length });
-                }
-            }
-            lines[nearest] = body with
-            {
-                Text = cap.Text + body.Text,
-                X = left,
-                Y = top,
-                Width = rightEdge - left,
-                Height = bottom - top,
-                Words = words.ToArray(),
-            };
-            removed.Add(index);
-        }
-        return lines.Where((_, index) => !removed.Contains(index)).ToArray();
+        return lines.ToArray();
     }
 }
