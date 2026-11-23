@@ -188,7 +188,13 @@ fn column_transition(lines: &[&[PositionedWord]], index: usize, width: f64) -> b
 }
 
 fn parallel_lines(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) -> Option<(BlockEdit, usize)> {
-    let [left_top, right_top, left_bottom, right_bottom, ..] = lines else { return None; };
+    let [left_top, second, remaining @ ..] = lines else { return None; };
+    let mut left_top = *left_top;
+    let (mut right_top, mut label, following) = match (*second, remaining) {
+        ([label], [right_top, following @ ..]) => (*right_top, Some(*label), following),
+        _ => (*second, None, remaining),
+    };
+    let [left_bottom, right_bottom, ..] = following else { return None; };
     if [left_top, right_top, left_bottom, right_bottom].iter().any(|line| line.len() < 2) {
         return None;
     }
@@ -199,36 +205,46 @@ fn parallel_lines(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) -
         !wide_gap(*left_bottom.last()?, right_next, page_width) {
         return None;
     }
-    let mut right = right_top[0];
-    let mut middle = None;
-    if !aligned(right, right_next) && right_top.len() >= 3 {
-        let next = right_top[1];
-        let character_width = average_character_width(next);
-        if right.right - right.left <= 5.0 * character_width &&
-            right.left > left_top.last()?.right && next.left - right.right >= 2.5 * character_width {
-            middle = Some(right);
-            right = next;
+    if label.is_none() {
+        if let [column @ .., last] = left_top {
+            if column.len() >= 2 && gutter_label(*column.last()?, *last, right_top[0]) {
+                left_top = column;
+                label = Some(*last);
+            }
+        }
+    }
+    if label.is_none() && !aligned(right_top[0], right_next) {
+        if let [first, column @ ..] = right_top {
+            if column.len() >= 2 && gutter_label(*left_top.last()?, *first, column[0]) {
+                right_top = column;
+                label = Some(*first);
+            }
         }
     }
 
+    let right = right_top[0];
+    let left_end = *left_top.last()?;
     let next_line = |upper: PositionedWord, lower: PositionedWord| {
         let drop = lower.center_y - upper.center_y;
         (upper.height.min(lower.height) * 0.6..=upper.height.max(lower.height) * 2.5)
             .contains(&drop)
     };
     if !next_line(left, left_next) || !aligned(right, right_next) ||
-        !same_baseline(left, right) || !wide_gap(*left_top.last()?, right, page_width) {
+        !same_baseline(left, right) || !wide_gap(left_end, right, page_width) ||
+        label.is_some_and(|label| !gutter_label(left_end, label, right) ||
+            label.center_y < left.center_y - 0.5 * left.height ||
+            label.center_y > left_next.center_y + 0.5 * left_next.height) {
         return None;
     }
 
     let piece = |first: PositionedWord, last: PositionedWord, separator| SourcePiece {
         start: first.start, end: last.end, separator,
     };
-    let mut left_pieces = vec![piece(left, *left_top.last()?, "")];
+    let mut left_pieces = vec![piece(left, left_end, "")];
     let mut right_pieces = vec![piece(right, *right_top.last()?, "\n\n")];
-    let mut line_count = 2;
+    let mut line_count = lines.len() - following.len();
     let mut previous_left = left;
-    for pair in lines[2..].chunks_exact(2).take(23) {
+    for pair in following.chunks_exact(2).take(23) {
         let [next_left, next_right] = pair else { break; };
         if next_left.len() < 2 || next_right.len() < 2 ||
             !aligned(left, next_left[0]) || !aligned(right, next_right[0]) ||
@@ -242,11 +258,11 @@ fn parallel_lines(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) -
         previous_left = next_left[0];
         line_count += 2;
     }
-    if line_count < 4 { return None; }
+    if left_pieces.len() < 2 { return None; }
     let start = left.start;
     let end = right_pieces.last()?.end;
     if end - start > 2048 { return None; }
-    if let Some(label) = middle {
+    if let Some(label) = label {
         left_pieces.push(piece(label, label, "\n\n"));
     }
     left_pieces.extend(right_pieces);
@@ -258,6 +274,13 @@ fn parallel_lines(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) -
         cursor = part.end;
     }
     Some((BlockEdit { start, end, slices: left_pieces }, line_count))
+}
+
+fn gutter_label(left: PositionedWord, label: PositionedWord, right: PositionedWord) -> bool {
+    let character_width = average_character_width(left).max(average_character_width(right));
+    label.right - label.left <= 5.0 * character_width &&
+        label.left - left.right >= 2.5 * character_width &&
+        right.left - label.right >= 2.5 * character_width
 }
 
 fn whitespace(text: &[u16]) -> bool {
@@ -363,5 +386,33 @@ mod tests {
         assert_eq!(reconstructed, "𐐷 One left\nSecond left\n\nOR\n\nOne right\nSecond right");
         assert_eq!(edits[1].end - edits[1].start, 1);
         assert!(edits[1].slices.is_empty());
+    }
+
+    #[test]
+    fn keeps_center_label_separate_when_ocr_places_it_on_either_side_or_its_own_row() {
+        for top in ["Left option OU\nRight option", "Left option\nOU Right option",
+            "Left option\nOU\nRight option", "Left option OU Right option"] {
+            let text = format!("{top}\nLeft detail\nRight detail\nSubsequent heading");
+            let positions = [30.0, 62.0, 152.0, 222.0, 257.0, 30.0, 62.0, 222.0, 257.0, 30.0, 85.0];
+            let mut cursor = 0;
+            let words = text.split_whitespace().zip(positions).enumerate()
+                .map(|(index, (word, left))| {
+                    let start = cursor + text[cursor..].find(word).unwrap();
+                    cursor = start + word.len();
+                    PositionedWord {
+                        start, end: cursor, left, right: left + 5.0 * word.len() as f64,
+                        center_y: 20.0 + 14.0 * (if index < 5 { 0 } else if index < 9 { 1 } else { 3 }) as f64,
+                        height: 10.0,
+                    }
+                }).collect::<Vec<_>>();
+            let edits = separate_blocks(&text, &words, 320.0).unwrap();
+            assert_eq!(edits.len(), 1, "{top}");
+            let edit = &edits[0];
+            let reordered = edit.slices.iter()
+                .map(|part| format!("{}{}", part.separator, &text[part.start..part.end])).collect::<String>();
+            assert_eq!(reordered, "Left option\nLeft detail\n\nOU\n\nRight option\nRight detail", "{top}");
+            assert_eq!(&text[edit.end..], "\nSubsequent heading");
+            assert_eq!(edit.slices[2].start, text.find("OU").unwrap());
+        }
     }
 }
