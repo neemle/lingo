@@ -61,9 +61,9 @@ pub fn parse_tesseract_tsv(tsv: &str, width: u32, height: u32) -> Result<Vec<Ocr
         }
     }
 
-    groups
-        .into_values()
-        .map(|group| {
+    let mut lines = groups
+        .into_iter()
+        .map(|((block, paragraph, _), group)| {
             let mut line = OcrLine {
                 page: 0,
                 text: String::new(),
@@ -103,9 +103,45 @@ pub fn parse_tesseract_tsv(tsv: &str, width: u32, height: u32) -> Result<Vec<Ocr
             line.width = right - line.x;
             line.height = bottom - line.y;
             line.confidence = (scored > 0).then(|| score / f64::from(scored));
-            Ok(line)
+            Ok(((block, paragraph), line))
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    for index in 1..lines.len() {
+        let (previous_group, previous) = &lines[index - 1];
+        let (group, current) = &lines[index];
+        if previous_group != group && starts_paragraph(previous, current) {
+            lines[index].1.block_start = true;
+        }
+    }
+    Ok(lines.into_iter().map(|(_, line)| line).collect())
+}
+
+fn starts_paragraph(previous: &OcrLine, next: &OcrLine) -> bool {
+    let height = previous.height.min(next.height);
+    let gap = next.y - previous.y - previous.height;
+    if gap < -0.2 * height || next.y <= previous.y {
+        return false;
+    }
+    let before = previous.text.trim_end_matches(['»', '”', '"', '\'', ')', ' ']);
+    let after = next.text.trim_start_matches(['«', '“', '"', ' ']);
+    if let Some(stem) = before.strip_suffix('.') {
+        let last = stem.rsplit(|ch: char| !ch.is_alphabetic()).next().unwrap_or("");
+        if crate::pdf_sentences::is_abbreviated_title(last) {
+            return false;
+        }
+    }
+    if before.ends_with(['-', '‐', '‑', '\u{00ad}']) {
+        return false;
+    }
+    if crate::document_layout::keep_pdf_sentence_break(&previous.text, &next.text) {
+        return true;
+    }
+    let first_word = &next.words[0];
+    let glyph = first_word.width / first_word.text.chars().count() as f64;
+    let indent = next.x - previous.x;
+    after.starts_with(char::is_uppercase) &&
+        (gap >= 0.25 * height && before.ends_with(['.', '?', '!', '…']) ||
+         gap >= 0.0 && (2.5 * glyph..=0.08).contains(&indent))
 }
 
 #[cfg(test)]
@@ -127,5 +163,22 @@ mod tests {
         assert!((lines[0].width - 0.4).abs() < 1e-9);
         assert!((lines[0].confidence.unwrap() - 0.85).abs() < 1e-9);
         assert_eq!(lines[1].text, "Autre");
+    }
+
+    #[test]
+    fn restores_ocr_paragraph_breaks_without_breaking_a_wrapped_title() {
+        let tsv = concat!(
+            "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n",
+            "5\t1\t1\t1\t1\t1\t10\t10\t40\t10\t90\tLe marin arrive.\n",
+            "5\t1\t1\t2\t1\t1\t10\t26\t50\t10\t90\tIl aperçoit M.\n",
+            "5\t1\t1\t3\t1\t1\t10\t42\t55\t10\t90\tMorrel sur le quai.\n",
+            "5\t1\t1\t3\t2\t1\t10\t58\t70\t10\t90\tIl appelle le capitaine.\n",
+            "5\t1\t2\t1\t1\t1\t10\t74\t45\t10\t90\t— Bonjour !\n",
+        );
+        let result = parse_tesseract_tsv(tsv, 100, 100).unwrap();
+        assert_eq!(result.iter().map(|line| line.block_start).collect::<Vec<_>>(),
+            [false, true, false, false, true]);
+        let text = crate::ocr::recognized_lines(&result, 1).unwrap();
+        assert_eq!(text, "Le marin arrive.\n\nIl aperçoit M.\nMorrel sur le quai.\nIl appelle le capitaine.\n\n— Bonjour !");
     }
 }

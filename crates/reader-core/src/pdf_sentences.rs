@@ -219,8 +219,7 @@ pub(crate) fn mask_title_periods(boundaries: &mut [u8]) {
     let text = std::str::from_utf8(boundaries).expect("PDF sentence boundary text is UTF-8");
     let indices: Vec<_> = text.match_indices('.').filter_map(|(dot, _)| {
         let title = text[..dot].rsplit(|ch: char| !ch.is_alphabetic()).next()?;
-        if !matches!(title, "M" | "MM" | "Mme" | "Mmes" | "Mlle" | "Mlles" | "Dr" | "Pr" | "Me" | "Mgr" |
-            "Mr" | "Mrs" | "Ms") {
+        if !is_abbreviated_title(title) {
             return None;
         }
         let tail = &text[dot + 1..];
@@ -232,6 +231,11 @@ pub(crate) fn mask_title_periods(boundaries: &mut [u8]) {
     for index in indices {
         boundaries[index] = b' ';
     }
+}
+
+pub(crate) fn is_abbreviated_title(word: &str) -> bool {
+    matches!(word, "M" | "MM" | "Mme" | "Mmes" | "Mlle" | "Mlles" | "Dr" | "Pr" | "Me" | "Mgr" |
+        "Mr" | "Mrs" | "Ms")
 }
 
 fn storage_error(error: impl std::fmt::Display) -> String {
