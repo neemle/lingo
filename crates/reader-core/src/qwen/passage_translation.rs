@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     time::{Duration, Instant},
 };
+use unicode_segmentation::UnicodeSegmentation;
 const SYSTEM: &str = concat!(
     "<|im_start|>system\n",
     "You are a translator. Translate every sentence into the requested language. ",
@@ -254,7 +255,7 @@ fn recover_chunk(
             return Ok(TranslationChunk { text: format!("{} {}", left.text, right.text) });
         }
     }
-    if attempts > 1 && error != GENERATION_TIMEOUT {
+    if attempts > 1 {
         return parse(&render(input, !regenerate)?, target, input);
     }
     Err(error)
@@ -281,6 +282,14 @@ fn complete_sentences(text: &str) -> usize {
         let text = sentence.text.trim_end_matches([' ', '\t', '»', '”', '"', '’', '\'', ')', ']']);
         text.ends_with(['.', '!', '?', '…']) && text.chars().any(char::is_alphabetic)
     }).count()
+}
+
+fn mixed_cyrillic_word(text: &str) -> bool {
+    text.unicode_words().any(|word| {
+        word.chars().any(|ch| ch.is_alphabetic() && matches!(ch, '\u{0400}'..='\u{052f}'))
+            && word.chars().any(|ch| ch.is_ascii_alphabetic()
+                || (ch.is_alphabetic() && matches!(ch, '\u{00c0}'..='\u{024f}')))
+    })
 }
 
 fn parse(bytes: &[u8], target: &str, source_text: &str) -> Result<TranslationChunk> {
@@ -312,6 +321,7 @@ fn parse(bytes: &[u8], target: &str, source_text: &str) -> Result<TranslationChu
     if text.is_empty()
         || text.eq_ignore_ascii_case(source_text.trim())
         || wrong_script
+        || (target == "uk" && mixed_cyrillic_word(text))
         || (target == "uk" && crate::marian_target_uk::clearly_russian(text))
         || crate::language_detection::detect(text).is_some_and(|language| language != target)
     {
@@ -414,10 +424,52 @@ mod tests {
     }
 
     #[test]
+    fn unsplittable_sentence_retries_a_timed_out_generation_once() {
+        let source = "Le jeune marin revient à la maison après son voyage.";
+        let mut requests = Vec::new();
+        let translated = translate_chunk(source, "uk", false, |fragment, sampled| {
+            requests.push((fragment.to_owned(), sampled));
+            if sampled {
+                Ok(serde_json::to_vec(&TranslationChunk {
+                    text: "Молодий моряк повертається додому після подорожі.".into(),
+                }).unwrap())
+            } else {
+                Err(GENERATION_TIMEOUT.into())
+            }
+        }).unwrap();
+        assert_eq!(requests, [(source.to_owned(), false), (source.to_owned(), true)]);
+        assert_eq!(translated.text, "Молодий моряк повертається додому після подорожі.");
+    }
+
+    #[test]
+    fn passage_response_can_use_spare_context_without_displacing_input() {
+        let mode = GenerationMode::Passage { regenerate: false };
+        assert_eq!(mode.response_budget(210), Some(320));
+        assert_eq!(mode.response_budget(500), Some(268));
+        assert_eq!(mode.response_budget(544), Some(224));
+        assert_eq!(mode.response_budget(545), None);
+        assert_eq!(GenerationMode::Hint.response_budget(500), Some(160));
+    }
+
+    #[test]
     fn confidently_wrong_third_language_is_not_cached_as_the_target() {
         let english = b"{\"text\":\"The young man gave orders to the sailors, and the ship entered the harbor before dawn.\"}";
         assert!(parse(english, "en", "Le jeune homme donne ses ordres aux marins.").is_ok());
         assert!(parse(english, "de", "Le jeune homme donne ses ordres aux marins.").is_err());
+    }
+
+    #[test]
+    fn ukrainian_translation_retries_hybrid_spellings_without_rejecting_latin_names() {
+        let source = "Le bateau entre dans le port de Marseille.";
+        let hybrid = "Корабель заходить до порту Мarseйля.";
+        let complete = "Корабель заходить до порту Марселя.";
+        let json = |text: &str| serde_json::to_vec(&TranslationChunk { text: text.into() }).unwrap();
+        assert!(parse(&json(hybrid), "uk", source).is_err());
+        assert!(parse(&json("Корабель заходить до порту Marseille."), "uk", source).is_ok());
+        let recovered = translate_chunk(source, "uk", false, |_, sampled| {
+            Ok(json(if sampled { complete } else { hybrid }))
+        }).unwrap();
+        assert_eq!(recovered.text, complete);
     }
 
     #[test]

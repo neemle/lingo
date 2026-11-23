@@ -1257,6 +1257,17 @@ enum GenerationMode {
     Passage { regenerate: bool },
 }
 
+impl GenerationMode {
+    fn response_budget(&self, prompt_tokens: usize) -> Option<usize> {
+        let available = (CONTEXT_TOKENS as usize).checked_sub(prompt_tokens)?;
+        let (minimum, maximum) = match self {
+            Self::Hint => (RESPONSE_TOKENS, RESPONSE_TOKENS),
+            Self::Passage { .. } => (224, 320),
+        };
+        (available >= minimum).then_some(available.min(maximum))
+    }
+}
+
 fn generate(
     model: &LlamaModel,
     context: &mut llama_cpp_2::context::LlamaContext<'_>,
@@ -1285,18 +1296,13 @@ fn generate_in_mode(
     mode: GenerationMode,
     check: impl Fn() -> Result<()>,
 ) -> Result<Vec<u8>> {
-    let response_tokens = match mode {
-        GenerationMode::Hint => RESPONSE_TOKENS,
-        GenerationMode::Passage { .. } => 224,
-    };
     let vocab = model.vocab();
     let mut tokens = vocab.tokenize(system.as_bytes(), false, true);
     // The selected text is tokenized independently without interpreting role markers.
     tokens.extend(vocab.tokenize(example.as_bytes(), false, false));
     tokens.extend(vocab.tokenize(END.as_bytes(), false, true));
-    if tokens.len() + response_tokens > CONTEXT_TOKENS as usize {
-        return Err("Речення задовге для локального пояснення.".into());
-    }
+    let response_tokens = mode.response_budget(tokens.len())
+        .ok_or("Текст задовгий для локальної моделі.")?;
     let mut batch = LlamaBatch::new(BATCH, 1);
     for (offset, chunk) in tokens.chunks(BATCH).enumerate() {
         check()?;
