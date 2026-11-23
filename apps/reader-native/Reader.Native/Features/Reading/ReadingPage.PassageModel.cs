@@ -74,11 +74,12 @@ public partial class ReadingPage
             result = result is null ? failure.Text : $"{result}{Environment.NewLine}{failure.Text}";
         ModelTranslationBusy.IsRunning = ModelTranslationBusy.IsVisible = running && !detached;
         DetachedModelTranslationBusy.IsRunning = DetachedModelTranslationBusy.IsVisible = running && detached;
-        ModelTranslationResult.IsVisible = !detached && (running || result is not null);
-        DetachedModelTranslationResult.IsVisible = detached && (running || result is not null);
+        ModelTranslationViewport.IsVisible = ModelTranslationResult.IsVisible = !detached && (running || result is not null);
+        DetachedModelTranslationViewport.IsVisible = DetachedModelTranslationResult.IsVisible = detached && (running || result is not null);
         var text = running ? "Qwen перекладає абзац…" : result ?? "";
-        if (detached) DetachedModelTranslationText.Text = text;
-        else ModelTranslationText.Text = text;
+        var label = detached ? DetachedModelTranslationText : ModelTranslationText;
+        var textChanged = label.Text != text;
+        label.Text = text;
 
         var source = translation?.SourceText;
         var hasSource = !running && !string.IsNullOrWhiteSpace(source);
@@ -92,6 +93,12 @@ public partial class ReadingPage
         {
             if (detached) DetachedModelSourceText.Text = source;
             else ModelSourceText.Text = source;
+        }
+        if (textChanged && (running || result is not null))
+        {
+            var viewport = detached ? DetachedModelTranslationViewport : ModelTranslationViewport;
+            if (viewport.ScrollY > 0)
+                _ = RevealModelTranslationAsync(detached, detached ? DetachedModelTranslationResult : ModelTranslationResult);
         }
     }
 
@@ -124,12 +131,25 @@ public partial class ReadingPage
     private ModelPassageTranslation? CurrentModelTranslation(ModelPassage? address) =>
         modelPassageResult is { } saved && saved.Address == address ? saved.Translation : null;
 
-    private void ToggleModelSourceClicked(object? sender, EventArgs args)
+    private async void ToggleModelSourceClicked(object? sender, EventArgs args)
     {
         var address = CurrentModelPassage();
         if (CurrentModelTranslation(address)?.SourceText is null) return;
         inspectingModelSource = inspectingModelSource == address ? null : address;
         UpdateModelTranslation();
+        if (inspectingModelSource == address)
+        {
+            var detached = address?.Page is not null;
+            await RevealModelTranslationAsync(detached, detached ? DetachedModelSourcePreview : ModelSourcePreview);
+        }
+    }
+
+    private async Task RevealModelTranslationAsync(bool detached, VisualElement element)
+    {
+        var viewport = detached ? DetachedModelTranslationViewport : ModelTranslationViewport;
+        if (!viewport.IsVisible || !element.IsVisible) return;
+        try { await viewport.ScrollToAsync(element, ScrollToPosition.Start, animated: false); }
+        catch (Exception error) when (error is InvalidOperationException or OperationCanceledException) { }
     }
 
     private async void ShareModelTranslationClicked(object? sender, EventArgs args)

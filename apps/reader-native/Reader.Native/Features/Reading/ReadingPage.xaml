@@ -166,7 +166,7 @@
       </ScrollView>
      </Grid>
 
-     <Grid Grid.Column="1" x:Name="TranslationPane" RowDefinitions="Auto,*,Auto" BackgroundColor="{StaticResource Panel}">
+     <Grid Grid.Column="1" x:Name="TranslationPane" RowDefinitions="Auto,*,Auto,Auto" BackgroundColor="{StaticResource Panel}">
       <Grid Padding="16,10" ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="6" BackgroundColor="#F8F9F3">
        <Label Text="ПЕРЕКЛАД" Style="{StaticResource ReaderColumnCaption}" VerticalOptions="Center" />
        <Button Grid.Column="1" x:Name="AutoTranslate" Text="Автопереклад"
@@ -192,6 +192,25 @@
          </Grid>
         </Border>
         <VerticalStackLayout x:Name="ParagraphAfter" Spacing="8" IsVisible="False" />
+       </VerticalStackLayout>
+      </ScrollView>
+      <ScrollView Grid.Row="1" x:Name="PdfTranslationViewport" IsVisible="False"
+       SizeChanged="PdfTranslationViewportChanged" Scrolled="PdfTranslationViewportScrolled">
+       <VerticalStackLayout>
+        <Grid x:Name="PdfTranslationPaper" HorizontalOptions="Center" VerticalOptions="Start">
+         <Image x:Name="PdfTranslationBackground" Aspect="AspectFit" InputTransparent="True" />
+         <GraphicsView x:Name="PdfTranslationSurface">
+          <GraphicsView.GestureRecognizers>
+           <TapGestureRecognizer Tapped="TranslatedPdfTapped" />
+          </GraphicsView.GestureRecognizers>
+         </GraphicsView>
+        </Grid>
+        <VerticalStackLayout x:Name="PdfTranslationOverflow" Padding="20,12" Spacing="10" IsVisible="False" />
+       </VerticalStackLayout>
+      </ScrollView>
+      <ScrollView Grid.Row="2" x:Name="ModelTranslationViewport"
+       MaximumHeightRequest="180" IsVisible="False" BackgroundColor="#F8F9F3">
+       <VerticalStackLayout Padding="14,8" Spacing="8">
         <Grid x:Name="ModelTranslationResult" ColumnDefinitions="Auto,*" ColumnSpacing="9" IsVisible="False">
          <ActivityIndicator x:Name="ModelTranslationBusy" IsVisible="False" Color="{StaticResource Sage}"
           WidthRequest="20" HeightRequest="20" VerticalOptions="Start" />
@@ -210,21 +229,7 @@
         </Border>
        </VerticalStackLayout>
       </ScrollView>
-      <ScrollView Grid.Row="1" x:Name="PdfTranslationViewport" IsVisible="False"
-       SizeChanged="PdfTranslationViewportChanged" Scrolled="PdfTranslationViewportScrolled">
-       <VerticalStackLayout>
-        <Grid x:Name="PdfTranslationPaper" HorizontalOptions="Center" VerticalOptions="Start">
-         <Image x:Name="PdfTranslationBackground" Aspect="AspectFit" InputTransparent="True" />
-         <GraphicsView x:Name="PdfTranslationSurface">
-          <GraphicsView.GestureRecognizers>
-           <TapGestureRecognizer Tapped="TranslatedPdfTapped" />
-          </GraphicsView.GestureRecognizers>
-         </GraphicsView>
-        </Grid>
-        <VerticalStackLayout x:Name="PdfTranslationOverflow" Padding="20,12" Spacing="10" IsVisible="False" />
-       </VerticalStackLayout>
-      </ScrollView>
-      <FlexLayout Grid.Row="2" Padding="10,2,10,8" Wrap="Wrap" JustifyContent="Start">
+      <FlexLayout Grid.Row="3" Padding="10,2,10,8" Wrap="Wrap" JustifyContent="Start">
        <Button x:Name="ReadPdfTranslationText" Text="Увесь текст" IsVisible="False" Margin="0,3,5,0"
         Style="{StaticResource PlayerButton}" Clicked="ReadPdfTranslationTextClicked" />
        <Button x:Name="EditTranslation" Text="Додати свій переклад" Margin="0,3,5,0"
@@ -270,7 +275,7 @@
          </Grid>
         </ScrollView>
        </Grid>
-       <Grid Grid.Column="1" x:Name="DetachedTargetPane" RowDefinitions="Auto,*" BackgroundColor="{StaticResource Panel}">
+       <Grid Grid.Column="1" x:Name="DetachedTargetPane" RowDefinitions="Auto,*,Auto" BackgroundColor="{StaticResource Panel}">
         <Grid Padding="14,5" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
          <Label Text="ПЕРЕКЛАД" Style="{StaticResource ReaderColumnCaption}" VerticalOptions="Center" />
          <Button Grid.Column="1" x:Name="DetachedPdfTranslationMode" Text="Верстка" IsVisible="False"
@@ -293,6 +298,25 @@
            </Grid>
           </Border>
           <VerticalStackLayout x:Name="DetachedPassageAfter" Spacing="7" IsVisible="False" />
+         </VerticalStackLayout>
+        </ScrollView>
+        <ScrollView Grid.Row="1" x:Name="DetachedPdfTranslationViewport" IsVisible="False"
+         SizeChanged="PdfTranslationViewportChanged" Scrolled="PdfTranslationViewportScrolled">
+         <VerticalStackLayout>
+          <Grid x:Name="DetachedPdfTranslationPaper" HorizontalOptions="Center" VerticalOptions="Start">
+           <Image x:Name="DetachedPdfTranslationBackground" Aspect="AspectFit" InputTransparent="True" />
+           <GraphicsView x:Name="DetachedPdfTranslationSurface">
+            <GraphicsView.GestureRecognizers>
+             <TapGestureRecognizer Tapped="TranslatedPdfTapped" />
+            </GraphicsView.GestureRecognizers>
+           </GraphicsView>
+          </Grid>
+          <VerticalStackLayout x:Name="DetachedPdfTranslationOverflow" Padding="20,12" Spacing="10" IsVisible="False" />
+         </VerticalStackLayout>
+        </ScrollView>
+        <ScrollView Grid.Row="2" x:Name="DetachedModelTranslationViewport"
+         MaximumHeightRequest="180" IsVisible="False" BackgroundColor="#F8F9F3">
+         <VerticalStackLayout Padding="14,8" Spacing="8">
           <Grid x:Name="DetachedModelTranslationResult" ColumnDefinitions="Auto,*" ColumnSpacing="9" IsVisible="False">
            <ActivityIndicator x:Name="DetachedModelTranslationBusy" IsVisible="False" Color="{StaticResource Sage}"
             WidthRequest="20" HeightRequest="20" VerticalOptions="Start" />
@@ -309,20 +333,6 @@
            BackgroundColor="#F6F4EB" StrokeThickness="0" StrokeShape="RoundRectangle 7">
            <Label x:Name="DetachedModelSourceText" FontFamily="Georgia" FontSize="16" LineBreakMode="WordWrap" />
           </Border>
-         </VerticalStackLayout>
-        </ScrollView>
-        <ScrollView Grid.Row="1" x:Name="DetachedPdfTranslationViewport" IsVisible="False"
-         SizeChanged="PdfTranslationViewportChanged" Scrolled="PdfTranslationViewportScrolled">
-         <VerticalStackLayout>
-          <Grid x:Name="DetachedPdfTranslationPaper" HorizontalOptions="Center" VerticalOptions="Start">
-           <Image x:Name="DetachedPdfTranslationBackground" Aspect="AspectFit" InputTransparent="True" />
-           <GraphicsView x:Name="DetachedPdfTranslationSurface">
-            <GraphicsView.GestureRecognizers>
-             <TapGestureRecognizer Tapped="TranslatedPdfTapped" />
-            </GraphicsView.GestureRecognizers>
-           </GraphicsView>
-          </Grid>
-          <VerticalStackLayout x:Name="DetachedPdfTranslationOverflow" Padding="20,12" Spacing="10" IsVisible="False" />
          </VerticalStackLayout>
         </ScrollView>
        </Grid>
