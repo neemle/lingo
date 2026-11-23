@@ -14,6 +14,7 @@ public sealed class PdfOrderedText
     private static readonly Regex Tokens = new(@"\S+");
     private static readonly Regex TextTokens = new(@"[^\s\uFFFC]+");
     private readonly SourceSlice[] slices;
+    private readonly string originalText;
 
     public string Text { get; }
     public PdfTextOrderEdit[] Corrections { get; } = [];
@@ -21,23 +22,83 @@ public sealed class PdfOrderedText
     public PdfOrderedText(string text)
     {
         Text = text;
+        originalText = text;
         slices = [];
     }
 
-    private PdfOrderedText(string text, SourceSlice[] slices, PdfTextOrderEdit[] corrections)
+    private PdfOrderedText(string text, string originalText, SourceSlice[] slices, PdfTextOrderEdit[] corrections)
     {
         Text = text;
+        this.originalText = originalText;
         this.slices = slices;
         Corrections = corrections;
     }
 
-    public int? OriginalOffset(int start, int length)
+    public int? OriginalOffset(int start, int length) => OriginalRange(start, length)?.Start;
+
+    public (int Start, int Length)? OriginalRange(int start, int length)
     {
-        if (slices.Length == 0) return start;
+        if (slices.Length == 0) return (start, length);
+        var cursor = start;
+        var end = start + length;
+        var originalStart = -1;
+        var originalEnd = 0;
         foreach (var slice in slices)
-            if (start >= slice.OutputStart && start - slice.OutputStart <= slice.Length - length)
-                return slice.SourceStart + start - slice.OutputStart;
+        {
+            if (slice.OutputStart + slice.Length <= cursor) continue;
+            if (slice.OutputStart > cursor) break;
+            var next = slice.SourceStart + cursor - slice.OutputStart;
+            if (originalStart < 0) originalStart = next;
+            else if (next < originalEnd || originalText.AsSpan(originalEnd, next - originalEnd)
+                .IndexOfAnyExcept(" \t\u00a0\u202f") >= 0) break;
+            var count = Math.Min(end, slice.OutputStart + slice.Length) - cursor;
+            cursor += count;
+            originalEnd = next + count;
+            if (cursor == end) return (originalStart, originalEnd - originalStart);
+        }
         return null;
+    }
+
+    public PdfOrderedText JoinLigatures(Func<int, int, WordBounds?> bounds)
+    {
+        if (Text.Length == 0 || Text.Length > 24000) return this;
+        var words = TextTokens.Matches(Text);
+        var candidates = new SortedDictionary<int, PdfLayoutWord>();
+        for (var index = 0; index + 1 < words.Count; index++)
+        {
+            var left = words[index];
+            var right = words[index + 1];
+            if ((left.ValueSpan.EndsWith("fi", StringComparison.Ordinal) ||
+                 left.ValueSpan.EndsWith("fl", StringComparison.Ordinal)) &&
+                char.IsLower(right.ValueSpan[0]))
+            {
+                Add(left);
+                Add(right);
+            }
+        }
+        if (candidates.Count < 2) return this;
+        var joins = Client.FindPdfLigatureJoins(Text, candidates.Values.ToArray());
+        if (joins.Length == 0) return this;
+        var output = new StringBuilder(Text.Length);
+        var sources = new List<SourceSlice>();
+        var changes = new List<PdfTextOrderEdit>(joins.Length);
+        var cursor = 0;
+        foreach (var join in joins)
+        {
+            AppendSource(output, sources, cursor, join.Start);
+            changes.Add(new(join.Start, join.End, ""));
+            cursor = join.End;
+        }
+        AppendSource(output, sources, cursor, Text.Length);
+        return new(output.ToString(), originalText, sources.ToArray(), changes.ToArray());
+
+        void Add(Match token)
+        {
+            if (!candidates.ContainsKey(token.Index) &&
+                OriginalRange(token.Index, token.Length) is { } original && bounds(original.Start, original.Length) is { } box)
+                candidates.Add(token.Index, new(token.Index, token.Index + token.Length,
+                    box.Left, box.Right, -box.MidY, box.Height));
+        }
     }
 
     public PdfOrderedText SeparateBlocks(Func<int, int, WordBounds?> bounds, double pageWidth)
@@ -45,7 +106,7 @@ public sealed class PdfOrderedText
         if (Text.Length == 0 || Text.Length > 24000 || pageWidth <= 0) return this;
         var words = new List<PdfLayoutWord>();
         foreach (Match token in TextTokens.Matches(Text))
-            if (OriginalOffset(token.Index, token.Length) is { } original && bounds(original, token.Length) is { } box)
+            if (OriginalRange(token.Index, token.Length) is { } original && bounds(original.Start, original.Length) is { } box)
                 words.Add(new(token.Index, token.Index + token.Length, box.Left, box.Right, -box.MidY, box.Height));
         if (words.Count == 0) return this;
         var edits = Client.SeparatePdfBlocks(Text, words.ToArray(), pageWidth);
@@ -56,37 +117,35 @@ public sealed class PdfOrderedText
         var cursor = 0;
         foreach (var edit in edits)
         {
-            AppendSource(cursor, edit.Start);
+            AppendSource(output, sources, cursor, edit.Start);
             var start = output.Length;
             if (edit.Slices.Length == 0) output.Append("\n\n");
             foreach (var slice in edit.Slices)
             {
                 output.Append(slice.Separator);
-                AppendSource(slice.Start, slice.End);
+                AppendSource(output, sources, slice.Start, slice.End);
             }
             changes.Add(new(edit.Start, edit.End, output.ToString(start, output.Length - start)));
             cursor = edit.End;
         }
-        AppendSource(cursor, Text.Length);
-        return new(output.ToString(), sources.ToArray(), changes.ToArray());
+        AppendSource(output, sources, cursor, Text.Length);
+        return new(output.ToString(), originalText, sources.ToArray(), changes.ToArray());
+    }
 
-        void AppendSource(int start, int end)
-        {
-            if (end <= start) return;
-            if (slices.Length == 0) sources.Add(new(output.Length, start, end - start));
-            else
+    private void AppendSource(StringBuilder output, List<SourceSlice> sources, int start, int end)
+    {
+        if (end <= start) return;
+        if (slices.Length == 0) sources.Add(new(output.Length, start, end - start));
+        else
+            foreach (var slice in slices)
             {
-                foreach (var slice in slices)
-                {
-                    var left = Math.Max(start, slice.OutputStart);
-                    var right = Math.Min(end, slice.OutputStart + slice.Length);
-                    if (left < right)
-                        sources.Add(new(output.Length + left - start, slice.SourceStart + left - slice.OutputStart,
-                            right - left));
-                }
+                var left = Math.Max(start, slice.OutputStart);
+                var right = Math.Min(end, slice.OutputStart + slice.Length);
+                if (left < right)
+                    sources.Add(new(output.Length + left - start, slice.SourceStart + left - slice.OutputStart,
+                        right - left));
             }
-            output.Append(Text, start, end - start);
-        }
+        output.Append(Text, start, end - start);
     }
 
     public static PdfOrderedText Repair(string text, Func<int, int, WordBounds?> bounds)
@@ -143,7 +202,7 @@ public sealed class PdfOrderedText
             cursor = edit.End;
         }
         AppendSource(cursor, text.Length - cursor);
-        return new(output.ToString(), sources.ToArray(), corrections.ToArray());
+        return new(output.ToString(), text, sources.ToArray(), corrections.ToArray());
 
         void AppendSource(int start, int length)
         {

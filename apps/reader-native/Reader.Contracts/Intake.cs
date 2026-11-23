@@ -44,4 +44,5 @@ public sealed record PdfTextOrderEdit(int StartUtf16, int EndUtf16, string Repla
 public readonly record struct PdfLayoutWord(int Start, int End, double Left, double Right, double CenterY, double Height);
 public sealed record PdfLayoutSlice(int Start, int End, string Separator);
 public sealed record PdfLayoutEdit(int Start, int End, PdfLayoutSlice[] Slices);
+public sealed record PdfLigatureJoin(int Start, int End);
 public sealed record DetachedPdfFindPage(DetachedPdfFindHit[] Matches, DetachedPdfFindCursor? Next);

@@ -33,6 +33,10 @@ pub enum Command {
         #[serde(rename = "pageWidth")]
         page_width: f64,
     },
+    FindPdfLigatureJoins {
+        text: String,
+        words: Vec<reader_core::pdf_text_blocks::PositionedWord>,
+    },
     StorageUsage,
     ClearStorage {
         scope: reader_core::storage_management::StorageScope,

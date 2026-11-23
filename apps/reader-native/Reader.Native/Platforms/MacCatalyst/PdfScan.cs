@@ -114,12 +114,16 @@ internal static partial class PdfScan
             var raw = page.Text ?? "";
             var text = raw.Trim();
             var offset = raw.Length - raw.TrimStart().Length;
-            var layer = PdfOrderedText.Repair(text, (start, length) => TextBounds(page, offset + start, length));
-            if (text == storedText && layer.Text != text) return layer.Corrections;
-            if (layer.Text != storedText) return [];
-            var blocks = layer.SeparateBlocks((start, length) => TextBounds(page, offset + start, length),
-                page.GetBoundsForBox(PdfDisplayBox.Crop).Width);
-            return blocks.Text == storedText ? [] : blocks.Corrections;
+            PdfOrderedText.WordBounds? Bounds(int start, int length) => TextBounds(page, offset + start, length);
+            var accents = PdfOrderedText.Repair(text, Bounds);
+            if (text == storedText && accents.Text != text) return accents.Corrections;
+            var joined = accents.JoinLigatures(Bounds);
+            if (accents.Text == storedText && joined.Text != storedText) return joined.Corrections;
+            var width = page.GetBoundsForBox(PdfDisplayBox.Crop).Width;
+            if (joined.Text == storedText) return joined.SeparateBlocks(Bounds, width).Corrections;
+            if (accents.Text == joined.Text) return [];
+            var previousLayout = accents.SeparateBlocks(Bounds, width);
+            return previousLayout.Text == storedText ? previousLayout.JoinLigatures(Bounds).Corrections : [];
         });
 
     internal enum LanguageSample { TextLayer, PortableOcr, NativeOcr }
@@ -214,8 +218,8 @@ internal static partial class PdfScan
         foreach (System.Text.RegularExpressions.Match word in System.Text.RegularExpressions.Regex.Matches(text, @"[^\s\uFFFC]+"))
         {
             if (IsPdfListLabel(text, word.Index, word.Length)) continue;
-            if (layer.OriginalOffset(word.Index, word.Length) is not { } originalOffset) continue;
-            using var selection = page.GetSelection(new NSRange(offset + originalOffset, word.Length));
+            if (layer.OriginalRange(word.Index, word.Length) is not { } original) continue;
+            using var selection = page.GetSelection(new NSRange(offset + original.Start, original.Length));
             if (selection is null) continue;
             var box = selection.GetBoundsForPage(page);
             if (box.Width <= 0 || box.Height <= 0) continue;
@@ -232,7 +236,7 @@ internal static partial class PdfScan
             };
             boxes.Add(new(word.Value, x, y, width, height, null, index,
                 SourceSpan: new(0, 0, word.Index, word.Index + word.Length)));
-            appearance[word.Index] = ReadAppearance(attributes, offset + originalOffset, pageHeight);
+            appearance[word.Index] = ReadAppearance(attributes, offset + original.Start, pageHeight);
         }
         bitmap?.AddColors(boxes, appearance);
         return (image, text, boxes.ToArray(), appearance);
@@ -261,10 +265,19 @@ internal static partial class PdfScan
         // Existing libraries may already be anchored to PDFKit's original order.
         if (page.Rotation % 360 != 0 || expected.Span.StartsWith(text.AsSpan(), StringComparison.Ordinal))
             return new(text);
-        var repaired = PdfOrderedText.Repair(text, (start, length) => TextBounds(page, nativeOffset + start, length));
-        if (expected.IsEmpty || expected.Span.StartsWith(repaired.Text.AsSpan(), StringComparison.Ordinal)) return repaired;
-        return repaired.SeparateBlocks((start, length) => TextBounds(page, nativeOffset + start, length),
-            page.GetBoundsForBox(PdfDisplayBox.Crop).Width);
+        PdfOrderedText.WordBounds? Bounds(int start, int length) => TextBounds(page, nativeOffset + start, length);
+        var accents = PdfOrderedText.Repair(text, Bounds);
+        if (expected.Span.StartsWith(accents.Text.AsSpan(), StringComparison.Ordinal)) return accents;
+        var joined = accents.JoinLigatures(Bounds);
+        if (expected.IsEmpty || expected.Span.StartsWith(joined.Text.AsSpan(), StringComparison.Ordinal)) return joined;
+        var width = page.GetBoundsForBox(PdfDisplayBox.Crop).Width;
+        var layout = joined.SeparateBlocks(Bounds, width);
+        if (accents.Text == joined.Text || expected.Span.StartsWith(layout.Text.AsSpan(), StringComparison.Ordinal))
+            return layout;
+        var previousLayout = accents.SeparateBlocks(Bounds, width);
+        if (expected.Span.StartsWith(previousLayout.Text.AsSpan(), StringComparison.Ordinal)) return previousLayout;
+        var upgraded = previousLayout.JoinLigatures(Bounds);
+        return expected.Span.StartsWith(upgraded.Text.AsSpan(), StringComparison.Ordinal) ? upgraded : layout;
     }
 
     private static PdfOrderedText.WordBounds? TextBounds(PdfPage page, int start, int length)

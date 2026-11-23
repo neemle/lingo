@@ -66,7 +66,13 @@ fn repair_text_order(old: &str, changes: &[PdfTextOrderEdit]) -> Result<(String,
         let start = cursor + ocr::byte_at_utf16(&old[cursor..], skip).ok_or_else(invalid)?;
         let end = start + ocr::byte_at_utf16(&old[start..], length).ok_or_else(invalid)?;
         let original = old.get(start..end).ok_or_else(invalid)?;
-        if !valid_pdf_order_edit(original, &change.replacement) {
+        let valid = if change.replacement.is_empty() {
+            let left = old[..start].rsplit(char::is_whitespace).next().unwrap_or("");
+            crate::pdf_text_blocks::ligature_boundary(left, original, &old[end..])
+        } else {
+            valid_pdf_order_edit(original, &change.replacement)
+        };
+        if !valid {
             return Err(invalid());
         }
         text.push_str(&old[cursor..start]);

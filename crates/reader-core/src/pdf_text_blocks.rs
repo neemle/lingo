@@ -26,8 +26,46 @@ pub struct BlockEdit {
     pub(crate) slices: Vec<SourcePiece>,
 }
 
+#[derive(Serialize)]
+pub struct LigatureJoin {
+    start: usize,
+    end: usize,
+}
+
+pub(crate) fn ligature_boundary(left: &str, gap: &str, right: &str) -> bool {
+    (left.ends_with("fi") || left.ends_with("fl")) &&
+        !gap.is_empty() && gap.chars().all(|ch| matches!(ch, ' ' | '\t' | '\u{00a0}' | '\u{202f}')) &&
+        right.starts_with(char::is_lowercase)
+}
+
+/// PDF extraction sometimes puts a space after a ligature even when the ink is contiguous.
+pub fn ligature_joins(text: &str, words: &[PositionedWord]) -> Result<Vec<LigatureJoin>> {
+    let units = positioned_utf16(text, words, 1.0)?;
+    Ok(words.windows(2).filter_map(|pair| {
+        let [left, right] = pair else { return None; };
+        let height = left.height.min(right.height);
+        let horizontal = right.left - left.right;
+        if right.start <= left.end || left.height.max(right.height) > 1.25 * height ||
+            (left.center_y - right.center_y).abs() > 0.12 * height ||
+            !(-0.06 * height..=0.04 * height).contains(&horizontal) {
+            return None;
+        }
+        let spelling = String::from_utf16(&units[left.start..left.end]).ok()?;
+        let gap = String::from_utf16(&units[left.end..right.start]).ok()?;
+        let continuation = String::from_utf16(&units[right.start..right.end]).ok()?;
+        ligature_boundary(&spelling, &gap, &continuation)
+            .then_some(LigatureJoin { start: left.end, end: right.start })
+    }).collect())
+}
+
 /// Finds page-layout boundaries in UTF-16 text. Geometry uses a top-left coordinate system.
 pub fn separate_blocks(text: &str, words: &[PositionedWord], page_width: f64) -> Result<Vec<BlockEdit>> {
+    let units = positioned_utf16(text, words, page_width)?;
+
+    separate_positioned_blocks(&units, words, page_width)
+}
+
+fn positioned_utf16(text: &str, words: &[PositionedWord], page_width: f64) -> Result<Vec<u16>> {
     if text.len() > 96_000 || words.len() > 24_000 || !page_width.is_finite() || page_width <= 0.0 {
         return Err("Некоректна геометрія текстових блоків PDF.".into());
     }
@@ -47,7 +85,10 @@ pub fn separate_blocks(text: &str, words: &[PositionedWord], page_width: f64) ->
         }
         previous_end = word.end;
     }
+    Ok(units)
+}
 
+fn separate_positioned_blocks(units: &[u16], words: &[PositionedWord], page_width: f64) -> Result<Vec<BlockEdit>> {
     let mut line_start = 0;
     let mut remaining = words;
     let mut lines = Vec::new();
@@ -83,7 +124,7 @@ pub fn separate_blocks(text: &str, words: &[PositionedWord], page_width: f64) ->
     let mut edits = Vec::new();
     let mut index = 0;
     while index < lines.len() {
-        if let Some((edit, line_count)) = parallel_lines(&lines[index..], &units, page_width) {
+        if let Some((edit, line_count)) = parallel_lines(&lines[index..], units, page_width) {
             edits.push(edit);
             index += line_count;
             continue;
@@ -237,6 +278,22 @@ fn aligned(upper: PositionedWord, lower: PositionedWord) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn joins_ligature_gaps_without_touching_real_word_spaces() {
+        let text = "𐐷 vérifi ez défi réel";
+        let tokens = [("vérifi", 0.0, 30.0), ("ez", 30.01, 38.0),
+            ("défi", 45.0, 62.0), ("réel", 66.0, 80.0)];
+        let words = tokens.map(|(token, left, right)| {
+            let index = text.find(token).unwrap();
+            let start = text[..index].encode_utf16().count();
+            PositionedWord { start, end: start + token.encode_utf16().count(), left, right,
+                center_y: 10.0, height: 14.0 }
+        });
+        let joins = ligature_joins(text, &words).unwrap();
+        assert_eq!(joins.len(), 1);
+        assert_eq!((joins[0].start, joins[0].end), (9, 10));
+    }
 
     #[test]
     fn separates_columns_when_ocr_groups_two_columns_into_each_row() {
