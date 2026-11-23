@@ -1258,6 +1258,46 @@ mod tests {
     }
 
     #[test]
+    fn rendered_pdf_keeps_cached_rows_when_page_inference_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("library.sqlite")).unwrap();
+        let document = store.import_scanned_pdf(
+            "scan.pdf", b"%PDF-1.4\n", "fr",
+            vec![crate::ocr::OcrLine {
+                page: 0, text: "Le bateau arrive. Le marin part.".into(),
+                x: 0.1, y: 0.8, width: 0.8, height: 0.1, confidence: Some(1.0),
+                correction: None, words: Vec::new(), source_span: None,
+            }], 1,
+        ).unwrap();
+        assert_eq!(document.sentences.len(), 2);
+        let package = store.translation_packages().into_iter()
+            .find(|package| (package.source, package.target) == ("fr", "uk")).unwrap();
+        let package_directory = store.model_directory.join(package.repository);
+        std::fs::create_dir_all(&package_directory).unwrap();
+        // Advertise the package to route discovery, but fail verification before inference.
+        for asset in &package.assets {
+            std::fs::File::create(package_directory.join(asset.name)).unwrap().set_len(asset.bytes).unwrap();
+        }
+        assert!(store.translation_readiness("fr", "uk").unwrap().ready);
+        assert!(store.pdf_page_translation(&document.id, 0, "uk", false).is_err());
+
+        let route = Route::Direct(ModelEdge {
+            source: package.source.into(), target: package.target.into(),
+            revision: package.revision.into(), quality: None,
+        });
+        let first = &document.sentences[0];
+        store.save_cached_segments([(
+            unit_cache_key(&route, &first.text).unwrap(), &["Корабель прибуває.".into()][..],
+        )]).unwrap();
+        let rows = serde_json::to_value(store.pdf_page_translation(&document.id, 0, "uk", false).unwrap()).unwrap();
+        assert_eq!(rows[0]["text"], "Корабель прибуває.");
+        assert_eq!(rows[0]["startUtf16"], first.start_utf16);
+        assert_eq!(rows[0]["endUtf16"], first.end_utf16);
+        assert!(rows[1]["text"].is_null());
+        assert!(store.pdf_page_translation_with_priority(&document.id, 0, "uk", false, true).is_err());
+    }
+
+    #[test]
     fn readiness_prefers_a_working_pivot_and_identifies_only_missing_packages() {
         let edge = |source: &str, target: &str| ModelEdge {
             source: source.into(),

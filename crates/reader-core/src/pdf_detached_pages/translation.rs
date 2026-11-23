@@ -91,15 +91,23 @@ impl Store {
             let first = local.next()?;
             Some((first, local.last().unwrap_or(first)))
         };
+        let mut generation_error = None;
         if !cached_only {
-            let generated = self.translate_document_page(&document, physical.clone(), target, boundaries, background)?;
-            if generated.iter().any(|unit| !unit.reviewed && unit.translation.is_some()) {
-                return Ok(generated.into_iter().filter_map(|unit| {
-                    let (first, last) = page_range(&unit)?;
-                    Some(PdfPageTranslationRow {
-                        start_utf16: offsets[first].0, end_utf16: offsets[last].1, text: unit.translation,
-                    })
-                }).collect());
+            match self.translate_document_page(&document, physical.clone(), target, boundaries, background) {
+                Ok(generated) if generated.iter().any(|unit| !unit.reviewed && unit.translation.is_some())
+                    && (background || generated.iter().all(|unit| unit.translation.is_some())) =>
+                {
+                    return Ok(generated.into_iter().filter_map(|unit| {
+                        let (first, last) = page_range(&unit)?;
+                        Some(PdfPageTranslationRow {
+                            start_utf16: offsets[first].0, end_utf16: offsets[last].1, text: unit.translation,
+                        })
+                    }).collect());
+                }
+                Ok(_) => {}
+                Err(error) if background => return Err(error),
+                // Earlier batches may already be in SQLite, alongside translations from prior routes.
+                Err(error) => generation_error = Some(error),
             }
         }
         let routes = self.translation_cache_routes(&document.language, target)?;
@@ -115,11 +123,18 @@ impl Store {
                 let text = unit.translation.or_else(|| cached.sentence.as_ref()
                     .filter(|_| first == last && first == position - physical.start)
                     .and_then(|result| result.segments.first().cloned()));
-                if text.is_some() { covered[first..=last].fill(true); }
-                let row = rows.entry(first).or_insert(PdfPageTranslationRow {
-                    start_utf16: offsets[first].0, end_utf16: offsets[last].1, text: None,
+                if text.is_none() || covered[first..=last].contains(&true) { continue; }
+                covered[first..=last].fill(true);
+                rows.insert(first, PdfPageTranslationRow {
+                    start_utf16: offsets[first].0, end_utf16: offsets[last].1, text,
                 });
-                if row.text.is_none() && text.is_some() { row.text = text; }
+            }
+        }
+        if let Some(error) = generation_error.filter(|_| rows.is_empty()) { return Err(error); }
+        for (local, sentence) in document.sentences[physical].iter().enumerate() {
+            if !covered[local] && !document_layout::sentence_in_footnote(&document.blocks, sentence) {
+                let (start_utf16, end_utf16) = offsets[local];
+                rows.insert(local, PdfPageTranslationRow { start_utf16, end_utf16, text: None });
             }
         }
         Ok(rows.into_values().collect())
