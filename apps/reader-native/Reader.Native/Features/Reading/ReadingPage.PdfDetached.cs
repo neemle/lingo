@@ -364,10 +364,8 @@ public partial class ReadingPage
 
     private async void DetachedShareTranslationClicked(object? sender, EventArgs args)
     {
-        if (sharingReaderText || detachedSentence is not { } current || TargetCode is not { } target
-            || CurrentDetachedTranslation() is not { } translated) return;
-        var source = ReviewedDetachedTranslation() is null ? detachedMachineTranslation?.SourceText : null;
-        await ShareTranslationPairAsync(new TranslationPair(source ?? current.Sentence.Text, current.Language, translated, target));
+        if (sharingReaderText || !TranslationVisible || DisplayedDetachedTranslationPair() is not { } pair) return;
+        await ShareTranslationPairAsync(pair);
     }
 
     private async void DetachedTranslateClicked(object? sender, EventArgs args) =>
@@ -838,7 +836,7 @@ public partial class ReadingPage
         DetachedEditTranslation.IsEnabled = available && detachedSentence?.Footnote == false && !changingDetachedAnnotation && TargetCode is not null;
         DetachedEditTranslation.Text = ReviewedDetachedTranslation() is null ? "Свій переклад…" : "Редагувати переклад…";
         UpdateModelTranslation();
-        DetachedShareTranslation.IsVisible = available && !translatingDetachedSentence && CurrentDetachedTranslation() is not null;
+        DetachedShareTranslation.IsVisible = available && !translatingDetachedSentence && DisplayedDetachedTranslationPair() is not null;
         var playing = speakingDetachedSentence && !detachedPaused;
         DetachedSpeak.Text = playing ? "Ⅱ" : "▶";
         SemanticProperties.SetDescription(DetachedSpeak, playing ? "Призупинити озвучення" : "Озвучити речення сторінки");

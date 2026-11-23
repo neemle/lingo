@@ -399,6 +399,8 @@ pub struct ParagraphUnit {
     pub sentence_ids: Vec<String>,
     pub translation: Option<String>,
     pub reviewed: bool,
+    #[serde(skip)]
+    pub(crate) pdf_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alignment: Option<TranslationAlignment>,
 }
@@ -928,16 +930,20 @@ fn paragraph_plan(
             active_unit = units.len();
         }
         let review = reviewed(index).cloned();
-        if review.is_none() {
+        let pdf_source = if review.is_none() {
             let input = inference_span(document, index, next - 1)
                 .ok_or("Межі абзацу пошкоджені.")?;
             let input = match boundaries {
                 PageBoundaries::Canonical => with_adjacent_pdf_text(store, document, index, next - 1, target, input)?,
                 PageBoundaries::Projected => input,
             };
+            let pdf_source = (document.format == "pdf").then(|| input.clone());
             let input = normalize_cardinals(&document.language, target, input);
             pending.push((units.len(), input));
-        }
+            pdf_source
+        } else {
+            (document.format == "pdf").then(|| sentences[index].text.clone())
+        };
         let mut unit = ParagraphUnit {
             sentence_ids: sentences[index..next]
                 .iter()
@@ -945,6 +951,7 @@ fn paragraph_plan(
                 .collect(),
             reviewed: review.is_some(),
             translation: None,
+            pdf_source,
             alignment: None,
         };
         if let Some(text) = review {
@@ -1021,13 +1028,20 @@ fn sentence_span_input(
 pub(crate) fn sentence_input(
     store: &Store, document: &Document, selected: usize, target: &str, boundaries: PageBoundaries,
 ) -> Result<(String, Vec<String>)> {
+    let (input, ids) = sentence_source(store, document, selected, target, boundaries)?;
+    Ok((normalize_cardinals(&document.language, target, input), ids))
+}
+
+pub(crate) fn sentence_source(
+    store: &Store, document: &Document, selected: usize, target: &str, boundaries: PageBoundaries,
+) -> Result<(String, Vec<String>)> {
     let (input, range) = sentence_span_input(document, selected);
     let input = match boundaries {
         PageBoundaries::Canonical => with_adjacent_pdf_text(store, document, *range.start(), *range.end(), target, input)?,
         PageBoundaries::Projected => input,
     };
     let ids = document.sentences[range].iter().map(|sentence| sentence.id.clone()).collect();
-    Ok((normalize_cardinals(&document.language, target, input), ids))
+    Ok((input, ids))
 }
 
 pub(crate) fn normalize_cardinals(source: &str, target: &str, text: String) -> String {
@@ -1295,9 +1309,11 @@ mod tests {
         )]).unwrap();
         let rows = serde_json::to_value(store.pdf_page_translation(&document.id, 0, "uk", false).unwrap()).unwrap();
         assert_eq!(rows[0]["text"], "Корабель прибуває.");
+        assert_eq!(rows[0]["sourceText"], first.text);
         assert_eq!(rows[0]["startUtf16"], first.start_utf16);
         assert_eq!(rows[0]["endUtf16"], first.end_utf16);
         assert!(rows[1]["text"].is_null());
+        assert!(rows[1].get("sourceText").is_none());
         assert!(store.pdf_page_translation_with_priority(&document.id, 0, "uk", false, true).is_err());
     }
 

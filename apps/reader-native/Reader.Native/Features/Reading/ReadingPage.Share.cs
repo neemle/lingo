@@ -12,6 +12,7 @@ public partial class ReadingPage
 
     private TranslationPair? DisplayedTranslationPair()
     {
+        if (PdfUsesPageTranslation) return DisplayedPdfTranslationPair();
         var session = AppState.Session;
         var shown = SegmentTranslation.Text;
         if (session.Document is not { } document || session.Sentence is not { } sentence
@@ -28,6 +29,32 @@ public partial class ReadingPage
         // Older sentence-only model results can report joined lines without an exact source span.
         var source = aligned.Unit.JoinedLines ? aligned.Unit.SourceSpan : sentence.Text;
         return source is null ? null : new TranslationPair(source, document.Language, shown, target);
+    }
+
+    private TranslationPair? DisplayedPdfTranslationPair()
+    {
+        if (!readingPageActive || !PdfUsesPageTranslation || CurrentPdfLayoutAddress() is not { } address ||
+            address != pdfLayoutRequest || AppState.Session.Document is not { } document)
+            return null;
+
+        var selected = DetachedPdfReader.IsVisible
+            ? !loadingDetachedSentence && detachedAddress?.Page == address.Page ? detachedSentence?.Sentence : null
+            : AppState.Session.Sentence;
+        if (selected is null) return null;
+        var row = Array.Find(pdfLayoutRows, candidate => candidate.StartUtf16 < selected.EndUtf16 &&
+            candidate.EndUtf16 > selected.StartUtf16 && !string.IsNullOrWhiteSpace(candidate.Text) &&
+            !string.IsNullOrWhiteSpace(candidate.SourceText));
+        return row is { SourceText: { } original, Text: { } translated }
+            ? new TranslationPair(original, document.Language, translated, address.Target) : null;
+    }
+
+    private TranslationPair? DisplayedDetachedTranslationPair()
+    {
+        if (PdfUsesPageTranslation) return DisplayedPdfTranslationPair();
+        if (detachedSentence is not { } current || TargetCode is not { } target ||
+            CurrentDetachedTranslation() is not { } translated) return null;
+        var source = ReviewedDetachedTranslation() is null ? detachedMachineTranslation?.SourceText : null;
+        return new TranslationPair(source ?? current.Sentence.Text, current.Language, translated, target);
     }
 
     private async void ShareSelectionClicked(object? sender, EventArgs args)

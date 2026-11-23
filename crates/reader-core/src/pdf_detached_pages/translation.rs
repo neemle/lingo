@@ -1,5 +1,5 @@
 use super::{annotations, word_break, CachedSentences};
-use crate::translation::{sentence_input, CacheRoutes, PageBoundaries, ParagraphTranslation};
+use crate::translation::{sentence_input, sentence_source, CacheRoutes, PageBoundaries, ParagraphTranslation};
 use crate::{document_layout, Document, Result, Sentence, Store};
 use serde::Serialize;
 use std::{collections::BTreeMap, ops::Range};
@@ -39,6 +39,8 @@ pub struct PdfPageTranslationRow {
     start_utf16: usize,
     end_utf16: usize,
     pub(crate) text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_text: Option<String>,
 }
 
 impl PageProjection {
@@ -100,7 +102,8 @@ impl Store {
                     return Ok(generated.into_iter().filter_map(|unit| {
                         let (first, last) = page_range(&unit)?;
                         Some(PdfPageTranslationRow {
-                            start_utf16: offsets[first].0, end_utf16: offsets[last].1, text: unit.translation,
+                            start_utf16: offsets[first].0, end_utf16: offsets[last].1,
+                            source_text: unit.translation.as_ref().and(unit.pdf_source), text: unit.translation,
                         })
                     }).collect());
                 }
@@ -120,13 +123,22 @@ impl Store {
             let cached = routes.cached_window(self, &document, position, target, boundaries)?;
             for unit in cached.paragraph.units {
                 let Some((first, last)) = page_range(&unit) else { continue; };
-                let text = unit.translation.or_else(|| cached.sentence.as_ref()
+                if covered[first..=last].contains(&true) { continue; }
+                let source_text;
+                let text;
+                if let Some(translated) = unit.translation {
+                    text = translated;
+                    source_text = unit.pdf_source;
+                } else if let Some(translated) = cached.sentence.as_ref()
                     .filter(|_| first == last && first == position - physical.start)
-                    .and_then(|result| result.segments.first().cloned()));
-                if text.is_none() || covered[first..=last].contains(&true) { continue; }
+                    .and_then(|result| result.segments.first())
+                {
+                    text = translated.clone();
+                    source_text = Some(sentence_source(self, &document, position, target, boundaries)?.0);
+                } else { continue; }
                 covered[first..=last].fill(true);
                 rows.insert(first, PdfPageTranslationRow {
-                    start_utf16: offsets[first].0, end_utf16: offsets[last].1, text,
+                    start_utf16: offsets[first].0, end_utf16: offsets[last].1, text: Some(text), source_text,
                 });
             }
         }
@@ -134,7 +146,7 @@ impl Store {
         for (local, sentence) in document.sentences[physical].iter().enumerate() {
             if !covered[local] && !document_layout::sentence_in_footnote(&document.blocks, sentence) {
                 let (start_utf16, end_utf16) = offsets[local];
-                rows.insert(local, PdfPageTranslationRow { start_utf16, end_utf16, text: None });
+                rows.insert(local, PdfPageTranslationRow { start_utf16, end_utf16, text: None, source_text: None });
             }
         }
         Ok(rows.into_values().collect())

@@ -93,6 +93,11 @@ public partial class ReadingPage
         var hasRows = pdfLayoutRows.Any(row => !string.IsNullOrWhiteSpace(row.Text));
         ReadPdfTranslationText.IsVisible = shown && !detached && hasRows;
         DetachedReadPdfTranslationText.IsVisible = shown && detached && hasRows;
+        if (detached)
+            DetachedShareTranslation.IsVisible = !loadingDetachedSentence && !translatingDetachedSentence &&
+                DisplayedDetachedTranslationPair() is not null;
+        else
+            ShareTranslationPair.IsVisible = DisplayedTranslationPair() is not null;
         if (shown)
         {
             ResizePdfTranslationLayout();
