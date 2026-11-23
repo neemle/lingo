@@ -6,7 +6,18 @@ public static class NativeFiles
 {
     private static readonly SemaphoreSlim ExportDialog = new(1, 1);
     private static readonly TimeSpan SharedExportLifetime = TimeSpan.FromDays(7);
-    private static string ExportRoot => Path.Combine(FileSystem.CacheDirectory, "exports");
+    internal static string ExportRoot => Path.Combine(FileSystem.CacheDirectory, "exports");
+
+    internal static void ClearStagedExports()
+    {
+        if (!ExportDialog.Wait(0))
+            throw new InvalidOperationException("Завершіть збереження або поширення файла й повторіть дію.");
+        try
+        {
+            if (Directory.Exists(ExportRoot)) Directory.Delete(ExportRoot, recursive: true);
+        }
+        finally { ExportDialog.Release(); }
+    }
 
     public static async Task<byte[]> ReadBoundedAsync(FileResult file, int maximum)
     {

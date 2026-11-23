@@ -64,15 +64,18 @@ public partial class SettingsPage
             var usage = await session.StorageUsageAsync();
             var files = await Task.Run(() =>
             {
-                var downloads = TemporaryDownloads.Sum(name => FolderSize(Path.Combine(FileSystem.CacheDirectory, name)));
+                var downloads = DownloadStaging().Sum(EntrySize);
                 var intake = LocalIntake.Sum(name => FolderSize(Path.Combine(FileSystem.AppDataDirectory, name)));
-                return (downloads, intake);
+                var exports = FolderSize(NativeFiles.ExportRoot);
+                return (downloads, intake, exports);
             });
-            var cache = usage.DatabaseCacheBytes + usage.AudioCacheBytes;
+            var cache = usage.DatabaseCacheBytes + usage.AudioCacheBytes + files.exports;
             var downloads = usage.DownloadBytes + files.downloads;
             var library = usage.DatabaseBytes - usage.DatabaseCacheBytes + usage.OriginalBytes + files.intake;
             StorageTotal.Text = $"Зайнято {DisplaySize(library + cache + downloads)}";
-            StorageBreakdown.Text = $"Бібліотека й база  {DisplaySize(library)}  ·  Кеш  {DisplaySize(cache)}  ·  Завантажені ресурси  {DisplaySize(downloads)}";
+            LibraryStorage.Text = DisplaySize(library);
+            CacheStorage.Text = DisplaySize(cache);
+            DownloadStorage.Text = DisplaySize(downloads);
         }
         catch (Exception error) { StorageStatus.Text = error.Message; }
         finally
@@ -116,10 +119,12 @@ public partial class SettingsPage
         if (changingStorage || sender is not Button { CommandParameter: string scope }) return;
         var (title, detail) = scope switch
         {
-            "cache" => ("Очистити кеш?", "Збережені автоматичні переклади, мовні підказки й аудіо буде видалено. Фоновий переклад вимкнеться."),
+            "cache" => ("Очистити кеш?", "Збережені автоматичні переклади, мовні підказки, аудіо й тимчасові копії для поширення буде видалено. Фоновий переклад вимкнеться."),
             "downloads" => ("Видалити завантажені ресурси?", "Офлайн-моделі, мовні пакети й незавершені завантаження буде видалено. Книжки та словник залишаться в бібліотеці."),
-            _ => ("Видалити всі локальні дані?", "Книжки, словник, нотатки, історію, налаштування та завантажені ресурси буде видалено. Цю дію неможливо скасувати."),
+            "all" => ("Видалити всі локальні дані?", "Базу з книжками, словником, нотатками й історією буде очищено. Локальні копії книжок, налаштування та завантажені ресурси буде видалено. Цю дію неможливо скасувати."),
+            _ => ("", ""),
         };
+        if (title.Length == 0) return;
         changingStorage = true;
         SettingsScroll.IsEnabled = false;
         var importGateHeld = false;
@@ -150,7 +155,7 @@ public partial class SettingsPage
                     AppState.TranslationWorker?.SetEnabled(false);
                     Preferences.Default.Clear();
                 }
-                if (scope != "cache") await Task.Run(() => RemoveAuxiliaryFiles(scope == "all"));
+                await Task.Run(() => RemoveAuxiliaryFiles(scope));
                 StorageStatus.Text = "Готово.";
             }
             finally
@@ -184,25 +189,67 @@ public partial class SettingsPage
         }
     }
 
-    private static void RemoveAuxiliaryFiles(bool all)
+    private static void RemoveAuxiliaryFiles(string scope)
     {
-        foreach (var name in TemporaryDownloads.Concat(all ? ["exports"] : Array.Empty<string>()))
-            RemoveFolder(Path.Combine(FileSystem.CacheDirectory, name));
-        if (all)
+        if (scope != "cache")
+            foreach (var entry in DownloadStaging())
+            {
+                if (entry is DirectoryInfo directory) RemoveFolder(directory.FullName);
+                else entry.Delete();
+            }
+        if (scope == "all")
             foreach (var name in LocalIntake)
                 RemoveFolder(Path.Combine(FileSystem.AppDataDirectory, name));
+        if (scope != "downloads") NativeFiles.ClearStagedExports();
+    }
+
+    private static IEnumerable<FileSystemInfo> DownloadStaging()
+    {
+        var root = new DirectoryInfo(FileSystem.CacheDirectory);
+        if (!root.Exists) yield break;
+        foreach (var entry in root.EnumerateFileSystemInfos())
+        {
+            var name = entry.Name;
+            if (entry is DirectoryInfo && (TemporaryDownloads.Contains(name) ||
+                name.StartsWith("optional-model-import-", StringComparison.Ordinal) &&
+                Guid.TryParseExact(name["optional-model-import-".Length..], "N", out _)))
+                yield return entry;
+            if (entry is FileInfo && name.StartsWith("translation-", StringComparison.Ordinal) &&
+                name.EndsWith(".zip", StringComparison.Ordinal) &&
+                Guid.TryParseExact(name["translation-".Length..^".zip".Length], "N", out _))
+                yield return entry;
+        }
+    }
+
+    private static long EntrySize(FileSystemInfo entry)
+    {
+        try
+        {
+            if (entry.Attributes.HasFlag(FileAttributes.ReparsePoint)) return 0;
+            return entry is FileInfo file ? file.Length : FolderSize(entry.FullName);
+        }
+        catch (FileNotFoundException) { return 0; }
+        catch (DirectoryNotFoundException) { return 0; }
     }
 
     private static void RemoveFolder(string path)
     {
-        if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+        var directory = new DirectoryInfo(path);
+        if (directory.Exists)
+            directory.Delete(recursive: !directory.Attributes.HasFlag(FileAttributes.ReparsePoint));
     }
 
     private static long FolderSize(string path)
     {
         if (!Directory.Exists(path)) return 0;
         var options = new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint };
-        return new DirectoryInfo(path).EnumerateFiles("*", options).Sum(file => file.Length);
+        try
+        {
+            var directory = new DirectoryInfo(path);
+            return directory.Attributes.HasFlag(FileAttributes.ReparsePoint)
+                ? 0 : directory.EnumerateFiles("*", options).Sum(EntrySize);
+        }
+        catch (DirectoryNotFoundException) { return 0; }
     }
 
     private static string DisplaySize(long bytes)
