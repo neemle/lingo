@@ -4,3 +4,7 @@ resolver = "2"
 
 [workspace.package]
 rust-version = "1.100"
+
+# Debug builds verify multi-gigabyte model files with the same SHA-256 as release.
+[profile.dev.package.sha2]
+opt-level = 3
