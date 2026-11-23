@@ -65,7 +65,8 @@ internal static class TesseractOcr
                 try
                 {
                     sparse = await ExecuteAsync(executable,
-                        ["stdin", "stdout", "-l", Languages[language], "--oem", "1", "--psm", "11", "tsv"], image.Bytes,
+                        ["stdin", "stdout", "-l", Languages[language], "--oem", "1", "--psm", "11",
+                         "-c", "thresholding_method=2", "tsv"], image.Bytes,
                         16 * 1024 * 1024, TimeSpan.FromSeconds(12), cancellation).ConfigureAwait(false);
                 }
                 catch (Exception error) when (CanFallback(error))

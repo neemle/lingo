@@ -4,6 +4,10 @@ use std::collections::BTreeMap;
 
 /// Convert one Tesseract page into the normalized, upright OCR geometry used by the reader.
 pub fn parse_tesseract_tsv(tsv: &str, width: u32, height: u32) -> Result<Vec<OcrLine>> {
+    parse_lines(tsv, width, height, false)
+}
+
+fn parse_lines(tsv: &str, width: u32, height: u32, sparse: bool) -> Result<Vec<OcrLine>> {
     if tsv.len() > 16 * 1024 * 1024 || !(1..=4096).contains(&width) || !(1..=4096).contains(&height)
     {
         return Err("Результат OCR або розмір зображення перевищує допустимі межі.".into());
@@ -64,6 +68,13 @@ pub fn parse_tesseract_tsv(tsv: &str, width: u32, height: u32) -> Result<Vec<Ocr
     let mut lines = groups
         .into_iter()
         .map(|((block, paragraph, _), group)| {
+            // A checkbox on a coloured panel is sometimes read as half a
+            // bracket. Leave its pixels to the PDF renderer and anchor the
+            // recovered text at the first actual word.
+            let decorative_prefix = sparse && group.len() >= 3
+                && group[0].1.is_some_and(|score| score < 0.75)
+                && matches!(group[0].0.text.as_str(), "[" | "]" | "[1" | "1]" | "[]" | "□" | "☐")
+                && group[1].0.text.starts_with(char::is_alphabetic);
             let mut line = OcrLine {
                 page: 0,
                 text: String::new(),
@@ -79,7 +90,7 @@ pub fn parse_tesseract_tsv(tsv: &str, width: u32, height: u32) -> Result<Vec<Ocr
             };
             let (mut right, mut bottom, mut offset, mut score, mut scored) =
                 (0.0_f64, 0.0_f64, 0, 0.0, 0);
-            for (mut word, confidence) in group {
+            for (mut word, confidence) in group.into_iter().skip(usize::from(decorative_prefix)) {
                 if !line.text.is_empty() {
                     line.text.push(' ');
                     offset += 1;
@@ -151,7 +162,7 @@ pub fn recover_tesseract_lines(
     if primary.is_empty() {
         return primary;
     }
-    let Ok(sparse) = parse_tesseract_tsv(sparse_tsv, width, height) else {
+    let Ok(sparse) = parse_lines(sparse_tsv, width, height, true) else {
         return primary;
     };
     let horizontal_overlap = |a: &OcrLine, b: &OcrLine| {
@@ -258,8 +269,9 @@ mod tests {
         let sparse = format!("{HEADER}{}", concat!(
             "5\t1\t1\t1\t1\t1\t10\t11\t25\t5\t99\tFirst\n",
             "5\t1\t1\t1\t1\t2\t45\t11\t30\t5\t99\tparagraph.\n",
-            "5\t1\t2\t1\t1\t1\t10\t22\t24\t5\t94\tSecond\n",
-            "5\t1\t2\t1\t1\t2\t43\t22\t35\t5\t94\tparagraph.\n",
+            "5\t1\t2\t1\t1\t1\t3\t22\t5\t5\t10\t[1\n",
+            "5\t1\t2\t1\t1\t2\t10\t22\t24\t5\t94\tSecond\n",
+            "5\t1\t2\t1\t1\t3\t43\t22\t35\t5\t94\tparagraph.\n",
             "5\t1\t3\t1\t1\t1\t10\t32\t25\t5\t9\tdotted\n",
             "5\t1\t3\t1\t1\t2\t43\t32\t25\t5\t9\tpattern\n",
         ));
@@ -268,6 +280,7 @@ mod tests {
         assert_eq!(merged.iter().map(|line| line.text.as_str()).collect::<Vec<_>>(),
             ["First paragraph.", "Second paragraph.", "Third paragraph."]);
         assert_eq!(merged[1].words[1].raw_start_utf16, Some(7));
+        assert_eq!(merged[1].x, 0.1);
         assert!(merged[1].block_start);
     }
 }
