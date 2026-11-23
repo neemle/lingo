@@ -21,6 +21,7 @@ internal sealed class BackgroundTranslation
     private bool enabled;
     private bool paused;
     private JobKey? lastLibraryJob;
+    private JobKey? readerTarget;
     private bool libraryStepInvalidated;
     private (BackgroundTranslatedPage Address, string? DetachedText)? visiblePdf;
     private ((BackgroundTranslatedPage Address, string? DetachedText) Page, long RetryAt)? visibleAttempt;
@@ -57,6 +58,18 @@ internal sealed class BackgroundTranslation
             retryAt = default;
             stepCancellation?.Cancel();
         }
+        Wake();
+    }
+
+    internal void SetReaderTarget(Document? document, string? target = null)
+    {
+        var next = document?.CurrentRevisionId is { } revision && target is not null && target != document.Language
+            ? new JobKey(document.Id, revision, target) : null;
+        if (readerTarget == next) return;
+        readerTarget = next;
+        retryAt = default;
+        lastLibraryJob = null;
+        stepCancellation?.Cancel();
         Wake();
     }
 
@@ -251,8 +264,11 @@ internal sealed class BackgroundTranslation
             foreach (var document in session.Snapshot.Documents.OrderByDescending(doc => doc.Id == current))
             {
                 if (document.CurrentRevisionId is not { } revision) continue;
-                var target = preferences.TranslationTargets.GetValueOrDefault(document.Language)
-                    ?? (document.Language == "uk" ? "fr" : "uk");
+                var target = readerTarget is { } selection && selection.Document == current &&
+                    selection.Document == document.Id && selection.Revision == revision
+                        ? selection.Target
+                        : preferences.TranslationTargets.GetValueOrDefault(document.Language)
+                            ?? (document.Language == "uk" ? "fr" : "uk");
                 if (target == document.Language) continue;
                 var key = new JobKey(document.Id, revision, target);
                 live.Add(key);

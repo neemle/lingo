@@ -129,6 +129,7 @@ public partial class ReadingPage : ContentPage
     protected override void OnDisappearing()
     {
         readingPageActive = false;
+        AppState.TranslationWorker?.SetReaderTarget(null);
         readerOcrReview.CancelInference();
         CancelModelPassage();
         CancelWordExplanation();
@@ -348,6 +349,7 @@ public partial class ReadingPage : ContentPage
         var targetLabel = TargetCode is { } chosenTarget ? DocumentLanguages.Name(chosenTarget) : "Мова перекладу";
         TargetLanguage.Text = targetLabel;
         DescribeButton(TargetLanguage, $"Вибрати мову перекладу. Зараз {targetLabel}");
+        if (readingPageActive) AppState.TranslationWorker?.SetReaderTarget(session.Document, TargetCode);
         RefreshPdfTranslationLayout();
 
         var wordTranslationLabel = TargetCode is { } cardTarget
