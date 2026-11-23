@@ -40,6 +40,7 @@ pub(super) struct PageProjection {
 pub struct PdfPageTranslationRow {
     start_utf16: usize,
     end_utf16: usize,
+    source_sentence_id: String,
     pub(crate) text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     source_text: Option<String>,
@@ -135,6 +136,7 @@ impl Store {
                         let (first, last) = page_range(&unit.sentence_ids)?;
                         Some(PdfPageTranslationRow {
                             start_utf16: offsets[first].0, end_utf16: offsets[last].1,
+                            source_sentence_id: document.sentences[physical.start + first].id.clone(),
                             source_text: unit.translation.as_ref().and(unit.pdf_source), text: unit.translation,
                             pivot_language: unit.pivot_language,
                         })
@@ -166,6 +168,7 @@ impl Store {
                 covered[first..=last].fill(true);
                 rows.insert(first, PdfPageTranslationRow {
                     start_utf16: offsets[first].0, end_utf16: offsets[last].1, text: unit.translation,
+                    source_sentence_id: document.sentences[physical.start + first].id.clone(),
                     source_text: unit.pdf_source, pivot_language: unit.pivot_language,
                 });
             }
@@ -175,7 +178,8 @@ impl Store {
             if !covered[local] && !document_layout::sentence_in_footnote(&document.blocks, sentence) {
                 let (start_utf16, end_utf16) = offsets[local];
                 rows.insert(local, PdfPageTranslationRow {
-                    start_utf16, end_utf16, text: None, source_text: None, pivot_language: None,
+                    start_utf16, end_utf16, source_sentence_id: sentence.id.clone(),
+                    text: None, source_text: None, pivot_language: None,
                 });
             }
         }
@@ -482,7 +486,7 @@ mod tests {
         let glossary_start = cached.text.find("Quai :").unwrap();
         let glossary_start = cached.text[..glossary_start].encode_utf16().count();
         let projection = store.project_pdf_translation_page(
-            &document.id, 1, "uk", cached.text, cached.sentences, cached.language,
+            &document.id, 1, "uk", cached.text, cached.sentences.clone(), cached.language,
         ).unwrap();
         assert_eq!(projection.physical.start, 1);
         let (joined, _) = sentence_source(&store, &projection.document, projection.physical.start,
@@ -493,6 +497,18 @@ mod tests {
         let rows = store.pdf_page_translation(&document.id, 1, "uk", true).unwrap();
         assert!(!rows.is_empty());
         assert!(rows.iter().all(|row| row.end_utf16 <= glossary_start));
+        for row in &rows {
+            let sentence = cached.sentences.iter().find(|sentence| sentence.id == row.source_sentence_id).unwrap();
+            assert_eq!(row.start_utf16, sentence.start_utf16);
+        }
+        let row = &rows[0];
+        assert!(store.select_detached_pdf_sentence_at(
+            &document.id, 1, None, Some("stale-id"), Some(row.start_utf16),
+        ).is_err());
+        let selected = store.select_detached_pdf_sentence_at(
+            &document.id, 1, None, Some(&row.source_sentence_id), Some(row.start_utf16),
+        ).unwrap().unwrap();
+        assert_eq!(selected.sentence.id, row.source_sentence_id);
 
         let left = store.detached_pdf_sentences(&document.id, 0).unwrap().unwrap();
         let dangling = left.sentences.iter().position(|sentence| sentence.text.contains("extraordi-")).unwrap();

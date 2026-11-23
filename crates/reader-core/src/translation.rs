@@ -1748,8 +1748,10 @@ mod tests {
         assert!(store.translation_readiness("fr", "uk").unwrap().ready);
         let rows = serde_json::to_value(store.pdf_page_translation(&document.id, 0, "uk", true).unwrap()).unwrap();
         assert_eq!(rows[0]["text"], "Корабель прибуває.");
+        assert_eq!(rows[0]["sourceSentenceId"], document.sentences[0].id);
         assert!(rows[0].get("pivotLanguage").is_none());
         assert_eq!(rows[1]["text"], "Моряк вирушає.");
+        assert_eq!(rows[1]["sourceSentenceId"], document.sentences[1].id);
         assert_eq!(rows[1]["pivotLanguage"], "en");
     }
 

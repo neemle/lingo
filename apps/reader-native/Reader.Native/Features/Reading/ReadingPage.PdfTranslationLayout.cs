@@ -292,15 +292,19 @@ public partial class ReadingPage
         var session = AppState.Session;
         await session.WaitUntilIdleAsync();
 #if MACCATALYST
-        await pdfWindowRead;
-        if (address.DetachedText is not null) await detachedInitialSentence;
+        while (readingPageActive)
+        {
+            var window = pdfWindowRead;
+            await window;
+            var detached = detachedInitialSentence;
+            if (address.DetachedText is not null) await detached;
+            if (ReferenceEquals(window, pdfWindowRead) &&
+                (address.DetachedText is null || ReferenceEquals(detached, detachedInitialSentence))) break;
+        }
 #endif
-        if (!readingPageActive || session.Busy || session.Document is not { Format: "pdf" } document ||
-            document.Id != address.Document || document.CurrentRevisionId != address.Revision ||
-            TargetCode != address.Target ||
-            (await session.PdfReadingPageAsync(document.Id) ?? session.OriginalPageIndex()) != address.Page ||
-            !ReferenceEquals(session.Document, document))
-            return;
+        if (!IsCurrentPdfTranslationSource(address)) return;
+        var page = await session.PdfReadingPageAsync(address.Document) ?? session.OriginalPageIndex();
+        if (page != address.Page || !IsCurrentPdfTranslationSource(address)) return;
 
         if (readingLayout == ReaderLayout.Translation)
         {
@@ -309,6 +313,11 @@ public partial class ReadingPage
         }
         await SelectPdfSourceRangeAsync(address, fragment);
     }
+
+    private bool IsCurrentPdfTranslationSource(PdfLayoutAddress address) =>
+        readingPageActive && !AppState.Session.Busy && TargetCode == address.Target &&
+        AppState.Session.Document is { Format: "pdf" } document &&
+        document.Id == address.Document && document.CurrentRevisionId == address.Revision;
 
     private Label PdfTranslationTextLabel(PdfPageTranslationRow row, double size) =>
         HasPdfTranslation(row)
@@ -478,13 +487,15 @@ public partial class ReadingPage
         {
             if (detachedAddress is { } detached && detached.Document == address.Document &&
                 detached.Page == address.Page && detached.Text == address.DetachedText && !loadingDetachedSentence)
-                await LoadDetachedSentenceAsync(detached, position: null, sourceOffset: fragment.StartUtf16);
+                await LoadDetachedSentenceAsync(detached, position: null, sentenceId: fragment.SourceSentenceId,
+                    sourceOffset: fragment.StartUtf16);
             return;
         }
         if (DetachedPdfReader.IsVisible || session.Document is not { } document ||
             document.Id != address.Document || document.CurrentRevisionId != address.Revision) return;
         var position = Array.FindIndex(document.Sentences,
-            sentence => sentence.StartUtf16 < fragment.EndUtf16 && sentence.EndUtf16 > fragment.StartUtf16);
+            sentence => (fragment.SourceSentenceId is null || sentence.Id == fragment.SourceSentenceId) &&
+                sentence.StartUtf16 < fragment.EndUtf16 && sentence.EndUtf16 > fragment.StartUtf16);
         if (position < 0) return;
         dictionaryFocus = null;
         documentFindFocus = null;
