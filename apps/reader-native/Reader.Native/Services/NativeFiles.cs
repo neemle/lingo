@@ -55,30 +55,58 @@ public static class NativeFiles
     internal static Task<string?> ExportBytesAsync(Page owner, string name, byte[] bytes, bool share = false) =>
         ExportAsync(owner, name, share, path => File.WriteAllBytesAsync(path, bytes));
 
-    internal static async Task<string?> ExportAsync(Page owner, string name, bool share, Func<string, Task> write)
+    internal static Task<string?> ExportAsync(Page owner, string name, bool share, Func<string, Task> write) =>
+        WithStagedFileAsync(name, write, retain: share, async path =>
+        {
+            if (share)
+            {
+                await Share.Default.RequestAsync(new ShareFileRequest("Поширити файл", new ShareFile(path)));
+                return "Відкрито меню поширення.";
+            }
+            var window = owner.Window ?? throw new InvalidOperationException("Вікно застосунку закрито.");
+            return await NativeFileSave.SaveAsync(window, path) ? "Файл збережено." : null;
+        });
+
+    internal static Task PreviewBytesAsync(Page owner, string name, byte[] bytes)
+    {
+        Task Write(string path) => File.WriteAllBytesAsync(path, bytes);
+#if MACCATALYST
+        return WithStagedFileAsync(name, Write, retain: false, async path =>
+        {
+            var window = owner.Window ?? throw new InvalidOperationException("Вікно застосунку закрито.");
+            await NativeFilePreview.ShowAsync(window, path);
+            return null;
+        });
+#else
+        return WithStagedFileAsync(name, Write, retain: true, async path =>
+        {
+            if (!await Launcher.Default.OpenAsync(new OpenFileRequest("Оригінал", new ReadOnlyFile(path))))
+                throw new InvalidOperationException("Не вдалося відкрити оригінальний файл.");
+            return null;
+        });
+#endif
+    }
+
+    private static async Task<string?> WithStagedFileAsync(string name, Func<string, Task> write, bool retain,
+        Func<string, Task<string?>> useFile)
     {
         if (!ExportDialog.Wait(0)) return null;
         DirectoryInfo? staging = null;
-        var keepForShare = false;
+        var keep = false;
         try
         {
             staging = Directory.CreateDirectory(Path.Combine(ExportRoot, Guid.NewGuid().ToString("N")));
             var path = Path.Combine(staging.FullName, Path.GetFileName(name));
             await write(path);
-            if (share)
-            {
-                await Share.Default.RequestAsync(new ShareFileRequest("Поширити файл", new ShareFile(path)));
-                keepForShare = true;
-                return "Відкрито меню поширення.";
-            }
-            var window = owner.Window ?? throw new InvalidOperationException("Вікно застосунку закрито.");
-            return await NativeFileSave.SaveAsync(window, path) ? "Файл збережено." : null;
+            var result = await useFile(path);
+            keep = retain;
+            return result;
         }
         finally
         {
             try
             {
-                if (!keepForShare) staging?.Delete(recursive: true);
+                if (!keep) staging?.Delete(recursive: true);
             }
             finally { ExportDialog.Release(); }
         }

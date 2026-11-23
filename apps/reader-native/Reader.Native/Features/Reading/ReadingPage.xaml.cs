@@ -722,6 +722,23 @@ public partial class ReadingPage : ContentPage
 
     private async void ViewOriginalClicked(object? sender, EventArgs args) => await ShowOriginalAsync();
 
+    private async void PreviewOriginalFileClicked(object? sender, EventArgs args)
+    {
+        var session = AppState.Session;
+        if (openingOriginal || !readingPageActive || !session.CanPreviewOriginalFile || session.Document is not { } document)
+            return;
+        openingOriginal = true;
+        try
+        {
+            var original = await session.OriginalAsync(document.Id);
+            if (!readingPageActive || session.Document?.Id != document.Id) return;
+            var bytes = original.Bytes.Select(value => checked((byte)value)).ToArray();
+            await NativeFiles.PreviewBytesAsync(this, original.Name, bytes);
+        }
+        catch (Exception error) { await DisplayAlertAsync("Оригінал", error.Message, "Гаразд"); }
+        finally { openingOriginal = false; }
+    }
+
     internal async Task ShowOriginalAsync()
     {
         var session = AppState.Session;

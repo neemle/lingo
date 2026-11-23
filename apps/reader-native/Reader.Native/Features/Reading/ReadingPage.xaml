@@ -88,6 +88,8 @@
      IsVisible="False" Clicked="ToggleInlinePdfFitClicked" />
     <Button Text="Відкрити окремо" Style="{StaticResource OutlineButton}" IsVisible="{Binding CanViewOriginal}"
      Clicked="ViewOriginalClicked" SemanticProperties.Description="Переглянути оригінал документа" />
+    <Button Text="Переглянути оригінал" Style="{StaticResource OutlineButton}" IsVisible="{Binding CanPreviewOriginalFile}"
+     Clicked="PreviewOriginalFileClicked" />
    </HorizontalStackLayout>
    <Grid Grid.Row="1" Grid.ColumnSpan="2" x:Name="PdfPageControls" IsVisible="False" Margin="0,8,0,0"
     ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">

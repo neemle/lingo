@@ -101,6 +101,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     });
 
     public bool CanViewOriginal => !busy && (Document?.Format == "pdf" || Document?.OcrLines is { Length: > 0 });
+    public bool CanPreviewOriginalFile => !busy && Document?.Format is "docx" or "txt";
 
     public int OriginalPageIndex() => Document is { } document ? OriginalPageIndex(document) : 0;
 
@@ -842,7 +843,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     {
         foreach (var name in new[] { nameof(Snapshot), nameof(Document), nameof(Sentence), nameof(Busy),
             nameof(CanInteract), nameof(Error), nameof(Progress), nameof(CanBookmark), nameof(HasBookmarks),
-            nameof(BookmarkAction), nameof(CanViewOriginal) })
+            nameof(BookmarkAction), nameof(CanViewOriginal), nameof(CanPreviewOriginalFile) })
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
 
