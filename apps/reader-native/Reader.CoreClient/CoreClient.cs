@@ -84,6 +84,8 @@ public sealed class CoreClient : IDisposable
             bytes = bytes.Select(value => (int)value).ToArray() });
     public static uint[] SamplePdfBackgrounds(int width, int height, byte[] rgba, PdfSampleBox[] boxes) =>
         Invoke<uint[]>(0, new { version = 1, operation = "sample_pdf_backgrounds", width, height, rgba, boxes });
+    public static PdfSampleColors[] SamplePdfColors(int width, int height, byte[] rgba, PdfSampleBox[] boxes) =>
+        Invoke<PdfSampleColors[]>(0, new { version = 1, operation = "sample_pdf_backgrounds", width, height, rgba, boxes, withInk = true });
     public static PdfLayoutEdit[] SeparatePdfBlocks(string text, PdfLayoutWord[] words, double pageWidth) =>
         Invoke<PdfLayoutEdit[]>(0, new { version = 1, operation = "separate_pdf_blocks", text, words, pageWidth });
     public static OcrLine[] ParseOcrTsv(string tsv, int width, int height) =>

@@ -198,7 +198,7 @@ internal static partial class PdfScan
         var appearance = new Dictionary<int, PdfBoxAppearance>();
         if (recognized.Length > 0)
         {
-            bitmap?.AddBackgrounds(recognized, appearance);
+            bitmap?.AddColors(recognized, appearance);
             return (image, "", [], appearance);
         }
         var layer = TextLayer(page, out var offset, expectedText);
@@ -234,7 +234,7 @@ internal static partial class PdfScan
                 SourceSpan: new(0, 0, word.Index, word.Index + word.Length)));
             appearance[word.Index] = ReadAppearance(attributes, offset + originalOffset, pageHeight);
         }
-        bitmap?.AddBackgrounds(boxes, appearance);
+        bitmap?.AddColors(boxes, appearance);
         return (image, text, boxes.ToArray(), appearance);
     });
 

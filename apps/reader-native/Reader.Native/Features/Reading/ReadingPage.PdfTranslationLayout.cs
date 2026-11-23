@@ -938,7 +938,10 @@ public partial class ReadingPage
                 var box = new RectF(page.X + (float)x * page.Width, page.Y + (float)y * page.Height,
                     (float)width * page.Width, (float)height * page.Height);
                 if (box.Width <= 0 || box.Height <= 0) return;
-                firstStyle ??= AppearanceFor(span);
+                var candidate = AppearanceFor(span);
+                firstStyle ??= candidate;
+                if (firstStyle is { Ink: null } && candidate?.Ink is { } measured)
+                    firstStyle = firstStyle with { Ink = measured };
                 heights.Add(box.Height);
                 result = result is { } previous ? Union(previous, box) : box;
             }
@@ -957,8 +960,10 @@ public partial class ReadingPage
             if (area.Width < 2 || area.Height < 2) return false;
             var font = new Microsoft.Maui.Graphics.Font(style?.FontFamily ?? "Georgia", style?.Weight ?? 400,
                 style?.Italic == true ? FontStyleType.Italic : FontStyleType.Normal);
+            var ink = style?.Ink ?? Color.FromArgb("#302D27");
+            var lightInk = ink.Red * 0.21f + ink.Green * 0.72f + ink.Blue * 0.07f > 0.55f;
             canvas.Font = font;
-            canvas.FontColor = style?.Ink ?? Color.FromArgb("#302D27");
+            canvas.FontColor = ink;
             var size = preferredSize;
             var words = Regex.Matches(text, @"\S+");
             if (words.Count == 0) return false;
@@ -990,7 +995,7 @@ public partial class ReadingPage
                     hitTargets.Add((bounds, fragment.Source));
                     if (!fragment.Active) continue;
                     ActiveBounds = ActiveBounds is { } previous ? Union(previous, bounds) : bounds;
-                    canvas.FillColor = Color.FromArgb("#FFF1CF");
+                    canvas.FillColor = Color.FromArgb(lightInk ? "#4A391E" : "#FFF1CF");
                     canvas.FillRectangle(bounds);
                     if (fragment.Match is { } match)
                     {
@@ -1000,7 +1005,7 @@ public partial class ReadingPage
                         {
                             var matchBounds = BoundsFor(matchStart, matchEnd);
                             MatchBounds = MatchBounds is { } previousMatch ? Union(previousMatch, matchBounds) : matchBounds;
-                            canvas.FillColor = PdfSearchMatchColor;
+                            canvas.FillColor = lightInk ? Color.FromArgb("#604321") : PdfSearchMatchColor;
                             canvas.FillRectangle(matchBounds);
                         }
                     }
@@ -1014,7 +1019,7 @@ public partial class ReadingPage
                         if ((index == 0 || !char.IsLetterOrDigit(line[index - 1])) &&
                             (search == line.Length || !char.IsLetterOrDigit(line[search])))
                         {
-                            canvas.FillColor = Color.FromArgb("#FFE48B");
+                            canvas.FillColor = Color.FromArgb(lightInk ? "#604321" : "#FFE48B");
                             canvas.FillRectangle(BoundsFor(index, search));
                         }
                     }

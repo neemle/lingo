@@ -60,12 +60,15 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
     if let Command::SeparatePdfBlocks { text, words, page_width } = command {
         return encode_job(reader_core::pdf_text_blocks::separate_blocks(&text, &words, page_width));
     }
-    if let Command::SamplePdfBackgrounds { rgba, width, height, boxes } = command {
+    if let Command::SamplePdfBackgrounds { rgba, width, height, boxes, with_ink } = command {
         if rgba.len() > 5_600_000 {
             return Err(Error::new("invalid_argument", "PDF preview exceeds the sampling bound"));
         }
         let pixels = base64::decode(rgba)
             .map_err(|_| Error::new("invalid_argument", "Invalid PDF preview image data"))?;
+        if with_ink {
+            return encode_job(reader_core::pdf_appearance::sample_colors(&pixels, width, height, &boxes));
+        }
         return encode_job(reader_core::pdf_appearance::sample_backgrounds(&pixels, width, height, &boxes));
     }
     let cancellation = match &command {

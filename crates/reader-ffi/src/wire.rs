@@ -24,6 +24,8 @@ pub enum Command {
         width: usize,
         height: usize,
         boxes: Vec<reader_core::pdf_appearance::SampleBox>,
+        #[serde(default, rename = "withInk")]
+        with_ink: bool,
     },
     SeparatePdfBlocks {
         text: String,

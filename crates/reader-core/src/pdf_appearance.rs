@@ -1,5 +1,5 @@
 use crate::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
 pub struct SampleBox {
@@ -9,40 +9,150 @@ pub struct SampleBox {
     height: f64,
 }
 
-pub fn sample_backgrounds(pixels: &[u8], width: usize, height: usize, boxes: &[SampleBox]) -> Result<Vec<u32>> {
-    if !(1..=1024).contains(&width) || !(1..=1024).contains(&height) ||
-        pixels.len() != width * height * 4 || boxes.len() > 32_768 {
+#[derive(Debug, Serialize)]
+pub struct SampledColors {
+    pub background: u32,
+    pub ink: Option<u32>,
+}
+
+pub fn sample_backgrounds(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    boxes: &[SampleBox],
+) -> Result<Vec<u32>> {
+    validate_image(pixels, width, height, boxes)?;
+    Ok(boxes
+        .iter()
+        .map(|bounds| background(pixels, width, height, bounds))
+        .collect())
+}
+
+pub fn sample_colors(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    boxes: &[SampleBox],
+) -> Result<Vec<SampledColors>> {
+    validate_image(pixels, width, height, boxes)?;
+    let mut samples = Vec::with_capacity(48 * 24);
+    Ok(boxes
+        .iter()
+        .map(|bounds| {
+            let background = background(pixels, width, height, bounds);
+            let ink = if valid(bounds) {
+                ink(pixels, width, height, bounds, background, &mut samples)
+            } else {
+                None
+            };
+            SampledColors { background, ink }
+        })
+        .collect())
+}
+
+fn validate_image(pixels: &[u8], width: usize, height: usize, boxes: &[SampleBox]) -> Result<()> {
+    if !(1..=1024).contains(&width)
+        || !(1..=1024).contains(&height)
+        || pixels.len() != width * height * 4
+        || boxes.len() > 32_768
+    {
         return Err("Некоректне зображення або координати блоків PDF.".into());
     }
-    Ok(boxes.iter().map(|bounds| {
-        if ![bounds.x, bounds.y, bounds.width, bounds.height].into_iter().all(f64::is_finite) ||
-            bounds.width <= 0.0 || bounds.height <= 0.0 {
-            return 0xff_ff_ff;
+    Ok(())
+}
+
+fn valid(bounds: &SampleBox) -> bool {
+    [bounds.x, bounds.y, bounds.width, bounds.height]
+        .into_iter()
+        .all(f64::is_finite)
+        && bounds.width > 0.0
+        && bounds.height > 0.0
+}
+
+fn background(pixels: &[u8], width: usize, height: usize, bounds: &SampleBox) -> u32 {
+    if !valid(bounds) {
+        return 0xff_ff_ff;
+    }
+    let mut samples = [0u64; 40];
+    for (index, sample) in samples.iter_mut().enumerate() {
+        let x = bounds.x + bounds.width * ((index % 8) as f64 + 0.5) / 8.0;
+        let y = bounds.y + bounds.height * ((index / 8) as f64 + 0.5) / 5.0;
+        let x = ((x * width as f64) as usize).min(width - 1);
+        let y = ((y * height as f64) as usize).min(height - 1);
+        let start = (y * width + x) * 4;
+        let [red, green, blue] =
+            [pixels[start], pixels[start + 1], pixels[start + 2]].map(u64::from);
+        let bucket = ((red >> 3) << 10) | ((green >> 3) << 5) | (blue >> 3);
+        *sample = (bucket << 24) | (red << 16) | (green << 8) | blue;
+    }
+    samples.sort_unstable();
+    let mut best = (0, 0);
+    let mut start = 0;
+    while start < samples.len() {
+        let end =
+            start + samples[start..].partition_point(|sample| sample >> 24 == samples[start] >> 24);
+        if end - start >= best.0 {
+            best = (end - start, (start + end) / 2);
         }
-        let mut samples = [0u64; 40];
-        for (index, sample) in samples.iter_mut().enumerate() {
-            let x = bounds.x + bounds.width * ((index % 8) as f64 + 0.5) / 8.0;
-            let y = bounds.y + bounds.height * ((index / 8) as f64 + 0.5) / 5.0;
-            let x = ((x * width as f64) as usize).min(width - 1);
-            let y = ((y * height as f64) as usize).min(height - 1);
-            let start = (y * width + x) * 4;
-            let [red, green, blue] = [pixels[start], pixels[start + 1], pixels[start + 2]].map(u64::from);
-            let bucket = ((red >> 3) << 10) | ((green >> 3) << 5) | (blue >> 3);
-            *sample = (bucket << 24) | (red << 16) | (green << 8) | blue;
-        }
-        samples.sort_unstable();
-        // Return a measured color from the dominant cluster of nearby raster colors.
-        let mut best = (0, 0);
-        let mut start = 0;
-        while start < samples.len() {
-            let end = start + samples[start..].partition_point(|sample| sample >> 24 == samples[start] >> 24);
-            if end - start >= best.0 {
-                best = (end - start, (start + end) / 2);
+        start = end;
+    }
+    (samples[best.1] & 0xff_ff_ff) as u32
+}
+
+fn ink(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    bounds: &SampleBox,
+    paper: u32,
+    samples: &mut Vec<u64>,
+) -> Option<u32> {
+    let x = (bounds.x * width as f64) as usize;
+    let y = (bounds.y * height as f64) as usize;
+    let right = (((bounds.x + bounds.width) * width as f64).ceil() as usize).min(width);
+    let bottom = (((bounds.y + bounds.height) * height as f64).ceil() as usize).min(height);
+    if x >= right || y >= bottom {
+        return None;
+    }
+    let x_step = (right - x).div_ceil(48);
+    let y_step = (bottom - y).div_ceil(24);
+    let distance = |color: u32| {
+        [0, 8, 16]
+            .into_iter()
+            .map(|shift| ((color >> shift) & 255).abs_diff((paper >> shift) & 255))
+            .max()
+            .unwrap_or(0)
+    };
+    samples.clear();
+    let mut total = 0;
+    for row in (y..bottom).step_by(y_step) {
+        for column in (x..right).step_by(x_step) {
+            total += 1;
+            let index = (row * width + column) * 4;
+            let [r, g, b] = [pixels[index], pixels[index + 1], pixels[index + 2]].map(u32::from);
+            let color = r << 16 | g << 8 | b;
+            if distance(color) >= 56 {
+                let cluster = (r >> 4) << 8 | (g >> 4) << 4 | (b >> 4);
+                samples.push(u64::from(cluster) << 24 | u64::from(color));
             }
-            start = end;
         }
-        (samples[best.1] & 0xff_ff_ff) as u32
-    }).collect())
+    }
+    samples.sort_unstable();
+    let minimum = 3.max(total / 50);
+    let mut remaining = samples.as_slice();
+    let mut best = None;
+    while let Some(first) = remaining.first() {
+        let count = remaining.partition_point(|sample| sample >> 24 == first >> 24);
+        if count >= minimum {
+            let color = (remaining[count / 2] & 0xff_ff_ff) as u32;
+            let score = count * distance(color) as usize;
+            if best.is_none_or(|(previous, _)| score > previous) {
+                best = Some((score, color));
+            }
+        }
+        remaining = &remaining[count..];
+    }
+    best.map(|(_, color)| color)
 }
 
 #[cfg(test)]
@@ -50,19 +160,66 @@ mod tests {
     use super::*;
 
     #[test]
+    fn distinguishes_colored_ink_light_ink_and_blank_paper() {
+        let mut pixels = Vec::new();
+        for y in 0..20 {
+            for x in 0..60 {
+                let stroke = (5..15).contains(&y) && x % 20 < 5;
+                let rgb = match (x / 20, stroke) {
+                    (0, true) => [22, 69, 146],
+                    (1, true) => [246, 238, 217],
+                    (1, false) => [38, 32, 65],
+                    _ => [243, 250, 216],
+                };
+                pixels.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+            }
+        }
+        let boxes = [0, 1, 2].map(|column| SampleBox {
+            x: f64::from(column) / 3.0,
+            y: 0.0,
+            width: 1.0 / 3.0,
+            height: 1.0,
+        });
+        let colors = sample_colors(&pixels, 60, 20, &boxes).unwrap();
+        assert_eq!(colors[0].background, 0xf3_fa_d8);
+        assert_eq!(colors[0].ink, Some(0x16_45_92));
+        assert_eq!(colors[1].background, 0x26_20_41);
+        assert_eq!(colors[1].ink, Some(0xf6_ee_d9));
+        assert_eq!(colors[2].ink, None);
+    }
+
+    #[test]
     fn samples_each_background_without_using_text_ink() {
         let mut rgba = Vec::new();
         for row in 0..10 {
             for column in 0..16 {
-                let rgb = if row == 3 { [15, 17, 13] }
-                    else if column < 8 { [230, 246, 202] } else { [255, 255, 255] };
+                let rgb = if row == 3 {
+                    [15, 17, 13]
+                } else if column < 8 {
+                    [230, 246, 202]
+                } else {
+                    [255, 255, 255]
+                };
                 rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
             }
         }
         let boxes = [
-            SampleBox { x: 0.0, y: 0.0, width: 0.5, height: 1.0 },
-            SampleBox { x: 0.5, y: 0.0, width: 0.5, height: 1.0 },
+            SampleBox {
+                x: 0.0,
+                y: 0.0,
+                width: 0.5,
+                height: 1.0,
+            },
+            SampleBox {
+                x: 0.5,
+                y: 0.0,
+                width: 0.5,
+                height: 1.0,
+            },
         ];
-        assert_eq!(sample_backgrounds(&rgba, 16, 10, &boxes).unwrap(), [0xe6_f6_ca, 0xff_ff_ff]);
+        assert_eq!(
+            sample_backgrounds(&rgba, 16, 10, &boxes).unwrap(),
+            [0xe6_f6_ca, 0xff_ff_ff]
+        );
     }
 }

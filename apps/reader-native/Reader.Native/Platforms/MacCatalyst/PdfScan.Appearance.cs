@@ -48,7 +48,7 @@ internal static partial class PdfScan
             Marshal.Copy(context.Data, pixels, 0, pixels.Length);
         }
 
-        internal void AddBackgrounds(IEnumerable<OcrLine> lines, Dictionary<int, PdfBoxAppearance> appearance)
+        internal void AddColors(IEnumerable<OcrLine> lines, Dictionary<int, PdfBoxAppearance> appearance)
         {
             var boxes = new Dictionary<int, PdfSampleBox>();
             foreach (var line in lines)
@@ -59,15 +59,16 @@ internal static partial class PdfScan
             }
             if (boxes.Count == 0 || boxes.Count > 32_768) return;
             var sources = boxes.ToArray();
-            var colors = Client.SamplePdfBackgrounds(width, height, pixels, sources.Select(source => source.Value).ToArray());
+            var colors = Client.SamplePdfColors(width, height, pixels, sources.Select(source => source.Value).ToArray());
             for (var index = 0; index < sources.Length; index++)
             {
                 var key = sources[index].Key;
-                var rgb = colors[index];
-                var background = Color.FromRgb((int)(rgb >> 16), (int)((rgb >> 8) & 255), (int)(rgb & 255));
+                var sampled = colors[index];
+                var background = Rgb(sampled.Background);
+                var ink = sampled.Ink is { } measured ? Rgb(measured) : null;
                 appearance[key] = appearance.TryGetValue(key, out var style)
-                    ? style with { Background = background }
-                    : new(null, 0, 400, false, null, background);
+                    ? style with { Background = background, Ink = style.Ink ?? ink }
+                    : new(null, 0, 400, false, ink, background);
             }
 
             void Add(OcrSpan? span, double x, double y, double w, double h)
@@ -75,6 +76,9 @@ internal static partial class PdfScan
                 if (span is { } range)
                     boxes[range.StartUtf16] = new(x, y, w, h);
             }
+
+            static Color Rgb(uint value) =>
+                Color.FromRgb((int)(value >> 16), (int)((value >> 8) & 255), (int)(value & 255));
         }
     }
 }
