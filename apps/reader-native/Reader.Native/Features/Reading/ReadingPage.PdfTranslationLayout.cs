@@ -42,6 +42,8 @@ public partial class ReadingPage
     private (VerticalStackLayout Panel, PdfPageTranslationRow[] Rows, Label[] Labels, Sentence? Active, string? Query)? overflowContent;
     private (PdfLayoutAddress Address, string SentenceId, RectF Bounds, double ViewportHeight)? lastPdfTranslationFollow;
     private const string UntranslatedPdfFragment = "Фрагмент ще не перекладено";
+    private static string PdfFragmentState(PdfPageTranslationRow row) =>
+        row.Failure is null ? "Не перекладено" : "Помилка перекладу";
     private static readonly Color PdfSearchMatchColor = Color.FromArgb("#FFD27A");
 
     private static bool HasPdfTranslation(PdfPageTranslationRow row) => !string.IsNullOrWhiteSpace(row.Text);
@@ -776,7 +778,7 @@ public partial class ReadingPage
             if (viewport.IsVisible && ReferenceEquals(surface.Drawable, drawing))
             {
                 var description = string.Join(" ", pdfLayoutRows.Except(rows)
-                    .Select(row => HasPdfTranslation(row) ? row.Text : UntranslatedPdfFragment));
+                    .Select(row => HasPdfTranslation(row) ? row.Text : row.Failure ?? UntranslatedPdfFragment));
                 if (SemanticProperties.GetDescription(surface) != description)
                     SemanticProperties.SetDescription(surface, description);
                 var bounds = drawing.MatchBounds ?? drawing.ActiveBounds;
@@ -1016,22 +1018,50 @@ public partial class ReadingPage
                 var ink = appearance?.Ink ?? Color.FromArgb("#302D27");
                 foreground.Add(() => DrawText(canvas, translated, area, fragments, font, ink, fit, region.Alignment));
             }
+            foreach (var index in layout.Pending)
+                DrawPendingFragment(canvas, page, rows[index], layout.Anchors[index]);
             foreach (var paint in foreground) paint();
 
-            foreach (var index in layout.Pending)
+            OverflowChanged?.Invoke(overflow.OrderBy(row => row.StartUtf16).ToArray());
+        }
+
+        private void DrawPendingFragment(ICanvas canvas, RectF page, PdfPageTranslationRow row, PdfTranslationAnchor anchor)
+        {
+            if (anchor.Bounds is not { } sourceBounds) return;
+            var bounds = Scale(sourceBounds, page);
+            hitTargets.Add((bounds, row));
+            foreach (var mask in anchor.PendingMasks ?? [])
             {
-                var row = rows[index];
-                var bounds = Scale(layout.Anchors[index].Bounds!, page);
-                // Keep the original pixels visible and selectable until this row has a translation.
-                hitTargets.Add((bounds, row));
-                if (active is null || row.StartUtf16 >= active.EndUtf16 || row.EndUtf16 <= active.StartUtf16)
-                    continue;
+                canvas.FillColor = ColorFrom(mask.Background);
+                canvas.FillRectangle(Scale(mask.Bounds, page));
+            }
+
+            if (active is not null && row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16)
+            {
                 ActiveBounds = ActiveBounds is { } previous ? Union(previous, bounds) : bounds;
                 canvas.FillColor = Color.FromRgba(255, 212, 122, 64);
                 canvas.FillRectangle(bounds);
             }
 
-            OverflowChanged?.Invoke(overflow.OrderBy(row => row.StartUtf16).ToArray());
+            var spot = anchor.PendingMasks?.FirstOrDefault()?.Bounds is { } firstLine ? Scale(firstLine, page) : bounds;
+            var height = Math.Min(21, spot.Height);
+            if (height <= 0 || spot.Width <= 0) return;
+            var label = PdfFragmentState(row);
+            var font = Microsoft.Maui.Graphics.Font.Default;
+            var size = height * 0.65f;
+            var width = canvas.GetStringSize(label, font, size).Width + height;
+            if (width > spot.Width)
+            {
+                label = row.Failure is null ? "…" : "!";
+                width = Math.Min(spot.Width, height);
+            }
+            canvas.FillColor = Color.FromArgb(row.Failure is null ? "#58584E" : "#88432C");
+            canvas.FillRoundedRectangle(spot.Left, spot.Top, width, height, Math.Min(width, height) * 0.25f);
+            canvas.Font = font;
+            canvas.FontSize = size;
+            canvas.FontColor = Colors.White;
+            canvas.DrawString(label, spot.Left, spot.Top, width, height,
+                HorizontalAlignment.Center, VerticalAlignment.Center, TextFlow.ClipBounds);
         }
 
         private static RectF Scale(PdfSampleBox bounds, RectF page) =>
@@ -1050,7 +1080,7 @@ public partial class ReadingPage
             for (var index = 0; index < ordered.Length; index++)
             {
                 var row = ordered[index];
-                var text = HasPdfTranslation(row) ? row.Text! : "…";
+                var text = HasPdfTranslation(row) ? row.Text! : PdfFragmentState(row);
                 var layout = FitText(canvas, text, font, width, bottom - top, size, size);
                 if (layout is null) return ordered[index..];
                 var height = layout.Lines.Length * layout.LineHeight;

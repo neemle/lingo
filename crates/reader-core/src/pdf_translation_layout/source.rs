@@ -65,9 +65,12 @@ impl SourceStyle {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Anchor {
     bounds: Option<Bounds>,
     style: Option<SourceStyle>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pending_masks: Vec<super::masks::BackgroundMask>,
 }
 
 #[derive(Serialize)]
@@ -113,9 +116,17 @@ pub fn project(
     }
     let anchors = fragments
         .into_iter()
-        .map(|fragment| Anchor {
-            bounds: fragment.bounds,
-            style: fragment.style,
+        .zip(rows)
+        .map(|(fragment, row)| {
+            // A missing translation may only replace ink we can safely attribute to its own source span.
+            let pending_masks = if preserve_artwork && row.pending {
+                fragment.bounds.and_then(|bounds| {
+                    super::masks::plan(bounds, std::iter::once(row.page_span(offset)), geometry, &styles)
+                }).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            Anchor { bounds: fragment.bounds, style: fragment.style, pending_masks }
         })
         .collect();
     Ok(ProjectedLayout { layout, anchors })
@@ -251,7 +262,7 @@ mod tests {
             source_span: span(5, 10),
         };
         let geometry = [line(0, 4, 0.30, vec![]), line(5, 18, 0.32, vec![word])];
-        let rows = [
+        let mut rows = [
             SourceRow {
                 start_utf16: 100,
                 end_utf16: 104,
@@ -286,5 +297,14 @@ mod tests {
                 .len(),
             1
         );
+
+        rows[1].pending = true;
+        let page = project(&rows, &geometry, 100, &styles, true).unwrap();
+        assert_eq!(page.layout.pending, [1]);
+        assert!(page.anchors[0].pending_masks.is_empty());
+        assert_eq!(page.anchors[1].pending_masks.len(), 1);
+        rows[1].end_utf16 = 109;
+        let ambiguous = project(&rows, &geometry, 100, &styles, true).unwrap();
+        assert!(ambiguous.anchors[1].pending_masks.is_empty());
     }
 }
