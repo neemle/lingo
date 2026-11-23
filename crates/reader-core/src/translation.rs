@@ -135,7 +135,7 @@ impl Route {
         }
     }
 
-    fn without_quality(&self) -> Self {
+    pub(crate) fn without_quality(&self) -> Self {
         let mut route = self.clone();
         match &mut route {
             Self::Direct(edge) => edge.quality = None,

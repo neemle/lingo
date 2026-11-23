@@ -839,6 +839,21 @@ impl Store {
         route_readiness(&catalog, &provider.installed_models()?, source, target)
     }
 
+    pub(crate) fn background_translation_route(
+        &self,
+        source: &str,
+        target: &str,
+    ) -> Result<(String, Option<Vec<crate::translation::TranslationPair>>)> {
+        let installed = MarianProvider::interactive(&self.model_directory).installed_models()?;
+        if let Some(route) = crate::translation::resolve_route(&installed, source, target)? {
+            let identity = serde_json::to_string(&route.without_quality()).map_err(|error| error.to_string())?;
+            return Ok((identity, None));
+        }
+        let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
+        let readiness = route_readiness(&catalog, &installed, source, target)?;
+        Ok((String::new(), Some(readiness.missing)))
+    }
+
     pub fn translate_dictionary_gloss(
         &mut self, id: &str, source: &str, gloss: &str,
     ) -> Result<Option<AlignedTranslation>> {

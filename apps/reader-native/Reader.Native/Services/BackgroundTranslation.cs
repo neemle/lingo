@@ -62,17 +62,20 @@ internal sealed class BackgroundTranslation
 
     internal void Resume(bool clearProgress = false)
     {
-        if (clearProgress)
-        {
-            jobs.Clear();
-            lastLibraryJob = null;
-            UpdateRequiredPackages();
-            retryAt = default;
-            visibleAttempt = null;
-        }
+        if (clearProgress) TranslationRoutesChanged();
         paused = false;
         UpdateTimer();
         if (enabled) SetStatus("Перевіряємо чергу перекладу…");
+    }
+
+    internal void TranslationRoutesChanged()
+    {
+        jobs.Clear();
+        libraryStepInvalidated = true;
+        lastLibraryJob = null;
+        retryAt = default;
+        visibleAttempt = null;
+        UpdateRequiredPackages();
     }
 
     internal void Stop()

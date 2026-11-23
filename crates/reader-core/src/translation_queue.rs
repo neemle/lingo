@@ -44,6 +44,7 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
             incomplete INTEGER NOT NULL,
             resume_at INTEGER,
             ocr_generation INTEGER NOT NULL DEFAULT 0,
+            route_identity TEXT,
             PRIMARY KEY(document_id, target)
         );",
     )
@@ -60,6 +61,18 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
         tx.execute_batch(
             "ALTER TABLE background_translation_progress ADD COLUMN ocr_generation INTEGER NOT NULL DEFAULT 0;"
         ).map_err(database_error)?;
+    }
+    let has_route_identity: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('background_translation_progress')
+             WHERE name='route_identity')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(database_error)?;
+    if !has_route_identity {
+        tx.execute_batch("ALTER TABLE background_translation_progress ADD COLUMN route_identity TEXT;")
+            .map_err(database_error)?;
     }
     tx.execute_batch(
         "CREATE TRIGGER IF NOT EXISTS background_translation_new_pdf_text
@@ -87,6 +100,40 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
     )
     .map_err(database_error)?;
     tx.commit().map_err(database_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completed_checkpoint_reopens_when_its_route_disappears() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("reader.db");
+        let (id, revision) = {
+            let mut store = Store::open(&path).unwrap();
+            let document = store.import("reader.txt", b"Bonjour le monde.", "fr").unwrap();
+            store.update_reader_preference(crate::reader_preferences::ReaderPreferenceChange::BackgroundTranslation { value: true }).unwrap();
+            let revision = document.current_revision_id.unwrap();
+            store.connection.execute(
+                "INSERT INTO background_translation_progress(document_id,target,revision_id,cursor,incomplete,resume_at,route_identity)
+                 VALUES (?1,'uk',?2,8,0,NULL,'previously installed route')",
+                params![document.id, revision],
+            ).unwrap();
+            (document.id, revision)
+        };
+
+        let mut store = Store::open(&path).unwrap();
+        let progress = store.advance_background_translation(&id, &revision, "uk").unwrap();
+        assert!(progress.missing_packages.is_some());
+        let deadline = progress.resume_at.unwrap();
+        let cursor: u32 = store.connection.query_row(
+            "SELECT cursor FROM background_translation_progress WHERE document_id=?1 AND target='uk'",
+            [&id], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(cursor, 0);
+        assert_eq!(store.advance_background_translation(&id, &revision, "uk").unwrap().resume_at, Some(deadline));
+    }
 }
 
 impl Store {
@@ -291,16 +338,19 @@ impl Store {
         {
             return Ok(done);
         }
+        let (route_identity, missing_packages) = self.background_translation_route(&document.language, target)?;
         let now = crate::now();
         // Reserve before inference so concurrent OCR can invalidate the exact checkpoint.
+        // A different route uses different cache keys, even for an unchanged document revision.
         self.connection.execute(
-            "INSERT INTO background_translation_progress(document_id,target,revision_id,cursor,incomplete,resume_at)
-             SELECT id,?2,?3,0,0,0 FROM documents
+            "INSERT INTO background_translation_progress(document_id,target,revision_id,cursor,incomplete,resume_at,route_identity)
+             SELECT id,?2,?3,0,0,0,?4 FROM documents
              WHERE id=?1 AND json_extract(body,'$.currentRevisionId')=?3
              ON CONFLICT(document_id,target) DO UPDATE SET revision_id=excluded.revision_id,
-               cursor=0,incomplete=0,resume_at=0
-             WHERE background_translation_progress.revision_id<>excluded.revision_id",
-            params![id, target, revision],
+               cursor=0,incomplete=0,resume_at=0,route_identity=excluded.route_identity
+             WHERE background_translation_progress.revision_id<>excluded.revision_id
+                OR background_translation_progress.route_identity IS NOT excluded.route_identity",
+            params![id, target, revision, route_identity],
         ).map_err(database_error)?;
         let checkpoint = self.connection.query_row(
                 "SELECT cursor,incomplete,resume_at,ocr_generation FROM background_translation_progress
@@ -323,12 +373,6 @@ impl Store {
         if resume_at.is_none() {
             return Ok(done);
         }
-        let missing_packages = if cursor == 0 {
-            let readiness = self.translation_readiness(&document.language, target)?;
-            (!readiness.ready).then_some(readiness.missing)
-        } else {
-            None
-        };
         if resume_at.is_some_and(|deadline| deadline > now) {
             return Ok(BackgroundTranslationProgress { resume_at, missing_packages, ..done });
         }

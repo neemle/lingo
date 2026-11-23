@@ -239,7 +239,11 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         try
         {
             var packages = await AppState.Session.TranslationPackagesAsync();
-            translationRoutes = await AppState.Session.TranslationRoutesAsync();
+            var routes = await AppState.Session.TranslationRoutesAsync();
+            if (translationRoutes is null || !translationRoutes.SequenceEqual(routes) ||
+                !InstalledPackageRevisions(translationInventory ?? []).SequenceEqual(InstalledPackageRevisions(packages)))
+                AppState.TranslationWorker?.TranslationRoutesChanged();
+            translationRoutes = routes;
             translationInventory = packages;
             TranslationPackages.Text = string.Join(Environment.NewLine, packages.Select(package =>
                 $"{DocumentLanguages.Name(package.Source)} → {DocumentLanguages.Name(package.Target)}: " +
@@ -261,6 +265,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
             UpdateTranslationControls();
             UpdateCapabilityMatrix();
         }
+
         catch (Exception error)
         {
             translationInventory = null;
@@ -269,6 +274,10 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
             UpdateTranslationControls();
             UpdateCapabilityMatrix();
         }
+
+        static IEnumerable<(string Source, string Target, string Revision)> InstalledPackageRevisions(
+            TranslationPackageStatus[] packages) => packages.Where(package => package.FilesPresent)
+                .Select(package => (package.Source, package.Target, package.Revision));
     }
 
     private void UpdateTranslationControls()
