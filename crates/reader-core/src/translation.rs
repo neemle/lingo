@@ -1612,6 +1612,43 @@ mod tests {
     }
 
     #[test]
+    fn pdf_page_translation_reports_the_pivot_of_the_cached_row() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("library.sqlite")).unwrap();
+        let document = store.import_scanned_pdf(
+            "scan.pdf", b"%PDF-1.4\n", "fr",
+            vec![crate::ocr::OcrLine {
+                page: 0, text: "Le bateau arrive. Le marin part.".into(),
+                x: 0.1, y: 0.8, width: 0.8, height: 0.1, confidence: Some(1.0),
+                correction: None, words: Vec::new(), source_span: None,
+            }], 1,
+        ).unwrap();
+        let direct = french_uk_route_with_invalid_assets(&store);
+        let catalog = store.translation_packages();
+        let edge = |source: &str, target: &str| {
+            let package = catalog.iter().find(|package| {
+                (package.source, package.target) == (source, target)
+            }).unwrap();
+            ModelEdge {
+                source: source.into(), target: target.into(),
+                revision: package.revision.into(), quality: None,
+            }
+        };
+        let pivot = Route::Pivot { first: edge("fr", "en"), second: edge("en", "uk") };
+        let key = |route: &Route, index: usize| unit_cache_key(route, &document.sentences[index].text).unwrap();
+        store.save_cached_segments([
+            (key(&direct, 0), &["Корабель прибуває.".into()][..]),
+            (key(&pivot, 1), &["Моряк вирушає.".into()][..]),
+        ]).unwrap();
+        assert!(store.translation_readiness("fr", "uk").unwrap().ready);
+        let rows = serde_json::to_value(store.pdf_page_translation(&document.id, 0, "uk", true).unwrap()).unwrap();
+        assert_eq!(rows[0]["text"], "Корабель прибуває.");
+        assert!(rows[0].get("pivotLanguage").is_none());
+        assert_eq!(rows[1]["text"], "Моряк вирушає.");
+        assert_eq!(rows[1]["pivotLanguage"], "en");
+    }
+
+    #[test]
     fn rendered_pdf_keeps_cached_rows_when_page_inference_fails() {
         let root = tempfile::tempdir().unwrap();
         let mut store = Store::open(&root.path().join("library.sqlite")).unwrap();

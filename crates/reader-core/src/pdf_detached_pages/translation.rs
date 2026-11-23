@@ -41,6 +41,8 @@ pub struct PdfPageTranslationRow {
     pub(crate) text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     source_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pivot_language: Option<String>,
 }
 
 impl PageProjection {
@@ -104,6 +106,7 @@ impl Store {
                         Some(PdfPageTranslationRow {
                             start_utf16: offsets[first].0, end_utf16: offsets[last].1,
                             source_text: unit.translation.as_ref().and(unit.pdf_source), text: unit.translation,
+                            pivot_language: unit.pivot_language,
                         })
                     }).collect());
                 }
@@ -126,19 +129,23 @@ impl Store {
                 if covered[first..=last].contains(&true) { continue; }
                 let source_text;
                 let text;
+                let pivot_language;
                 if let Some(translated) = unit.translation {
                     text = translated;
                     source_text = unit.pdf_source;
-                } else if let Some(translated) = cached.sentence.as_ref()
+                    pivot_language = unit.pivot_language;
+                } else if let Some(aligned) = cached.sentence.as_ref()
                     .filter(|_| first == last && first == position - physical.start)
-                    .and_then(|result| result.segments.first())
+                    .filter(|result| !result.segments.is_empty())
                 {
-                    text = translated.clone();
+                    text = aligned.segments[0].clone();
                     source_text = Some(sentence_source(self, &document, position, target, boundaries)?.0);
+                    pivot_language = aligned.route.pivot_language().map(str::to_owned);
                 } else { continue; }
                 covered[first..=last].fill(true);
                 rows.insert(first, PdfPageTranslationRow {
-                    start_utf16: offsets[first].0, end_utf16: offsets[last].1, text: Some(text), source_text,
+                    start_utf16: offsets[first].0, end_utf16: offsets[last].1, text: Some(text),
+                    source_text, pivot_language,
                 });
             }
         }
@@ -146,7 +153,9 @@ impl Store {
         for (local, sentence) in document.sentences[physical].iter().enumerate() {
             if !covered[local] && !document_layout::sentence_in_footnote(&document.blocks, sentence) {
                 let (start_utf16, end_utf16) = offsets[local];
-                rows.insert(local, PdfPageTranslationRow { start_utf16, end_utf16, text: None, source_text: None });
+                rows.insert(local, PdfPageTranslationRow {
+                    start_utf16, end_utf16, text: None, source_text: None, pivot_language: None,
+                });
             }
         }
         Ok(rows.into_values().collect())

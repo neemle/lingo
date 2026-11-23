@@ -150,11 +150,23 @@ public partial class ReadingPage
             else if (pdfLayoutRows.Any(row => row.Text is null))
                 text = pdfLayoutRows.Any(row => row.Text is not null)
                     ? "Переклад сторінки частковий." : "Сторінка очікує перекладу.";
+            if (PdfPagePivotNotice(address) is { } pivotNotice)
+                text = text is null ? pivotNotice : $"{text} {pivotNotice}";
         }
 
         PdfLayoutStatusLabel.Text = DetachedPdfLayoutStatusLabel.Text = text;
         PdfLayoutStatusLabel.IsVisible = !detached && text is not null;
         DetachedPdfLayoutStatusLabel.IsVisible = detached && text is not null;
+    }
+
+    private string? PdfPagePivotNotice(PdfLayoutAddress address)
+    {
+        if (AppState.Session.Document is not { } document || document.Id != address.Document) return null;
+        var routes = pdfLayoutRows.Where(row => row.Text is not null)
+            .Select(row => row.PivotLanguage).OfType<string>().Distinct(StringComparer.Ordinal)
+            .Select(pivot => DocumentLanguages.PivotRoute(document.Language, pivot, address.Target))
+            .ToArray();
+        return routes.Length == 0 ? null : $"Переклад через проміжну мову · {string.Join(", ", routes)}.";
     }
 
     private int PdfAttemptCount(PdfAutoTranslation request) =>
@@ -197,6 +209,8 @@ public partial class ReadingPage
         if (rows.Length == 0 || pdfLayoutRequest is not { } address || CurrentPdfLayoutAddress() != address) return;
         var text = new VerticalStackLayout { Padding = new Thickness(22, 10), Spacing = 9 };
         var viewport = new ScrollView { Content = text };
+        if (PdfPagePivotNotice(address) is { } pivotNotice)
+            text.Children.Add(new Label { Text = pivotNotice, Style = (Style)Resources["ReaderMeta"] });
         Label? activeLabel = null;
         foreach (var row in rows)
         {
