@@ -769,17 +769,6 @@ impl CacheRoutes {
         cached_translation_with_routes(store, self, document, position, target, scope, PageBoundaries::Projected)
     }
 
-    pub(crate) fn cached_standalone(
-        &self, store: &Store, text: &str, target: &str,
-    ) -> Result<Option<(String, Option<String>)>> {
-        Ok(self.cached_sentence(store, text, target)?.map(|cached| {
-            (
-                cached.segments.into_iter().next().expect("one cached segment"),
-                cached.route.pivot_language().map(str::to_owned),
-            )
-        }))
-    }
-
     pub(crate) fn cached_sentence(
         &self,
         store: &Store,

@@ -40,7 +40,8 @@ public sealed record DetachedPdfFindCursor(int Page, int Position);
 public sealed record DetachedPdfFindHit(int Page, int Position, string SentenceId, string Text,
     string? PivotLanguage = null, bool? Reviewed = null, string? SourceText = null,
     TranslationFindFragment? PdfFragment = null);
-public sealed record DetachedPdfTranslation(string Text, string? PivotLanguage, string? SourceText, int StartPosition);
+public sealed record DetachedPdfTranslation(string Text, string? PivotLanguage, string? SourceText, int StartPosition,
+    string? DirectModelRevision = null);
 public sealed record DetachedPdfPassage(DetachedPdfTranslation? Active, DetachedPdfPassageRow[] Rows);
 public sealed record DetachedPdfPassageRow(int Position, int SentenceCount, string Text);
 public sealed record PdfPageTranslationRow(int StartUtf16, int EndUtf16, string? Text,

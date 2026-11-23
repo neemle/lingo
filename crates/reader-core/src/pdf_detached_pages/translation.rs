@@ -13,6 +13,8 @@ pub struct DetachedPdfTranslation {
     pub(super) pivot_language: Option<String>,
     pub(super) source_text: Option<String>,
     pub(super) start_position: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) direct_model_revision: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -785,6 +787,7 @@ pub(super) fn cached_page_translation(
                 &ids,
                 text,
                 aligned.route.pivot_language().map(str::to_owned),
+                aligned.route.direct_model_revision().map(str::to_owned),
             )
             .map(|value| projection.localize(value)));
         }
@@ -794,13 +797,14 @@ pub(super) fn cached_page_translation(
     );
     let standalone = crate::translation::prepare_translation_input(&document.language, target, standalone);
     Ok(routes
-        .cached_standalone(store, &standalone, target)?
-        .map(|(text, pivot_language)| DetachedPdfTranslation {
-            text,
-            pivot_language,
+        .cached_sentence(store, &standalone, target)?
+        .and_then(|aligned| Some(DetachedPdfTranslation {
+            text: aligned.segments.into_iter().next()?,
+            pivot_language: aligned.route.pivot_language().map(str::to_owned),
+            direct_model_revision: aligned.route.direct_model_revision().map(str::to_owned),
             source_text: None,
             start_position: local_position,
-        }))
+        })))
 }
 
 fn active_translation(
@@ -818,7 +822,8 @@ fn active_translation(
         selected,
         &unit.sentence_ids,
         unit.translation?,
-        paragraph.pivot_language,
+        unit.pivot_language,
+        unit.direct_model_revision,
     )
 }
 
@@ -828,6 +833,7 @@ fn machine_result(
     ids: &[String],
     text: String,
     pivot_language: Option<String>,
+    direct_model_revision: Option<String>,
 ) -> Option<DetachedPdfTranslation> {
     let id = &document.sentences[selected].id;
     let start_position = selected.checked_sub(ids.iter().position(|candidate| candidate == id)?)?;
@@ -846,6 +852,7 @@ fn machine_result(
     Some(DetachedPdfTranslation {
         text,
         pivot_language,
+        direct_model_revision,
         source_text,
         start_position,
     })

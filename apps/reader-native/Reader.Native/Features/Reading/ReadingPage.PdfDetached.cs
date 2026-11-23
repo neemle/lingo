@@ -21,6 +21,7 @@ public partial class ReadingPage
     private DetachedPdfTranslation? detachedMachineTranslation;
     private string detachedTranslationLabel = "";
     private int? detachedCacheLookupRun;
+    private (int Sentence, int Readiness)? detachedAutoAttempt;
     private bool speakingDetachedSentence;
     private bool detachedPaused;
     private int detachedAudioRun;
@@ -398,7 +399,7 @@ public partial class ReadingPage
     private async void DetachedTranslateClicked(object? sender, EventArgs args)
     {
         ClearPdfFragmentFocus();
-        await TranslateDetachedAsync(background: false);
+        await TranslateDetachedAsync(automatic: false);
     }
 
     private async Task RefreshDetachedSentenceTranslationAsync()
@@ -430,37 +431,39 @@ public partial class ReadingPage
         if (run == detachedTranslationRun) await RestoreDetachedTranslationAsync(allowAutoTranslate: false);
     }
 
-    private async Task TranslateDetachedAsync(bool background)
+    private async Task TranslateDetachedAsync(bool automatic)
     {
         if (!DetachedTranslate.IsEnabled || detachedAddress is not { } address ||
             detachedSentence is not { } current || TargetCode is not { } target) return;
         var run = ++detachedTranslationRun;
         translatingDetachedSentence = true;
         UpdateDetachedControls();
-        if (ReviewedDetachedTranslation() is null) ShowDetachedTranslation("Перекладаємо офлайн…");
+        if (CurrentDetachedTranslation() is null) ShowDetachedTranslation("Перекладаємо офлайн…");
         try
         {
             var translated = await AppState.Session.DetachedPdfPassageAsync(
-                address.Document, address.Page, current.Sentence.Id, target, cachedOnly: false, background: background);
+                address.Document, address.Page, current.Sentence.Id, target, cachedOnly: false);
             if (run != detachedTranslationRun) return;
             RenderDetachedPassage(address, current, translated.Rows);
             if (ReviewedDetachedTranslation() is not null)
                 ShowDetachedReviewedTranslation();
             else if (translated.Active is not { } active)
             {
-                if (!background)
+                if (!automatic)
                 {
                     ShowDetachedTranslation("Для цього речення переклад недоступний.");
                     RefreshReadiness((current.Language, target));
                 }
-                else ShowDetachedTranslation("");
+                else if (detachedMachineTranslation is null) ShowDetachedTranslation("");
             }
             else
                 ShowDetachedMachineTranslation(active, current.Language, target);
         }
         catch (Exception error)
         {
-            if (run == detachedTranslationRun && ReviewedDetachedTranslation() is null) ShowDetachedTranslation(error.Message);
+            if (run == detachedTranslationRun && ReviewedDetachedTranslation() is null &&
+                (!automatic || detachedMachineTranslation is null))
+                ShowDetachedTranslation(error.Message);
         }
         finally
         {
@@ -490,14 +493,6 @@ public partial class ReadingPage
                 ShowDetachedMachineTranslation(active, current.Language, target);
                 UpdateDetachedControls();
             }
-            else if (allowAutoTranslate && CurrentDetachedTranslation() is null && autoTranslate && !PdfUsesPageTranslation &&
-                !speakingDetachedSentence && !AppState.Session.Busy)
-            {
-                await Task.Delay(250);
-                if (run == detachedTranslationRun && readingPageActive && autoTranslate && !PdfUsesPageTranslation && !speakingDetachedSentence &&
-                    !AppState.Session.Busy && CurrentDetachedTranslation() is null)
-                    await TranslateDetachedAsync(background: true);
-            }
         }
         catch (Exception error)
         {
@@ -508,6 +503,19 @@ public partial class ReadingPage
         {
             if (detachedCacheLookupRun == run) detachedCacheLookupRun = null;
         }
+        if (!allowAutoTranslate) return;
+        var attempt = (detachedSentenceRequest, readinessRequest);
+        bool CanRefresh() => detachedAutoAttempt != attempt && run == detachedTranslationRun &&
+            readingPageActive && autoTranslate && !PdfUsesPageTranslation && !speakingDetachedSentence &&
+            DetachedTranslate.IsEnabled && readinessPair == (current.Language, target) &&
+            readiness is { Ready: true } preferred && ReviewedDetachedTranslation() is null &&
+            (detachedMachineTranslation is not { } machine || machine.PivotLanguage != preferred.PivotLanguage ||
+                machine.DirectModelRevision != preferred.DirectModelRevision);
+        if (!CanRefresh()) return;
+        await Task.Delay(250);
+        if (attempt != (detachedSentenceRequest, readinessRequest) || !CanRefresh()) return;
+        detachedAutoAttempt = attempt;
+        await TranslateDetachedAsync(automatic: true);
     }
 
     private void ResetDetachedTranslation()

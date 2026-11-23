@@ -216,6 +216,7 @@ public partial class ReadingPage
         autoTranslate = !autoTranslate;
         lastAutoTranslation = null;
         pdfAutoAttempts = null;
+        detachedAutoAttempt = null;
         SaveReaderPreference(ReaderPreferenceChange.AutoTranslate(autoTranslate));
         UpdateAutoTranslateButton();
         RefreshPdfTranslationLayout();
