@@ -25,9 +25,13 @@ public partial class ReadingPage
         var currentPage = CurrentOcrReviewPage();
         ReviewReaderOcrMenu.IsEnabled = !reviewingReaderOcr && !session.Busy && currentPage is not null;
         var current = lastReaderOcrSource;
-        if (current is not null && (current.DocumentId != session.Document?.Id ||
-            (!reviewingReaderOcr && currentPage is { } page && (current.Page != page.Page || current.Detached != page.Detached))))
+        var reopeningPdf = reviewingReaderOcr && session.Document is { PdfPageStarts.Length: > 0 } document &&
+            CurrentNativePdfWindow(document.Id) is null;
+        var pageChanged = currentPage is { } page && current is not null &&
+            !reopeningPdf && (current.Page != page.Page || current.Detached != page.Detached);
+        if (current is not null && (current.DocumentId != session.Document?.Id || pageChanged))
         {
+            readerOcrReview.CancelInference();
             OcrReviewFeedback.IsVisible = false;
             lastReaderOcrSource = current = null;
         }
@@ -44,7 +48,6 @@ public partial class ReadingPage
 
         reviewingReaderOcr = true;
         UpdateOcrPageReviewMenu();
-        OcrReviewActivity.IsVisible = OcrReviewActivity.IsRunning = true;
         try
         {
             var detached = page.Detached ? await session.DetachedPdfOcrAsync(document.Id, page.Page) : null;
@@ -52,7 +55,8 @@ public partial class ReadingPage
             if (revision is null || !IsCurrent()) return;
             var source = new OcrPageReviewFlow.Source(document.Id, page.Page, page.Detached, revision);
             lastReaderOcrSource = source;
-            var applied = await readerOcrReview.RunAsync(session, Navigation, source, IsCurrent, ShowOcrReviewMessage);
+            var applied = await readerOcrReview.RunAsync(session, Navigation, source, IsCurrent,
+                ShowOcrReviewMessage, ShowOcrInferenceState);
             if (applied is not null && IsCurrent())
             {
                 var updatedRevision = applied.DetachedPage?.Revision ?? session.Document?.CurrentRevisionId;
@@ -63,7 +67,6 @@ public partial class ReadingPage
         finally
         {
             reviewingReaderOcr = false;
-            OcrReviewActivity.IsVisible = OcrReviewActivity.IsRunning = false;
             UpdateOcrPageReviewMenu();
         }
     }
@@ -72,5 +75,17 @@ public partial class ReadingPage
     {
         OcrReviewMessage.Text = message;
         OcrReviewFeedback.IsVisible = message.Length > 0;
+    }
+
+    private void CancelOcrReviewClicked(object? sender, EventArgs args)
+    {
+        CancelOcrReview.IsEnabled = false;
+        readerOcrReview.CancelInference();
+    }
+
+    private void ShowOcrInferenceState(bool running)
+    {
+        CancelOcrReview.IsVisible = CancelOcrReview.IsEnabled = running;
+        OcrReviewActivity.IsVisible = OcrReviewActivity.IsRunning = running;
     }
 }

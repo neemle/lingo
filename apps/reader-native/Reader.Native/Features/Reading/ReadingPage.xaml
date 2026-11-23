@@ -100,9 +100,11 @@
      SemanticProperties.Description="Уточнити розпізнаний текст цієї сторінки PDF" />
    </Grid>
    <Grid Grid.Row="2" Grid.ColumnSpan="2" x:Name="OcrReviewFeedback" IsVisible="False"
-    ColumnDefinitions="Auto,*" ColumnSpacing="8" Margin="0,6,0,0">
+    ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8" Margin="0,6,0,0">
     <ActivityIndicator x:Name="OcrReviewActivity" WidthRequest="16" HeightRequest="16" />
     <Label x:Name="OcrReviewMessage" Grid.Column="1" Style="{StaticResource ReaderMeta}" />
+    <Button x:Name="CancelOcrReview" Grid.Column="2" Text="Скасувати звірку" IsVisible="False"
+     Style="{StaticResource PlayerButton}" Clicked="CancelOcrReviewClicked" />
    </Grid>
   </Grid>
 

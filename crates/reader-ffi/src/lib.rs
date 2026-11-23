@@ -56,6 +56,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
     let command = validation::decode(bytes)?;
     let cancellation = match &command {
         Command::CancelModelTranslation { request_id } => Some((ModelRequestKind::Passage, *request_id)),
+        Command::CancelOcrPageReview { request_id } => Some((ModelRequestKind::OcrPageReview, *request_id)),
         Command::CancelPdfPageTranslation { request_id } => Some((ModelRequestKind::PdfPageTranslation, *request_id)),
         Command::CancelBackgroundTranslation { request_id } => Some((ModelRequestKind::BackgroundTranslation, *request_id)),
         Command::CancelSpeech { request_id, prefetch } => Some((speech_request_kind(*prefetch), *request_id)),
@@ -365,11 +366,15 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
-        Command::ReviewOcrPage { id, page, detached, revision_id, cached_only, reviewed_indices } => {
+        Command::ReviewOcrPage { id, page, detached, revision_id, cached_only, reviewed_indices, request_id } => {
+            let canceled = request_cancellation(handle, *request_id, ModelRequestKind::OcrPageReview)?;
+            let canceled_error = || Error::new("canceled", "Звірку OCR скасовано.");
+            if canceled() { return Err(canceled_error()); }
             let job = registry::lock()?.store(handle)?
                 .prepare_ocr_page_review(id, *page, *detached, revision_id, *cached_only, reviewed_indices)
                 .map_err(gateway::domain)?;
-            return encode_job(job.run());
+            let result = job.run_until_canceled(&canceled);
+            return if canceled() { Err(canceled_error()) } else { encode_job(result) };
         }
         Command::ExplainWord {
             model, document, sentence, word, start_utf16, revision_id, cached_only,

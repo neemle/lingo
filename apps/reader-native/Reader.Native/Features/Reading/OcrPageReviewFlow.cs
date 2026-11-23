@@ -11,22 +11,24 @@ internal sealed class OcrPageReviewFlow
     private Source? previousSource;
     private readonly HashSet<int> reviewedIndices = [];
     private int remainingLines;
+    private CancellationTokenSource? inference;
     internal bool IsRunning { get; private set; }
+    internal void CancelInference() => inference?.Cancel();
 
     internal string ButtonText(Source? source) => remainingLines > 0 && previousSource == source
         ? "Звірити наступні рядки" : "Звірити сторінку із Qwen";
 
     internal async Task<Applied?> RunAsync(ReaderSession session, INavigation navigation, Source source,
-        Func<bool> isReadingPage, Action<string> status)
+        Func<bool> isReadingPage, Action<string> status, Action<bool>? inferenceChanged = null)
     {
         if (IsRunning) return null;
         IsRunning = true;
-        try { return await ReviewAsync(session, navigation, source, isReadingPage, status); }
+        try { return await ReviewAsync(session, navigation, source, isReadingPage, status, inferenceChanged); }
         finally { IsRunning = false; }
     }
 
     private async Task<Applied?> ReviewAsync(ReaderSession session, INavigation navigation, Source source,
-        Func<bool> isReadingPage, Action<string> status)
+        Func<bool> isReadingPage, Action<string> status, Action<bool>? inferenceChanged)
     {
         bool IsCurrent() => isReadingPage() && session.Document is { } document &&
             document.Id == source.DocumentId && (source.Detached || document.CurrentRevisionId == source.Revision);
@@ -37,10 +39,7 @@ internal sealed class OcrPageReviewFlow
             reviewedIndices.Clear();
             remainingLines = 0;
         }
-        var reviewed = reviewedIndices.ToArray();
-        var review = await LoadAsync(session, IsCurrent, status, "Qwen перевіряє рядки з низькою впевненістю OCR…",
-            cachedOnly => session.ReviewOcrPageAsync(source.DocumentId, source.Page, source.Detached,
-                source.Revision, cachedOnly, reviewed));
+        var review = await LoadPageReviewAsync(session, source, IsCurrent, status, inferenceChanged);
         if (review is null || !IsCurrent()) return null;
         if (review.Corrections.Length == 0)
         {
@@ -72,6 +71,33 @@ internal sealed class OcrPageReviewFlow
         if (updatedRevision is not null)
             Finish(review, source with { Revision = updatedRevision }, $"Виправлено рядків: {selected.Length}.", status);
         return new Applied(updatedPage);
+    }
+
+    private async Task<OcrPageReview?> LoadPageReviewAsync(ReaderSession session, Source source, Func<bool> isCurrent,
+        Action<string> status, Action<bool>? inferenceChanged)
+    {
+        using var cancellation = new CancellationTokenSource();
+        inference = cancellation;
+        var reviewed = reviewedIndices.ToArray();
+        inferenceChanged?.Invoke(true);
+        try
+        {
+            var review = await LoadAsync(session, isCurrent, status, "Qwen перевіряє рядки з низькою впевненістю OCR…",
+                cachedOnly => session.ReviewOcrPageAsync(source.DocumentId, source.Page, source.Detached,
+                    source.Revision, cachedOnly, reviewed, cancellation.Token));
+            cancellation.Token.ThrowIfCancellationRequested();
+            return review;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            if (isCurrent()) status("Звірку OCR скасовано. Готові перевірки збережено.");
+            return null;
+        }
+        finally
+        {
+            inference = null;
+            inferenceChanged?.Invoke(false);
+        }
     }
 
     internal static async Task<T?> LoadAsync<T>(ReaderSession session, Func<bool> isCurrent, Action<string> status,

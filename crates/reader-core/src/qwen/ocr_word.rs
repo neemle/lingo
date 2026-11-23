@@ -234,6 +234,14 @@ fn parse_line_review(text: &str, output: &[u8]) -> Result<OcrSpelling> {
 
 impl ReviewOcrPageJob {
     pub fn run(self) -> Result<Option<OcrPageReview>> {
+        self.run_until_canceled(&|| false)
+    }
+
+    pub fn run_until_canceled(self, canceled: &dyn Fn() -> bool) -> Result<Option<OcrPageReview>> {
+        let check_canceled = || -> Result<()> {
+            if canceled() { Err("Звірку OCR скасовано.".into()) } else { Ok(()) }
+        };
+        check_canceled()?;
         let read_cache = || -> Result<Option<Vec<OcrSpelling>>> {
             let results = self.lines.iter().map(|(_, job)| match &job.work {
                 HintWork::Cached(result) => Ok(result.clone()),
@@ -249,13 +257,14 @@ impl ReviewOcrPageJob {
             return Ok(read_cache()?.map(|results| self.merge(results)));
         };
         model.run_requested_with_cache(
-            None,
+            Some(canceled),
             || Ok(read_cache()?.map(|results| Some(self.merge(results)))),
             |directory, should_yield| {
                 let deadline = Instant::now() + Duration::from_secs(20);
                 with_prompt_context(directory, || prompt_checkpoint(should_yield, deadline), |model, context| {
                     let mut results = Vec::with_capacity(self.lines.len());
                     for (_, job) in &self.lines {
+                        check_canceled()?;
                         match &job.work {
                             HintWork::Cached(Some(review)) => results.push(review.clone()),
                             HintWork::Cached(None) => return Ok(None),

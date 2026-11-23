@@ -18,6 +18,7 @@ pub enum ModelRequestKind {
     SpeechPrefetch,
     PdfPageTranslation,
     BackgroundTranslation,
+    OcrPageReview,
 }
 
 impl ModelCancellation {
@@ -32,7 +33,7 @@ impl ModelCancellation {
 
 struct OpenStore {
     store: gateway::Store,
-    model_cancellations: [Arc<ModelCancellation>; 5],
+    model_cancellations: [Arc<ModelCancellation>; 6],
 }
 
 #[derive(Default)]

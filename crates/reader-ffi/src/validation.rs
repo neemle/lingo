@@ -20,6 +20,8 @@ pub fn decode(input: &[u8]) -> Result<Command> {
 fn validate(command: &Command) -> Result<()> {
     match command {
         Command::CancelModelTranslation { request_id: 0 }
+        | Command::CancelOcrPageReview { request_id: 0 }
+        | Command::ReviewOcrPage { request_id: Some(0), .. }
         | Command::CancelBackgroundTranslation { request_id: 0 }
         | Command::AdvanceBackgroundTranslation { request_id: Some(0), .. }
         | Command::CancelPdfPageTranslation { request_id: 0 }

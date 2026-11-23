@@ -123,6 +123,7 @@ public partial class ReadingPage : ContentPage
     protected override void OnDisappearing()
     {
         readingPageActive = false;
+        readerOcrReview.CancelInference();
         CancelModelPassage();
         RestoreCachedModelTranslation(null);
         dictionaryFocus = null;

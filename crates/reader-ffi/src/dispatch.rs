@@ -276,6 +276,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         | Command::ReviewOcrWord { .. }
         | Command::ReviewOcrLine { .. }
         | Command::ReviewOcrPage { .. }
+        | Command::CancelOcrPageReview { .. }
         | Command::TranslateWithModel { .. }
         | Command::CancelModelTranslation { .. }
         | Command::CancelPdfPageTranslation { .. }

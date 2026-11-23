@@ -510,6 +510,12 @@ pub enum Command {
         cached_only: bool,
         #[serde(default, rename = "reviewedIndices")]
         reviewed_indices: Vec<usize>,
+        #[serde(rename = "requestId")]
+        request_id: Option<u64>,
+    },
+    CancelOcrPageReview {
+        #[serde(rename = "requestId")]
+        request_id: u64,
     },
     ApplyOcrPageReview {
         id: String,

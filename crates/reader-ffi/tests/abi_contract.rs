@@ -64,6 +64,28 @@ fn canceled_pdf_translation_does_not_cancel_a_later_page_request() {
 }
 
 #[test]
+fn canceling_ocr_page_review_leaves_later_requests_available() {
+    let store = StoreFixture::new();
+    let imported = call(store.handle, json!({
+        "version": 1, "operation": "import_scanned_pdf", "name": "scan.pdf", "language": "en",
+        "bytes": b"%PDF-1.4\n", "pages": 1,
+        "lines": [{"page": 0, "text": "A rnagic book.", "x": 0.1, "y": 0.2, "width": 0.8, "height": 0.1, "confidence": 0.5}],
+    }));
+    assert_eq!(imported["ok"], true, "{imported}");
+    let request = |request_id| call(store.handle, json!({
+        "version": 1, "operation": "review_ocr_page", "id": imported["data"]["id"],
+        "revisionId": imported["data"]["currentRevisionId"], "page": 0, "detached": false,
+        "cachedOnly": true, "requestId": request_id,
+    }));
+    let canceled = call(store.handle, json!({
+        "version": 1, "operation": "cancel_ocr_page_review", "requestId": 1,
+    }));
+    assert_eq!(canceled["ok"], true, "{canceled}");
+    assert_error(&request(1), "canceled");
+    assert_eq!(request(2)["ok"], true);
+}
+
+#[test]
 fn unsupported_versions_and_operations_are_rejected_explicitly() {
     for version in [0, 2, u32::MAX] {
         assert_error(

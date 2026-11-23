@@ -13,6 +13,7 @@ public sealed class CoreClient : IDisposable
     private long nextModelTranslationRequest;
     private long nextPdfPageTranslationRequest;
     private long nextBackgroundTranslationRequest;
+    private long nextOcrPageReviewRequest;
     private long nextSpeechRequest;
     private long nextSpeechPrefetchRequest;
     public const int MaxImportBytes = 20 * 1024 * 1024;
@@ -274,9 +275,11 @@ public sealed class CoreClient : IDisposable
             version = 1, operation = "review_ocr_line", id, page, revisionId, index, cachedOnly,
         });
 
-    public OcrPageReview? ReviewOcrPage(string id, int page, bool detached, string revisionId, bool cachedOnly, int[] reviewedIndices) =>
-        CallIndependent<OcrPageReview?>(new
-        { version = 1, operation = "review_ocr_page", id, page, detached, revisionId, cachedOnly, reviewedIndices });
+    public OcrPageReview? ReviewOcrPage(string id, int page, bool detached, string revisionId, bool cachedOnly,
+        int[] reviewedIndices, CancellationToken cancellationToken) =>
+        CallCancelable<OcrPageReview?>(ref nextOcrPageReviewRequest, cancellationToken,
+            requestId => new { version = 1, operation = "review_ocr_page", id, page, detached, revisionId, cachedOnly, reviewedIndices, requestId },
+            requestId => new { version = 1, operation = "cancel_ocr_page_review", requestId });
 
     public void ApplyOcrPageReview(string id, int page, bool detached, string revisionId, OcrLineEdit[] edits) =>
         Call<JsonElement>(new { version = 1, operation = "apply_ocr_page_review", id, page, detached, revisionId, edits });

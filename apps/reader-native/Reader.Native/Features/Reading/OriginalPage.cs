@@ -178,6 +178,7 @@ internal sealed class OriginalPage : ContentPage
     protected override void OnDisappearing()
     {
         visible = false;
+        ocrPageReview.CancelInference();
         pageOcr?.Cancel();
         base.OnDisappearing();
     }
