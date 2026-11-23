@@ -1,5 +1,7 @@
 use super::{annotations, word_break, CachedSentences};
-use crate::translation::{sentence_input, sentence_source, CacheRoutes, PageBoundaries, ParagraphTranslation, TranslationBatchError};
+use crate::translation::{
+    sentence_input, CacheRoutes, PageBoundaries, ParagraphTranslation, TranslationBatchError, UnitGrouping,
+};
 use crate::{document_layout, ocr, Document, Result, Sentence, Store};
 use serde::Serialize;
 use std::{collections::BTreeMap, ops::Range};
@@ -118,8 +120,8 @@ impl Store {
         if document.language == target { return Ok(Vec::new()); }
         let indices: std::collections::HashMap<_, _> = document.sentences[physical.clone()].iter()
             .enumerate().map(|(i, sentence)| (sentence.id.as_str(), i)).collect();
-        let page_range = |unit: &crate::translation::ParagraphUnit| {
-            let mut local = unit.sentence_ids.iter().filter_map(|id| indices.get(id.as_str()).copied());
+        let page_range = |sentence_ids: &[String]| {
+            let mut local = sentence_ids.iter().filter_map(|id| indices.get(id.as_str()).copied());
             let first = local.next()?;
             Some((first, local.last().unwrap_or(first)))
         };
@@ -127,10 +129,10 @@ impl Store {
         if !cached_only {
             match self.translate_document_page(&document, physical.clone(), target, boundaries, background, canceled) {
                 Ok(generated) if generated.iter().any(|unit| !unit.reviewed && unit.translation.is_some())
-                    && (background || generated.iter().all(|unit| unit.translation.is_some())) =>
+                    && generated.iter().all(|unit| unit.translation.is_some()) =>
                 {
                     return Ok(generated.into_iter().filter_map(|unit| {
-                        let (first, last) = page_range(&unit)?;
+                        let (first, last) = page_range(&unit.sentence_ids)?;
                         Some(PdfPageTranslationRow {
                             start_utf16: offsets[first].0, end_utf16: offsets[last].1,
                             source_text: unit.translation.as_ref().and(unit.pdf_source), text: unit.translation,
@@ -139,7 +141,8 @@ impl Store {
                     }).collect());
                 }
                 Ok(_) => {}
-                Err(error) if background || canceled() => return Err(error),
+                Err(error) if canceled() || (background && matches!(&error, TranslationBatchError::Deferred { .. })) =>
+                    return Err(error),
                 // Earlier batches may already be in SQLite, alongside translations from prior routes.
                 Err(error) => generation_error = Some(error),
             }
@@ -147,36 +150,23 @@ impl Store {
         let routes = self.translation_cache_routes(&document.language, target)?;
         let mut covered = vec![false; offsets.len()];
         let mut rows = BTreeMap::<usize, PdfPageTranslationRow>::new();
-        for position in physical.clone() {
-            if canceled() {
-                return Err(TranslationBatchError::deferred(CANCELED.into()));
-            }
-            if covered[position - physical.start] { continue; }
-            let sentence = &document.sentences[position];
-            if document_layout::sentence_in_footnote(&document.blocks, sentence) { continue; }
-            let cached = routes.cached_window(self, &document, position, target, boundaries)?;
-            for unit in cached.paragraph.units {
-                let Some((first, last)) = page_range(&unit) else { continue; };
+        // Older cached groups can fill gaps after all individually aligned rows are reserved.
+        for grouping in [UnitGrouping::Sentence, UnitGrouping::LegacyContext] {
+            for position in physical.clone() {
+                if canceled() {
+                    return Err(TranslationBatchError::deferred(CANCELED.into()));
+                }
+                if covered[position - physical.start] { continue; }
+                let sentence = &document.sentences[position];
+                if document_layout::sentence_in_footnote(&document.blocks, sentence) { continue; }
+                let Some(unit) = routes.cached_pdf_row(self, &document, position, target, boundaries, grouping)?
+                    else { continue; };
+                let Some((first, last)) = page_range(&unit.sentence_ids) else { continue; };
                 if covered[first..=last].contains(&true) { continue; }
-                let source_text;
-                let text;
-                let pivot_language;
-                if let Some(translated) = unit.translation {
-                    text = translated;
-                    source_text = unit.pdf_source;
-                    pivot_language = unit.pivot_language;
-                } else if let Some(aligned) = cached.sentence.as_ref()
-                    .filter(|_| first == last && first == position - physical.start)
-                    .filter(|result| !result.segments.is_empty())
-                {
-                    text = aligned.segments[0].clone();
-                    source_text = Some(sentence_source(self, &document, position, target, boundaries)?.0);
-                    pivot_language = aligned.route.pivot_language().map(str::to_owned);
-                } else { continue; }
                 covered[first..=last].fill(true);
                 rows.insert(first, PdfPageTranslationRow {
-                    start_utf16: offsets[first].0, end_utf16: offsets[last].1, text: Some(text),
-                    source_text, pivot_language,
+                    start_utf16: offsets[first].0, end_utf16: offsets[last].1, text: unit.translation,
+                    source_text: unit.pdf_source, pivot_language: unit.pivot_language,
                 });
             }
         }
@@ -451,6 +441,7 @@ fn include_neighbors(
 
 #[cfg(test)]
 mod tests {
+    use crate::translation::sentence_source;
     use super::*;
     use crate::{file_originals, pdf_detached_pages};
 

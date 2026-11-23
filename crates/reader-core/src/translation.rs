@@ -678,6 +678,27 @@ impl CacheRoutes {
         cached_translation_with_routes(store, self, document, position, target, CacheScope::Window, boundaries)
     }
 
+    pub(crate) fn cached_pdf_row(
+        &self, store: &Store, document: &Document, position: usize, target: &str,
+        boundaries: PageBoundaries, grouping: UnitGrouping,
+    ) -> Result<Option<ParagraphUnit>> {
+        let active = &document.sentences[position].id;
+        let plan = paragraph_plan(store, document, position, target, boundaries, grouping)?;
+        let (source, ids) = sentence_source(store, document, position, target, boundaries)?;
+        let input = (normalize_cardinals(&document.language, target, source.clone()), ids);
+        let cached = read_cached_plan(store, self, active, target, CacheScope::Active, plan, &input)?;
+        let unit = cached.paragraph.units.into_iter()
+            .find(|unit| unit.translation.is_some() && unit.sentence_ids.contains(active));
+        Ok(unit.or_else(|| cached.sentence.map(|aligned| ParagraphUnit {
+            sentence_ids: input.1,
+            translation: aligned.segments.into_iter().next(),
+            reviewed: false,
+            pivot_language: aligned.route.pivot_language().map(str::to_owned),
+            pdf_source: Some(source),
+            alignment: aligned.alignment,
+        })))
+    }
+
     pub(crate) fn cached_active(
         &self, store: &Store, document: &crate::Document, position: usize, target: &str, for_search: bool,
     ) -> Result<CachedTranslation> {
@@ -741,7 +762,7 @@ enum CacheScope {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum UnitGrouping {
+pub(crate) enum UnitGrouping {
     Sentence,
     LegacyContext,
 }
@@ -1730,6 +1751,41 @@ mod tests {
         assert!(rows[0].get("pivotLanguage").is_none());
         assert_eq!(rows[1]["text"], "Моряк вирушає.");
         assert_eq!(rows[1]["pivotLanguage"], "en");
+    }
+
+    #[test]
+    fn rendered_pdf_prefers_aligned_cache_over_an_overlapping_legacy_group() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("library.sqlite")).unwrap();
+        let document = store.import_scanned_pdf(
+            "scan.pdf", b"%PDF-1.4\n", "fr",
+            vec![crate::ocr::OcrLine {
+                page: 0, text: "Le bateau arrive. Le marin part.".into(),
+                x: 0.1, y: 0.1, width: 0.8, height: 0.1, confidence: None,
+                correction: None, words: Vec::new(), source_span: None,
+            }], 1,
+        ).unwrap();
+        let route = french_uk_route_with_invalid_assets(&store);
+        let legacy = paragraph_plan(&store, &document, 0, "uk", PageBoundaries::Canonical, UnitGrouping::LegacyContext)
+            .unwrap();
+        assert_eq!(legacy.result.units[0].sentence_ids.len(), 2);
+        let legacy_key = unit_cache_key(&route, &legacy.pending[0].1).unwrap();
+        store.save_cached_segments([(legacy_key, &["Старий груповий переклад.".into()][..])]).unwrap();
+        let grouped = store.pdf_page_translation(&document.id, 0, "uk", true).unwrap();
+        assert_eq!(grouped.len(), 1);
+        assert_eq!(grouped[0].text.as_deref(), Some("Старий груповий переклад."));
+
+        let sentence = &document.sentences[1];
+        let sentence_key = unit_cache_key(&route, &sentence.text).unwrap();
+        store.save_cached_segments([(sentence_key, &["Моряк вирушає.".into()][..])]).unwrap();
+        assert!(store.remove_translation_package("fr", "uk").unwrap());
+        assert!(!store.translation_readiness("fr", "uk").unwrap().ready);
+        let rows = serde_json::to_value(store.pdf_page_translation(&document.id, 0, "uk", true).unwrap()).unwrap();
+        assert_eq!(rows.as_array().unwrap().len(), 2);
+        assert!(rows[0]["text"].is_null());
+        assert_eq!(rows[1]["text"], "Моряк вирушає.");
+        assert_eq!(rows[1]["sourceText"], sentence.text);
+        assert_eq!(rows[1]["startUtf16"], sentence.start_utf16);
     }
 
     #[test]
