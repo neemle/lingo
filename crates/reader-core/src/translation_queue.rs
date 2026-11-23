@@ -293,6 +293,18 @@ fn database_error(error: impl std::fmt::Display) -> String {
     format!("Помилка черги перекладу. {error}")
 }
 
+pub(crate) fn revise_pdf_checkpoint(
+    db: &Connection, id: &str, previous: &str, revision: &str, page: u16,
+) -> Result<()> {
+    db.execute(
+        "UPDATE background_translation_progress
+         SET revision_id=?3,cursor=min(cursor,?4),resume_at=0,ocr_generation=ocr_generation+1
+         WHERE document_id=?1 AND revision_id=?2",
+        params![id, previous, revision, page.saturating_sub(1)],
+    ).map_err(database_error)?;
+    Ok(())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationWarmStep {

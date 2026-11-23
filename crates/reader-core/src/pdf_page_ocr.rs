@@ -565,7 +565,7 @@ impl Store {
             for edit in &mut edits { edit.start_utf16 += start; }
             *old = corrected;
             let page_text = serde_json::to_string(&pages).map_err(database_error)?;
-            reflow_pdf_document_with_edits(tx, document, pages, &edits)?;
+            reflow_pdf_document(tx, document, pages, &edits, page)?;
             tx.execute("UPDATE file_originals SET pdf_page_text=?2 WHERE document_id=?1",
                 params![id, page_text]).map_err(database_error)?;
             changed = true;
@@ -612,7 +612,7 @@ impl Store {
             changed = reconcile(page_lines)?;
             if changed {
                 let edits = ocr::line_transcript_edits(page_lines, &previous)?;
-                reflow_pdf_document_with_edits(tx, document, pages, &edits)?;
+                reflow_pdf_document(tx, document, pages, &edits, page)?;
             }
             Ok(changed)
         })?;
@@ -1041,7 +1041,7 @@ pub(crate) fn reconcile_ocr_with_layer(reference: &str, lines: &mut [ocr::OcrLin
 }
 
 fn update_focused_page(db: &Connection, document: &mut Document, page: u16, pages: Vec<String>) -> Result<()> {
-    reflow_pdf_document(db, document, pages)?;
+    reflow_pdf_document(db, document, pages, &[], page)?;
     let focused: bool = db.query_row(
         "SELECT EXISTS(SELECT 1 FROM pdf_reading_positions WHERE document_id=?1 AND page=?2)",
         params![document.id, page],
@@ -1182,6 +1182,7 @@ pub(crate) fn merge_cached_pages(
     if adopted_pages.is_empty() {
         return Ok(true);
     }
+    let first_changed = *adopted_pages.first().expect("checked adopted pages");
     for page in adopted_pages {
         local.pdf_pending_text_pages.remove(&page);
         if cache.stale.contains(&page) {
@@ -1204,7 +1205,7 @@ pub(crate) fn merge_cached_pages(
         lines.sort_by_key(|line| line.page);
     }
     if layers_changed || has_added_ocr {
-        reflow_pdf_document(db, &mut local, pages)?;
+        reflow_pdf_document(db, &mut local, pages, &[], first_changed)?;
     }
     let body = serde_json::to_string(&local).map_err(database_error)?;
     db.execute(
@@ -1215,13 +1216,10 @@ pub(crate) fn merge_cached_pages(
     Ok(true)
 }
 
-fn reflow_pdf_document(db: &Connection, document: &mut Document, pages: Vec<String>) -> Result<()> {
-    reflow_pdf_document_with_edits(db, document, pages, &[])
-}
-
-fn reflow_pdf_document_with_edits(
-    db: &Connection, document: &mut Document, pages: Vec<String>, edits: &[ocr::TranscriptEdit],
+fn reflow_pdf_document(
+    db: &Connection, document: &mut Document, pages: Vec<String>, edits: &[ocr::TranscriptEdit], first_changed: u16,
 ) -> Result<()> {
+    let previous_revision = document.current_revision_id.clone();
     let lines = document.ocr_lines.as_deref().unwrap_or_default();
     let (text, starts) = pdf_layers::merge_page_text(pages, lines)?;
     let parsed = document_layout::from_transcript(text, Some(starts));
@@ -1238,6 +1236,9 @@ fn reflow_pdf_document_with_edits(
     ocr::refresh_provenance(document);
     if changed {
         document_revisions::append(document, db)?;
+    }
+    if let (Some(previous), Some(revision)) = (previous_revision.as_deref(), document.current_revision_id.as_deref()) {
+        crate::translation_queue::revise_pdf_checkpoint(db, &document.id, previous, revision, first_changed)?;
     }
     if let Some(resume) = document.speech_resume.take() {
         Store::write_speech_resume(db, &document.id, &resume)?;
@@ -1333,6 +1334,44 @@ fn database_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod drop_cap_tests {
     use super::*;
+
+    #[test]
+    fn canonical_ocr_rebases_background_progress_without_restarting_the_book() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("library.db")).unwrap();
+        let original = root.path().join("library.pdf");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let mut pages = vec![String::from("Le bateau arrive."); 12];
+        pages[8].clear();
+        let prepared = file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "library.pdf", &original, "fr", pages, vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let previous = document.current_revision_id.as_deref().unwrap();
+        for (target, cursor) in [("uk", 12), ("en", 3)] {
+            store.connection.execute(
+                "INSERT INTO background_translation_progress
+                 (document_id,target,revision_id,cursor,incomplete,resume_at,ocr_generation,route_identity)
+                 VALUES (?1,?2,?3,?4,1,NULL,5,'installed route')",
+                params![document.id, target, previous, cursor],
+            ).unwrap();
+        }
+        let revised = store.cache_pdf_ocr_page(&document.id, 8, vec![ocr::OcrLine {
+            page: 8, text: "Le marin part.".into(), x: 0.1, y: 0.1, width: 0.5, height: 0.05,
+            confidence: None, correction: None, words: Vec::new(), source_span: None,
+        }]).unwrap();
+        let revision = revised.current_revision_id.unwrap();
+        assert_ne!(previous, revision);
+        for (target, expected) in [("uk", 7), ("en", 3)] {
+            let saved: (String, u16, bool, i64, u32, String) = store.connection.query_row(
+                "SELECT revision_id,cursor,incomplete,resume_at,ocr_generation,route_identity
+                 FROM background_translation_progress WHERE document_id=?1 AND target=?2",
+                params![document.id, target],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+            ).unwrap();
+            assert_eq!(saved, (revision.clone(), expected, true, 0, 6, "installed route".into()));
+        }
+    }
 
     #[test]
     fn stored_pdf_order_repair_preserves_canonical_and_detached_annotations() {
