@@ -37,6 +37,7 @@ pub mod ocr_jobs;
 mod onnx_runtime;
 pub mod optional_models;
 pub mod pdf_layers;
+pub mod pdf_appearance;
 mod pdf_page_ocr;
 mod pdf_detached_pages;
 pub use pdf_detached_pages::{DetachedPdfAnnotationChange, DetachedPdfAnnotationItem, DetachedPdfFindCursor, DetachedPdfFindPage, DetachedPdfOcrPage, DetachedPdfPassage, DetachedPdfSentence, DetachedPdfTranslation};

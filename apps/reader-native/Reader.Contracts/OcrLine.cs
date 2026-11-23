@@ -17,3 +17,4 @@ public sealed record OcrWord(string Text, double X, double Y, double Width, doub
     int? RawStartUtf16 = null, OcrSpan? SourceSpan = null);
 
 public sealed record OcrSpan(int StartUtf8, int EndUtf8, int StartUtf16, int EndUtf16);
+public sealed record PdfSampleBox(double X, double Y, double Width, double Height);

@@ -9,7 +9,7 @@ using Client = Reader.CoreClient.CoreClient;
 
 namespace Reader.Native.Services;
 
-internal static class PdfScan
+internal static partial class PdfScan
 {
     internal static Task<int> PageCountAsync(byte[] bytes) => Task.Run(() =>
     {
@@ -175,19 +175,30 @@ internal static class PdfScan
         return Render(document, page, 1800);
     });
 
-    internal static Task<(PhotoPreview Image, string Text, OcrLine[] Boxes)> ReadingPreviewAsync(
-        string path, int index, bool textGeometry, ReadOnlyMemory<char> expectedText = default) => Task.Run(() =>
+    internal static Task<(PhotoPreview Image, string Text, OcrLine[] Boxes, Dictionary<int, PdfBoxAppearance> Appearance)> ReadingPreviewAsync(
+        string path, int index, OcrLine[] recognized, ReadOnlyMemory<char> expectedText = default) => Task.Run(() =>
     {
         using var pool = new NSAutoreleasePool();
         using var document = Open(path);
-        var image = Render(document, index, 1800);
-        if (!textGeometry) return (image, "", []);
         using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
+        using var thumbnail = Thumbnail(page, 1800);
+        var image = EncodePreview(thumbnail);
+        var bitmap = thumbnail.CGImage is { } pixels ? new PreviewColors(pixels) : null;
+        var appearance = new Dictionary<int, PdfBoxAppearance>();
+        if (recognized.Length > 0)
+        {
+            bitmap?.AddBackgrounds(recognized, appearance);
+            return (image, "", [], appearance);
+        }
         var layer = TextLayer(page, out var offset, expectedText);
         var text = layer.Text;
         var crop = page.GetBoundsForBox(PdfDisplayBox.Crop);
-        if (text.Length == 0 || crop.Width <= 0 || crop.Height <= 0) return (image, text, []);
+        if (text.Length == 0 || crop.Width <= 0 || crop.Height <= 0) return (image, text, [], appearance);
         var boxes = new List<OcrLine>();
+        using var attributed = page.AttributedString;
+        var attributes = string.Equals(attributed?.Value, page.Text, StringComparison.Ordinal) ? attributed : null;
+        var rotation = (page.Rotation % 360 + 360) % 360;
+        var pageHeight = (double)(rotation is 90 or 270 ? crop.Width : crop.Height);
         // PDFKit emits U+FFFC for artwork. Its selection bounds can span the entire page.
         foreach (System.Text.RegularExpressions.Match word in System.Text.RegularExpressions.Regex.Matches(text, @"[^\s\uFFFC]+"))
         {
@@ -201,7 +212,7 @@ internal static class PdfScan
             var y = (double)((box.Y - crop.Y) / crop.Height);
             var width = (double)(box.Width / crop.Width);
             var height = (double)(box.Height / crop.Height);
-            (x, y, width, height) = ((page.Rotation % 360 + 360) % 360) switch
+            (x, y, width, height) = rotation switch
             {
                 90 => (y, x, height, width),
                 180 => (1 - x - width, y, width, height),
@@ -210,8 +221,10 @@ internal static class PdfScan
             };
             boxes.Add(new(word.Value, x, y, width, height, null, index,
                 SourceSpan: new(0, 0, word.Index, word.Index + word.Length)));
+            appearance[word.Index] = ReadAppearance(attributes, offset + originalOffset, pageHeight);
         }
-        return (image, text, boxes.ToArray());
+        bitmap?.AddBackgrounds(boxes, appearance);
+        return (image, text, boxes.ToArray(), appearance);
     });
 
     private static bool IsPdfListLabel(string text, int start, int length)
@@ -307,6 +320,11 @@ internal static class PdfScan
     {
         using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
         using var image = Thumbnail(page, limit);
+        return EncodePreview(image);
+    }
+
+    private static PhotoPreview EncodePreview(UIImage image)
+    {
         using var png = image.AsPNG() ?? throw new InvalidDataException("Не вдалося відобразити сторінку PDF.");
         var bitmap = image.CGImage;
         return new PhotoPreview(png.ToArray(), bitmap is null ? (int)image.Size.Width : (int)bitmap.Width,

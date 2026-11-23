@@ -54,6 +54,14 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         unsafe { std::slice::from_raw_parts(input, len as usize) }
     };
     let command = validation::decode(bytes)?;
+    if let Command::SamplePdfBackgrounds { rgba, width, height, boxes } = command {
+        if rgba.len() > 5_600_000 {
+            return Err(Error::new("invalid_argument", "PDF preview exceeds the sampling bound"));
+        }
+        let pixels = base64::decode(rgba)
+            .map_err(|_| Error::new("invalid_argument", "Invalid PDF preview image data"))?;
+        return encode_job(reader_core::pdf_appearance::sample_backgrounds(&pixels, width, height, &boxes));
+    }
     let cancellation = match &command {
         Command::CancelModelTranslation { request_id } => Some((ModelRequestKind::Passage, *request_id)),
         Command::CancelOcrPageReview { request_id } => Some((ModelRequestKind::OcrPageReview, *request_id)),

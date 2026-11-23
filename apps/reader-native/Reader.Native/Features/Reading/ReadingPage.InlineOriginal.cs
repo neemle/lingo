@@ -23,6 +23,7 @@ public partial class ReadingPage
     private OcrLine[] inlineDetachedLines = [];
     private OcrLine[] inlineNativeBoxes = [];
     private string inlineNativeText = "";
+    private IReadOnlyDictionary<int, PdfBoxAppearance>? inlinePdfAppearance;
 
     private async void ToggleInlineOriginalClicked(object? sender, EventArgs args)
     {
@@ -77,6 +78,7 @@ public partial class ReadingPage
         pdfSourceLayout = null;
         inlineDetachedLines = inlineNativeBoxes = [];
         inlineNativeText = "";
+        inlinePdfAppearance = null;
         InlinePdfHighlight.IsVisible = DetachedInlinePdfHighlight.IsVisible = false;
         InlinePdfHighlight.Drawable = DetachedInlinePdfHighlight.Drawable = null;
         SourceText.IsVisible = DetachedPdfText.IsVisible = true;
@@ -135,19 +137,20 @@ public partial class ReadingPage
             PhotoPreview preview;
             OcrLine[] detachedLines = [], nativeBoxes = [];
             string nativeText = "";
+            IReadOnlyDictionary<int, PdfBoxAppearance>? appearance = null;
 #if MACCATALYST
             if (isPdf && await session.OriginalFileAsync(document.Id) is { } file)
             {
                 if (detachedText is not null)
                     detachedLines = (await session.DetachedPdfOcrAsync(document.Id, page))?.Lines ?? [];
-                var canonicalGeometry = detachedText is null &&
-                    document.OcrLines?.Any(line => line.Page == page && line.SourceSpan is not null) == true;
+                var recognized = detachedText is not null ? detachedLines :
+                    document.OcrLines?.Where(line => line.Page == page && line.SourceSpan is not null).ToArray() ?? [];
                 var textStart = document.PdfPageStarts?.ElementAtOrDefault(page)
                     ?? document.Blocks.FirstOrDefault(block => block.Page == page)?.StartUtf16 ?? -1;
                 var expectedText = detachedText is not null ? detachedText.AsMemory()
                     : textStart >= 0 && textStart <= document.Text.Length ? document.Text.AsMemory(textStart) : default;
-                (preview, nativeText, nativeBoxes) = await PdfScan.ReadingPreviewAsync(file.Path, page,
-                    !canonicalGeometry && detachedLines.Length == 0, expectedText);
+                (preview, nativeText, nativeBoxes, appearance) = await PdfScan.ReadingPreviewAsync(file.Path, page,
+                    recognized, expectedText);
             }
             else
 #endif
@@ -172,6 +175,7 @@ public partial class ReadingPage
             inlineDetachedLines = detachedLines;
             inlineNativeBoxes = nativeBoxes;
             inlineNativeText = nativeText;
+            inlinePdfAppearance = appearance;
             lastInlinePdfFollow = null;
             InlinePdfFitToggle.IsVisible = true;
             UpdateInlinePdfFitLabel();
@@ -419,7 +423,8 @@ public partial class ReadingPage
         }
 
         overlay.IsVisible = lines.Length > 0 && sentence is not null;
-        pdfSourceLayout = new(address, lines, offset, sentence);
+        pdfSourceLayout = new(address, lines, offset, sentence,
+            inlineNativeBoxes.Length == 0 || ReferenceEquals(lines, inlineNativeBoxes) ? inlinePdfAppearance : null);
         if (inlinePdfFit == PdfFit.TextWidth) ResizeInlinePdf();
         DrawPdfTranslationLayout();
         if (!overlay.IsVisible || sentence is null)

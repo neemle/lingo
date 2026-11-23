@@ -82,6 +82,8 @@ public sealed class CoreClient : IDisposable
     public string? DetectDocumentLanguage(string name, byte[] bytes) =>
         Call<string?>(new { version = 1, operation = "detect_document_language", name,
             bytes = bytes.Select(value => (int)value).ToArray() });
+    public static uint[] SamplePdfBackgrounds(int width, int height, byte[] rgba, PdfSampleBox[] boxes) =>
+        Invoke<uint[]>(0, new { version = 1, operation = "sample_pdf_backgrounds", width, height, rgba, boxes });
     public Backup Export() => Call<Backup>(new { version = 1, operation = "export" });
     public void ExportBackupFile(string path) =>
         Call<JsonElement>(new { version = 1, operation = "export_backup_file", path });

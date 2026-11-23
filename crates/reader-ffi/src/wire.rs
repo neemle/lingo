@@ -18,6 +18,12 @@ pub enum Command {
         path: String,
     },
     Snapshot,
+    SamplePdfBackgrounds {
+        rgba: String,
+        width: usize,
+        height: usize,
+        boxes: Vec<reader_core::pdf_appearance::SampleBox>,
+    },
     StorageUsage,
     ClearStorage {
         scope: reader_core::storage_management::StorageScope,
