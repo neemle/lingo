@@ -43,9 +43,12 @@ internal static partial class PdfScan
         var pages = new string[count];
         const int openingWindowPages = 3;
         const int openingWindowBytes = 1024 * 1024;
-        // Streamed imports only need the first page and its immediate neighbor.
-        var pageLimit = allowDeferred && new FileInfo(path).Length > Client.MaxImportBytes
-            ? Math.Min(count, 2) : count;
+        const int maxImmediatePages = 32;
+        const int initialPages = 2;
+        // Even a small PDF can require expensive layout extraction across many pages.
+        var deferRemainingPages = allowDeferred &&
+            (count > maxImmediatePages || new FileInfo(path).Length > Client.MaxImportBytes);
+        var pageLimit = deferRemainingPages ? Math.Min(count, initialPages) : count;
         long totalBytes = 0;
         var openingPages = 0;
         for (var index = 0; index < pageLimit; index++)
