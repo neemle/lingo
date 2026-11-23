@@ -463,6 +463,12 @@ pub enum Command {
         sentence_id: String,
         target: String,
     },
+    PassageSource {
+        id: String,
+        page: Option<u16>,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+    },
     CancelModelTranslation {
         #[serde(rename = "requestId")]
         request_id: u64,

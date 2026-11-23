@@ -2,6 +2,12 @@ use crate::{translation::normalize_pdf_translation_input, Document, Result, Stor
 use std::ops::Range;
 
 impl Store {
+    pub fn passage_source(&self, id: &str, page: Option<u16>, sentence_id: &str) -> Result<String> {
+        let (_, text) = self.passage_translation_source(id, page, sentence_id)?;
+        passage_chunks(&text)?;
+        Ok(text)
+    }
+
     pub(crate) fn passage_translation_source(
         &self, id: &str, page: Option<u16>, sentence_id: &str,
     ) -> Result<(String, String)> {

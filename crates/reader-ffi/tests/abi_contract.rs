@@ -29,6 +29,27 @@ fn malformed_requests_are_structured_errors() {
 }
 
 #[test]
+fn passage_source_is_available_before_any_model_translation() {
+    let store = StoreFixture::new();
+    let source = "— Bonjour, monsieur.\n— Vous partez demain ?";
+    let document = call(store.handle, json!({
+        "version": 1, "operation": "import", "name": "dialogue.txt",
+        "language": "fr", "bytes": source.as_bytes(),
+    }));
+    assert_eq!(document["ok"], true, "{document}");
+    let reply = call(store.handle, json!({
+        "version": 1, "operation": "passage_source",
+        "id": document["data"]["id"], "sentenceId": document["data"]["sentences"][0]["id"],
+    }));
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["data"], source);
+    let bad = call(store.handle, json!({
+        "version": 1, "operation": "passage_source", "id": document["data"]["id"], "sentenceId": "",
+    }));
+    assert_error(&bad, "invalid_argument");
+}
+
+#[test]
 fn canceled_pdf_translation_does_not_cancel_a_later_page_request() {
     let store = StoreFixture::new();
     let imported = call(store.handle, json!({

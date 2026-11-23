@@ -104,8 +104,9 @@ public partial class ReadingPage
 
         var result = translation is null ? null :
             $"{(translation.Cached ? "Збережений переклад Qwen" : "Переклад Qwen 2B")}{Environment.NewLine}{translation.Text}";
-        if (modelPassageError is { } failure && failure.Address == address)
-            result = result is null ? failure.Text : $"{result}{Environment.NewLine}{failure.Text}";
+        var failure = CurrentModelFailure(address);
+        if (failure is not null)
+            result = result is null ? failure : $"{result}{Environment.NewLine}{failure}";
         ModelTranslationBusy.IsRunning = ModelTranslationBusy.IsVisible = running && !detached;
         DetachedModelTranslationBusy.IsRunning = DetachedModelTranslationBusy.IsVisible = running && detached;
         ModelTranslationViewport.IsVisible = ModelTranslationResult.IsVisible = !detached && (running || result is not null);
@@ -115,9 +116,11 @@ public partial class ReadingPage
         var textChanged = label.Text != text;
         label.Text = text;
 
-        var canCompare = !running && !string.IsNullOrWhiteSpace(translation?.SourceText);
+        var canShare = !running && !string.IsNullOrWhiteSpace(translation?.SourceText);
+        var canCompare = !running && (canShare || failure is not null);
         ModelTranslationActions.IsVisible = canCompare && !detached;
         DetachedModelTranslationActions.IsVisible = canCompare && detached;
+        ShareModelTranslation.IsVisible = DetachedShareModelTranslation.IsVisible = canShare;
         if (textChanged && (running || result is not null))
         {
             var viewport = detached ? DetachedModelTranslationViewport : ModelTranslationViewport;
@@ -155,17 +158,41 @@ public partial class ReadingPage
     private ModelPassageTranslation? CurrentModelTranslation(ModelPassage? address) =>
         modelPassageResult is { } saved && saved.Address == address ? saved.Translation : null;
 
+    private string? CurrentModelFailure(ModelPassage? address) =>
+        modelPassageError is { } failure && failure.Address == address ? failure.Text : null;
+
     private async void CompareModelTranslationClicked(object? sender, EventArgs args)
     {
-        var address = CurrentModelPassage();
-        if (openingPassageComparison || address is null ||
-            CurrentModelTranslation(address) is not { SourceText: { Length: > 0 } source } translation)
-            return;
+        if (openingPassageComparison || CurrentModelPassage() is not { } address) return;
+        var translation = CurrentModelTranslation(address);
+        var failure = CurrentModelFailure(address);
+        if (translation is null && failure is null) return;
+        openingPassageComparison = true;
+        try
+        {
+            var source = translation?.SourceText;
+            if (string.IsNullOrWhiteSpace(source))
+                source = await AppState.Session.PassageSourceAsync(address.Document, address.Page, address.Sentence);
+            if (!readingPageActive || CurrentModelPassage() != address) return;
 
+            var qwen = translation?.Text;
+            if (failure is not null) qwen = qwen is null ? failure : $"{qwen}{Environment.NewLine}{failure}";
+            await ShowModelComparisonAsync(address, source, qwen ?? "Qwen не повернув перекладу.");
+        }
+        catch (Exception error)
+        {
+            if (readingPageActive && CurrentModelPassage() == address)
+                await DisplayAlertAsync("Порівняння перекладів", error.Message, "Гаразд");
+        }
+        finally { openingPassageComparison = false; }
+    }
+
+    private async Task ShowModelComparisonAsync(ModelPassage address, string source, string qwen)
+    {
         var content = new VerticalStackLayout { Padding = new Thickness(22, 14), Spacing = 12 };
         AddPassageComparisonSection(content, "Оригінал", source);
         var (offlineHeading, offlineText) = AddPassageComparisonSection(content, "Офлайн-переклад", "Перекладаємо уривок…");
-        AddPassageComparisonSection(content, "Qwen", translation.Text);
+        AddPassageComparisonSection(content, "Qwen", qwen);
         var close = new Button { Text = "Закрити", HorizontalOptions = LayoutOptions.End, Margin = new Thickness(12) };
         var layout = new Grid { RowDefinitions = { new(GridLength.Auto), new(GridLength.Star) } };
         layout.Add(close);
@@ -175,16 +202,15 @@ public partial class ReadingPage
         {
             if (Navigation.ModalStack.LastOrDefault() == page) await Navigation.PopModalAsync();
         };
-        openingPassageComparison = true;
+        await Navigation.PushModalAsync(page);
         try
         {
-            await Navigation.PushModalAsync(page);
             var offline = await AppState.Session.TranslateOfflinePassageAsync(
                 address.Document, address.Page, address.Sentence, address.Target);
             if (offline is null)
                 offlineText.Text = "Офлайн-переклад уривка недоступний. Перевірте мовні пакети в налаштуваннях.";
             else if (!string.Equals(offline.SourceText, source, StringComparison.Ordinal))
-                offlineText.Text = "Уривок змінився. Оновіть переклад Qwen і порівняйте знову.";
+                offlineText.Text = "Уривок змінився. Відкрийте порівняння ще раз.";
             else
             {
                 offlineText.Text = offline.Text;
@@ -193,7 +219,6 @@ public partial class ReadingPage
             }
         }
         catch (Exception error) { offlineText.Text = error.Message; }
-        finally { openingPassageComparison = false; }
     }
 
     private static (Label Heading, Label Text) AddPassageComparisonSection(VerticalStackLayout content, string title, string text)

@@ -291,6 +291,9 @@ fn validate(command: &Command) -> Result<()> {
         {
             Err(Error::new("invalid_argument", "Invalid sentence translation address"))
         }
+        Command::PassageSource { id, sentence_id, .. } if !valid_token_address(id, sentence_id) => {
+            Err(Error::new("invalid_argument", "Invalid passage source address"))
+        }
         Command::CorrectDetachedPdfOcr { revision, .. } | Command::FocusDetachedPdfOcrWord { revision, .. }
         | Command::CorrectOcrLine { revision: Some(revision), .. }
             if revision.len() != 64 || !revision.bytes().all(|ch| ch.is_ascii_hexdigit()) =>

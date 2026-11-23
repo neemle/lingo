@@ -675,6 +675,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         Task.Run(() => client.TranslateOfflinePassage(id, page, sentenceId, target));
     public Task<ModelPassageTranslation?> CachedModelTranslationAsync(string id, int? page, string sentenceId, string target) =>
         Task.Run(() => client.CachedModelTranslation(id, page, sentenceId, target));
+    public Task<string> PassageSourceAsync(string id, int? page, string sentenceId) =>
+        Task.Run(() => client.PassageSource(id, page, sentenceId));
 
     public Task<MachineTranslation?> TranslateDictionaryGlossAsync(string id, string source, string gloss, string target = "uk") =>
         Task.Run(() => client.TranslateDictionaryGloss(id, source, gloss, target));

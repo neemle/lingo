@@ -379,6 +379,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             selected_translation(store.translate_selected_text(&id, &target, &selection)),
         Command::TranslateOfflinePassage { id, page, sentence_id, target } =>
             value(store.translate_offline_passage(&id, page, &sentence_id, &target)),
+        Command::PassageSource { id, page, sentence_id } =>
+            value(store.passage_source(&id, page, &sentence_id)),
         Command::ScheduleTranslationWindow { id, sentence_id, revision_id, target } => {
             value(store.schedule_translation_window(&id, &sentence_id, &revision_id, &target))
         }
