@@ -235,7 +235,7 @@ fn standalone_heading(text: &str) -> bool {
         && text.chars().all(|ch| ch.is_uppercase() || ch.is_ascii_digit() || ch.is_whitespace())
 }
 
-fn footnote_start(text: &str) -> bool {
+pub(crate) fn footnote_start(text: &str) -> bool {
     let remainder = text.trim_start_matches(|ch: char| ch.is_ascii_digit());
     if !(1..=2).contains(&(text.len() - remainder.len())) || !remainder.starts_with(char::is_whitespace) {
         return false;
@@ -544,7 +544,7 @@ fn materialize_blocks(text: &str, ranges: Vec<BlockRange>) -> Vec<DocumentBlock>
     blocks
 }
 
-fn pdf_note_references(text: &str, numbers: &[u32]) -> Vec<Range<usize>> {
+pub(crate) fn pdf_note_references(text: &str, numbers: &[u32]) -> Vec<Range<usize>> {
     let mut result = Vec::new();
     let mut letters = 0;
     let mut lower = true;

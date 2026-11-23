@@ -593,6 +593,7 @@ impl Store {
                 }
                 reconcile_ocr_with_layer(old_layer, &mut lines);
                 repair_ocr_drop_caps(old_layer, &mut lines);
+                remove_spurious_ocr_note_punctuation(old_layer, &mut lines);
                 pages[usize::from(page)].clear();
                 let page_text = serde_json::to_string(&pages).map_err(database_error)?;
                 tx.execute("UPDATE file_originals SET pdf_page_text=?2 WHERE document_id=?1",
@@ -708,20 +709,102 @@ impl Store {
     }
 }
 
+fn normalized_ocr_anchor(word: &str) -> String {
+    use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
+    word.nfd()
+        .filter(|&ch| !is_combining_mark(ch))
+        .flat_map(char::to_lowercase)
+        .map(|ch| if ch == '’' { '\'' } else { ch })
+        .collect()
+}
+
+fn remove_spurious_ocr_note_punctuation(reference: &str, lines: &mut [ocr::OcrLine]) {
+    use crate::document_layout::{footnote_start, pdf_note_references};
+    use crate::document_tokens::word_parts;
+
+    const ANCHORS: usize = 4;
+    let numbers: Vec<u32> = reference
+        .lines()
+        .map(str::trim)
+        .filter(|line| footnote_start(line))
+        .filter_map(|line| line.split_whitespace().next()?.parse().ok())
+        .collect();
+    let references = pdf_note_references(reference, &numbers);
+    if references.is_empty() {
+        return;
+    }
+
+    let mut source = String::with_capacity(reference.len());
+    let mut notes = std::collections::BTreeMap::new();
+    let mut offset = 0;
+    for marker in references {
+        source.push_str(&reference[offset..marker.start]);
+        let punctuation = reference[marker.end..]
+            .trim_start_matches([' ', '\u{00a0}', '\u{202f}'])
+            .chars()
+            .next()
+            .filter(|ch| matches!(*ch, '?' | '!' | '*' | '\'' | '’'));
+        notes.insert(source.len(), punctuation);
+        offset = marker.end;
+    }
+    source.push_str(&reference[offset..]);
+    let source_words: Vec<_> = word_parts(&source)
+        .map(|(start, _, text)| {
+            (
+                normalized_ocr_anchor(text),
+                notes.get(&(start + text.len())),
+            )
+        })
+        .take(4097)
+        .collect();
+    if !(ANCHORS + 1..=4096).contains(&source_words.len()) {
+        return;
+    }
+
+    for line in lines {
+        let text = line.reading_text();
+        let words: Vec<_> = word_parts(text)
+            .map(|(start, _, word)| (start + word.len(), normalized_ocr_anchor(word)))
+            .collect();
+        let mut corrected = text.to_owned();
+        for (index, &(end, _)) in words.iter().enumerate().rev() {
+            let Some(mark @ ('?' | '!' | '*' | '\'' | '’')) = text[end..].chars().next() else {
+                continue;
+            };
+            if text[end + mark.len_utf8()..].starts_with(char::is_alphanumeric) {
+                continue;
+            }
+            let after = (words.len() - index - 1).min(ANCHORS - index.min(2));
+            let before = ANCHORS - after;
+            if before > index {
+                continue;
+            }
+            let keys = words[index - before..=index + after]
+                .iter()
+                .map(|(_, key)| key);
+            let mut matches = source_words
+                .windows(ANCHORS + 1)
+                .filter(|sample| sample.iter().map(|(key, _)| key).eq(keys.clone()))
+                .map(|sample| sample[before].1);
+            let removable = |suffix: Option<&Option<char>>| {
+                suffix.is_some_and(|punctuation| *punctuation != Some(mark))
+            };
+            if matches.next().is_some_and(removable) && matches.all(removable) {
+                corrected.replace_range(end..end + mark.len_utf8(), "");
+            }
+        }
+        if corrected != text {
+            line.correction = Some(corrected);
+        }
+    }
+}
 // OCR sometimes reads a two-line initial as part of both text lines.
 fn repair_ocr_drop_caps(reference: &str, lines: &mut [ocr::OcrLine]) {
     use crate::document_tokens::word_parts;
-    use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
 
     const ANCHORS: usize = 4;
-    let fold = |word: &str| {
-        word.nfd()
-            .filter(|&ch| !is_combining_mark(ch))
-            .flat_map(char::to_lowercase)
-            .collect::<String>()
-    };
     let reference: Vec<_> = word_parts(reference)
-        .map(|(_, _, word)| (word, fold(word)))
+        .map(|(_, _, word)| (word, normalized_ocr_anchor(word)))
         .take(4097)
         .collect();
     if !(ANCHORS + 1..=4096).contains(&reference.len()) {
@@ -732,7 +815,7 @@ fn repair_ocr_drop_caps(reference: &str, lines: &mut [ocr::OcrLine]) {
         let anchors: Vec<_> = words
             .iter()
             .take(ANCHORS)
-            .map(|&(_, _, word)| fold(word))
+            .map(|&(_, _, word)| normalized_ocr_anchor(word))
             .collect();
         if anchors.len() != ANCHORS {
             return None;
@@ -1162,5 +1245,35 @@ mod drop_cap_tests {
         lines[1].correction = None;
         repair_ocr_drop_caps(reference, &mut lines);
         assert!(lines.iter().all(|line| line.correction.is_none()));
+    }
+}
+
+#[cfg(test)]
+mod note_punctuation_tests {
+    use super::*;
+
+    #[test]
+    fn confirmed_footnote_stops_splitting_sentences_and_preserves_real_questions() {
+        let layer = "Il monte dans une chaloupe2 pour rejoindre son bateau.\n\
+            Ce n’est pas le capitaine3 qui dirige la manœuvre.\n\
+            Avez-vous vu cette grande chaloupe2 ?\n\
+            Parlez-vous souvent de cette autre chaloupe ?\n\
+            2 Chaloupe : petit bateau non couvert.\n\
+            3 Capitaine : personne qui dirige un bateau.";
+        let mut lines: Vec<_> = [
+            "Il monte dans une chaloupe?",
+            "Ce n'est pas le capitaine' qui dirige la manœuvre.",
+            "Avez-vous vu cette grande chaloupe?",
+            "Parlez-vous souvent de cette autre chaloupe?",
+        ].into_iter().map(|text| ocr::OcrLine {
+            page: 0, text: text.to_owned(), x: 0.1, y: 0.2, width: 0.7, height: 0.02,
+            confidence: None, correction: None, words: vec![], source_span: None,
+        }).collect();
+        remove_spurious_ocr_note_punctuation(layer, &mut lines);
+        assert_eq!(lines[0].reading_text(), "Il monte dans une chaloupe");
+        assert_eq!(lines[1].reading_text(), "Ce n'est pas le capitaine qui dirige la manœuvre.");
+        assert!(lines[2].reading_text().ends_with('?'));
+        assert!(lines[3].reading_text().ends_with('?'));
+        assert_eq!(lines[0].text, "Il monte dans une chaloupe?");
     }
 }
