@@ -7,7 +7,7 @@ namespace Reader.Presentation;
 
 public sealed class PdfOrderedText
 {
-    public readonly record struct WordBounds(double Left, double Right, double MidY, double Height);
+    public readonly record struct WordBounds(double Left, double Right, double MidY, double Height, int? Rotation = null);
     private readonly record struct SourceSlice(int OutputStart, int SourceStart, int Length);
     private readonly record struct Edit(int Start, int End, int? MovedWord);
     private static readonly Regex IsolatedAccent = new(@"(?m)^[ \t]*(à)[ \t\r]*$");
@@ -107,7 +107,8 @@ public sealed class PdfOrderedText
         var words = new List<PdfLayoutWord>();
         foreach (Match token in TextTokens.Matches(Text))
             if (OriginalRange(token.Index, token.Length) is { } original && bounds(original.Start, original.Length) is { } box)
-                words.Add(new(token.Index, token.Index + token.Length, box.Left, box.Right, -box.MidY, box.Height));
+                words.Add(new(token.Index, token.Index + token.Length, box.Left, box.Right, -box.MidY, box.Height,
+                    box.Rotation));
         if (words.Count == 0) return this;
         var edits = Client.SeparatePdfBlocks(Text, words.ToArray(), pageWidth);
         if (edits.Length == 0) return this;

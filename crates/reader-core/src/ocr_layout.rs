@@ -230,7 +230,7 @@ fn reconstruct_columns(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
             let geometry = PositionedWord {
                 start: utf16 + left, end: utf16 + right,
                 left: word.x, right: word.x + word.width,
-                center_y: word.y + word.height / 2.0, height: word.height,
+                center_y: word.y + word.height / 2.0, height: word.height, rotation: None,
             };
             if positioned.len() > first_word &&
                 positioned.last().is_some_and(|last: &PositionedWord| last.start == geometry.start) {

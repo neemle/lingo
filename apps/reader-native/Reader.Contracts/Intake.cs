@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Reader.Contracts;
 
 public sealed record ImportLanguageSample(string? Language, string Sample);
@@ -45,7 +47,8 @@ public sealed record PdfPageTranslationRow(int StartUtf16, int EndUtf16, string?
     string? SourceText = null, string? PivotLanguage = null, string? SourceSentenceId = null, int? SourceBlockIndex = null,
     bool LegacyGroup = false, string? Failure = null);
 public sealed record PdfTextOrderEdit(int StartUtf16, int EndUtf16, string Replacement);
-public readonly record struct PdfLayoutWord(int Start, int End, double Left, double Right, double CenterY, double Height);
+public readonly record struct PdfLayoutWord(int Start, int End, double Left, double Right, double CenterY, double Height,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Rotation = null);
 public sealed record PdfLayoutSlice(int Start, int End, string Separator);
 public sealed record PdfLayoutEdit(int Start, int End, PdfLayoutSlice[] Slices);
 public sealed record PdfLigatureJoin(int Start, int End);

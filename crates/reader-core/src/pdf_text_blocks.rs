@@ -10,6 +10,8 @@ pub struct PositionedWord {
     pub(crate) right: f64,
     pub(crate) center_y: f64,
     pub(crate) height: f64,
+    #[serde(default)]
+    pub(crate) rotation: Option<u16>,
 }
 
 #[derive(Serialize)]
@@ -61,8 +63,53 @@ pub fn ligature_joins(text: &str, words: &[PositionedWord]) -> Result<Vec<Ligatu
 /// Finds page-layout boundaries in UTF-16 text. Geometry uses a top-left coordinate system.
 pub fn separate_blocks(text: &str, words: &[PositionedWord], page_width: f64) -> Result<Vec<BlockEdit>> {
     let units = positioned_utf16(text, words, page_width)?;
+    let mut edits = Vec::new();
+    let (mut word_start, mut text_start) = (0, 0);
+    let mut direction = None;
+    for (index, word) in words.iter().enumerate() {
+        let Some(rotation @ (0 | 90 | 180 | 270)) = word.rotation else { continue; };
+        let run_rotation = *direction.get_or_insert(rotation);
+        if run_rotation == rotation {
+            continue;
+        }
+        let previous_end = words[index - 1].end;
+        let gap = &units[previous_end..word.start];
+        if gap.is_empty() || !whitespace(gap) {
+            continue;
+        }
+        if run_rotation == 0 {
+            edits.extend(horizontal_run(&units, &words[word_start..index], page_width, text_start, previous_end)?);
+        }
+        if line_break_count(gap) < 2 {
+            edits.push(BlockEdit { start: previous_end, end: word.start, slices: Vec::new() });
+        }
+        (word_start, text_start, direction) = (index, word.start, Some(rotation));
+    }
+    if direction.unwrap_or_default() == 0 {
+        edits.extend(horizontal_run(&units, &words[word_start..], page_width, text_start, units.len())?);
+    }
+    Ok(edits)
+}
 
-    separate_positioned_blocks(&units, words, page_width)
+fn horizontal_run(
+    units: &[u16], words: &[PositionedWord], page_width: f64, start: usize, end: usize,
+) -> Result<Vec<BlockEdit>> {
+    if start == 0 {
+        return separate_positioned_blocks(&units[..end], words, page_width);
+    }
+    let relative = words.iter().map(|word| PositionedWord {
+        start: word.start - start, end: word.end - start, ..*word
+    }).collect::<Vec<_>>();
+    let mut edits = separate_positioned_blocks(&units[start..end], &relative, page_width)?;
+    for edit in &mut edits {
+        edit.start += start;
+        edit.end += start;
+        for slice in &mut edit.slices {
+            slice.start += start;
+            slice.end += start;
+        }
+    }
+    Ok(edits)
 }
 
 fn positioned_utf16(text: &str, words: &[PositionedWord], page_width: f64) -> Result<Vec<u16>> {
@@ -164,12 +211,15 @@ fn isolate_block(units: &[u16], start: usize, end: usize, edits: &mut Vec<BlockE
     let after = units[end..].iter().position(|unit| !space(*unit)).map_or(units.len(), |index| end + index);
     for (left, right) in [(before, start), (end, after)] {
         let gap = &units[left..right];
-        let breaks = gap.iter().enumerate().filter(|&(index, &unit)|
-            unit == 13 || unit == 10 && (index == 0 || gap[index - 1] != 13)).count();
-        if left > 0 && right < units.len() && breaks == 1 {
+        if left > 0 && right < units.len() && line_break_count(gap) == 1 {
             edits.push(BlockEdit { start: left, end: right, slices: Vec::new() });
         }
     }
+}
+
+fn line_break_count(gap: &[u16]) -> usize {
+    gap.iter().enumerate().filter(|&(index, &unit)|
+        unit == 13 || unit == 10 && (index == 0 || gap[index - 1] != 13)).count()
 }
 
 // Some OCR providers already emit all lines in the left column before the right column.
@@ -336,6 +386,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn separates_rotated_captions_and_keeps_later_column_ranges_absolute() {
+        let text = "𐐷 Body\r\nCaption\r\n\r\nLeft starts Right starts\nLeft ends Right ends";
+        let words = text.split_whitespace()
+            .zip([10.0, 24.0, 94.0, 10.0, 24.0, 70.0, 85.0, 10.0, 24.0, 70.0, 85.0])
+            .enumerate().scan(0, |cursor, (index, (token, left))| {
+                let start = *cursor + text[*cursor..].find(token).unwrap();
+                *cursor = start + token.len();
+                Some(PositionedWord {
+                    start: text[..start].encode_utf16().count(),
+                    end: text[..*cursor].encode_utf16().count(),
+                    left, right: left + 8.0, center_y: if index < 7 { 10.0 } else { 19.0 },
+                    height: 4.0, rotation: Some(if index == 2 { 90 } else { 0 }),
+                })
+            }).collect::<Vec<_>>();
+        let edits = separate_blocks(text, &words, 100.0).unwrap();
+        let units = text.encode_utf16().collect::<Vec<_>>();
+        assert_eq!(edits.len(), 2);
+        assert_eq!(&units[edits[0].start..edits[0].end], &[13, 10]);
+        assert!(edits[0].slices.is_empty());
+        let layout = &edits[1];
+        assert_eq!(layout.start, words[3].start);
+        let output = layout.slices.iter().map(|part| format!("{}{}", part.separator,
+            String::from_utf16(&units[part.start..part.end]).unwrap())).collect::<String>();
+        assert_eq!(output, "Left starts\nLeft ends\n\nRight starts\nRight ends");
+    }
+
+    #[test]
     fn joins_ligature_gaps_without_touching_real_word_spaces() {
         let text = "𐐷 vérifi ez défi réel";
         let tokens = [("vérifi", 0.0, 30.0), ("ez", 30.01, 38.0),
@@ -344,7 +421,7 @@ mod tests {
             let index = text.find(token).unwrap();
             let start = text[..index].encode_utf16().count();
             PositionedWord { start, end: start + token.encode_utf16().count(), left, right,
-                center_y: 10.0, height: 14.0 }
+                center_y: 10.0, height: 14.0, rotation: None }
         });
         let joins = ligature_joins(text, &words).unwrap();
         assert_eq!(joins.len(), 1);
@@ -363,6 +440,7 @@ mod tests {
                     start, end, left, right: left + 8.0,
                     center_y: if index < 4 { 10.0 } else { 19.0 },
                     height: if index == 4 { 3.0 } else { 4.0 },
+                    rotation: None,
                 })
             }).collect::<Vec<_>>();
         // The same page can also arrive with each OCR axis independently normalized.
@@ -400,7 +478,7 @@ mod tests {
             PositionedWord {
                 start: text[..start].encode_utf16().count(),
                 end: text[..offset].encode_utf16().count(),
-                left, right: left + width, center_y, height: 10.0,
+                left, right: left + width, center_y, height: 10.0, rotation: None,
             }
         });
         let edits = separate_blocks(text, &words, 420.0).unwrap();
@@ -430,6 +508,7 @@ mod tests {
                         start, end: cursor, left, right: left + 5.0 * word.len() as f64,
                         center_y: 20.0 + 14.0 * (if index < 5 { 0 } else if index < 9 { 1 } else { 3 }) as f64,
                         height: 10.0,
+                        rotation: None,
                     }
                 }).collect::<Vec<_>>();
             let edits = separate_blocks(&text, &words, 320.0).unwrap();

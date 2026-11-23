@@ -119,7 +119,6 @@ internal static partial class PdfScan
             using var pool = new NSAutoreleasePool();
             using var document = Open(path);
             using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
-            if (page.Rotation % 360 != 0) return [];
             var raw = page.Text ?? "";
             var text = raw.Trim();
             var offset = raw.Length - raw.TrimStart().Length;
@@ -129,11 +128,12 @@ internal static partial class PdfScan
             var joined = accents.JoinLigatures(Bounds);
             if (accents.Text == storedText && joined.Text != storedText) return joined.Corrections;
             var width = page.GetBoundsForBox(PdfDisplayBox.Crop).Width;
-            var layout = joined.SeparateBlocks(Bounds, width);
+            PdfOrderedText.WordBounds? LayoutBounds(int start, int length) => TextBounds(page, offset + start, length, raw);
+            var layout = joined.SeparateBlocks(LayoutBounds, width);
             if (joined.Text == storedText) return layout.Corrections;
             if (accents.Text != joined.Text)
             {
-                var previousLayout = accents.SeparateBlocks(Bounds, width);
+                var previousLayout = accents.SeparateBlocks(LayoutBounds, width);
                 if (previousLayout.Text == storedText) return previousLayout.JoinLigatures(Bounds).Corrections;
             }
             return PdfOrderedText.MissingBlockBreaks(storedText, layout.Text);
@@ -249,7 +249,7 @@ internal static partial class PdfScan
                 270 => (1 - y - height, 1 - x - width, height, width),
                 _ => (x, 1 - y - height, width, height),
             };
-            var direction = TextDirection(page, offset + original.Start, original.Length, raw, rotation);
+            var direction = TextDirection(page, offset + original.Start, original.Length, raw, box, rotation);
             boxes.Add(new(word.Value, x, y, width, height, null, index,
                 SourceSpan: new(0, 0, word.Index, word.Index + word.Length), Rotation: direction));
             appearance[word.Index] = ReadAppearance(attributes, offset + original.Start, pageHeight, inkSpace);
@@ -260,7 +260,7 @@ internal static partial class PdfScan
 
     private static int DisplayRotation(PdfPage page) => (int)((page.Rotation % 360 + 360) % 360);
 
-    private static int? TextDirection(PdfPage page, int start, int length, string raw, int pageRotation)
+    private static int? TextDirection(PdfPage page, int start, int length, string raw, CGRect word, int pageRotation)
     {
         var source = raw.AsSpan(start, length);
         var split = System.Globalization.StringInfo.GetNextTextElementLength(source);
@@ -268,14 +268,12 @@ internal static partial class PdfScan
 
         // PDFKit character bounds follow the individual text matrix. Selections use page coordinates.
         using var leading = page.GetSelection(new NSRange(start, split));
-        using var trailing = page.GetSelection(new NSRange(start + split, length - split));
-        if (leading is null || trailing is null) return null;
+        if (leading is null) return null;
         var first = leading.GetBoundsForPage(page);
-        var rest = trailing.GetBoundsForPage(page);
-        if (first.IsEmpty || rest.IsEmpty) return null;
+        if (first.IsEmpty) return null;
 
-        var dx = (double)(rest.X - first.X + (rest.Width - first.Width) / 2);
-        var dy = (double)(rest.Y - first.Y + (rest.Height - first.Height) / 2);
+        var dx = (double)(word.X - first.X + (word.Width - first.Width) / 2);
+        var dy = (double)(word.Y - first.Y + (word.Height - first.Height) / 2);
         int direction;
         if (Math.Abs(dx) > Math.Abs(dy) * 1.6) direction = dx > 0 ? 0 : 180;
         else if (Math.Abs(dy) > Math.Abs(dx) * 1.6) direction = dy < 0 ? 90 : 270;
@@ -304,7 +302,7 @@ internal static partial class PdfScan
         var nativeOffset = raw.Length - raw.TrimStart().Length;
         offset = nativeOffset;
         // Existing libraries may already be anchored to PDFKit's original order.
-        if (page.Rotation % 360 != 0 || expected.Span.StartsWith(text.AsSpan(), StringComparison.Ordinal))
+        if (expected.Span.StartsWith(text.AsSpan(), StringComparison.Ordinal))
             return new(text);
         PdfOrderedText.WordBounds? Bounds(int start, int length) => TextBounds(page, nativeOffset + start, length);
         var accents = PdfOrderedText.Repair(text, Bounds);
@@ -312,23 +310,25 @@ internal static partial class PdfScan
         var joined = accents.JoinLigatures(Bounds);
         if (expected.Span.StartsWith(joined.Text.AsSpan(), StringComparison.Ordinal)) return joined;
         var width = page.GetBoundsForBox(PdfDisplayBox.Crop).Width;
-        var layout = joined.SeparateBlocks(Bounds, width);
+        PdfOrderedText.WordBounds? LayoutBounds(int start, int length) => TextBounds(page, nativeOffset + start, length, raw);
+        var layout = joined.SeparateBlocks(LayoutBounds, width);
         if (expected.IsEmpty || accents.Text == joined.Text ||
             expected.Span.StartsWith(layout.Text.AsSpan(), StringComparison.Ordinal))
             return layout;
-        var previousLayout = accents.SeparateBlocks(Bounds, width);
+        var previousLayout = accents.SeparateBlocks(LayoutBounds, width);
         if (expected.Span.StartsWith(previousLayout.Text.AsSpan(), StringComparison.Ordinal)) return previousLayout;
         var upgraded = previousLayout.JoinLigatures(Bounds);
         return expected.Span.StartsWith(upgraded.Text.AsSpan(), StringComparison.Ordinal) ? upgraded : layout;
     }
 
-    private static PdfOrderedText.WordBounds? TextBounds(PdfPage page, int start, int length)
+    private static PdfOrderedText.WordBounds? TextBounds(PdfPage page, int start, int length, string? raw = null)
     {
         using var selection = page.GetSelection(new NSRange(start, length));
         if (selection is null) return null;
         var box = selection.GetBoundsForPage(page);
         if (box.Width <= 0 || box.Height <= 0) return null;
-        return new((double)box.Left, (double)box.Right, (double)(box.Y + box.Height / 2), (double)box.Height);
+        var rotation = raw is null ? null : TextDirection(page, start, length, raw, box, pageRotation: 0);
+        return new((double)box.Left, (double)box.Right, (double)(box.Y + box.Height / 2), (double)box.Height, rotation);
     }
 
     internal static Task RecognizeAsync(byte[] bytes, string language, int expectedPages, int[] pendingPages,
