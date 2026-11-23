@@ -66,10 +66,7 @@ fn repair_text_order(old: &str, changes: &[PdfTextOrderEdit]) -> Result<(String,
         let start = cursor + ocr::byte_at_utf16(&old[cursor..], skip).ok_or_else(invalid)?;
         let end = start + ocr::byte_at_utf16(&old[start..], length).ok_or_else(invalid)?;
         let original = old.get(start..end).ok_or_else(invalid)?;
-        let moved = original.strip_suffix('à').ok_or_else(invalid)?;
-        let replacement = change.replacement.strip_prefix(" à ").ok_or_else(invalid)?;
-        if moved.trim() != replacement || replacement.is_empty()
-            || !moved.starts_with(char::is_whitespace) || !moved.ends_with(char::is_whitespace) {
+        if !valid_pdf_order_edit(original, &change.replacement) {
             return Err(invalid());
         }
         text.push_str(&old[cursor..start]);
@@ -84,6 +81,37 @@ fn repair_text_order(old: &str, changes: &[PdfTextOrderEdit]) -> Result<(String,
     }
     text.push_str(&old[cursor..]);
     Ok((text, edits))
+}
+
+fn valid_pdf_order_edit(original: &str, replacement: &str) -> bool {
+    if let Some((moved, restored)) = original.strip_suffix('à').zip(replacement.strip_prefix(" à ")) {
+        return !restored.is_empty() && moved.trim() == restored
+            && moved.starts_with(char::is_whitespace) && moved.ends_with(char::is_whitespace);
+    }
+    if replacement == "\n\n" {
+        return !original.is_empty() && !original.contains(['\r', '\n']) && original.chars().all(char::is_whitespace);
+    }
+    let line_count = original.lines().count();
+    if original.len() > 8192 || !(4..=48).contains(&line_count) ||
+        line_count % 2 != 0 || replacement.trim() != replacement {
+        return false;
+    }
+    let mut columns = replacement.split("\n\n");
+    let first = columns.next();
+    let middle = columns.next();
+    let last = columns.next();
+    let columns_valid = first.is_some_and(|text| text.lines().count() == line_count / 2)
+        && match (middle, last, columns.next()) {
+            (Some(right), None, None) => right.lines().count() == line_count / 2,
+            (Some(label), Some(right), None) => label.split_whitespace().count() == 1 && right.lines().count() == line_count / 2,
+            _ => false,
+        };
+    if !columns_valid { return false; }
+    let mut before: Vec<_> = original.split_whitespace().collect();
+    let mut after: Vec<_> = replacement.split_whitespace().collect();
+    before.sort_unstable();
+    after.sort_unstable();
+    before == after
 }
 
 #[derive(Debug, Serialize)]
@@ -1406,6 +1434,19 @@ mod drop_cap_tests {
             ).unwrap();
             assert_eq!(saved, (revision.to_owned(), expected, true, 0, 6, "installed route".into()));
         }
+    }
+
+    #[test]
+    fn pdf_layout_repairs_preserve_words_and_create_independent_blocks() {
+        let before = "Left choice\nOR Right choice\ncontinues here.\ncontinues there.";
+        let after = "Left choice\ncontinues here.\n\nOR\n\nRight choice\ncontinues there.";
+        assert!(valid_pdf_order_edit(before, after));
+        assert!(!valid_pdf_order_edit(before, &after.replace("there", "elsewhere")));
+        assert!(valid_pdf_order_edit(" ", "\n\n"));
+        assert!(!valid_pdf_order_edit("text", "\n\n"));
+        let sentences = crate::segment_pdf_with_titles(after, "fixture");
+        let segments = sentences.iter().map(|sentence| sentence.text.as_str()).collect::<Vec<_>>();
+        assert_eq!(segments, ["Left choice\ncontinues here.", "OR", "Right choice\ncontinues there."]);
     }
 
     #[test]

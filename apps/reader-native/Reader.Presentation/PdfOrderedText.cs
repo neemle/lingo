@@ -15,7 +15,6 @@ public sealed class PdfOrderedText
 
     public string Text { get; }
     public PdfTextOrderEdit[] Corrections { get; } = [];
-    public static bool MayNeedRepair(string text) => IsolatedAccent.IsMatch(text);
 
     public PdfOrderedText(string text)
     {
@@ -37,6 +36,50 @@ public sealed class PdfOrderedText
             if (start >= slice.OutputStart && start - slice.OutputStart <= slice.Length - length)
                 return slice.SourceStart + start - slice.OutputStart;
         return null;
+    }
+
+    public PdfOrderedText SeparateBlocks(Func<int, int, WordBounds?> bounds, double pageWidth)
+    {
+        var edits = PdfTextBlocks.Separate(Text, (start, length) =>
+            OriginalOffset(start, length) is { } original ? bounds(original, length) : null, pageWidth);
+        if (edits.Length == 0) return this;
+        var output = new StringBuilder(Text.Length + edits.Length);
+        var sources = new List<SourceSlice>();
+        var changes = new List<PdfTextOrderEdit>();
+        var cursor = 0;
+        foreach (var edit in edits)
+        {
+            AppendSource(cursor, edit.Start);
+            var start = output.Length;
+            if (edit.Slices.Length == 0) output.Append("\n\n");
+            foreach (var slice in edit.Slices)
+            {
+                output.Append(slice.Separator);
+                AppendSource(slice.Start, slice.End);
+            }
+            changes.Add(new(edit.Start, edit.End, output.ToString(start, output.Length - start)));
+            cursor = edit.End;
+        }
+        AppendSource(cursor, Text.Length);
+        return new(output.ToString(), sources.ToArray(), changes.ToArray());
+
+        void AppendSource(int start, int end)
+        {
+            if (end <= start) return;
+            if (slices.Length == 0) sources.Add(new(output.Length, start, end - start));
+            else
+            {
+                foreach (var slice in slices)
+                {
+                    var left = Math.Max(start, slice.OutputStart);
+                    var right = Math.Min(end, slice.OutputStart + slice.Length);
+                    if (left < right)
+                        sources.Add(new(output.Length + left - start, slice.SourceStart + left - slice.OutputStart,
+                            right - left));
+                }
+            }
+            output.Append(Text, start, end - start);
+        }
     }
 
     public static PdfOrderedText Repair(string text, Func<int, int, WordBounds?> bounds)

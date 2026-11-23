@@ -221,7 +221,7 @@ public partial class ReadingPage
         var page = window.Pages.FirstOrDefault(candidate => candidate.Page == window.Center);
         if (document.CurrentRevisionId is not { } revision ||
             page is not { HasOcr: false, State: "textLayer" or "detached" } ||
-            !PdfOrderedText.MayNeedRepair(page.Text))
+            page.Text.Length == 0)
             return false;
 
         var attempt = (document.Id, page.Page, page.Text);

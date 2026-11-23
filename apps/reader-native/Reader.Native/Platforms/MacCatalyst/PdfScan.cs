@@ -110,8 +110,16 @@ internal static class PdfScan
             using var pool = new NSAutoreleasePool();
             using var document = Open(path);
             using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
-            if (!string.Equals(page.Text?.Trim(), storedText, StringComparison.Ordinal)) return [];
-            return TextLayer(page, out _).Corrections;
+            if (page.Rotation % 360 != 0) return [];
+            var raw = page.Text ?? "";
+            var text = raw.Trim();
+            var offset = raw.Length - raw.TrimStart().Length;
+            var layer = PdfOrderedText.Repair(text, (start, length) => TextBounds(page, offset + start, length));
+            if (text == storedText && layer.Text != text) return layer.Corrections;
+            if (layer.Text != storedText) return [];
+            var blocks = layer.SeparateBlocks((start, length) => TextBounds(page, offset + start, length),
+                page.GetBoundsForBox(PdfDisplayBox.Crop).Width);
+            return blocks.Text == storedText ? [] : blocks.Corrections;
         });
 
     internal static Task<string[]> ReadLanguageSamplesAsync(
@@ -229,14 +237,19 @@ internal static class PdfScan
         // Existing libraries may already be anchored to PDFKit's original order.
         if (page.Rotation % 360 != 0 || expected.Span.StartsWith(text.AsSpan(), StringComparison.Ordinal))
             return new(text);
-        return PdfOrderedText.Repair(text, (start, length) =>
-        {
-            using var selection = page.GetSelection(new NSRange(nativeOffset + start, length));
-            if (selection is null) return null;
-            var box = selection.GetBoundsForPage(page);
-            if (box.Width <= 0 || box.Height <= 0) return null;
-            return new((double)box.Left, (double)box.Right, (double)(box.Y + box.Height / 2), (double)box.Height);
-        });
+        var repaired = PdfOrderedText.Repair(text, (start, length) => TextBounds(page, nativeOffset + start, length));
+        if (expected.IsEmpty || expected.Span.StartsWith(repaired.Text.AsSpan(), StringComparison.Ordinal)) return repaired;
+        return repaired.SeparateBlocks((start, length) => TextBounds(page, nativeOffset + start, length),
+            page.GetBoundsForBox(PdfDisplayBox.Crop).Width);
+    }
+
+    private static PdfOrderedText.WordBounds? TextBounds(PdfPage page, int start, int length)
+    {
+        using var selection = page.GetSelection(new NSRange(start, length));
+        if (selection is null) return null;
+        var box = selection.GetBoundsForPage(page);
+        if (box.Width <= 0 || box.Height <= 0) return null;
+        return new((double)box.Left, (double)box.Right, (double)(box.Y + box.Height / 2), (double)box.Height);
     }
 
     internal static Task RecognizeAsync(byte[] bytes, string language, int expectedPages, int[] pendingPages,
