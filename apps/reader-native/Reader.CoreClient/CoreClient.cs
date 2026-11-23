@@ -90,8 +90,8 @@ public sealed class CoreClient : IDisposable
         Invoke<PdfLayoutEdit[]>(0, new { version = 1, operation = "separate_pdf_blocks", text, words, pageWidth });
     public static PdfLigatureJoin[] FindPdfLigatureJoins(string text, PdfLayoutWord[] words) =>
         Invoke<PdfLigatureJoin[]>(0, new { version = 1, operation = "find_pdf_ligature_joins", text, words });
-    public static OcrLine[] ParseOcrTsv(string tsv, int width, int height) =>
-        Invoke<OcrLine[]>(0, new { version = 1, operation = "parse_ocr_tsv", tsv, width, height });
+    public static OcrLine[] ParseOcrTsv(string tsv, int width, int height, string? sparseTsv = null) =>
+        Invoke<OcrLine[]>(0, new { version = 1, operation = "parse_ocr_tsv", tsv, width, height, sparseTsv });
     public Backup Export() => Call<Backup>(new { version = 1, operation = "export" });
     public void ExportBackupFile(string path) =>
         Call<JsonElement>(new { version = 1, operation = "export_backup_file", path });

@@ -144,6 +144,72 @@ fn starts_paragraph(previous: &OcrLine, next: &OcrLine) -> bool {
          gap >= 0.0 && (2.5 * glyph..=0.08).contains(&indent))
 }
 
+/// Use sparse OCR to fill holes without replacing primary text or its reading order.
+pub fn recover_tesseract_lines(
+    primary: Vec<OcrLine>, sparse_tsv: &str, width: u32, height: u32,
+) -> Vec<OcrLine> {
+    if primary.is_empty() {
+        return primary;
+    }
+    let Ok(sparse) = parse_tesseract_tsv(sparse_tsv, width, height) else {
+        return primary;
+    };
+    let horizontal_overlap = |a: &OcrLine, b: &OcrLine| {
+        (a.x + a.width).min(b.x + b.width) - a.x.max(b.x)
+    };
+    let center = |line: &OcrLine| line.y + line.height / 2.0;
+    let same_ink = |a: &OcrLine, b: &OcrLine| {
+        let vertical = (a.y + a.height).min(b.y + b.height) - a.y.max(b.y);
+        vertical >= 0.35 * a.height.min(b.height)
+            && horizontal_overlap(a, b) >= 0.20 * a.width.min(b.width)
+    };
+    let mut additions = BTreeMap::<usize, Vec<OcrLine>>::new();
+    let mut line_count = primary.len();
+    let mut word_count = primary.iter().map(|line| line.words.len()).sum::<usize>();
+    for mut line in sparse.into_iter().filter(|line| {
+        line.confidence.is_some_and(|score| score >= 0.88)
+            && line.words.iter().filter(|word| word.text.chars().any(char::is_alphabetic)).take(2).count() >= 2
+            && line.text.chars().filter(|ch| ch.is_alphabetic()).take(8).count() >= 8
+    }).take(256) {
+        if line_count >= 8192 || word_count + line.words.len() > 65_536 {
+            break;
+        }
+        if primary.iter().any(|row| same_ink(row, &line))
+            || additions.values().flatten().any(|row| same_ink(row, &line))
+        {
+            continue;
+        }
+        let Some((index, anchor)) = primary.iter().enumerate()
+            .filter(|(_, row)| horizontal_overlap(row, &line) >= 0.35 * row.width.min(line.width))
+            .min_by(|(_, a), (_, b)| (center(a) - center(&line)).abs().total_cmp(&(center(b) - center(&line)).abs()))
+        else {
+            continue;
+        };
+        let insertion = index + usize::from(center(anchor) < center(&line));
+        word_count += line.words.len();
+        line_count += 1;
+        // Sparse OCR treats each detection as its own block. Rebuild
+        // paragraph boundaries using the merged neighbours instead.
+        line.block_start = false;
+        additions.entry(insertion).or_default().push(line);
+    }
+    if additions.is_empty() {
+        return primary;
+    }
+    let mut merged = Vec::with_capacity(line_count);
+    for (index, primary) in primary.into_iter().map(Some).chain([None]).enumerate() {
+        if let Some(mut rows) = additions.remove(&index) {
+            rows.sort_by(|a, b| a.y.total_cmp(&b.y).then_with(|| a.x.total_cmp(&b.x)));
+            for mut row in rows {
+                row.block_start = merged.last().is_some_and(|previous| starts_paragraph(previous, &row));
+                merged.push(row);
+            }
+        }
+        merged.extend(primary);
+    }
+    merged
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,5 +246,28 @@ mod tests {
             [false, true, false, false, true]);
         let text = crate::ocr::recognized_lines(&result, 1).unwrap();
         assert_eq!(text, "Le marin arrive.\n\nIl aperçoit M.\nMorrel sur le quai.\nIl appelle le capitaine.\n\n— Bonjour !");
+    }
+
+    #[test]
+    fn sparse_ocr_adds_supported_missing_rows_without_duplicating_primary_text() {
+        const HEADER: &str = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n";
+        let primary = format!("{HEADER}{}", concat!(
+            "5\t1\t1\t1\t1\t1\t10\t10\t75\t5\t96\tFirst paragraph.\n",
+            "5\t1\t1\t1\t2\t1\t10\t40\t75\t5\t96\tThird paragraph.\n",
+        ));
+        let sparse = format!("{HEADER}{}", concat!(
+            "5\t1\t1\t1\t1\t1\t10\t11\t25\t5\t99\tFirst\n",
+            "5\t1\t1\t1\t1\t2\t45\t11\t30\t5\t99\tparagraph.\n",
+            "5\t1\t2\t1\t1\t1\t10\t22\t24\t5\t94\tSecond\n",
+            "5\t1\t2\t1\t1\t2\t43\t22\t35\t5\t94\tparagraph.\n",
+            "5\t1\t3\t1\t1\t1\t10\t32\t25\t5\t9\tdotted\n",
+            "5\t1\t3\t1\t1\t2\t43\t32\t25\t5\t9\tpattern\n",
+        ));
+        let primary = parse_tesseract_tsv(&primary, 100, 100).unwrap();
+        let merged = recover_tesseract_lines(primary, &sparse, 100, 100);
+        assert_eq!(merged.iter().map(|line| line.text.as_str()).collect::<Vec<_>>(),
+            ["First paragraph.", "Second paragraph.", "Third paragraph."]);
+        assert_eq!(merged[1].words[1].raw_start_utf16, Some(7));
+        assert!(merged[1].block_start);
     }
 }

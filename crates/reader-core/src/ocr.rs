@@ -4,7 +4,7 @@ use std::path::Path;
 use crate::{Result, MAX_IMPORT};
 
 mod tesseract;
-pub use tesseract::parse_tesseract_tsv;
+pub use tesseract::{parse_tesseract_tsv, recover_tesseract_lines};
 
 /// Coordinates use the upright image, with the origin in its upper left corner.
 #[derive(Debug, Clone, Serialize, Deserialize)]

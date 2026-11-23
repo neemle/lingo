@@ -61,8 +61,19 @@ internal static class TesseractOcr
                 var output = await ExecuteAsync(executable,
                     ["stdin", "stdout", "-l", Languages[language], "--oem", "1", "--psm", "3", "tsv"], image.Bytes,
                     16 * 1024 * 1024, TimeSpan.FromSeconds(60), cancellation).ConfigureAwait(false);
+                string? sparse = null;
+                try
+                {
+                    sparse = await ExecuteAsync(executable,
+                        ["stdin", "stdout", "-l", Languages[language], "--oem", "1", "--psm", "11", "tsv"], image.Bytes,
+                        16 * 1024 * 1024, TimeSpan.FromSeconds(12), cancellation).ConfigureAwait(false);
+                }
+                catch (Exception error) when (CanFallback(error))
+                {
+                    Debug.WriteLine(error.Message);
+                }
                 cancellation.ThrowIfCancellationRequested();
-                var lines = RustCoreClient.ParseOcrTsv(output, width, height);
+                var lines = RustCoreClient.ParseOcrTsv(output, width, height, sparse);
                 if (lines.Length > 0) return lines;
             }
         }

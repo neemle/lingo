@@ -18,7 +18,13 @@ pub enum Command {
         path: String,
     },
     Snapshot,
-    ParseOcrTsv { tsv: String, width: u32, height: u32 },
+    ParseOcrTsv {
+        tsv: String,
+        width: u32,
+        height: u32,
+        #[serde(default, rename = "sparseTsv")]
+        sparse_tsv: Option<String>,
+    },
     SamplePdfBackgrounds {
         rgba: String,
         width: usize,
