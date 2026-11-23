@@ -193,7 +193,7 @@ pub(crate) fn restore(store: &mut Store, file: File) -> Result<Vec<BackupResourc
     let (mut zip, backup) = open(file)?;
     let _intake = (!backup.pending_intake.is_empty()).then(|| store.lock_intake()).transpose()?;
     let root = &store.file_original_directory;
-    let documents = validate_entries(&mut zip, &backup, Some(root))?;
+    let documents = validate_entries(&mut zip, &backup, Some((root, &store.connection)))?;
     let resources = backup.resources.clone();
 
     // The SQLite write transaction is dropped before this guard on every failure.
@@ -210,13 +210,22 @@ pub(crate) fn restore(store: &mut Store, file: File) -> Result<Vec<BackupResourc
             pdf_page_ocr::merge_backup_cache(&tx, &document, pages, &entry.ocr_completed_pages)?;
         }
         let Some(id) = restore_document(&tx, document, history)? else {
+            let local = if entry.pdf_page_text.is_some() {
+                existing_file_pdf(&tx, &hash)?
+            } else {
+                None
+            };
+            if let Some(local) = &local {
+                if original_file_missing(root, &local.id)? {
+                    published.restore_pdf(&mut zip, root, index, entry, &hash, &local.id, staged)?;
+                }
+            }
             if entry.detached_cache.is_some() {
-                let local = existing_file_pdf(&tx, &hash)?;
                 restore_detached_cache(&mut zip, &tx, index, entry, &backup.snapshot.documents[index], local.as_ref())?;
             }
             continue;
         };
-        if let Some(staged) = staged {
+        if entry.pdf_page_text.is_some() {
             let content = serde_json::to_string(&entry.pdf_page_text).map_err(archive_error)?;
             tx.execute(
                 "INSERT INTO file_originals VALUES (?1,?2,?3,?4)",
@@ -230,10 +239,7 @@ pub(crate) fn restore(store: &mut Store, file: File) -> Result<Vec<BackupResourc
             if entry.detached_cache.is_some() {
                 restore_detached_cache(&mut zip, &tx, index, entry, archive_document, Some(archive_document))?;
             }
-            file_originals::verify_root(root)?;
-            let path = file_originals::original_path(root, &id)?;
-            staged.persist_noclobber(&path).map_err(archive_error)?;
-            published.paths.push(path);
+            published.restore_pdf(&mut zip, root, index, entry, &hash, &id, staged)?;
         } else {
             let bytes = read_inline(&mut zip, index, entry, &hash)?;
             tx.execute(
@@ -323,6 +329,24 @@ fn restore_detached_cache(
 #[derive(Default)]
 struct PublishedFiles {
     paths: Vec<PathBuf>,
+}
+
+impl PublishedFiles {
+    fn restore_pdf(
+        &mut self, zip: &mut ZipArchive<BufReader<File>>, root: &Path, index: usize,
+        entry: &OriginalEntry, hash: &str, id: &str, staged: Option<NamedTempFile>,
+    ) -> Result<()> {
+        // A previously present original may have disappeared while the archive was validated.
+        let staged = match staged {
+            Some(staged) => staged,
+            None => stage_pdf_original(zip, root, index, entry, hash)?,
+        };
+        file_originals::verify_root(root)?;
+        let path = file_originals::original_path(root, id)?;
+        staged.persist_noclobber(&path).map_err(archive_error)?;
+        self.paths.push(path);
+        Ok(())
+    }
 }
 
 impl Drop for PublishedFiles {
@@ -464,7 +488,7 @@ type ValidatedDocument = (Document, Vec<DocumentRevision>, Option<NamedTempFile>
 fn validate_entries(
     zip: &mut ZipArchive<BufReader<File>>,
     backup: &Manifest,
-    staging: Option<&Path>,
+    staging: Option<(&Path, &Connection)>,
 ) -> Result<Vec<ValidatedDocument>> {
     read_model_hints(zip, backup, |_| Ok(()))?;
     let mut revisions = revision_groups(
@@ -472,6 +496,12 @@ fn validate_entries(
         backup.snapshot.documents.iter().map(|doc| doc.id.as_str()),
     )?;
     let mut documents = Vec::with_capacity(backup.originals.len());
+    let mut local_pdf = staging.map(|(_, db)| {
+        db.prepare_cached(
+            "SELECT documents.id FROM documents JOIN file_originals ON file_originals.document_id=documents.id
+             WHERE documents.source_hash=?1",
+        ).map_err(archive_error)
+    }).transpose()?;
     for (index, (entry, doc)) in backup
         .originals
         .iter()
@@ -480,19 +510,24 @@ fn validate_entries(
     {
         let history = revisions.remove(doc.id.as_str());
         let prepared = if let Some(pages) = &entry.pdf_page_text {
-            let mut staged = staging
-                .map(|root| {
+            let stage_root = if let (Some((root, _)), Some(local_pdf)) = (staging, &mut local_pdf) {
+                let local_id = local_pdf.query_row([&doc.source_hash], |row| row.get::<_, String>(0))
+                    .optional().map_err(archive_error)?;
+                if let Some(id) = local_id {
                     file_originals::ensure_root(root)?;
-                    file_originals::stage_original(root)
-                })
-                .transpose()?;
-            let data = original_entry(zip, index, entry)?;
-            if let Some(file) = &mut staged {
-                copy_original(data, file.as_file_mut(), entry.size, &doc.source_hash, true)?;
-                file.as_file().sync_all().map_err(archive_error)?;
+                    original_file_missing(root, &id)?.then_some(root)
+                } else {
+                    Some(root)
+                }
             } else {
-                copy_original(data, io::sink(), entry.size, &doc.source_hash, true)?;
-            }
+                None
+            };
+            let staged = if let Some(root) = stage_root {
+                Some(stage_pdf_original(zip, root, index, entry, &doc.source_hash)?)
+            } else {
+                copy_original(original_entry(zip, index, entry)?, io::sink(), entry.size, &doc.source_hash, true)?;
+                None
+            };
             let lines = doc.ocr_lines.as_deref().ok_or("У PDF немає даних OCR")?;
             let (text, offsets) = pdf_layers::merge_page_text(pages.clone(), lines)?;
             let parsed = document_layout::from_transcript(text, Some(offsets));
@@ -516,6 +551,26 @@ fn validate_entries(
         }
     }
     Ok(documents)
+}
+
+fn original_file_missing(root: &Path, id: &str) -> Result<bool> {
+    let path = file_originals::original_path(root, id)?;
+    match path.symlink_metadata() {
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(archive_error(error)),
+    }
+}
+
+fn stage_pdf_original(
+    zip: &mut ZipArchive<BufReader<File>>, root: &Path, index: usize,
+    entry: &OriginalEntry, hash: &str,
+) -> Result<NamedTempFile> {
+    file_originals::ensure_root(root)?;
+    let mut staged = file_originals::stage_original(root)?;
+    copy_original(original_entry(zip, index, entry)?, staged.as_file_mut(), entry.size, hash, true)?;
+    staged.as_file().sync_all().map_err(archive_error)?;
+    Ok(staged)
 }
 
 fn read_detached_cache(
@@ -731,6 +786,15 @@ mod tests {
         assert_eq!(inspect_backup_file(&archive).unwrap().documents, 2);
         let mut target = Store::open(&root.path().join("target.db")).unwrap();
         target.restore_backup_file(&archive).unwrap();
+        {
+            let (mut zip, manifest) = open(File::open(&archive).unwrap()).unwrap();
+            let staging = (target.pdf_original_root(), &target.connection);
+            let validated = validate_entries(&mut zip, &manifest, Some(staging)).unwrap();
+            assert!(validated.iter().all(|(_, _, staged)| staged.is_none()));
+        }
+        let original = target.original_file(&large.id).unwrap().unwrap().path;
+        fs::remove_file(&original).unwrap();
+        assert!(target.original_file(&large.id).is_err());
         target.restore_backup_file(&archive).unwrap();
         let documents = target.snapshot().unwrap().documents;
         assert_eq!(documents.len(), 2);
@@ -744,6 +808,7 @@ mod tests {
             b"An older original."
         );
         let path = target.original_file(&large.id).unwrap().unwrap().path;
+        assert_eq!(path, original);
         copy_original(
             File::open(path).unwrap(),
             io::sink(),
@@ -768,6 +833,8 @@ mod tests {
         damaged.write_all(b"x").unwrap();
         drop(damaged);
         assert!(inspect_backup_file(&archive).is_err());
+        assert!(target.restore_backup_file(&archive).is_err());
+        assert!(target.original_file(&large.id).unwrap().is_some());
         let mut empty = Store::open(&root.path().join("empty.db")).unwrap();
         assert!(empty.restore_backup_file(&archive).is_err());
         assert!(empty.snapshot().unwrap().documents.is_empty());
