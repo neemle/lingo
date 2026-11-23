@@ -495,15 +495,14 @@ impl Store {
             let start = lines.partition_point(|line| line.page < page);
             let end = lines.partition_point(|line| line.page <= page);
             let page_lines = &mut lines[start..end];
-            let was_raw: Vec<_> = page_lines.iter().map(|line| line.correction.is_none()).collect();
+            let previous: Vec<_> = page_lines.iter().map(|line| line.reading_text().to_owned()).collect();
             changed = reconcile(page_lines)?;
             if changed {
                 let mut edits = Vec::new();
-                for (line, _) in page_lines.iter().zip(was_raw)
-                    .filter(|(line, was_raw)| *was_raw && line.correction.is_some())
+                for (line, old) in page_lines.iter().zip(previous.iter().map(String::as_str))
+                    .filter(|(line, old)| line.reading_text() != *old)
                 {
                     let span = line.source_span.ok_or("Розпізнаний рядок не має позиції в тексті.")?;
-                    let old = line.text.trim();
                     let new = line.reading_text();
                     edits.extend(ocr::word_replacement_edits(span.start_utf16, old, new)
                         .unwrap_or_else(|| vec![ocr::TranscriptEdit {
@@ -902,15 +901,18 @@ pub(crate) fn reconcile_ocr_with_layer(reference: &str, lines: &mut [ocr::OcrLin
 
     let mut changed = false;
     let mut remaining = MAX_LAYER_WORDS;
-    for line in lines.iter_mut().filter(|line| line.correction.is_none()) {
-        let words: Vec<_> = word_parts(&line.text).take(remaining + 1).collect();
+    for line in lines {
+        let text = line.reading_text();
+        let words: Vec<_> = word_parts(text).take(remaining + 1).collect();
         if words.len() > remaining { break; }
         remaining -= words.len();
-        let mut corrected = line.text.clone();
+        let unchanged = line.unchanged_word_starts();
+        let mut corrected = text.to_owned();
         for (index, &(start, _, word)) in words.iter().enumerate().rev() {
             let after = (words.len() - index - 1).min(CONTEXT - index.min(2));
             let before = CONTEXT - after;
-            if index < before || word.chars().count() < 4 ||
+            if index < before || unchanged.as_ref().is_some_and(|starts| starts.binary_search(&start).is_err()) ||
+                word.chars().count() < 4 ||
                 !word.chars().all(char::is_alphabetic)
             {
                 continue;
@@ -929,7 +931,7 @@ pub(crate) fn reconcile_ocr_with_layer(reference: &str, lines: &mut [ocr::OcrLin
                 corrected.replace_range(start..start + word.len(), candidate);
             }
         }
-        if corrected != line.text {
+        if corrected != text {
             line.correction = Some(corrected);
             changed = true;
         }
@@ -1246,6 +1248,8 @@ mod drop_cap_tests {
         assert_eq!(lines[0].reading_text(), "Le 15 fevrier 1815, à Marseille.");
         assert_eq!(lines[1].reading_text(), "entre dans le port. Il revient.");
         assert!(lines[0].text.starts_with('©'));
+        assert!(reconcile_ocr_with_layer(reference, &mut lines));
+        assert_eq!(lines[0].reading_text(), "Le 15 février 1815, à Marseille.");
 
         lines[0].correction = None;
         lines[0].height = 0.024;

@@ -381,10 +381,8 @@ impl Store {
         db: &Connection, language: &str, lines: &mut [crate::ocr::OcrLine],
     ) -> Result<bool> {
         let mut changed = false;
-        for line in lines.iter_mut().filter(|line| {
-            line.correction.is_none() && line.confidence.is_some_and(|value| value < 0.92)
-        }) {
-            if let Some(revised) = ocr_suggestions::revise_line(db, language, &line.text)? {
+        for line in lines.iter_mut().filter(|line| line.confidence.is_some_and(|value| value < 0.92)) {
+            if let Some(revised) = ocr_suggestions::revise_line(db, language, line)? {
                 if revised.len() <= 8192 {
                     line.correction = Some(revised);
                     changed = true;
@@ -882,8 +880,18 @@ mod tests {
             page, text: raw.into(), x: 0.1, y: 0.1, width: 0.8, height: 0.1,
             confidence: Some(0.8), correction: None, words: vec![], source_span: None,
         };
-        let document = store.cache_pdf_ocr_page(&document.id, 0, vec![line(0)]).unwrap();
-        pdf_detached_pages::write_ocr(&store.connection, &document.id, 1, "en", &[line(1)], 2).unwrap();
+        let protected = |page| OcrLine { text: "A magic book.".into(), y: 0.4, ..line(page) };
+        let document = store.cache_pdf_ocr_page(&document.id, 0, vec![line(0), protected(0)]).unwrap();
+        store.correct_ocr_line(&document.id, 0, Some("A rnagic book!".into())).unwrap();
+        store.correct_ocr_line(&document.id, 1, Some("A rnagic book.".into())).unwrap();
+        let document = store.translation_document(&document.id).unwrap();
+        pdf_detached_pages::write_ocr(&store.connection, &document.id, 1, "en", &[line(1), protected(1)], 2).unwrap();
+        for (index, text) in ["A rnagic book!", "A rnagic book."].into_iter().enumerate() {
+            let detached = serde_json::to_value(store.detached_pdf_ocr(&document.id, 1).unwrap()).unwrap();
+            store.correct_detached_pdf_ocr(
+                &document.id, 1, detached["revision"].as_str().unwrap(), index, Some(text.into()),
+            ).unwrap();
+        }
         let detached = serde_json::to_value(store.detached_pdf_ocr(&document.id, 1).unwrap()).unwrap();
         let path = PACKS[0].path(&store.knowledge_directory);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -899,12 +907,16 @@ mod tests {
             &document.id, 1, detached["revision"].as_str().unwrap(), "en", "", true,
         ).unwrap());
         let snapshot = store.snapshot().unwrap();
-        let canonical = &snapshot.documents[0].ocr_lines.as_ref().unwrap()[0];
+        let canonical = snapshot.documents[0].ocr_lines.as_ref().unwrap();
         let detached = store.detached_pdf_ocr(&document.id, 1).unwrap().unwrap();
-        for line in [canonical, &detached.lines[0]] {
-            assert_eq!(line.text, raw);
-            assert_eq!(line.reading_text(), "A magic book.");
+        for lines in [canonical, &detached.lines] {
+            assert_eq!(lines[0].text, raw);
+            assert_eq!(lines[0].reading_text(), "A magic book!");
+            assert_eq!(lines[1].reading_text(), "A rnagic book.");
         }
+        assert!(!store.reconcile_pdf_ocr_page(
+            &document.id, 0, snapshot.documents[0].current_revision_id.as_deref().unwrap(), "en", "", false,
+        ).unwrap());
     }
 
     #[test]

@@ -50,6 +50,25 @@ impl OcrLine {
     pub fn reading_text(&self) -> &str {
         self.correction.as_deref().unwrap_or(&self.text).trim()
     }
+
+    pub(crate) fn unchanged_word_starts(&self) -> Option<Vec<usize>> {
+        use crate::document_tokens::word_parts;
+        self.correction.as_ref()?;
+        let raw: Vec<_> = word_parts(self.text.trim()).map(|(_, _, word)| word).collect();
+        let reading: Vec<_> = word_parts(self.reading_text()).collect();
+        if raw.len() != reading.len() {
+            // A restored or removed token can shift the rest of the line. Only the
+            // matching prefix and suffix have a clear correspondence in this case.
+            let prefix = raw.iter().zip(&reading).take_while(|(raw, (_, _, current))| *raw == current).count();
+            let suffix = raw[prefix..].iter().rev().zip(reading[prefix..].iter().rev())
+                .take_while(|(raw, (_, _, current))| *raw == current).count();
+            return Some(reading[..prefix].iter().chain(&reading[reading.len() - suffix..])
+                .map(|(start, _, _)| *start).collect());
+        }
+        Some(raw.into_iter().zip(reading)
+            .filter_map(|(raw, (start, _, current))| (raw == current).then_some(start))
+            .collect())
+    }
 }
 
 fn valid_text(value: &str) -> bool {

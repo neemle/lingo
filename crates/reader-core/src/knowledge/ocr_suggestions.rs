@@ -182,14 +182,17 @@ fn spacing_hint(
 }
 
 /// Only change a missing form if exactly one candidate is observed beside both source neighbors.
-pub(super) fn revise_line(db: &Connection, language: &str, text: &str) -> Result<Option<String>> {
+pub(super) fn revise_line(db: &Connection, language: &str, line: &crate::ocr::OcrLine) -> Result<Option<String>> {
+    let text = line.reading_text();
+    let unchanged = line.unchanged_word_starts();
     let words: Vec<_> = word_parts(text).take(120).collect();
     let mut attested = db.prepare_cached("SELECT EXISTS(SELECT 1 FROM forms WHERE term=?1)")
         .map_err(|error| error.to_string())?;
     let mut edited = None;
     for neighbors in words.windows(3).rev() {
         let [(_, _, left), (offset, _, word), (_, _, right)] = neighbors else { continue; };
-        if !word.starts_with(char::is_lowercase) || word.chars().take(4).count() < 4 ||
+        if unchanged.as_ref().is_some_and(|starts| starts.binary_search(offset).is_err()) ||
+            !word.starts_with(char::is_lowercase) || word.chars().take(4).count() < 4 ||
             attested_form(&mut attested, word)? {
             continue;
         }

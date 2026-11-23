@@ -119,16 +119,16 @@ impl Store {
         if previous.revision != revision || current_language != language {
             return Err("Текст або мова PDF змінилися. Відкрийте сторінку знову.".into());
         }
-        let uncorrected: Vec<_> = previous.lines.iter().map(|line| line.correction.is_none()).collect();
+        let previous_lines: Vec<_> = previous.lines.iter().map(|line| line.reading_text().to_owned()).collect();
         if !reconcile(&mut previous.lines)? {
             return Ok(false);
         }
         let mut edits = Vec::new();
-        for (line, _) in previous.lines.iter().zip(uncorrected)
-            .filter(|(line, was_raw)| *was_raw && line.correction.is_some())
+        for (line, old) in previous.lines.iter().zip(previous_lines.iter().map(String::as_str))
+            .filter(|(line, old)| line.reading_text() != *old)
         {
             let start = line.source_span.ok_or("Розпізнаний рядок не має позиції в тексті.")?.start_utf16;
-            edits.extend(Edit::for_line(start, line.text.trim(), line.reading_text()));
+            edits.extend(Edit::for_line(start, old, line.reading_text()));
         }
         save_ocr_edits(&tx, id, page, &old_text, previous.lines, &edits)?;
         tx.commit().map_err(database_error)?;
