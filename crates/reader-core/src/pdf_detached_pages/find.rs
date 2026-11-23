@@ -1,4 +1,5 @@
 use super::{database_error, translation};
+use crate::translation::{PageBoundaries, TranslationSearchFragment, UnitGrouping};
 use crate::{Result, Store};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -28,6 +29,8 @@ pub struct DetachedPdfFindHit {
     reviewed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     source_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pdf_fragment: Option<TranslationSearchFragment>,
 }
 
 #[derive(Serialize)]
@@ -80,13 +83,18 @@ impl Store {
             let text: String = row.get(1).map_err(database_error)?;
             let prefix = super::sentence_prefix(id, page, &super::page_revision(&text));
             let sentences = super::Layout::from_storage(row.get(2).map_err(database_error)?).segment(&text, &prefix);
+            let local_start = sentences.first().map_or(0, |sentence| sentence.start_utf16);
             let (projection, original) = if let Some((target, source, _)) = &routes {
                 (Some(self.project_pdf_translation_page(id, page, target, text, sentences, source.clone())?), Vec::new())
             } else {
                 (None, sentences)
             };
             let sentences = projection.as_ref().map_or(original.as_slice(), translation::PageProjection::physical_sentences);
+            let projected_offset = sentences.first().map_or(0, |sentence| sentence.start_utf16 - local_start);
+            let layout = projection.as_ref().zip(routes.as_ref())
+                .and_then(|(projection, (target, _, _))| projection.ocr_search_projection(target));
             for (position, sentence) in sentences.iter().enumerate().skip(first_position) {
+                let mut pdf_fragment = None;
                 let (text, pivot_language, reviewed, source_text) =
                     if let (Some((target, _, routes)), Some(projection)) = (&routes, &projection) {
                         if scanned_sentences == MAX_TRANSLATION_SCAN_SENTENCES {
@@ -94,7 +102,30 @@ impl Store {
                             return Ok(result);
                         }
                         scanned_sentences += 1;
-                        if let Some(text) = projection.reviewed(&sentence.id, target) {
+                        let split = layout.as_ref().and_then(|layout| {
+                            let first = layout.sentences.partition_point(|part| part.end_utf16 <= sentence.start_utf16);
+                            let last = layout.sentences.partition_point(|part| part.start_utf16 < sentence.end_utf16);
+                            (last > first + 1).then_some((layout, first..last))
+                        });
+                        if let Some((layout, fragments)) = split {
+                            let mut matched = None;
+                            for index in fragments {
+                                let Some(text) = routes.cached_pdf_row(
+                                    self, layout, index, target, PageBoundaries::Projected, UnitGrouping::Sentence,
+                                )?.and_then(|row| row.translation) else { continue; };
+                                if !search_text(&text).contains(&needle) { continue; }
+                                let part = &layout.sentences[index];
+                                pdf_fragment = Some(TranslationSearchFragment {
+                                    page,
+                                    start_utf16: part.start_utf16 - projected_offset,
+                                    end_utf16: part.end_utf16 - projected_offset,
+                                });
+                                matched = Some(text);
+                                break;
+                            }
+                            let Some(text) = matched else { continue; };
+                            (text, None, None, None)
+                        } else if let Some(text) = projection.reviewed(&sentence.id, target) {
                             (text.to_owned(), None, Some(true), None)
                         } else if let Some(hit) = translation::cached_page_translation(self, routes, projection, position, target, true)? {
                             if hit.start_position != position { continue; }
@@ -111,14 +142,14 @@ impl Store {
                     result.next = Some(DetachedPdfFindCursor { page, position });
                     return Ok(result);
                 }
-                let text = if reviewed.is_some() || text.chars().take(513).count() <= 512 {
+                let text = if reviewed.is_some() || pdf_fragment.is_some() || text.chars().take(513).count() <= 512 {
                     text
                 } else {
                     let excerpt: String = normalized[offset..].chars().take(512).collect();
                     if offset == 0 { excerpt } else { format!("…{excerpt}") }
                 };
                 result.matches.push(DetachedPdfFindHit {
-                    page, position, sentence_id: sentence.id.clone(), text, pivot_language, reviewed, source_text,
+                    page, position, sentence_id: sentence.id.clone(), text, pivot_language, reviewed, source_text, pdf_fragment,
                 });
             }
         }

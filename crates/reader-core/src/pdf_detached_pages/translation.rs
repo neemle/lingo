@@ -64,6 +64,10 @@ impl PageProjection {
             .map(String::as_str)
     }
 
+    pub(super) fn ocr_search_projection(&self, target: &str) -> Option<Document> {
+        ocr_search_projection(&self.document, self.physical.clone(), None, target)
+    }
+
     fn localize(&self, mut result: DetachedPdfTranslation) -> DetachedPdfTranslation {
         result.start_position = result.start_position.saturating_sub(self.physical.start);
         result
@@ -383,7 +387,11 @@ pub(crate) fn canonical_ocr_search_projection(document: &Document, page: u16, ta
     let (start, end) = crate::pdf_reading_position::page_bounds(document, page)?;
     let physical = document.sentences.partition_point(|s| s.end_utf16 <= start)
         ..document.sentences.partition_point(|s| s.start_utf16 < end);
-    let units = split_ocr_sentences(document, physical.clone(), Some(page), target)?;
+    ocr_search_projection(document, physical, Some(page), target)
+}
+
+fn ocr_search_projection(document: &Document, physical: Range<usize>, page: Option<u16>, target: &str) -> Option<Document> {
+    let units = split_ocr_sentences(document, physical.clone(), page, target)?;
     let mut projection = document.clone();
     projection.sentences.splice(physical, units);
     Some(projection)

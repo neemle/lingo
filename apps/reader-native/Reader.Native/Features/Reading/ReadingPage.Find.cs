@@ -426,7 +426,8 @@ public partial class ReadingPage
                 matches.AddRange(found.Matches.Select(hit => new DocumentFindHit(hit.Text,
                     new DocumentFindSelection(hit.Position, Translation: language is not null,
                         PhysicalPage: hit.Page, SentenceId: hit.SentenceId,
-                        CachedMachine: hit.Reviewed == false ? new DetachedPdfTranslation(hit.Text, hit.PivotLanguage, hit.SourceText, hit.Position) : null))));
+                        CachedMachine: hit.Reviewed == false ? new DetachedPdfTranslation(hit.Text, hit.PivotLanguage, hit.SourceText, hit.Position) : null,
+                        PdfFragment: hit.PdfFragment))));
                 if (found.Next is not { } next || next == cursor) return new(matches.ToArray(), null);
                 space = DocumentFind.PageSize - matches.Count;
                 cursor = next;

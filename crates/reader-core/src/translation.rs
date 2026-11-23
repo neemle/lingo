@@ -905,9 +905,9 @@ pub struct TranslationSearchMatch {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationSearchFragment {
-    page: u16,
-    start_utf16: usize,
-    end_utf16: usize,
+    pub(crate) page: u16,
+    pub(crate) start_utf16: usize,
+    pub(crate) end_utf16: usize,
 }
 
 pub(crate) fn search_cached_translation(

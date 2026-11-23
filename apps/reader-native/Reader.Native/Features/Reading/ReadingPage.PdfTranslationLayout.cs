@@ -553,8 +553,11 @@ public partial class ReadingPage
             focus.Address == pdfLayoutRequest && focus.Address.Source == page && focus.SentenceId == sentence.Id)
             return sentence with { StartUtf16 = focus.Start, EndUtf16 = focus.End };
         if (sentence is not null && documentFindFocus is { PdfFragment: { } fragment } found &&
-            page.DetachedText is null && found.Document == page.Document && found.Revision == page.Revision &&
-            found.Target == TargetCode && found.Sentence == sentence.Id && fragment.Page == page.Page)
+            found.Document == page.Document && found.Target == TargetCode &&
+            found.Sentence == sentence.Id && fragment.Page == page.Page &&
+            (page.DetachedText is null
+                ? found.Page is null && found.Revision == page.Revision
+                : found.Page == page.Page && found.Revision == detachedSentence?.RevisionId))
             return sentence with { StartUtf16 = fragment.StartUtf16, EndUtf16 = fragment.EndUtf16 };
         return sentence;
     }
