@@ -240,16 +240,23 @@ public partial class ReadingPage
         if (source is null || inlinePdfAddress is not { } address ||
             !overlay.IsVisible || overlay.Drawable is not PdfReadingHighlight drawing ||
             args.GetPosition(view) is not { } point ||
-            drawing.SelectionAt(source, point, (float)view.Width, (float)view.Height) is not { } hit) return;
+            drawing.HitAt(source.Length, point, (float)view.Width, (float)view.Height) is not { } hit) return;
 
+        if (!hit.IsWord)
+        {
+            await SelectPdfSourceRangeAsync(address, hit.Start, hit.End);
+            return;
+        }
+
+        if (SourceRanges.Selection(source, hit.Start, hit.End - hit.Start) is not { } selected) return;
         var anchor = new PdfWordAnchor(view, address, hit.Bounds);
         if (detached)
         {
-            await ShowDetachedSelectionAsync(hit.Selection, anchor);
+            await ShowDetachedSelectionAsync(selected, anchor);
         }
         else
         {
-            await ShowWordAsync(hit.Selection, anchor);
+            await ShowWordAsync(selected, anchor);
         }
     }
 
@@ -435,30 +442,42 @@ public partial class ReadingPage
             return top < bottom ? (top, bottom) : null;
         }
 
-        internal (TextSelection Selection, Rect Bounds)? SelectionAt(string source, Point point, float viewWidth, float viewHeight)
+        internal (int Start, int End, Rect Bounds, bool IsWord)? HitAt(
+            int sourceLength, Point point, float viewWidth, float viewHeight)
         {
             var fit = OriginalPage.AspectFit(new RectF(0, 0, viewWidth, viewHeight), width, height);
             if (fit.Width <= 0 || fit.Height <= 0) return null;
             var x = (point.X - fit.X) / fit.Width;
             var y = (point.Y - fit.Y) / fit.Height;
+            (int Start, int End, Rect Bounds, bool IsWord)? lineHit = null;
             foreach (var line in lines)
             {
-                if (nativeWords && x >= line.X && x <= line.X + line.Width &&
-                    y >= line.Y && y <= line.Y + line.Height && line.SourceSpan is { } nativeSpan)
-                    return ToSelection(nativeSpan, new Rect(line.X, line.Y, line.Width, line.Height));
+                if (x >= line.X && x <= line.X + line.Width &&
+                    y >= line.Y && y <= line.Y + line.Height && line.SourceSpan is { } lineSpan)
+                {
+                    var bounds = new Rect(line.X, line.Y, line.Width, line.Height);
+                    var candidate = ToHit(lineSpan, bounds, isWord: nativeWords);
+                    if (nativeWords && candidate is not null) return candidate;
+                    lineHit ??= candidate;
+                }
 
                 foreach (var word in line.Words ?? [])
                 {
                     if (x >= word.X && x <= word.X + word.Width && y >= word.Y && y <= word.Y + word.Height &&
-                        word.SourceSpan is { } span)
-                        return ToSelection(span, new Rect(word.X, word.Y, word.Width, word.Height));
+                        word.SourceSpan is { } span &&
+                        ToHit(span, new Rect(word.X, word.Y, word.Width, word.Height), isWord: true) is { } hit)
+                        return hit;
                 }
             }
-            return null;
+            return lineHit;
 
-            (TextSelection Selection, Rect Bounds)? ToSelection(OcrSpan span, Rect bounds) =>
-                SourceRanges.Selection(source, span.StartUtf16 + offset, span.EndUtf16 - span.StartUtf16) is { } selection
-                    ? (selection, bounds) : null;
+            (int Start, int End, Rect Bounds, bool IsWord)? ToHit(OcrSpan span, Rect bounds, bool isWord)
+            {
+                var first = span.StartUtf16 + offset;
+                var last = span.EndUtf16 + offset;
+                return first >= 0 && first < last && last <= sourceLength
+                    ? (first, last, bounds, isWord) : null;
+            }
         }
 
         private bool Overlaps(OcrSpan? span, int rangeStart, int rangeEnd) =>

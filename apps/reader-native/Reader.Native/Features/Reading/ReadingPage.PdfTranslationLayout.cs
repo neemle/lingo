@@ -8,7 +8,10 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage
 {
-    private sealed record PdfLayoutAddress(string Document, int Page, string? Revision, string Target, string? DetachedText);
+    private sealed record PdfLayoutAddress(string Document, int Page, string? Revision, string Target, string? DetachedText)
+    {
+        public InlinePdfAddress Source => new(Document, Page, Revision, DetachedText);
+    }
     private sealed record PdfAutoTranslation(PdfLayoutAddress Address, int RouteRequest);
     private sealed record PdfSourceLayout(InlinePdfAddress Page, OcrLine[] Lines, int Offset, Sentence? Sentence)
     {
@@ -311,7 +314,7 @@ public partial class ReadingPage
             readingLayout = ReaderLayout.Automatic;
             ArrangeReadingColumns();
         }
-        await SelectPdfSourceRangeAsync(address, fragment);
+        await SelectPdfSourceRangeAsync(address.Source, fragment.StartUtf16, fragment.EndUtf16, fragment.SourceSentenceId);
     }
 
     private bool IsCurrentPdfTranslationSource(PdfLayoutAddress address) =>
@@ -476,26 +479,26 @@ public partial class ReadingPage
         var session = AppState.Session;
         if (!readingPageActive || session.Busy || CurrentPdfLayoutAddress() is not { } address ||
             address != pdfLayoutRequest || !pdfLayoutRows.Contains(fragment)) return;
-        await SelectPdfSourceRangeAsync(address, fragment);
+        await SelectPdfSourceRangeAsync(address.Source, fragment.StartUtf16, fragment.EndUtf16, fragment.SourceSentenceId);
     }
 
-    private async Task SelectPdfSourceRangeAsync(PdfLayoutAddress address, PdfPageTranslationRow fragment)
+    private async Task SelectPdfSourceRangeAsync(InlinePdfAddress address, int start, int end, string? sentenceId = null)
     {
         var session = AppState.Session;
+        if (!readingPageActive || session.Busy) return;
         lastInlinePdfFollow = null;
         if (address.DetachedText is not null)
         {
             if (detachedAddress is { } detached && detached.Document == address.Document &&
                 detached.Page == address.Page && detached.Text == address.DetachedText && !loadingDetachedSentence)
-                await LoadDetachedSentenceAsync(detached, position: null, sentenceId: fragment.SourceSentenceId,
-                    sourceOffset: fragment.StartUtf16);
+                await LoadDetachedSentenceAsync(detached, position: null, sentenceId: sentenceId, sourceOffset: start);
             return;
         }
         if (DetachedPdfReader.IsVisible || session.Document is not { } document ||
             document.Id != address.Document || document.CurrentRevisionId != address.Revision) return;
         var position = Array.FindIndex(document.Sentences,
-            sentence => (fragment.SourceSentenceId is null || sentence.Id == fragment.SourceSentenceId) &&
-                sentence.StartUtf16 < fragment.EndUtf16 && sentence.EndUtf16 > fragment.StartUtf16);
+            sentence => (sentenceId is null || sentence.Id == sentenceId) &&
+                sentence.StartUtf16 < end && sentence.EndUtf16 > start);
         if (position < 0) return;
         dictionaryFocus = null;
         documentFindFocus = null;
@@ -509,7 +512,7 @@ public partial class ReadingPage
         if (session.Error.Length == 0 && session.Sentence?.Id == document.Sentences[position].Id)
         {
             UpdateHighlight();
-            SourceText.RevealOffset(fragment.StartUtf16);
+            SourceText.RevealOffset(start);
         }
     }
 
