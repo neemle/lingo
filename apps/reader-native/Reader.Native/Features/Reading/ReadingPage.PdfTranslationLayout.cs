@@ -49,6 +49,10 @@ public partial class ReadingPage
     private void RefreshPdfTranslationLayout()
     {
         var address = CurrentPdfLayoutAddress();
+        AppState.TranslationWorker?.SetVisiblePdf(readingPageActive && TranslationVisible &&
+            address is { Revision: { } revision }
+                ? new BackgroundTranslatedPage(address.Document, revision, address.Page, address.Target) : null,
+            address?.DetachedText);
         var available = address is not null;
         var detached = DetachedPdfReader.IsVisible;
         var shown = available && pdfTranslationLayout;

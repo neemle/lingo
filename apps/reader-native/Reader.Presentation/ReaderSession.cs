@@ -285,6 +285,14 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<PdfPageTranslationRow[]> PdfPageTranslationAsync(string id, int page, string target, bool cachedOnly) =>
         Task.Run(() => client.PdfPageTranslation(id, page, target, cachedOnly));
 
+    public async Task<bool> PrefetchVisiblePdfTranslationAsync(BackgroundTranslatedPage address)
+    {
+        var rows = await Task.Run(() =>
+            client.PdfPageTranslation(address.DocumentId, address.Page, address.Target, cachedOnly: false, background: true));
+        if (rows.Any(row => row.Text is not null)) BackgroundPageTranslated?.Invoke(address);
+        return rows.Length > 0 && rows.All(row => row.Text is not null);
+    }
+
     public Task ReplacePdfTextLayerAsync(string id, int page, string revisionId, string language, OcrLine[] lines) =>
         Task.Run(() => client.ReplacePdfTextLayer(id, page, revisionId, language, lines));
 

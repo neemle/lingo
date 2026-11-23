@@ -12,6 +12,8 @@ internal sealed class BackgroundTranslation
     private DateTimeOffset retryAt;
     private bool enabled;
     private bool paused;
+    private (BackgroundTranslatedPage Address, string? DetachedText)? visiblePdf;
+    private ((BackgroundTranslatedPage Address, string? DetachedText) Page, long RetryAt)? visibleAttempt;
     internal string Status { get; private set; } = "";
     internal bool Running { get; private set; }
     internal IReadOnlyList<TranslationPair> RequiredPackages { get; private set; } = [];
@@ -28,9 +30,13 @@ internal sealed class BackgroundTranslation
         SetEnabled(session.GetReaderPreferences().BackgroundTranslation == true);
     }
 
+    internal void SetVisiblePdf(BackgroundTranslatedPage? address, string? detachedText = null) =>
+        visiblePdf = address is null ? null : (address, detachedText);
+
     internal void SetEnabled(bool value)
     {
         enabled = value;
+        visibleAttempt = null;
         if (!value)
         {
             jobs.Clear();
@@ -55,6 +61,7 @@ internal sealed class BackgroundTranslation
             jobs.Clear();
             UpdateRequiredPackages();
             retryAt = default;
+            visibleAttempt = null;
         }
         paused = false;
         UpdateTimer();
@@ -138,6 +145,25 @@ internal sealed class BackgroundTranslation
             }
             foreach (var key in jobs.Keys.Where(key => !live.Contains(key)).ToArray()) jobs.Remove(key);
             UpdateRequiredPackages();
+            if (visiblePdf is { } visible && current == visible.Address.DocumentId &&
+                (visibleAttempt is not { } attempted || attempted.Page != visible || attempted.RetryAt <= now))
+            {
+                var address = visible.Address;
+                var key = new JobKey(address.DocumentId, address.RevisionId, address.Target);
+                if (live.Contains(key) && jobs.GetValueOrDefault(key)?.MissingPackages is null)
+                {
+                    SetStatus($"Опрацьовуємо відкриту сторінку {address.Page + 1}…", running: true);
+                    visibleAttempt = (visible, now + 30);
+                    var complete = await session.PrefetchVisiblePdfTranslationAsync(address);
+                    if (enabled && !paused && visiblePdf == visible)
+                    {
+                        visibleAttempt = (visible, complete ? long.MaxValue : DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 30);
+                        SetStatus(complete ? $"Переклад сторінки {address.Page + 1} у кеші."
+                            : "Черга перекладу продовжується.");
+                    }
+                    return;
+                }
+            }
             if (candidate is not { } work)
             {
                 SetStatus(missing ?? (waiting ? "Очікує на доступний текст PDF або повторну спробу."

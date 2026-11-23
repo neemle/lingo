@@ -195,10 +195,10 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 return encode_job(worker.detached_pdf_passage(id, *page, sentence_id, target, *cached_only, *background));
             }
         }
-        Command::PdfPageTranslation { id, page, target, cached_only } => {
+        Command::PdfPageTranslation { id, page, target, cached_only, background } => {
             let worker = registry::lock()?.store(handle)?.prepare_translation_worker();
             if let Some(worker) = worker {
-                return encode_job(worker.pdf_page_translation(id, *page, target, *cached_only));
+                return encode_job(worker.pdf_page_translation_with_priority(id, *page, target, *cached_only, *background));
             }
         }
         Command::TranslateDetachedPdfSentence { id, page, sentence_id, target } => {

@@ -610,6 +610,8 @@ pub enum Command {
         target: String,
         #[serde(default, rename = "cachedOnly")]
         cached_only: bool,
+        #[serde(default)]
+        background: bool,
     },
     ScheduleTranslationWindow {
         id: String,

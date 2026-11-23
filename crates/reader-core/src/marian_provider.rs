@@ -504,8 +504,14 @@ impl StoreWorker {
     pub fn pdf_page_translation(
         self, id: &str, page: u16, target: &str, cached_only: bool,
     ) -> Result<Vec<crate::pdf_detached_pages::PdfPageTranslationRow>> {
+        self.pdf_page_translation_with_priority(id, page, target, cached_only, false)
+    }
+
+    pub fn pdf_page_translation_with_priority(
+        self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
+    ) -> Result<Vec<crate::pdf_detached_pages::PdfPageTranslationRow>> {
         let flags = if cached_only { OpenFlags::SQLITE_OPEN_READ_ONLY } else { OpenFlags::SQLITE_OPEN_READ_WRITE };
-        self.open(flags)?.pdf_page_translation(id, page, target, cached_only)
+        self.open(flags)?.pdf_page_translation_with_priority(id, page, target, cached_only, background)
     }
 
     pub fn translate_detached_pdf_sentence(

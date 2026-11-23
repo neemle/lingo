@@ -67,7 +67,7 @@ impl Store {
         self.pdf_page_translation_with_priority(id, page, target, cached_only, false)
     }
 
-    pub(crate) fn pdf_page_translation_with_priority(
+    pub fn pdf_page_translation_with_priority(
         &mut self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
     ) -> Result<Vec<PdfPageTranslationRow>> {
         let (document, physical, offsets, boundaries) = if let Some(cached) = self.detached_pdf_sentences(id, page)? {
