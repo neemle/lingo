@@ -20,9 +20,9 @@ public partial class App : Application
         window.Destroying += (_, _) =>
         {
             window.Activated -= Activate;
-            if (shell.CurrentPage is Features.Reading.ReadingPage reading) reading.StopSpeech();
             shell.StopListening();
-            Services.AppState.Close();
+            if (shell.CurrentPage is Features.Reading.ReadingPage reading) reading.PrepareWindowClose();
+            Services.AppState.StopTranslationWorker();
         };
         return window;
     }

@@ -151,6 +151,21 @@ public partial class ReadingPage : ContentPage
         base.OnDisappearing();
     }
 
+    internal void PrepareWindowClose()
+    {
+        readingPageActive = false;
+        readerOcrReview.CancelInference();
+        CancelModelPassage();
+        CancelScheduledTranslation();
+        StopAnalysisPrefetch();
+#if MACCATALYST
+        CancelReaderPdfOcr();
+#endif
+        if (speakingDetachedSentence) ClearDetachedSpeech();
+        StopWordDetail();
+        StopSpeech();
+    }
+
     private void SessionChanged(object? sender, PropertyChangedEventArgs args)
     {
         // Notifications describe a completed session state. Update once per state change.

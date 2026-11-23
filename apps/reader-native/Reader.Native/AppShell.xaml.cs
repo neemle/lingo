@@ -19,6 +19,7 @@ public partial class AppShell : Shell
     private bool openingFiles;
     private bool listening;
     private bool stopped;
+    internal bool IsClosing => stopped;
 
     public AppShell()
 	{
@@ -94,7 +95,10 @@ public partial class AppShell : Shell
                 finally { DesktopImport.Gate.Release(); }
             }
         }
-        catch (Exception error) { await DisplayAlertAsync("Відкрити файл", error.Message, "Гаразд"); }
+        catch (Exception error)
+        {
+            if (listening) await DisplayAlertAsync("Відкрити файл", error.Message, "Гаразд");
+        }
         finally { openingFiles = false; }
     }
 
