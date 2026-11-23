@@ -1018,13 +1018,13 @@ public partial class ReadingPage : ContentPage
         if (PdfPageNotice.IsVisible || session.Busy || session.Document is not { } initial || session.Sentence is not { } sentence) return;
         ClearPdfFragmentFocus();
         StopWordDetail();
-        if ((singleSentence || !ContinueSpeech.IsChecked) && IsFootnote(initial, sentence))
+        var source = SpeechSourceFor(initial, sentence);
+        if ((singleSentence || !ContinueSpeech.IsChecked) && !HasNarrationText(source.SpeechText))
         {
             StopSpeech();
-            SpeechStatus.Text = SkippedFootnote;
+            SpeechStatus.Text = IsFootnote(initial, sentence) ? SkippedFootnote : EmptyNarration;
             return;
         }
-        var source = SpeechSourceFor(initial, sentence);
         CheckpointSpeechPosition();
         var request = ++speechRequest;
         speech.Stop();
@@ -1063,6 +1063,7 @@ public partial class ReadingPage : ContentPage
             session.Sentence is { } sentence)
         {
             var speechText = EffectiveSpeechText(doc, sentence);
+            var speakable = HasNarrationText(speechText);
             var hasSpeechOverride = speechText != sentence.Text;
             var startAt = modelVoice || hasSpeechOverride ? 0 : SpeechProgress.ResumeOffset(sentence, resume) ?? 0;
             var startAtMs = modelVoice && resume is not null && SpeechProgress.Matches(sentence, resume, speechText)
@@ -1081,7 +1082,7 @@ public partial class ReadingPage : ContentPage
 
             RecordReadingActivity();
             status = LocalSpeech.CompletedStatus;
-            if (speechText.Length > 0 && modelVoice)
+            if (speakable && modelVoice)
             {
                 lastUsedSystemVoice = false;
                 status = await PlayModelAsync(session, doc, sentence, voice!, ratePercent, startAtMs, textHash, request,
@@ -1089,7 +1090,7 @@ public partial class ReadingPage : ContentPage
                 if (request != speechRequest || token.IsCancellationRequested) return;
             }
             var fallbackReason = status is not null && status != LocalSpeech.CompletedStatus ? status : null;
-            if (speechText.Length > 0 && (!modelVoice || fallbackReason is not null))
+            if (speakable && (!modelVoice || fallbackReason is not null))
             {
                 lastUsedSystemVoice = true;
                 receivedCue = false;

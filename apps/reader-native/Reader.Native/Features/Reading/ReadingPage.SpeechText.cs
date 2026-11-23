@@ -11,6 +11,9 @@ public partial class ReadingPage
     private bool editingSpeechText;
 
     private const string SkippedFootnote = "Виноски пропускаються під час озвучення.";
+    private const string EmptyNarration = "У фрагменті немає тексту для озвучення.";
+
+    private static bool HasNarrationText(string text) => text.EnumerateRunes().Any(Rune.IsLetterOrDigit);
 
     private static bool IsFootnote(Document document, Sentence sentence)
     {

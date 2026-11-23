@@ -263,7 +263,7 @@ impl Store {
                 let text = narration.unwrap_or_else(|| sentence.text.clone());
                 crate::speech::pdf_narration(layout, sentence, &text).unwrap_or(text)
             });
-            if !text.is_empty() {
+            if crate::speech::has_narration_text(&text) {
                 return Ok(Some((sentence.id.clone(), crate::speech::SpeechSource { language, text })));
             }
             if !skip_consumed {

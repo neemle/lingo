@@ -660,12 +660,14 @@ public partial class ReadingPage
                         latest is null || latest.Position != sentence.Position) break;
                     detachedSentence = sentence = latest;
                 }
-                if (sentence.Footnote && (singleSentence || !ContinueSpeech.IsChecked))
+                var speakable = !sentence.Footnote && HasNarrationText(
+                    sentence.SpeechText ?? sentence.NarrationText ?? sentence.Sentence.Text);
+                if (!speakable && (singleSentence || !ContinueSpeech.IsChecked))
                 {
-                    DetachedSentenceStatus.Text = SkippedFootnote;
+                    DetachedSentenceStatus.Text = sentence.Footnote ? SkippedFootnote : EmptyNarration;
                     break;
                 }
-                var completed = sentence.Footnote || await PlayDetachedSentenceAsync(address, sentence,
+                var completed = !speakable || await PlayDetachedSentenceAsync(address, sentence,
                     resumePlayback ? sentence.SpeechResume : null, singleSentence, token);
                 resumePlayback = false;
                 if (!completed || singleSentence || !ContinueSpeech.IsChecked || !readingPageActive ||

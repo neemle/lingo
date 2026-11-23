@@ -137,7 +137,8 @@ impl Store {
             .ok_or("Речення для озвучення не знайдено")?;
         let candidate = if next {
             document.sentences.iter().skip(index + 1).find(|sentence|
-                !crate::document_layout::sentence_in_footnote(&document.blocks, sentence))
+                !crate::document_layout::sentence_in_footnote(&document.blocks, sentence)
+                    && has_narration_text(document.speech_text(sentence)))
         } else {
             document.sentences.get(index)
         };
@@ -161,7 +162,7 @@ impl Store {
             }
         }
         candidate.map(|sentence| self.canonical_speech(&document, sentence)).transpose()
-            .map(|speech| speech.filter(|(_, source)| !source.text.is_empty()))
+            .map(|speech| speech.filter(|(_, source)| has_narration_text(&source.text)))
     }
 
     fn first_speech_on_pdf_page(
@@ -222,7 +223,7 @@ impl Store {
         let index = sentences.partition_point(|sentence| sentence.end_utf16 <= left);
         for sentence in sentences[index..].iter().take_while(|sentence| sentence.start_utf16 < right) {
             let speech = self.canonical_speech(document, sentence)?;
-            if !speech.1.text.is_empty() {
+            if has_narration_text(&speech.1.text) {
                 return Ok(Some(speech));
             }
         }
@@ -243,6 +244,10 @@ impl Store {
         };
         Ok((sentence.id.clone(), SpeechSource { language: document.language.clone(), text }))
     }
+}
+
+pub(crate) fn has_narration_text(text: &str) -> bool {
+    text.chars().any(char::is_alphanumeric)
 }
 
 
@@ -268,6 +273,30 @@ pub(crate) fn without_pdf_note_markers(document: &Document, sentence: &Sentence,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn narration_skips_detached_dialogue_dashes_inside_and_across_pages() {
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("book.pdf");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let prepared = crate::file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "book.pdf", &original, "fr",
+            vec!["CHAPITRE 1\n–\n\nBravo, mon jeune ami !".into(), String::new()], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let dash = document.sentences.iter().position(|sentence| sentence.text == "–").unwrap();
+        assert!(store.speech_source(&document.id, &document.sentences[dash].id, false).unwrap().is_none());
+        let (_, spoken) = store.speech_source(&document.id, &document.sentences[dash - 1].id, true)
+            .unwrap().unwrap();
+        assert_eq!(spoken.text, "Bravo, mon jeune ami !");
+
+        crate::pdf_detached_pages::write_text_layer(&store.connection, &document.id, 1,
+            "–\n\nOui, monsieur.").unwrap();
+        let (_, spoken) = store.speech_source(&document.id, &document.sentences[dash + 1].id, true)
+            .unwrap().unwrap();
+        assert_eq!(spoken.text, "Oui, monsieur.");
+    }
 
     #[test]
     fn narration_joins_pdf_wraps_but_keeps_french_inversion() {
