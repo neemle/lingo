@@ -1007,8 +1007,8 @@ fn paragraph_plan(
     const CONTEXT_GROUP: usize = 3;
     const CONTEXT_BYTES: usize = 768;
     let sentences = &document.sentences;
-    let footnote = |index| crate::document_layout::sentence_in_footnote(&document.blocks, &sentences[index]);
-    if footnote(selected) {
+    let skip = |index| crate::document_layout::skip_in_translation(document, &sentences[index]);
+    if skip(selected) {
         return Ok(ParagraphPlan {
             result: ParagraphTranslation { units: Vec::new(), pivot_language: None, more_before: false, more_after: false },
             pending: Vec::new(),
@@ -1025,7 +1025,7 @@ fn paragraph_plan(
     let reviewed = |index: usize| reviews.and_then(|entries| entries.get(&sentences[index].id));
     let can_wrap = |left: usize, right: usize| {
         (document.format == "pdf" || document.ocr_lines.is_some())
-            && !footnote(left) && !footnote(right)
+            && !skip(left) && !skip(right)
             && reviewed(left).is_none()
             && reviewed(right).is_none()
             && soft_wrap(document, left, right)
@@ -1056,13 +1056,13 @@ fn paragraph_plan(
     let mut active_unit = 0;
     let mut index = start;
     while index < end {
-        if footnote(index) {
+        if skip(index) {
             index += 1;
             continue;
         }
         let mut next = index + 1;
         while next < end
-            && !footnote(next)
+            && !skip(next)
             && next - index < 12
             && reviewed(index).is_none()
             && reviewed(next).is_none()
@@ -1147,7 +1147,7 @@ fn sentence_span_input(
     const MAX_JOINED_BYTES: usize = 1024;
     const MAX_FRAGMENTS: usize = 12;
     let active = &document.sentences[selected];
-    if crate::document_layout::sentence_in_footnote(&document.blocks, active) {
+    if crate::document_layout::skip_in_translation(document, active) {
         return (String::new(), selected..=selected);
     }
     if document.format != "pdf" && document.ocr_lines.is_none() {
@@ -1246,7 +1246,7 @@ fn inference_span(document: &crate::Document, first: usize, last: usize) -> Opti
         });
     }
     let normalized = if first.id == last.id && !span.contains('\n') {
-        let cleaned = crate::document_layout::mask_pdf_note_references(document, span, first.start_utf8);
+        let cleaned = crate::document_layout::mask_pdf_translation_input(document, span, first.start_utf8);
         cleaned.map_or_else(|| first.text.clone(), |text| normalize_ocr_input(document, &text, first.start_utf16))
     } else {
         normalize_pdf_translation_input(document, span, first.start_utf8, first.start_utf16)
@@ -1258,7 +1258,7 @@ fn inference_span(document: &crate::Document, first: usize, last: usize) -> Opti
 pub(crate) fn normalize_pdf_translation_input(
     document: &Document, text: &str, start_utf8: usize, start_utf16: usize,
 ) -> String {
-    let input = crate::document_layout::mask_pdf_note_references(document, text, start_utf8);
+    let input = crate::document_layout::mask_pdf_translation_input(document, text, start_utf8);
     normalize_ocr_input(document, input.as_deref().unwrap_or(text), start_utf16)
 }
 
@@ -1359,7 +1359,7 @@ fn page_word_break(document: &crate::Document, left: usize, right: usize) -> boo
 
 fn soft_wrap(document: &crate::Document, left: usize, right: usize) -> bool {
     if [left, right].into_iter().any(|index|
-        crate::document_layout::sentence_in_footnote(&document.blocks, &document.sentences[index]))
+        crate::document_layout::skip_in_translation(document, &document.sentences[index]))
     {
         return false;
     }

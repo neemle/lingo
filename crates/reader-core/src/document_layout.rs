@@ -1,4 +1,4 @@
-use crate::{Document, Result, MAX_IMPORT};
+use crate::{Document, Result, Sentence, MAX_IMPORT};
 use pdf_extract::{MediaBox, OutputDev, OutputError, PlainTextOutput, Transform};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -654,25 +654,77 @@ pub(crate) fn pdf_note_references(text: &str, numbers: &[u32]) -> Vec<Range<usiz
     result
 }
 
-pub(crate) fn mask_pdf_note_references(document: &Document, text: &str, start: usize) -> Option<String> {
+pub(crate) fn mask_pdf_non_text(document: &Document, text: &str, start: usize) -> Option<String> {
+    mask_pdf_markers(document, text, start, false)
+}
+
+pub(crate) fn mask_pdf_translation_input(document: &Document, text: &str, start: usize) -> Option<String> {
+    mask_pdf_markers(document, text, start, true)
+}
+
+fn mask_pdf_markers(document: &Document, text: &str, start: usize, mask_list_labels: bool) -> Option<String> {
     if document.format != "pdf" { return None; }
     let end = start.checked_add(text.len())?;
     let first = document.blocks.partition_point(|block| block.end_utf8 <= start);
     let refs = document.blocks[first..].iter().take_while(|block| block.start_utf8 < end)
         .flat_map(|block| &block.footnote_references)
-        .filter(|reference| reference.start_utf8 >= start && reference.end_utf8 <= end);
+        .filter(|reference| reference.start_utf8 >= start && reference.end_utf8 <= end)
+        .map(|reference| reference.start_utf8 - start..reference.end_utf8 - start);
+    let mut ranges: Vec<_> = refs.collect();
+    if mask_list_labels {
+        ranges.extend(pdf_list_label_ranges(document, text, start));
+    }
+    ranges.sort_unstable_by_key(|range| range.start);
     let mut clean = String::new();
     let mut copied = 0;
-    for reference in refs {
-        let range = reference.start_utf8 - start..reference.end_utf8 - start;
+    for mut range in ranges {
+        range.start = range.start.max(copied);
+        if range.is_empty() { continue; }
         let marker = text.get(range.clone())?;
         clean.push_str(text.get(copied..range.start)?);
         clean.extend(std::iter::repeat_n(' ', marker.encode_utf16().count()));
         copied = range.end;
     }
-    if copied == 0 { return None; }
+    if copied == 0 && !text.contains('\u{fffc}') { return None; }
     clean.push_str(text.get(copied..)?);
-    Some(clean)
+    // Keep UTF-16 offsets used for OCR geometry while omitting PDFKit artwork placeholders.
+    Some(clean.replace('\u{fffc}', " "))
+}
+
+pub(crate) fn skip_in_translation(document: &Document, sentence: &Sentence) -> bool {
+    sentence_in_footnote(&document.blocks, sentence)
+        || (document.format == "pdf" &&
+            sentence.text.trim_matches(|ch: char| ch.is_whitespace() || ch == '\u{fffc}').is_empty())
+        || (document.format == "pdf" && sentence.text.len() <= 32 &&
+            mask_pdf_translation_input(document, &sentence.text, sentence.start_utf8)
+                .is_some_and(|text| text.trim().is_empty()))
+}
+
+fn pdf_list_label_ranges<'a>(document: &'a Document, text: &'a str, start: usize)
+    -> impl Iterator<Item = Range<usize>> + 'a
+{
+    let mut line_offset = 0;
+    text.split_inclusive('\n').filter_map(move |line| {
+        let prefix = line_offset;
+        line_offset += line.len();
+        let body = line.trim_start_matches(|ch: char| ch.is_whitespace() || ch == '\u{fffc}');
+        let begin = prefix + line.len() - body.len();
+        let token = body.split_whitespace().next()?;
+        let label = token.strip_suffix('.')?.as_bytes();
+        if !(label.len() == 1 && label[0].is_ascii_lowercase())
+            && !((1..=3).contains(&label.len()) && label.iter().all(u8::is_ascii_digit))
+        {
+            return None;
+        }
+        let absolute = start.checked_add(begin)?;
+        let original = document.text.get(absolute..)?.strip_prefix(token)?;
+        if !original.starts_with(|ch: char| ch.is_whitespace() && !matches!(ch, '\r' | '\n')) {
+            return None;
+        }
+        let before = document.text.get(..absolute)?.rsplit(['\r', '\n']).next()?;
+        before.chars().all(|ch| ch.is_whitespace() || ch == '\u{fffc}')
+            .then_some(begin..begin + token.len())
+    })
 }
 
 fn note_digit(ch: char) -> Option<(u32, bool)> {
@@ -889,7 +941,7 @@ mod tests {
         assert_eq!(notes, ["7. Les marins viennent de Marseille.\nIls connaissent la mer depuis longtemps.",
             "8) Le capitaine commande le navire."]);
         assert_eq!(document.text, raw);
-        let masked = mask_pdf_note_references(&document, &raw, 0).unwrap();
+        let masked = mask_pdf_non_text(&document, &raw, 0).unwrap();
         assert!(masked.contains("L’équipage  attend") && masked.contains("capitaine  reste"));
         assert_eq!(masked.encode_utf16().count(), raw.encode_utf16().count());
 
@@ -897,7 +949,17 @@ mod tests {
         for line in &mut ordinary[3..6] { line.height = 0.030; }
         let document = detached_pdf_document(raw.clone(), "fr", Some(ordinary));
         assert!(document.blocks.iter().all(|block| !block.footnote));
-        assert!(mask_pdf_note_references(&document, &raw, 0).is_none());
+        assert!(mask_pdf_non_text(&document, &raw, 0).is_none());
+    }
+
+    #[test]
+    fn pdf_artwork_placeholders_keep_offsets_without_entering_translation() {
+        let raw = "\u{fffc}\n11. Préparez votre essai.\n\u{fffc}méthodologique";
+        let document = detached_pdf_document(raw.into(), "fr", None);
+        let cleaned = mask_pdf_translation_input(&document, raw, 0).unwrap();
+        assert_eq!(cleaned, " \n    Préparez votre essai.\n méthodologique");
+        assert_eq!(cleaned.encode_utf16().count(), raw.encode_utf16().count());
+        assert_eq!(document.text, raw);
     }
 
     #[test]

@@ -160,7 +160,7 @@ impl Store {
                 }
                 if covered[position - physical.start] { continue; }
                 let sentence = &document.sentences[position];
-                if document_layout::sentence_in_footnote(&document.blocks, sentence) { continue; }
+                if document_layout::skip_in_translation(&document, sentence) { continue; }
                 let Some(unit) = routes.cached_pdf_row(self, &document, position, target, boundaries, grouping)?
                     else { continue; };
                 let Some((first, last)) = page_range(&unit.sentence_ids) else { continue; };
@@ -175,7 +175,7 @@ impl Store {
         }
         if let Some(error) = generation_error.filter(|_| rows.is_empty()) { return Err(error); }
         for (local, sentence) in document.sentences[physical].iter().enumerate() {
-            if !covered[local] && !document_layout::sentence_in_footnote(&document.blocks, sentence) {
+            if !covered[local] && !document_layout::skip_in_translation(&document, sentence) {
                 let (start_utf16, end_utf16) = offsets[local];
                 rows.insert(local, PdfPageTranslationRow {
                     start_utf16, end_utf16, source_sentence_id: sentence.id.clone(),

@@ -180,8 +180,10 @@ internal static class PdfScan
         var crop = page.GetBoundsForBox(PdfDisplayBox.Crop);
         if (text.Length == 0 || crop.Width <= 0 || crop.Height <= 0) return (image, text, []);
         var boxes = new List<OcrLine>();
-        foreach (System.Text.RegularExpressions.Match word in System.Text.RegularExpressions.Regex.Matches(text, @"\S+"))
+        // PDFKit emits U+FFFC for artwork. Its selection bounds can span the entire page.
+        foreach (System.Text.RegularExpressions.Match word in System.Text.RegularExpressions.Regex.Matches(text, @"[^\s\uFFFC]+"))
         {
+            if (IsPdfListLabel(text, word.Index, word.Length)) continue;
             if (layer.OriginalOffset(word.Index, word.Length) is not { } originalOffset) continue;
             using var selection = page.GetSelection(new NSRange(offset + originalOffset, word.Length));
             if (selection is null) continue;
@@ -203,6 +205,20 @@ internal static class PdfScan
         }
         return (image, text, boxes.ToArray());
     });
+
+    private static bool IsPdfListLabel(string text, int start, int length)
+    {
+        var token = text.AsSpan(start, length);
+        var end = start + length;
+        if (token.Length is < 2 or > 4 || token[^1] != '.' ||
+            end == text.Length || !char.IsWhiteSpace(text[end]) || text[end] is '\r' or '\n')
+            return false;
+        if (!(token.Length == 2 && token[0] is >= 'a' and <= 'z') &&
+            token[..^1].IndexOfAnyExceptInRange('0', '9') >= 0) return false;
+        for (var i = start - 1; i >= 0 && text[i] is not ('\r' or '\n'); i--)
+            if (!char.IsWhiteSpace(text[i]) && text[i] != '\uFFFC') return false;
+        return true;
+    }
 
     private static PdfOrderedText TextLayer(PdfPage page, out int offset, ReadOnlyMemory<char> expected = default)
     {

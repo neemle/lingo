@@ -1,5 +1,5 @@
 use crate::{
-    document_layout::{detached_pdf_document, mask_pdf_note_references, reflow_ocr_paragraphs},
+    document_layout::{detached_pdf_document, mask_pdf_non_text, reflow_ocr_paragraphs},
     document_tokens::word_parts,
     knowledge::{annotation_cache, resolve_text_selection, select_words, AnalysisScope, WordContext},
     optional_models::OptionalModelJob,
@@ -929,7 +929,7 @@ fn review_examples(
 }
 
 fn pdf_review_text<'a>(document: &Document, sentence: &'a Sentence, scoped: bool) -> Cow<'a, str> {
-    let text = mask_pdf_note_references(document, &sentence.text, sentence.start_utf8)
+    let text = mask_pdf_non_text(document, &sentence.text, sentence.start_utf8)
         .map_or_else(|| Cow::Borrowed(sentence.text.as_str()), Cow::Owned);
     // The word and expression scopes still use their original UTF-16 offsets.
     if !scoped && document.format == "pdf" && text.contains('\n') {

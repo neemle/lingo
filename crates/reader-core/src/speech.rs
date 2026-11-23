@@ -259,7 +259,7 @@ pub(crate) fn pdf_narration(document: &Document, sentence: &Sentence, text: &str
 /// Blanks confirmed references in the reading input while preserving UTF-16 offsets.
 pub(crate) fn without_pdf_note_markers(document: &Document, sentence: &Sentence, text: &str) -> Option<String> {
     let start = text.find(&sentence.text)?;
-    let cleaned = crate::document_layout::mask_pdf_note_references(document, &sentence.text, sentence.start_utf8)?;
+    let cleaned = crate::document_layout::mask_pdf_non_text(document, &sentence.text, sentence.start_utf8)?;
     let mut out = text.to_owned();
     out.replace_range(start..start + sentence.text.len(), &cleaned);
     Some(out)

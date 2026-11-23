@@ -996,7 +996,7 @@ impl Store {
                        projected: word_break::ProjectedSelection<'_>| {
             let projected_text = projected.text.into_owned();
             let projected_context = projected.context.into_owned();
-            let mask = crate::document_layout::mask_pdf_note_references;
+            let mask = crate::document_layout::mask_pdf_non_text;
             if projected_context == sentence.text {
                 let source = mask(document, &projected_text, sentence.start_utf8 + projected.start_utf8)
                     .map(|text| text.trim().to_owned()).unwrap_or(projected_text);
