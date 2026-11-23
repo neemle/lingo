@@ -1,8 +1,9 @@
+use std::sync::OnceLock;
 use unicode_segmentation::UnicodeSegmentation;
-use whatlang::Lang;
+use whatlang::{Detector, Lang};
 
 const FRENCH_MANNER_OF_WALKING: &str = " de son pas souple et fort";
-pub(crate) const INSTRUCTION_REVISION: &str = "fr-uk-instructions-v2";
+pub(crate) const INSTRUCTION_REVISION: &str = "fr-uk-instructions-v3";
 
 /// Established Ukrainian forms for complete publication labels and names.
 pub(crate) fn publication_term(source: &str) -> Option<String> {
@@ -132,11 +133,13 @@ fn contains_russian_clause(sample: &str) -> bool {
     // Words that distinguish ordinary Russian prose even when it uses only shared letters.
     // Require two independent cues in the same unquoted sentence to avoid flagging names.
     sample.split_sentence_bounds().any(|clause| {
+        if distinguish(clause) == Some(Lang::Rus) { return true; }
         let lowercase = clause.to_lowercase();
         let mut cues = lowercase.unicode_words().filter(|word| matches!(*word,
             "она" | "они" | "оно" | "этот" | "этого" | "эти" | "это" | "будет" |
             "будут" | "будешь" | "будем" | "сейчас" | "чтобы" | "очень" | "только" |
-            "который" | "которая" | "которые" | "сказал" | "потому" | "сегодня"
+            "который" | "которая" | "которые" | "сказал" | "потому" | "сегодня" |
+            "он" | "что" | "мне" | "нужно" | "его" | "мужчина" | "приходит" | "встречу" | "сэр" | "но"
         ));
         cues.next().is_some_and(|first| cues.any(|word| word != first))
     })
@@ -210,11 +213,32 @@ fn distinguish(sample: &str) -> Option<Lang> {
         _ => return None,
     };
     let detected = whatlang::detect(sample)?;
-    // Whatlang's generic reliability threshold misses short but distinctive sentences.
-    (detected.lang() == expected && detected.confidence() >= 0.45).then_some(expected)
+    if detected.lang() == expected && detected.confidence() >= 0.45 { return Some(expected); }
+    // Short dialogue can score poorly against all languages. Require a Russian-only
+    // letter in a lowercase word before comparing the two closely related languages.
+    if expected == Lang::Rus && sample.unicode_words().any(|word|
+        word.starts_with(char::is_lowercase) && word.contains(['ы', 'э', 'ё', 'ъ']))
+    {
+        static DETECTOR: OnceLock<Detector> = OnceLock::new();
+        let focused = DETECTOR.get_or_init(|| Detector::with_allowlist(vec![Lang::Rus, Lang::Ukr]));
+        if focused.detect(sample).is_some_and(|info| info.lang() == Lang::Rus && info.confidence() >= 0.65) {
+            return Some(Lang::Rus);
+        }
+    }
+    None
 }
 
 fn outside_quotes(text: &str) -> String {
+    let dialogue = text.trim_start_matches(|ch: char| ch.is_whitespace() || matches!(ch, '–' | '—' | '-'))
+        .trim_end_matches(|ch: char| ch.is_whitespace() || matches!(ch, '.' | '!' | '?' | '…'));
+    if let Some(open) = dialogue.chars().next() {
+        if let Some(quoted) = dialogue.strip_prefix(open).and_then(|inner|
+            quote_closer(open).and_then(|close| inner.strip_suffix(close)))
+        {
+            // A quote occupying the whole fragment is dialogue, not an inline citation.
+            return quoted.to_owned();
+        }
+    }
     let mut sample = String::with_capacity(text.len());
     let mut closer = None;
     for ch in text.chars() {
@@ -224,16 +248,20 @@ fn outside_quotes(text: &str) -> String {
             }
             continue;
         }
-        closer = match ch {
-            '«' => Some('»'),
-            '„' => Some('“'),
-            '“' => Some('”'),
-            '"' => Some('"'),
-            _ => None,
-        };
+        closer = quote_closer(ch);
         sample.push(if closer.is_some() { ' ' } else { ch });
     }
     sample
+}
+
+fn quote_closer(open: char) -> Option<char> {
+    match open {
+        '«' => Some('»'),
+        '„' => Some('“'),
+        '“' => Some('”'),
+        '"' => Some('"'),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -281,6 +309,26 @@ mod tests {
         assert!(!clearly_ukrainian(mixed));
         assert!(!clearly_russian("Він процитував: «Она будет женой капитана»."));
         assert!(!clearly_russian("Вона буде дружиною капітана. Тепер можна йти."));
+    }
+
+    #[test]
+    fn detects_russian_dialogue_even_when_words_share_the_ukrainian_alphabet() {
+        for rejected in [
+            "Мне нужно управлять лодкой.",
+            "Мужчина приходит на встречу с мистером Морреллом.",
+            "- Так, сэр, но...",
+            "Я вас командую, сэр.",
+            "— «Мне нужно управлять лодкой».",
+            "Спочатку він мовчав. В Антона был брат. А потім пішов.",
+        ] { assert!(clearly_russian(rejected), "{rejected}"); }
+
+        for accepted in [
+            "— «Мені треба керувати човном».",
+            "Так, пане, але...",
+            "Пан Моррел стояв коло трапа.",
+            "Він написав: «Мне нужно управлять лодкой».",
+            "Мэр Ёлкин прибув сьогодні.",
+        ] { assert!(!clearly_russian(accepted), "{accepted}"); }
     }
 
     #[test]
