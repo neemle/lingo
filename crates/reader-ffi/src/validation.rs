@@ -227,6 +227,12 @@ fn validate(command: &Command) -> Result<()> {
         {
             Err(Error::new("invalid_argument", "Invalid local sentence review request"))
         }
+        Command::ReviewOcrWord { id, revision_id, word, .. }
+            if !valid_token_address(id, revision_id) || word.len() > 128
+                || revision_id.len() != 64 || !revision_id.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+        {
+            Err(Error::new("invalid_argument", "Invalid OCR word review address"))
+        }
         Command::ExplainWord { model, document, sentence, word, start_utf16, revision_id, .. }
             if model.len() > 32 || document.len() > 128 || sentence.len() > 128 || word.len() > 320
                 || start_utf16.is_some() != revision_id.is_some()

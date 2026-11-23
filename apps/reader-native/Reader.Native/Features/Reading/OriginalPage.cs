@@ -24,6 +24,7 @@ internal sealed class OriginalPage : ContentPage
     private readonly Button toggle = new();
     private readonly Button readPage = new() { Text = "Читати й перекладати" };
     private readonly Button wordCard = new() { Text = "Картка слова" };
+    private readonly Button reviewOcrWord = new() { Text = "Перевірити слово з Qwen", IsVisible = false };
     private readonly Button proofreadPhoto = new() { Text = "Звірити текст фото" };
     private readonly Func<int, Task<PhotoPreview>> loadPage;
     private readonly Func<TextSelection, Task> showWord;
@@ -100,12 +101,14 @@ internal sealed class OriginalPage : ContentPage
         };
         wordCard.IsVisible = lines.Any(line => line.Words is { Length: > 0 });
         wordCard.Clicked += async (_, _) => await OpenWordAsync();
+        reviewOcrWord.Clicked += async (_, _) => await ReviewOcrWordAsync();
         readPage.IsVisible = isPdf;
         readPage.Clicked += async (_, _) => await ReadPageAsync();
         proofreadPhoto.IsVisible = !isPdf && lines.Length > 0;
         proofreadPhoto.Clicked += async (_, _) => await ProofreadPhotoAsync();
         var controls = new FlexLayout { Wrap = Microsoft.Maui.Layouts.FlexWrap.Wrap };
-        foreach (var control in new View[] { previous, next, jump, readPage, zoomOut, zoomIn, fit, toggle, wordCard, proofreadPhoto, status })
+        foreach (var control in new View[] { previous, next, jump, readPage, zoomOut, zoomIn, fit, toggle,
+            wordCard, reviewOcrWord, proofreadPhoto, status })
         {
             control.Margin = new Thickness(0, 0, 8, 5);
             controls.Children.Add(control);
@@ -344,6 +347,7 @@ internal sealed class OriginalPage : ContentPage
                     CurrentWord(index, word) is not { } selected) continue;
                 SelectLine(choice, highlight: false);
                 activeWord = (index, word, selected);
+                editStatus.Text = "";
                 focus = (selected.StartUtf16, selected.StartUtf16 + selected.LengthUtf16);
                 overlay.IsVisible = true;
                 toggle.Text = OverlayLabel();
@@ -575,6 +579,10 @@ internal sealed class OriginalPage : ContentPage
         jump.IsEnabled = canInteract && pageCount > 1;
         lineButton.IsEnabled = canInteract && currentLineIndices.Length > 0;
         wordCard.IsEnabled = canInteract && activeWord is not null;
+        reviewOcrWord.IsVisible = activeWord is { Selection.Text: var word } &&
+            word.Length is >= 2 and <= 32 && word.Any(char.IsLetter) &&
+            word.All(ch => char.IsLetter(ch) || char.IsAsciiDigit(ch));
+        reviewOcrWord.IsEnabled = canInteract && !session.Busy;
         proofreadPhoto.IsEnabled = canInteract && !session.Busy;
         readPage.IsEnabled = readPage.IsVisible && canInteract && image.Source is not null &&
             session.Document is { } document && document.Id == documentId &&
@@ -585,6 +593,54 @@ internal sealed class OriginalPage : ContentPage
     }
 
     private enum LineAction { Edit, Suggest, Reset }
+
+    private async Task ReviewOcrWordAsync()
+    {
+        if (!reviewOcrWord.IsEnabled || !reviewOcrWord.IsVisible || activeWord is not { } active ||
+            session.Document is not { } document || document.Id != documentId ||
+            CurrentWord(active.LineIndex, active.Word) != active.Selection)
+            return;
+        int? page = detachedOcr is null ? null : pageIndex;
+        var revision = detachedOcr?.Revision ?? document.CurrentRevisionId;
+        if (revision is null) return;
+        bool IsCurrent() => visible && session.Document is { } current && current.Id == documentId &&
+            activeWord == active && revision == (detachedOcr?.Revision ?? current.CurrentRevisionId) &&
+            (!page.HasValue || page == pageIndex);
+
+        editing = true;
+        UpdateEditButtons();
+        editStatus.Text = "Шукаємо збережену перевірку…";
+        try
+        {
+            var hint = await session.ReviewOcrWordAsync(documentId, page, revision, active.Selection, cachedOnly: true);
+            if (!IsCurrent()) return;
+            if (hint is null)
+            {
+                var model = (await session.OptionalModelsAsync()).FirstOrDefault(item => item.CanGenerateLanguageHints);
+                if (!IsCurrent()) return;
+                if (model is not { FilesPresent: true })
+                {
+                    editStatus.Text = "Установіть Qwen 2B у налаштуваннях.";
+                    return;
+                }
+                editStatus.Text = "Qwen перевіряє слово…";
+                hint = await session.ReviewOcrWordAsync(documentId, page, revision, active.Selection);
+            }
+            if (IsCurrent())
+                editStatus.Text = hint?.Replacement is { } replacement
+                    ? $"Можливе виправлення OCR · {active.Selection.Text} → {replacement}"
+                    : "Qwen не запропонував виправлення для цього слова.";
+        }
+        catch (Exception error)
+        {
+            if (IsCurrent()) editStatus.Text = error.Message;
+        }
+        finally
+        {
+            editing = false;
+            UpdateEditButtons();
+        }
+    }
 
     private async Task ProofreadPhotoAsync()
     {

@@ -455,6 +455,17 @@ pub enum Command {
         #[serde(default, rename = "cachedOnly")]
         cached_only: bool,
     },
+    ReviewOcrWord {
+        id: String,
+        page: Option<u16>,
+        #[serde(rename = "revisionId")]
+        revision_id: String,
+        #[serde(rename = "startUtf16")]
+        start_utf16: usize,
+        word: String,
+        #[serde(default, rename = "cachedOnly")]
+        cached_only: bool,
+    },
     ExplainWord {
         model: String,
         document: String,

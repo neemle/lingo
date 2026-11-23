@@ -333,6 +333,12 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
+        Command::ReviewOcrWord { id, page, revision_id, start_utf16, word, cached_only } => {
+            let job = registry::lock()?.store(handle)?
+                .prepare_ocr_word_review(id, *page, revision_id, *start_utf16, word, *cached_only)
+                .map_err(gateway::domain)?;
+            return encode_job(job.run());
+        }
         Command::ExplainWord {
             model, document, sentence, word, start_utf16, revision_id, cached_only,
         } => {

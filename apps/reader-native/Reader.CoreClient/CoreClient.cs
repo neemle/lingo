@@ -247,6 +247,12 @@ public sealed class CoreClient : IDisposable
     public bool ReconcilePhotoOcr(string id, string revisionId) =>
         Call<bool>(new { version = 1, operation = "reconcile_photo_ocr", id, revisionId });
 
+    public OcrWordReview? ReviewOcrWord(string id, int? page, string revisionId, int startUtf16, string word, bool cachedOnly) =>
+        CallIndependent<OcrWordReview?>(new
+        {
+            version = 1, operation = "review_ocr_word", id, page, revisionId, startUtf16, word, cachedOnly,
+        });
+
     public void ReleasePdfOcrPage(string id, PdfOcrRequest claim, bool canceled) =>
         Call<bool>(new
         {

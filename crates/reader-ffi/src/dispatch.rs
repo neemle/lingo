@@ -256,6 +256,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::ExplainWord { .. }
         | Command::ExplainDetachedWord { .. }
         | Command::ReviewSentence { .. }
+        | Command::ReviewOcrWord { .. }
         | Command::TranslateWithModel { .. }
         | Command::CancelModelTranslation { .. }
         | Command::CancelSpeech { .. }

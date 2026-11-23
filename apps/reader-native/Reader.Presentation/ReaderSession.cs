@@ -356,6 +356,10 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         return changed;
     }
 
+    public Task<OcrWordReview?> ReviewOcrWordAsync(string id, int? page, string revisionId, TextSelection selected,
+        bool cachedOnly = false) =>
+        Task.Run(() => client.ReviewOcrWord(id, page, revisionId, selected.StartUtf16, selected.Text, cachedOnly));
+
     public Task MoveAsync(int delta) => SelectSentenceAsync((Document?.Position ?? 0) + delta);
 
     public Task SetDocumentLanguageAsync(string id, string language) => RunAsync(() =>

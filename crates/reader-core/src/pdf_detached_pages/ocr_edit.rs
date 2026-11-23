@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DetachedPdfOcrPage {
-    revision: String,
+    pub(crate) revision: String,
     pub(crate) lines: Vec<ocr::OcrLine>,
 }
 

@@ -27,6 +27,8 @@ use std::{
 };
 
 mod passage_translation;
+mod ocr_word;
+pub use ocr_word::{OcrWordReview, ReviewOcrWordJob};
 pub use passage_translation::{PassageTranslation, TranslatePassageJob};
 
 pub(crate) const HINT_GENERATION_MODEL: &str = "qwen-2b";
