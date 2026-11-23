@@ -1,8 +1,9 @@
-use crate::{translation::ParagraphTranslation, valid_language, Document, Result, Store};
+use crate::{translation::{ParagraphTranslation, TranslationBatchError}, valid_language, Document, Result, Store};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
 const RETRY_SECONDS: i64 = 15;
+const INTERACTIVE_RETRY_SECONDS: i64 = 2;
 const PDF_OCR_POLL_SECONDS: i64 = 15;
 
 #[derive(Deserialize)]
@@ -266,16 +267,21 @@ impl Store {
             )
             .map_err(database_error)?;
         } else {
+            let delay = if matches!(&result, Err(TranslationBatchError::Deferred(_))) {
+                INTERACTIVE_RETRY_SECONDS
+            } else {
+                RETRY_SECONDS
+            };
             tx.execute(
                 "UPDATE translation_windows SET lease=NULL,available_at=?3
                  WHERE document_id=?1 AND lease=?2",
-                params![id, lease, crate::now() + RETRY_SECONDS],
+                params![id, lease, crate::now() + delay],
             )
             .map_err(database_error)?;
         }
         tx.commit().map_err(database_error)?;
         if current {
-            result.map(|window| complete.then_some(window))
+            result.map(|window| complete.then_some(window)).map_err(String::from)
         } else {
             Ok(None)
         }
@@ -392,23 +398,28 @@ impl Store {
         let (cursor, incomplete, resume_at) = if missing_packages.is_some() {
             (0, false, Some(now + 30))
         } else {
-            let step = self.warm_document_translation_step(&document, target, cursor as usize)?;
-            progress.translated_page = step.translated_page;
-            progress.translated_sentence_ids = step.translated_sentence_ids;
-            match step.next {
-                Some(next) => (next, incomplete || step.incomplete, Some(0)),
-                None => {
-                    if document.format == "pdf" {
-                        progress.pending_pdf_text_page = self.next_background_pdf_text_page(id)?;
-                    }
-                    if progress.pending_pdf_text_page.is_some() {
-                        (cursor as usize, incomplete, Some(crate::now() + PDF_OCR_POLL_SECONDS))
-                    } else if incomplete {
-                        (0, false, Some(crate::now() + 300))
+            match self.warm_document_translation_step(&document, target, cursor as usize) {
+                Err(TranslationBatchError::Deferred(_)) =>
+                    (cursor as usize, incomplete, Some(crate::now() + INTERACTIVE_RETRY_SECONDS)),
+                Err(error) => return Err(error.into()),
+                Ok(step) => {
+                    progress.translated_page = step.translated_page;
+                    progress.translated_sentence_ids = step.translated_sentence_ids;
+                    if let Some(next) = step.next {
+                        (next, incomplete || step.incomplete, Some(0))
                     } else {
-                        progress.waiting_for_pdf_ocr = document.format == "pdf"
-                            && self.pdf_has_unprocessed_pages(&document)?;
-                        (cursor as usize, false, None)
+                        if document.format == "pdf" {
+                            progress.pending_pdf_text_page = self.next_background_pdf_text_page(id)?;
+                        }
+                        if progress.pending_pdf_text_page.is_some() {
+                            (cursor as usize, incomplete, Some(crate::now() + PDF_OCR_POLL_SECONDS))
+                        } else if incomplete {
+                            (0, false, Some(crate::now() + 300))
+                        } else {
+                            progress.waiting_for_pdf_ocr = document.format == "pdf"
+                                && self.pdf_has_unprocessed_pages(&document)?;
+                            (cursor as usize, false, None)
+                        }
                     }
                 }
             }
@@ -485,7 +496,7 @@ impl Store {
         {
             return Ok(done);
         }
-        self.warm_document_translation_step(&document, target, start)
+        self.warm_document_translation_step(&document, target, start).map_err(String::from)
     }
 
     fn warm_document_translation_step(
@@ -493,7 +504,7 @@ impl Store {
         document: &Document,
         target: &str,
         start: usize,
-    ) -> Result<TranslationWarmStep> {
+    ) -> std::result::Result<TranslationWarmStep, TranslationBatchError> {
         let done = TranslationWarmStep {
             next: None,
             incomplete: false,
@@ -523,13 +534,16 @@ impl Store {
             let Some(page) = canonical.into_iter().chain(detached.map(usize::from)).min() else {
                 return Ok(done);
             };
-            let rows = self.pdf_page_translation_with_priority(
+            let rows = match self.pdf_page_translation_result(
                 &document.id,
                 page as u16,
                 target,
                 false,
                 true,
-            );
+            ) {
+                Err(error @ TranslationBatchError::Deferred(_)) => return Err(error),
+                result => result,
+            };
             let translated_page = rows
                 .as_ref()
                 .ok()
@@ -545,19 +559,20 @@ impl Store {
         if start >= document.sentences.len() {
             return Ok(done);
         }
-        let translated = self.translate_document_paragraph(
+        let translated = match self.translate_document_paragraph(
             document,
             start,
             target,
             true,
             crate::translation::PageBoundaries::Canonical,
-        );
-        let Ok(translated) = translated else {
-            return Ok(TranslationWarmStep {
+        ) {
+            Ok(translated) => translated,
+            Err(error @ TranslationBatchError::Deferred(_)) => return Err(error),
+            Err(TranslationBatchError::Failed(_)) => return Ok(TranslationWarmStep {
                 next: Some(start + 1),
                 incomplete: true,
                 ..done
-            });
+            }),
         };
         let next = document.sentences[start..]
             .iter()

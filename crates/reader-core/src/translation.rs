@@ -535,7 +535,7 @@ pub(crate) fn translate_paragraph(
     selected: usize,
     target: &str,
     boundaries: PageBoundaries,
-) -> Result<ParagraphTranslation> {
+) -> std::result::Result<ParagraphTranslation, TranslationBatchError> {
     let ParagraphPlan {
         mut result,
         pending,
@@ -565,7 +565,7 @@ pub(crate) fn translate_pdf_page(
     physical: Range<usize>,
     target: &str,
     boundaries: PageBoundaries,
-) -> Result<Vec<ParagraphUnit>> {
+) -> std::result::Result<Vec<ParagraphUnit>, TranslationBatchError> {
     let positions: HashMap<_, _> = physical.clone()
         .map(|index| (document.sentences[index].id.as_str(), index))
         .collect();
@@ -1520,7 +1520,7 @@ mod tests {
         provider.pivot_installed = true;
         provider.deferred = true;
         let deferred = translate_paragraph(&mut store, &mut provider, &document, 1, "uk", PageBoundaries::Canonical);
-        assert!(matches!(deferred, Err(message) if message == "foreground is waiting"));
+        assert!(matches!(deferred, Err(TranslationBatchError::Deferred(message)) if message == "foreground is waiting"));
         assert_eq!(provider.calls, [("fr-uk".into(), vec!["Le marin part.".into()])]);
         provider.calls.clear();
         provider.deferred = false;
@@ -1698,6 +1698,32 @@ mod tests {
         let background = store.pdf_page_translation_with_priority(&document.id, 0, "uk", false, true).unwrap();
         assert_eq!(background[0].text.as_deref(), Some("Корабель прибуває."));
         assert!(background[1].text.is_none());
+    }
+
+    #[test]
+    fn background_translation_retries_interrupted_text_and_pdf_at_the_same_cursor() {
+        use crate::{ocr::OcrLine, reader_preferences::ReaderPreferenceChange, resources::RESOURCES};
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("library.sqlite")).unwrap();
+        let text = store.import("page.txt", b"Le bateau arrive.", "fr").unwrap();
+        let pdf = store.import_scanned_pdf("page.pdf", b"%PDF-1.4\n", "fr", vec![OcrLine {
+            page: 0, text: "Le bateau arrive.".into(), x: 0.1, y: 0.1, width: 0.5, height: 0.05,
+            confidence: None, correction: None, words: Vec::new(), source_span: None,
+        }], 1).unwrap();
+        let _route = french_uk_route_with_invalid_assets(&store);
+        store.update_reader_preference(ReaderPreferenceChange::BackgroundTranslation { value: true }).unwrap();
+        let before = crate::now();
+        let _foreground = RESOURCES.interactive();
+        for document in [&text, &pdf] {
+            let revision = document.current_revision_id.as_deref().unwrap();
+            store.advance_background_translation(&document.id, revision, "uk").unwrap();
+            let (cursor, incomplete, resume_at): (u32, bool, i64) = store.connection.query_row(
+                "SELECT cursor,incomplete,resume_at FROM background_translation_progress WHERE document_id=?1",
+                [&document.id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).unwrap();
+            assert_eq!((cursor, incomplete), (0, false));
+            assert!((before + 2..=crate::now() + 2).contains(&resume_at));
+        }
     }
 
     #[test]
@@ -2173,7 +2199,7 @@ impl Store {
         source: &str,
         target: &str,
         input: &[String],
-    ) -> Result<UnitsTranslation> {
+    ) -> std::result::Result<UnitsTranslation, TranslationBatchError> {
         let routes = ranked_routes(&provider.installed_models()?, source, target)?;
         let mut segments = vec![None; input.len()];
         let preferred_pivot = routes.first().and_then(Route::pivot_language).map(str::to_owned);
@@ -2201,7 +2227,7 @@ impl Store {
             let batch: Vec<_> = pending.iter().map(|&index| input[index].clone()).collect();
             let outcomes = match infer_independent_units(provider, route, &batch) {
                 Ok(outcomes) => outcomes,
-                Err(TranslationBatchError::Deferred(error)) => return Err(error),
+                Err(error @ TranslationBatchError::Deferred(_)) => return Err(error),
                 Err(TranslationBatchError::Failed(error)) => {
                     first_failure.get_or_insert(error);
                     continue;
@@ -2227,7 +2253,7 @@ impl Store {
         }
         if segments.iter().all(Option::is_none) {
             if let Some(error) = first_failure {
-                return Err(error);
+                return Err(error.into());
             }
         }
         Ok(UnitsTranslation { segments, preferred_pivot })

@@ -771,6 +771,7 @@ impl Store {
     ) -> Result<ParagraphTranslation> {
         let (document, selected) = self.translation_selection(document_id, sentence_id)?;
         self.translate_document_paragraph(&document, selected, target, background, PageBoundaries::Canonical)
+            .map_err(String::from)
     }
 
     pub(crate) fn translate_document_paragraph(
@@ -780,7 +781,7 @@ impl Store {
         target: &str,
         background: bool,
         boundaries: PageBoundaries,
-    ) -> Result<ParagraphTranslation> {
+    ) -> std::result::Result<ParagraphTranslation, TranslationBatchError> {
         let directory = self.model_directory.clone();
         let translated = translate_paragraph(
             self,
@@ -812,7 +813,7 @@ impl Store {
     pub(crate) fn translate_document_page(
         &mut self, document: &crate::Document, physical: std::ops::Range<usize>, target: &str,
         boundaries: PageBoundaries, background: bool,
-    ) -> Result<Vec<ParagraphUnit>> {
+    ) -> std::result::Result<Vec<ParagraphUnit>, TranslationBatchError> {
         let directory = self.model_directory.clone();
         translate_pdf_page(self, &mut MarianProvider { directory: &directory, background }, document, physical, target, boundaries)
     }

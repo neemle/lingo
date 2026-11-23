@@ -1,5 +1,5 @@
 use super::{annotations, word_break, CachedSentences};
-use crate::translation::{sentence_input, sentence_source, CacheRoutes, PageBoundaries, ParagraphTranslation};
+use crate::translation::{sentence_input, sentence_source, CacheRoutes, PageBoundaries, ParagraphTranslation, TranslationBatchError};
 use crate::{document_layout, ocr, Document, Result, Sentence, Store};
 use serde::Serialize;
 use std::{collections::BTreeMap, ops::Range};
@@ -74,6 +74,12 @@ impl Store {
     pub fn pdf_page_translation_with_priority(
         &mut self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
     ) -> Result<Vec<PdfPageTranslationRow>> {
+        self.pdf_page_translation_result(id, page, target, cached_only, background).map_err(String::from)
+    }
+
+    pub(crate) fn pdf_page_translation_result(
+        &mut self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
+    ) -> std::result::Result<Vec<PdfPageTranslationRow>, TranslationBatchError> {
         let (document, physical, offsets, boundaries) = if let Some(cached) = self.detached_pdf_sentences(id, page)? {
             let spans = cached.sentences.iter().map(|s| (s.start_utf16, s.end_utf16)).collect::<Vec<_>>();
             let projection = self.project_pdf_translation_page(id, page, target, cached.text, cached.sentences, cached.language)?;
