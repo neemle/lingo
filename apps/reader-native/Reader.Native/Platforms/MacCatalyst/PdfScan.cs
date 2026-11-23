@@ -120,10 +120,14 @@ internal static partial class PdfScan
             var joined = accents.JoinLigatures(Bounds);
             if (accents.Text == storedText && joined.Text != storedText) return joined.Corrections;
             var width = page.GetBoundsForBox(PdfDisplayBox.Crop).Width;
-            if (joined.Text == storedText) return joined.SeparateBlocks(Bounds, width).Corrections;
-            if (accents.Text == joined.Text) return [];
-            var previousLayout = accents.SeparateBlocks(Bounds, width);
-            return previousLayout.Text == storedText ? previousLayout.JoinLigatures(Bounds).Corrections : [];
+            var layout = joined.SeparateBlocks(Bounds, width);
+            if (joined.Text == storedText) return layout.Corrections;
+            if (accents.Text != joined.Text)
+            {
+                var previousLayout = accents.SeparateBlocks(Bounds, width);
+                if (previousLayout.Text == storedText) return previousLayout.JoinLigatures(Bounds).Corrections;
+            }
+            return PdfOrderedText.MissingBlockBreaks(storedText, layout.Text);
         });
 
     internal enum LanguageSample { TextLayer, PortableOcr, NativeOcr }

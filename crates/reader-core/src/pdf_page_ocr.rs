@@ -98,19 +98,18 @@ fn valid_pdf_order_edit(original: &str, replacement: &str) -> bool {
         return !original.is_empty() && original.lines().count() <= 2 &&
             original.matches('\n').count() <= 1 && original.chars().all(char::is_whitespace);
     }
-    let line_count = original.lines().count();
-    if original.len() > 8192 || !(4..=48).contains(&line_count) ||
-        line_count % 2 != 0 || replacement.trim() != replacement {
+    if original.len() > 8192 || !(2..=49).contains(&original.lines().count()) ||
+        replacement.trim() != replacement {
         return false;
     }
     let mut columns = replacement.split("\n\n");
-    let first = columns.next();
+    let height = columns.next().map_or(0, |text| text.lines().count());
     let middle = columns.next();
     let last = columns.next();
-    let columns_valid = first.is_some_and(|text| text.lines().count() == line_count / 2)
+    let columns_valid = (2..=24).contains(&height)
         && match (middle, last, columns.next()) {
-            (Some(right), None, None) => right.lines().count() == line_count / 2,
-            (Some(label), Some(right), None) => label.split_whitespace().count() == 1 && right.lines().count() == line_count / 2,
+            (Some(right), None, None) => right.lines().count() == height,
+            (Some(label), Some(right), None) => label.split_whitespace().count() == 1 && right.lines().count() == height,
             _ => false,
         };
     if !columns_valid { return false; }
@@ -1527,6 +1526,9 @@ mod drop_cap_tests {
         let before = "Left choice\nOR Right choice\ncontinues here.\ncontinues there.";
         let after = "Left choice\ncontinues here.\n\nOR\n\nRight choice\ncontinues there.";
         assert!(valid_pdf_order_edit(before, after));
+        assert!(valid_pdf_order_edit(&before.replace("OR Right", "OR\nRight"), after));
+        assert!(valid_pdf_order_edit("Left choice Right choice\ncontinues here. continues there.",
+            "Left choice\ncontinues here.\n\nRight choice\ncontinues there."));
         assert!(!valid_pdf_order_edit(before, &after.replace("there", "elsewhere")));
         assert!(valid_pdf_order_edit(" ", "\n\n"));
         assert!(!valid_pdf_order_edit("text", "\n\n"));

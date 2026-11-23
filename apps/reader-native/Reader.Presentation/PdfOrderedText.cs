@@ -132,6 +132,33 @@ public sealed class PdfOrderedText
         return new(output.ToString(), originalText, sources.ToArray(), changes.ToArray());
     }
 
+    public static PdfTextOrderEdit[] MissingBlockBreaks(string stored, string current)
+    {
+        if (stored == current || stored.Length > 24000 || current.Length > 24000) return [];
+        var oldTokens = Tokens.Matches(stored);
+        var newTokens = Tokens.Matches(current);
+        if (oldTokens.Count != newTokens.Count) return [];
+
+        var corrections = new List<PdfTextOrderEdit>();
+        var oldEnd = 0;
+        var newEnd = 0;
+        for (var index = 0; index < oldTokens.Count; index++)
+        {
+            var oldToken = oldTokens[index];
+            var newToken = newTokens[index];
+            if (!oldToken.ValueSpan.SequenceEqual(newToken.ValueSpan)) return [];
+            if (index > 0 && current.AsSpan(newEnd, newToken.Index - newEnd).SequenceEqual("\n\n"))
+            {
+                var gap = stored.AsSpan(oldEnd, oldToken.Index - oldEnd);
+                if (gap.Length > 0 && gap.Count('\n') <= 1 && !gap.SequenceEqual("\n\n"))
+                    corrections.Add(new(oldEnd, oldToken.Index, "\n\n"));
+            }
+            oldEnd = oldToken.Index + oldToken.Length;
+            newEnd = newToken.Index + newToken.Length;
+        }
+        return corrections.ToArray();
+    }
+
     private void AppendSource(StringBuilder output, List<SourceSlice> sources, int start, int end)
     {
         if (end <= start) return;
