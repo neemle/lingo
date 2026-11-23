@@ -27,6 +27,7 @@ public partial class ReadingPage
     private string? pdfLayoutStatus;
     private int pdfLayoutRequestId;
     private bool refreshingPdfLayout;
+    private PdfLayoutAddress? pendingPdfCacheRefresh;
     private PdfAutoTranslation? pendingPdfAutoTranslation;
     private (PdfAutoTranslation Request, int Attempts)? pdfAutoAttempts;
     private (VerticalStackLayout Panel, PdfPageTranslationRow[] Rows, Label[] Labels, Sentence? Active)? overflowContent;
@@ -109,6 +110,7 @@ public partial class ReadingPage
         if (address != pdfLayoutRequest)
         {
             pdfLayoutRequest = address;
+            pendingPdfCacheRefresh = null;
             pdfLayoutRequestId++;
             pdfAutoAttempts = null;
             pdfLayoutRows = [];
@@ -252,8 +254,10 @@ public partial class ReadingPage
         RefreshPdfTranslationLayout();
         try
         {
-            var rows = await AppState.Session.PdfPageTranslationAsync(address.Document, address.Page,
+            var translation = AppState.Session.PdfPageTranslationAsync(address.Document, address.Page,
                 address.Target, cachedOnly);
+            if (!cachedOnly) _ = FollowPdfTranslationBatchesAsync(address, request, translation);
+            var rows = await translation;
             if (request != pdfLayoutRequestId || CurrentPdfLayoutAddress() != address) return;
             pdfLayoutRows = rows;
             pdfLayoutStatus = rows.Length == 0 ? "На сторінці немає тексту для перекладу."
@@ -267,6 +271,33 @@ public partial class ReadingPage
         {
             if (!cachedOnly && translatingPdfLayout == address) translatingPdfLayout = null;
             RefreshPdfTranslationLayout();
+            if (!cachedOnly && CurrentPdfLayoutAddress() == address &&
+                (pendingPdfCacheRefresh == address || request != pdfLayoutRequestId))
+                RefreshCachedPdfPageLayout();
+        }
+    }
+
+    private async Task FollowPdfTranslationBatchesAsync(PdfLayoutAddress address, int request, Task translation)
+    {
+        bool Current() => !translation.IsCompleted && readingPageActive && pdfTranslationLayout &&
+            request == pdfLayoutRequestId && CurrentPdfLayoutAddress() == address &&
+            (pdfLayoutRows.Length == 0 || pdfLayoutRows.Any(row => row.Text is null));
+        while (Current())
+        {
+            await Task.WhenAny(translation, Task.Delay(1200));
+            if (!Current()) return;
+            try
+            {
+                var rows = await AppState.Session.PdfPageTranslationAsync(address.Document, address.Page,
+                    address.Target, cachedOnly: true);
+                if (!Current()) return;
+                if (rows.Any(row => row.Text is not null) && !pdfLayoutRows.SequenceEqual(rows))
+                {
+                    pdfLayoutRows = rows;
+                    RefreshPdfTranslationLayout();
+                }
+            }
+            catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
         }
     }
 
@@ -295,14 +326,27 @@ public partial class ReadingPage
 
     private async void RefreshCachedPdfPageLayout()
     {
-        if (!readingPageActive || refreshingPdfLayout || !pdfTranslationLayout || translatingPdfLayout is not null ||
+        if (!readingPageActive || !pdfTranslationLayout ||
             CurrentPdfLayoutAddress() is not { } address) return;
+        pendingPdfCacheRefresh = address;
+        if (refreshingPdfLayout || translatingPdfLayout == address) return;
         refreshingPdfLayout = true;
         try
         {
-            await Task.Delay(150);
-            if (readingPageActive && pdfTranslationLayout && CurrentPdfLayoutAddress() == address && translatingPdfLayout is null)
-                await LoadPdfPageLayoutAsync(address, cachedOnly: true);
+            while (pendingPdfCacheRefresh is { } pending && pending != translatingPdfLayout)
+            {
+                pendingPdfCacheRefresh = null;
+                await Task.Delay(150);
+                if (!readingPageActive || !pdfTranslationLayout || CurrentPdfLayoutAddress() != pending) continue;
+                if (translatingPdfLayout == pending)
+                {
+                    pendingPdfCacheRefresh = pending;
+                    break;
+                }
+                // Updates before the read starts are already covered by this read.
+                if (pendingPdfCacheRefresh == pending) pendingPdfCacheRefresh = null;
+                await LoadPdfPageLayoutAsync(pending, cachedOnly: true);
+            }
         }
         finally { refreshingPdfLayout = false; }
     }
