@@ -1,6 +1,5 @@
 using System.Text;
 using Reader.Contracts;
-using Reader.CoreClient;
 using Reader.Native.Services;
 using Reader.Presentation;
 
@@ -41,14 +40,6 @@ public partial class ReadingPage
             !document.SpeechTextOverrides.ContainsKey(sentence.Id)
             ? AppState.Session.GetSpeechNarration(document.Id, sentence.Id, pronunciationOnly: true) ?? speechText
             : speechText;
-
-    private static async Task<string> PrepareSystemSpeechAsync(ReaderSession session, string language, string text)
-    {
-        // Longer text can still be read by the platform voice without the optional pronunciation hints.
-        if (language != "uk" || Encoding.UTF8.GetByteCount(text) > 64 * 1024) return text;
-        try { return await session.PrepareUkrainianSpeechAsync(text); }
-        catch (CoreException) { return text; }
-    }
 
     private async void EditSpeechTextClicked(object? sender, EventArgs args)
     {

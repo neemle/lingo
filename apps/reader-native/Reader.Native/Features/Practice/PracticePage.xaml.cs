@@ -37,6 +37,7 @@ public partial class PracticePage : ContentPage
     protected override void OnDisappearing()
     {
         visible = false;
+        StopPronunciation();
         responseTimer.Stop();
         loadVersion++;
         loading = false;
@@ -47,6 +48,7 @@ public partial class PracticePage : ContentPage
         PracticeSettings? settings = null)
     {
         var request = ++loadVersion;
+        StopPronunciation();
         var session = AppState.Session;
         loading = true;
         UpdateControls();
@@ -157,6 +159,7 @@ public partial class PracticePage : ContentPage
 
     private void OpenQuestion(PracticeQueue next)
     {
+        StopPronunciation();
         var state = next.Progress;
         queue = next;
         progress = state;
@@ -195,6 +198,8 @@ public partial class PracticePage : ContentPage
             : "Оберіть іншу добірку або додайте слова з документа.";
         Prompt.Text = saved?.Prompt ?? (noCards ? emptyTitle : "На сьогодні все");
         var card = saved is null ? null : session.Snapshot.Vocabulary.FirstOrDefault(entry => entry.Id == saved.CardId);
+        SpeakPrompt.IsVisible = card is not null;
+        SpeakAnswer.IsVisible = card is not null && saved?.Revealed == true;
         var context = saved is null
             ? noCards ? emptyHint : "Усі картки цього напряму повторено. Можна змінити напрям або повернутися до читання."
             : state.Direction == "reverse" ? "Згадайте слово мовою оригіналу."

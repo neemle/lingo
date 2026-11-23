@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
+using System.Text;
 using Reader.Contracts;
+using Reader.CoreClient;
 using Reader.Presentation;
 
 namespace Reader.Native.Services;
@@ -7,6 +9,7 @@ namespace Reader.Native.Services;
 public sealed class LocalSpeech : IDisposable
 {
     internal const int MaxModelAudioSeconds = 75;
+    internal const int DefaultRatePercent = 40;
     internal const string CompletedStatus = "Озвучення завершено.";
 
     private readonly SpeechPlayback playback = new();
@@ -17,6 +20,13 @@ public sealed class LocalSpeech : IDisposable
 
     internal static SpeechVoice[] VoicesForLanguage(string language) =>
         SpeechVoice.ForLanguage(NativeSpeech.InstalledVoices(), language);
+
+    internal static async Task<string> PrepareSystemSpeechAsync(ReaderSession session, string language, string text)
+    {
+        if (language != "uk" || Encoding.UTF8.GetByteCount(text) > 64 * 1024) return text;
+        try { return await session.PrepareUkrainianSpeechAsync(text); }
+        catch (CoreException) { return text; }
+    }
 
     public Task<string?> SpeakAsync(string text, string language, Action<int, int>? boundary = null)
     {

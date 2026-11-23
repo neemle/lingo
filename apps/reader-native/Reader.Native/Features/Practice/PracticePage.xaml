@@ -59,6 +59,8 @@
       HorizontalTextAlignment="Center" />
      <Label x:Name="Prompt" Style="{StaticResource SerifTitle}" FontSize="42" TextColor="{StaticResource Sage}"
       HorizontalTextAlignment="Center" SemanticProperties.HeadingLevel="Level2" />
+     <Button x:Name="SpeakPrompt" Text="Прослухати запитання" Clicked="SpeakPracticeSideClicked"
+      CommandParameter="prompt" Style="{StaticResource OutlineButton}" HorizontalOptions="Center" IsVisible="False" />
      <Label x:Name="QuestionContext" Style="{StaticResource SerifTitle}" FontSize="17" FontAttributes="Italic"
       TextColor="{StaticResource Muted}" HorizontalTextAlignment="Center" LineHeight="1.2" IsVisible="False" />
      <Grid x:Name="Typing" ColumnDefinitions="*,Auto" ColumnSpacing="10" IsVisible="False"
@@ -72,6 +74,9 @@
      <Label x:Name="Feedback" IsVisible="False" HorizontalTextAlignment="Center" TextColor="{StaticResource Muted}" />
      <Label x:Name="Answer" Style="{StaticResource SerifTitle}" IsVisible="False" FontSize="30"
       HorizontalTextAlignment="Center" TextColor="{StaticResource Accent}" />
+     <Button x:Name="SpeakAnswer" Text="Прослухати відповідь" Clicked="SpeakPracticeSideClicked"
+      CommandParameter="answer" Style="{StaticResource OutlineButton}" HorizontalOptions="Center" IsVisible="False" />
+     <Label x:Name="PronunciationStatus" TextColor="{StaticResource Muted}" IsVisible="False" HorizontalTextAlignment="Center" />
      <Button x:Name="Reveal" Text="Показати відповідь" Clicked="RevealClicked" IsVisible="False"
       Style="{StaticResource AccentButton}" HorizontalOptions="Center" />
      <Button x:Name="EmptyAction" Text="Продовжити читати" Clicked="ReturnToReadingClicked" IsVisible="False"

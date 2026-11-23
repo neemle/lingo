@@ -15,7 +15,7 @@ public partial class ReadingPage
     private const string AutoTranslatePreference = "reader.translation.follow";
     private const string TargetPreferencePrefix = "reader.translation.target.";
     private const string VoicePreferencePrefix = "reader.speech.voice.";
-    private const int DefaultSpeechRate = 40;
+    private const int DefaultSpeechRate = LocalSpeech.DefaultRatePercent;
     private static readonly int[] LegacySpeechRates = [75, 100, 125];
     private static readonly int[] DefaultSpeechRates = [DefaultSpeechRate, 45, 50, 55, 60, 65, 75, 85, 100, 115, 125];
 
