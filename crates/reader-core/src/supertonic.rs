@@ -93,9 +93,8 @@ impl MultilingualSpeechJob {
             _ => self.text.as_str().into(),
         };
         let synthesis_rate = crate::tts::model_synthesis_rate(self.rate);
-        let narration = if self.language == "fr" { "supertonic-3-narration-v7" } else { "supertonic-3-narration-v6" };
         let cache = SpeechCacheKey::new(
-            narration,
+            "supertonic-3-narration-v8",
             self.model.revision(),
             &self.language,
             self.voice,
@@ -401,6 +400,7 @@ fn pause_punctuation(text: &str) -> Option<char> {
 
 fn text_chunks(text: &str, indexer: &[i64]) -> Result<Vec<SpeechChunk>> {
     let mut normalized = String::with_capacity(text.len());
+    let mut quote_open = false;
     for grapheme in text.graphemes(true) {
         if grapheme.chars().any(char::is_alphanumeric) {
             normalized.push_str(&crate::tts::spoken_grapheme(grapheme, true, |ch| index(indexer, ch) >= 0)?);
@@ -422,16 +422,25 @@ fn text_chunks(text: &str, indexer: &[i64]) -> Result<Vec<SpeechChunk>> {
         if matches!(ch, ',' | '.' | '!' | '?' | ';' | ':') {
             normalized.truncate(normalized.trim_end().len());
         }
-        if ch == ' ' && normalized.ends_with(' ') { continue; }
+        if ch == '"' {
+            if quote_open { normalized.truncate(normalized.trim_end().len()); }
+            quote_open = !quote_open;
+        }
+        if ch == ' ' && (normalized.ends_with(' ') || quote_open && normalized.ends_with('"')) { continue; }
         normalized.push(ch);
     }
-    let normalized = normalized.trim();
-    let normalized = normalized.strip_prefix("- ").unwrap_or(normalized);
-
     let mut chunks = Vec::new();
     let mut chunk = String::new();
     let mut width = 0;
-    for word in normalized.split_whitespace() {
+    let mut words = normalized.split_whitespace().peekable();
+    while let Some(word) = words.next() {
+        if word == "-" && !words.peek().is_some_and(|next| next.starts_with(|ch: char| ch.is_ascii_digit())) {
+            if !chunk.is_empty() && !ends_phrase(&chunk) {
+                chunk.push(',');
+                width += 1;
+            }
+            continue;
+        }
         let word_width = word.chars().count();
         if word_width > TEXT_WINDOW {
             return Err("Текст містить надто довге слово для Supertonic.".into());
@@ -466,10 +475,8 @@ fn text_chunks(text: &str, indexer: &[i64]) -> Result<Vec<SpeechChunk>> {
     if !chunk.is_empty() {
         chunks.push(chunk);
     }
-    if !chunks
-        .iter()
-        .any(|chunk| chunk.chars().any(char::is_alphanumeric))
-    {
+    chunks.retain(|chunk| chunk.chars().any(char::is_alphanumeric));
+    if chunks.is_empty() {
         return Err("У реченні немає тексту для озвучення".into());
     }
     let count = chunks.len();
@@ -480,11 +487,16 @@ fn text_chunks(text: &str, indexer: &[i64]) -> Result<Vec<SpeechChunk>> {
             Some(',' | ';' | ':') => 140,
             _ => 70,
         };
-        if !text.ends_with(['.', '!', '?', ':', ';', ',', '\'', '"', ')']) {
-            text.push(if continued { ',' } else { '.' });
+        if !ends_phrase(&text) {
+            let end = text.trim_end_matches('"').len();
+            text.insert(end, if continued { ',' } else { '.' });
         }
         SpeechChunk { text, pause_after_ms }
     }).collect())
+}
+
+fn ends_phrase(text: &str) -> bool {
+    matches!(pause_punctuation(text), Some('.' | '!' | '?' | ':' | ';' | ','))
 }
 
 fn append_phrase(waveform: &mut Vec<f32>, phrase: &[f32], pause_ms: usize) {
@@ -552,6 +564,15 @@ mod tests {
         assert_eq!(chunks[0].text, opening);
         assert_eq!(chunks[0].pause_after_ms, 140);
         assert!(chunks[1].text.starts_with("puis le marin"));
+    }
+
+    #[test]
+    fn speech_chunks_keep_a_pause_and_a_complete_quoted_phrase() {
+        let indexer = vec![1; 0x0400];
+        let text = |input| text_chunks(input, &indexer).unwrap().remove(0).text;
+        assert_eq!(text("— Dit-il — « Bonjour »"), "Dit-il, \"Bonjour.\"");
+        assert_eq!(text("Il demande : « Pars-tu ? »"), "Il demande: \"Pars-tu?\"");
+        assert_eq!(text("- 20 C"), "- 20 C.");
     }
 
     #[test]
