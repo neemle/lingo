@@ -25,6 +25,8 @@ root ::= "{" ws "\"text\"" ws ":" ws "\"" content "\"" ws "}"
 content ::= [^"\\\x00-\x1f\x7f]{1,768}
 ws ::= [ \t]{0,2}
 "#;
+const RECOVERY_ATTEMPTS: u8 = 7;
+const CHUNK_TIMEOUT: Duration = Duration::from_secs(55);
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -129,6 +131,9 @@ impl Store {
                 )
             })
             .collect::<Result<Vec<_>>>()?;
+        if chunks.is_empty() {
+            return Err("У цьому абзаці немає тексту для перекладу.".into());
+        }
         Ok(TranslatePassageJob {
             source: language,
             source_text: text,
@@ -265,10 +270,12 @@ impl TranslatePassageJob {
                                 } else {
                                     let (instruction, source_text) = example.split_once('\n')
                                         .ok_or("Qwen не отримав текст уривка.")?;
+                                    let chunk_deadline = Instant::now() + CHUNK_TIMEOUT;
                                     let render = |fragment: &str, regenerate| {
                                         let prompt = format!("{instruction}\n{fragment}");
                                         let seconds = if fragment == source_text { 25 } else { 16 };
-                                        let finish = Instant::now() + Duration::from_secs(seconds);
+                                        let finish = chunk_deadline.min(Instant::now() + Duration::from_secs(seconds));
+                                        prompt_checkpoint(should_yield, finish)?;
                                         context.clear_kv_cache();
                                         generate_in_mode(
                                             model,
@@ -324,26 +331,37 @@ fn translate_chunk(
     regenerate: bool,
     mut render: impl FnMut(&str, bool) -> Result<Vec<u8>>,
 ) -> Result<TranslationChunk> {
-    let first = render(input, regenerate);
-    let allow_same_size_retry = first.is_ok();
-    match first {
-        Ok(bytes) => {
-            if let Ok(translated) = parse(&bytes, target, input) {
-                return Ok(translated);
-            }
-        }
-        Err(error) if error == GENERATION_TIMEOUT => {}
+    recover_chunk(input, target, regenerate, RECOVERY_ATTEMPTS, &mut render)
+}
+
+fn recover_chunk(
+    input: &str,
+    target: &str,
+    regenerate: bool,
+    attempts: u8,
+    render: &mut impl FnMut(&str, bool) -> Result<Vec<u8>>,
+) -> Result<TranslationChunk> {
+    let error = match render(input, regenerate) {
+        Ok(bytes) => match parse(&bytes, target, input) {
+            Ok(translated) => return Ok(translated),
+            Err(error) => error,
+        },
+        Err(error) if error == GENERATION_TIMEOUT => error,
         Err(error) => return Err(error),
+    };
+    if attempts >= 3 {
+        if let Some((left, right)) = split_for_retry(input) {
+            let left_attempts = (attempts - 1) / 2;
+            let right_attempts = attempts - 1 - left_attempts;
+            let left = recover_chunk(left, target, !regenerate, left_attempts, render)?;
+            let right = recover_chunk(right, target, !regenerate, right_attempts, render)?;
+            return Ok(TranslationChunk { text: format!("{} {}", left.text, right.text) });
+        }
     }
-    if let Some((left, right)) = split_for_retry(input) {
-        let first = parse(&render(left, !regenerate)?, target, left)?;
-        let second = parse(&render(right, !regenerate)?, target, right)?;
-        return Ok(TranslationChunk { text: format!("{} {}", first.text, second.text) });
+    if attempts > 1 && error != GENERATION_TIMEOUT {
+        return parse(&render(input, !regenerate)?, target, input);
     }
-    if !allow_same_size_retry {
-        return Err(GENERATION_TIMEOUT.into());
-    }
-    parse(&render(input, !regenerate)?, target, input)
+    Err(error)
 }
 
 fn split_for_retry(input: &str) -> Option<(&str, &str)> {
@@ -464,6 +482,28 @@ mod tests {
         }).unwrap();
         assert_eq!(requests, [input.as_str(), first, second]);
         assert_eq!(result.text, format!("{first_output} {second_output}"));
+    }
+
+    #[test]
+    fn incomplete_retry_branch_recovers_all_sentences() {
+        let sentences = [
+            ("Le marin entre au port.", "Моряк заходить у порт."),
+            ("Il marche vers la maison.", "Він іде до будинку."),
+            ("Sa famille l'attend déjà.", "Родина вже чекає на нього."),
+        ];
+        let source = sentences.map(|(original, _)| original).join(" ");
+        let mut requests = Vec::new();
+        let result = translate_chunk(&source, "uk", false, |fragment, _| {
+            requests.push(fragment.to_owned());
+            if fragment != source && !sentences.iter().any(|(original, _)| *original == fragment) {
+                return Err(GENERATION_TIMEOUT.into());
+            }
+            let text = sentences.iter().find(|(original, _)| *original == fragment)
+                .map_or(sentences[0].1, |(_, translated)| translated);
+            Ok(serde_json::to_vec(&TranslationChunk { text: text.into() }).unwrap())
+        }).unwrap();
+        assert_eq!(requests.len(), 5);
+        assert_eq!(result.text, sentences.map(|(_, translated)| translated).join(" "));
     }
 
     #[test]
