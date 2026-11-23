@@ -17,7 +17,6 @@ use serde::{de::DeserializeOwned, Deserialize};
 use sha2::{Digest, Sha256};
 use std::{fs::File, io::BufReader, path::Path};
 use unicode_normalization::UnicodeNormalization;
-use unicode_segmentation::UnicodeSegmentation;
 
 const MODEL: &str = "supertonic-3";
 const CORE_LANGUAGES: &[&str] = &[
@@ -30,9 +29,10 @@ const LATENT_HOP: usize = 512 * 6;
 const MAX_BYTES: usize = 4096;
 const TEXT_WINDOW: usize = 110;
 const MAX_SAMPLES: usize = SAMPLE_RATE as usize * crate::tts::MAX_SECONDS;
-// Match the reference denoising budget and pause between split phrases.
+// Match the reference denoising budget.
 const STEPS: usize = 8;
-const CHUNK_PAUSE_SAMPLES: usize = SAMPLE_RATE as usize * 3 / 10;
+const MAX_QUIET_EDGE: usize = SAMPLE_RATE as usize * 350 / 1000;
+const QUIET_SAMPLE: f32 = 0.003;
 
 pub struct MultilingualSpeechJob {
     model: OptionalModelJob,
@@ -93,8 +93,13 @@ impl MultilingualSpeechJob {
             self.text.as_str().into()
         };
         let synthesis_rate = crate::tts::model_synthesis_rate(self.rate);
+        let narration = if spoken.nfkd().take(TEXT_WINDOW + 1).count() > TEXT_WINDOW {
+            "supertonic-3-narration-v4"
+        } else {
+            "supertonic-3-narration-v3"
+        };
         let cache = SpeechCacheKey::new(
-            "supertonic-3-narration-v3",
+            narration,
             self.model.revision(),
             &self.language,
             self.voice,
@@ -110,26 +115,22 @@ impl MultilingualSpeechJob {
                 let mut engine = Engine::load(directory, self.voice)?;
                 let chunks = text_chunks(&spoken, &engine.indexer)?;
                 let mut waveform = Vec::new();
+                let mut pause_ms = 0;
                 for chunk in chunks {
                     check_interrupted(should_yield)?;
-                    let pause = if waveform.is_empty() {
-                        0
-                    } else {
-                        CHUNK_PAUSE_SAMPLES
-                    };
                     let remaining = MAX_SAMPLES - waveform.len();
-                    if pause >= remaining {
-                        return Err("Озвучення перевищує 45 секунд".into());
-                    }
                     let audio = engine.synthesize(
-                        &chunk,
+                        &chunk.text,
                         &self.language,
                         synthesis_rate,
-                        remaining - pause,
+                        remaining,
                         should_yield,
                     )?;
-                    waveform.resize(waveform.len() + pause, 0.0);
-                    waveform.extend(audio);
+                    append_phrase(&mut waveform, &audio, pause_ms);
+                    if waveform.len() > MAX_SAMPLES {
+                        return Err(format!("Озвучення перевищує {} секунд.", crate::tts::MAX_SECONDS));
+                    }
+                    pause_ms = chunk.pause_after_ms;
                 }
                 let audio = to_wav(&waveform, SAMPLE_RATE)?;
                 check_interrupted(should_yield)?;
@@ -393,7 +394,12 @@ fn index(indexer: &[i64], c: char) -> i64 {
     indexer.get(c as usize).copied().unwrap_or(-1)
 }
 
-fn text_chunks(text: &str, indexer: &[i64]) -> Result<Vec<String>> {
+struct SpeechChunk {
+    text: String,
+    pause_after_ms: usize,
+}
+
+fn text_chunks(text: &str, indexer: &[i64]) -> Result<Vec<SpeechChunk>> {
     let characters = text.nfkd()
         .map(|c| match c {
             '–' | '—' | '‑' | '‐' => '-',
@@ -418,14 +424,18 @@ fn text_chunks(text: &str, indexer: &[i64]) -> Result<Vec<String>> {
     let mut chunk = String::new();
     let mut width = 0;
     for word in normalized.split_whitespace() {
-        if !chunk.is_empty() && width + 1 + word.chars().count() > TEXT_WINDOW {
+        let word_width = word.chars().count();
+        if word_width > TEXT_WINDOW {
+            return Err("Текст містить надто довге слово для Supertonic.".into());
+        }
+        if !chunk.is_empty() && width + 1 + word_width > TEXT_WINDOW {
             if let Some((pause, ch)) = chunk.rmatch_indices([',', ';', ':', '!', '?']).find(|(pause, _)| {
                 chunk[..*pause].chars().count() >= TEXT_WINDOW / 2
             }) {
                 let next = chunk.split_off(pause + ch.len());
                 chunks.push(std::mem::replace(&mut chunk, next.trim_start().to_owned()));
                 width = chunk.chars().count();
-                if width + 1 + word.chars().count() > TEXT_WINDOW {
+                if width + 1 + word_width > TEXT_WINDOW {
                     chunks.push(std::mem::take(&mut chunk));
                     width = 0;
                 }
@@ -438,18 +448,8 @@ fn text_chunks(text: &str, indexer: &[i64]) -> Result<Vec<String>> {
             chunk.push(' ');
             width += 1;
         }
-        for grapheme in word.graphemes(true) {
-            let size = grapheme.chars().count();
-            if size > TEXT_WINDOW {
-                return Err("Надто довгий символ у тексті для озвучення".into());
-            }
-            if width + size > TEXT_WINDOW {
-                chunks.push(std::mem::take(&mut chunk));
-                width = 0;
-            }
-            chunk.push_str(grapheme);
-            width += size;
-        }
+        chunk.push_str(word);
+        width += word_width;
     }
     if !chunk.is_empty() {
         chunks.push(chunk);
@@ -460,12 +460,36 @@ fn text_chunks(text: &str, indexer: &[i64]) -> Result<Vec<String>> {
     {
         return Err("У реченні немає тексту для озвучення".into());
     }
-    for chunk in &mut chunks {
-        if !chunk.ends_with(['.', '!', '?', ':', ';', ',', '\'', '"', ')']) {
-            chunk.push('.');
+    let count = chunks.len();
+    Ok(chunks.into_iter().enumerate().map(|(index, mut text)| {
+        let continued = index + 1 < count;
+        let pause_after_ms = match text.trim_end_matches(['"', '\'', ')']).chars().next_back() {
+            Some('.' | '!' | '?') => 210,
+            Some(',' | ';' | ':') => 140,
+            _ => 70,
+        };
+        if !text.ends_with(['.', '!', '?', ':', ';', ',', '\'', '"', ')']) {
+            text.push(if continued { ',' } else { '.' });
         }
+        SpeechChunk { text, pause_after_ms }
+    }).collect())
+}
+
+fn append_phrase(waveform: &mut Vec<f32>, phrase: &[f32], pause_ms: usize) {
+    if waveform.is_empty() {
+        waveform.extend_from_slice(phrase);
+        return;
     }
-    Ok(chunks)
+    let pause = SAMPLE_RATE as usize * pause_ms / 1000;
+    let leading = phrase.iter().take(MAX_QUIET_EDGE)
+        .take_while(|sample| sample.abs() <= QUIET_SAMPLE).count();
+    let trailing = waveform.iter().rev().take(MAX_QUIET_EDGE)
+        .take_while(|sample| sample.abs() <= QUIET_SAMPLE).count();
+    let keep_leading = leading.min(pause / 2);
+    let keep_trailing = trailing.min(pause - keep_leading);
+    waveform.truncate(waveform.len() - trailing + keep_trailing);
+    waveform.resize(waveform.len() + pause - keep_leading - keep_trailing, 0.0);
+    waveform.extend_from_slice(&phrase[leading - keep_leading..]);
 }
 
 fn initial_noise(seed: &[u8], count: usize) -> Vec<f32> {
@@ -506,13 +530,40 @@ mod tests {
     #[test]
     fn french_speech_drops_dialogue_marks_and_splits_long_input_at_a_pause() {
         let indexer = vec![1; 0x0400];
-        assert_eq!(text_chunks("– Il répond : est-elle là ?", &indexer).unwrap(),
-            ["Il re\u{301}pond: est-elle la\u{300}?"]);
+        let short = text_chunks("– Il répond : est-elle là ?", &indexer).unwrap();
+        assert_eq!(short.len(), 1);
+        assert_eq!(short[0].text, "Il re\u{301}pond: est-elle la\u{300}?");
         let opening = "Le capitaine regarde le bateau et attend la prochaine chaloupe au loin,";
         let end = "puis le marin descend sur les marches du quai pour retrouver son équipe.";
         let chunks = text_chunks(&format!("{opening} {end}"), &indexer).unwrap();
         assert_eq!(chunks.len(), 2);
-        assert_eq!(chunks[0], opening);
-        assert!(chunks[1].starts_with("puis le marin"));
+        assert_eq!(chunks[0].text, opening);
+        assert_eq!(chunks[0].pause_after_ms, 140);
+        assert!(chunks[1].text.starts_with("puis le marin"));
+    }
+
+    #[test]
+    fn forced_wrap_continues_with_a_short_pause_and_never_splits_a_word() {
+        let indexer = vec![1; 0x0400];
+        let source = format!("{} arrive.", "le bateau ".repeat(13));
+        let chunks = text_chunks(&source, &indexer).unwrap();
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks[0].text.ends_with(','));
+        assert_eq!(chunks[0].pause_after_ms, 70);
+        assert!(chunks[1].text.ends_with("arrive."));
+        assert!(text_chunks(&"a".repeat(TEXT_WINDOW + 1), &indexer).is_err());
+    }
+
+    #[test]
+    fn joins_keep_a_single_pause_without_removing_voiced_edges() {
+        let mut waveform = vec![0.1];
+        waveform.resize(1 + MAX_QUIET_EDGE, 0.0);
+        let mut next = vec![0.0; MAX_QUIET_EDGE];
+        next.extend([-0.1, 0.1]);
+        append_phrase(&mut waveform, &next, 70);
+        let gap = SAMPLE_RATE as usize * 70 / 1000;
+        assert_eq!(waveform[0], 0.1);
+        assert_eq!(waveform.len(), 1 + gap + 2);
+        assert_eq!(&waveform[gap + 1..], [-0.1, 0.1]);
     }
 }
