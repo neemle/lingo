@@ -157,7 +157,7 @@ fn starts_paragraph(previous: &OcrLine, next: &OcrLine) -> bool {
 
 /// Use sparse OCR to fill holes without replacing primary text or its reading order.
 pub fn recover_tesseract_lines(
-    primary: Vec<OcrLine>, sparse_tsv: &str, width: u32, height: u32,
+    mut primary: Vec<OcrLine>, sparse_tsv: &str, width: u32, height: u32,
 ) -> Vec<OcrLine> {
     if primary.is_empty() {
         return primary;
@@ -165,6 +165,8 @@ pub fn recover_tesseract_lines(
     let Ok(sparse) = parse_lines(sparse_tsv, width, height, true) else {
         return primary;
     };
+    // Normalized horizontal and vertical coordinates use different scales on portrait pages.
+    crate::ocr_layout::recover_sparse_initials(&mut primary, &sparse, f64::from(width) / f64::from(height));
     merge_missing_lines(primary, sparse)
 }
 
@@ -286,5 +288,48 @@ mod tests {
         assert_eq!(merged[1].words[1].raw_start_utf16, Some(7));
         assert_eq!(merged[1].x, 0.1);
         assert!(merged[1].block_start);
+    }
+
+    #[test]
+    fn sparse_ocr_restores_an_initial_missing_from_the_primary_pass() {
+        const HEADER: &str = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n";
+        let body = concat!(
+            "5\t1\t1\t1\t1\t1\t25\t20\t6\t10\t97\te\n",
+            "5\t1\t1\t1\t1\t2\t35\t20\t35\t10\t97\tmarin\n",
+        );
+        let initial = "5\t1\t2\t1\t1\t1\t10\t17\t13\t22\t96\tL\n";
+        let parsed = parse_tesseract_tsv(&format!("{HEADER}{body}"), 100, 100).unwrap();
+        let sparse = format!("{HEADER}{initial}");
+        let mut lines = recover_tesseract_lines(parsed.clone(), &sparse, 100, 100);
+        let text = crate::ocr::recognized_lines(&lines, 1).unwrap();
+        assert_eq!(text, "Le marin");
+        crate::ocr::refresh_line_provenance(&text, &mut lines, None);
+        assert_eq!(lines[0].words[0].x, 0.1);
+        assert_eq!(lines[0].words[0].source_span.unwrap().end_utf16, 2);
+        assert_eq!(lines[0].words[1].source_span.unwrap().start_utf16, 3);
+
+        let weak = sparse.replace("\t96\tL", "\t30\tL");
+        assert_eq!(recover_tesseract_lines(parsed, &weak, 100, 100)[0].text, "e marin");
+        let original = parse_tesseract_tsv(&format!("{HEADER}{body}{initial}"), 100, 100).unwrap();
+        let mut already_present = recover_tesseract_lines(original, &sparse, 100, 100);
+        crate::ocr_layout::reconstruct_blocks(&mut already_present);
+        assert_eq!(crate::ocr::recognized_lines(&already_present, 1).unwrap(), "Le marin");
+
+        let primary = format!("{HEADER}{}", concat!(
+            "5\t1\t1\t1\t1\t1\t10\t17\t21\t23\t55\tL_:\n",
+            "5\t1\t1\t1\t1\t2\t35\t20\t9\t10\t97\t15\n",
+            "5\t1\t1\t1\t1\t3\t47\t19\t25\t11\t97\tfévrier\n",
+        ));
+        let sparse = format!("{HEADER}{initial}{}", concat!(
+            "5\t1\t3\t1\t1\t1\t25\t20\t6\t10\t97\te\n",
+            "5\t1\t3\t1\t1\t2\t35\t20\t9\t10\t97\t15\n",
+            "5\t1\t3\t1\t1\t3\t47\t19\t25\t11\t97\tfévrier\n",
+        ));
+        let primary = parse_tesseract_tsv(&primary, 100, 100).unwrap();
+        let merged = recover_tesseract_lines(primary.clone(), &sparse, 100, 100);
+        assert_eq!(merged[0].text, "Le 15 février");
+        assert_eq!(merged[0].words[1].raw_start_utf16, Some(3));
+        let conflicting = sparse.replace("février", "janvier");
+        assert_eq!(recover_tesseract_lines(primary, &conflicting, 100, 100)[0].text, "L_: 15 février");
     }
 }

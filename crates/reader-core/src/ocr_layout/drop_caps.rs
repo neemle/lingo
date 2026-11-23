@@ -1,5 +1,67 @@
 use crate::ocr::OcrLine;
 
+/// Retain a sparse-only initial when its geometry matches a line in the primary OCR.
+pub(crate) fn recover_sparse_initials(primary: &mut [OcrLine], sparse: &[OcrLine], aspect: f64) {
+    for cap in sparse.iter().filter(|line| {
+        is_initial(&line.text) && line.confidence.is_some_and(|score| score >= 0.90)
+    }).take(32) {
+        if let Some(target) = nearest_body(cap, primary, aspect) {
+            if !primary.iter().any(|line| is_initial(&line.text) && distance(line, &primary[target], aspect).is_some()) {
+                prefix(&mut primary[target], cap);
+            }
+        } else if let Some(recovered) = nearest_body(cap, sparse, aspect).map(|index| &sparse[index]) {
+            repair_damaged_initial(primary, cap, recovered);
+        }
+    }
+}
+
+fn nearest_body(cap: &OcrLine, lines: &[OcrLine], aspect: f64) -> Option<usize> {
+    lines.iter().enumerate()
+        .filter_map(|(index, line)| distance(cap, line, aspect).map(|score| (index, score)))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(index, _)| index)
+}
+
+fn repair_damaged_initial(primary: &mut [OcrLine], cap: &OcrLine, sparse_body: &OcrLine) {
+    let [tail, first_anchor, second_anchor, ..] = sparse_body.words.as_slice() else { return };
+    let mut candidates = primary.iter_mut().filter(|line| {
+        let [damaged, first, second, ..] = line.words.as_slice() else { return false };
+        line.page == cap.page && damaged.raw_start_utf16 == Some(0)
+            && damaged.text.strip_prefix(&cap.text).is_some_and(|suffix| {
+                !suffix.is_empty() && !suffix.chars().any(char::is_alphanumeric)
+            })
+            && (damaged.x - cap.x).abs() <= cap.width * 0.35
+            && (damaged.y - cap.y).abs() <= cap.height * 0.35
+            && [first, second].into_iter().zip([first_anchor, second_anchor]).all(|(a, b)| {
+                a.text == b.text && (a.y - b.y).abs() <= b.height * 0.25
+                    && (a.x - b.x).abs() <= b.width * 0.25
+            })
+    });
+    let Some(line) = candidates.next() else { return };
+    if candidates.next().is_some() || !line.text.starts_with(&line.words[0].text) {
+        return;
+    }
+    let damaged = &line.words[0].text;
+    if line.text.len() - damaged.len() + tail.text.len() + cap.text.len() > 8192 {
+        return;
+    }
+    let original_units = damaged.encode_utf16().count();
+    let recovered_units = tail.text.encode_utf16().count();
+    line.text.replace_range(..damaged.len(), &tail.text);
+    line.words[0] = tail.clone();
+    for word in &mut line.words[1..] {
+        word.raw_start_utf16 = word.raw_start_utf16
+            .and_then(|offset| offset.checked_sub(original_units))
+            .map(|offset| offset + recovered_units);
+    }
+    prefix(line, cap);
+}
+
+fn is_initial(text: &str) -> bool {
+    let mut letters = text.chars();
+    letters.next().is_some_and(char::is_uppercase) && letters.next().is_none()
+}
+
 /// Join an isolated ornamental initial with the lowercase text aligned to its top right.
 pub(super) fn join(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
     let mut removed = vec![false; lines.len()];
@@ -10,8 +72,7 @@ pub(super) fn join(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
         }
     }
     for (index, cap) in lines.iter().enumerate() {
-        let mut letters = cap.text.chars();
-        if !letters.next().is_some_and(char::is_uppercase) || letters.next().is_some() {
+        if !is_initial(&cap.text) {
             continue;
         }
         let current = output.as_deref().unwrap_or(lines);
@@ -19,7 +80,7 @@ pub(super) fn join(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
             .iter()
             .enumerate()
             .filter(|&(index, _)| !removed[index])
-            .filter_map(|(index, line)| distance(cap, line).map(|score| (index, score)))
+            .filter_map(|(index, line)| distance(cap, line, 1.0).map(|score| (index, score)))
             .min_by(|a, b| a.1.total_cmp(&b.1));
         let Some((target, _)) = nearest else {
             continue;
@@ -40,9 +101,8 @@ pub(super) fn join(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
 /// Some engines report the initial and the rest of the word in the same OCR row.
 fn join_inline(line: &OcrLine) -> Option<OcrLine> {
     let [cap, tail, ..] = line.words.as_slice() else { return None };
-    let mut letters = cap.text.chars();
-    if cap.raw_start_utf16 != Some(0) || !letters.next().is_some_and(char::is_uppercase)
-        || letters.next().is_some() || !tail.text.chars().next().is_some_and(char::is_lowercase)
+    if cap.raw_start_utf16 != Some(0) || !is_initial(&cap.text)
+        || !tail.text.chars().next().is_some_and(char::is_lowercase)
         || !close_to_initial(cap.x + cap.width, cap.y, cap.height, tail.x, tail.y, tail.height)
     {
         return None;
@@ -75,15 +135,17 @@ fn join_inline(line: &OcrLine) -> Option<OcrLine> {
     Some(joined)
 }
 
-fn distance(cap: &OcrLine, body: &OcrLine) -> Option<f64> {
+fn distance(cap: &OcrLine, body: &OcrLine, aspect: f64) -> Option<f64> {
     let start = body.text.trim_start_matches(['’', '\'', 'ʼ']);
-    if !start.chars().next().is_some_and(char::is_lowercase)
-        || body.text.chars().take(3).count() < 3
-        || !close_to_initial(cap.x + cap.width, cap.y, cap.height, body.x, body.y, body.height)
+    let (x, y, height) = body.words.first().filter(|word| word.raw_start_utf16 == Some(0))
+        .map_or((body.x, body.y, body.height), |word| (word.x, word.y, word.height));
+    if cap.page != body.page || !start.chars().next().is_some_and(char::is_lowercase)
+        || body.text.chars().take(3).count() < 3 || body.text.len() + cap.text.len() > 8192
+        || !close_to_initial((cap.x + cap.width) * aspect, cap.y, cap.height, x * aspect, y, height)
     {
         return None;
     }
-    Some((body.x - (cap.x + cap.width)).abs() + (body.y - cap.y).abs())
+    Some((x - (cap.x + cap.width)).abs() * aspect + (y - cap.y).abs())
 }
 
 fn close_to_initial(right: f64, top: f64, cap_height: f64, x: f64, y: f64, height: f64) -> bool {
