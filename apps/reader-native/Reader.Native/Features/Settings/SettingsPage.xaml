@@ -59,7 +59,7 @@
      <BoxView HeightRequest="1" Color="{StaticResource BorderTone}" />
      <Label x:Name="StorageTotal" Text="Обчислюємо зайняте місце…" FontAttributes="Bold" />
      <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="6">
-      <Label Text="Бібліотека й база" Style="{StaticResource ResourceDetail}" />
+      <Label Text="Бібліотека, нотатки й прогрес" Style="{StaticResource ResourceDetail}" />
       <Label x:Name="LibraryStorage" Grid.Column="1" HorizontalTextAlignment="End" />
       <Label Grid.Row="1" Text="Кеш" Style="{StaticResource ResourceDetail}" />
       <Label x:Name="CacheStorage" Grid.Row="1" Grid.Column="1" HorizontalTextAlignment="End" />
@@ -67,11 +67,13 @@
       <Label x:Name="DownloadStorage" Grid.Row="2" Grid.Column="1" HorizontalTextAlignment="End" />
      </Grid>
      <FlexLayout Wrap="Wrap">
-      <Button Text="Оновити розмір" Clicked="RefreshStorageClicked" />
-      <Button Text="Очистити кеш…" Clicked="ClearStorageClicked" CommandParameter="cache" />
-      <Button Text="Видалити завантажені ресурси…" Clicked="ClearStorageClicked" CommandParameter="downloads" />
-      <Button Text="Видалити всі локальні дані…" TextColor="#A53426" Clicked="ClearStorageClicked" CommandParameter="all" />
+      <Button Text="Оновити розмір" Clicked="RefreshStorageClicked" Margin="0,0,8,8" Style="{StaticResource OutlineButton}" />
+      <Button Text="Очистити кеш…" Clicked="ClearStorageClicked" CommandParameter="cache" Margin="0,0,8,8" Style="{StaticResource OutlineButton}" />
+      <Button Text="Видалити завантажені ресурси…" Clicked="ClearStorageClicked" CommandParameter="downloads" Margin="0,0,8,8" Style="{StaticResource OutlineButton}" />
      </FlexLayout>
+     <BoxView HeightRequest="1" Color="{StaticResource BorderTone}" />
+     <Button Text="Видалити всі локальні дані…" TextColor="#A53426" Clicked="ClearStorageClicked" CommandParameter="all"
+      HorizontalOptions="Start" Style="{StaticResource OutlineButton}" />
      <Label x:Name="StorageStatus" Style="{StaticResource ResourceDetail}" />
     </VerticalStackLayout>
    </Border>

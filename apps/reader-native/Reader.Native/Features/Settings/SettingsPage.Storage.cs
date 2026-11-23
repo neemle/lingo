@@ -157,7 +157,7 @@ public partial class SettingsPage
         var (title, detail) = scope switch
         {
             "cache" => ("Очистити кеш?", "Збережені автоматичні переклади, мовні підказки, аудіо й тимчасові копії для поширення буде видалено. Фоновий переклад вимкнеться."),
-            "downloads" => ("Видалити завантажені ресурси?", "Офлайн-моделі, мовні пакети й незавершені завантаження буде видалено. Книжки та словник залишаться в бібліотеці."),
+            "downloads" => ("Видалити завантажені ресурси?", "Офлайн-моделі, мовні пакети, кеш модельних голосів і незавершені завантаження буде видалено. Книжки та словник залишаться в бібліотеці."),
             "all" => ("Видалити всі локальні дані?", "Базу з книжками, словником, нотатками й історією буде очищено. Локальні копії книжок, налаштування та завантажені ресурси буде видалено. Цю дію неможливо скасувати."),
             _ => ("", ""),
         };
@@ -174,12 +174,18 @@ public partial class SettingsPage
             }
             if (!await DisplayAlertAsync(title, detail, "Видалити", "Скасувати")) return;
             if (automaticStorageRefresh is { } pending) await pending;
+            if (ResourceOperationActive || AppState.Session.Busy)
+            {
+                StorageStatus.Text = "Зачекайте, поки завершиться поточна операція.";
+                return;
+            }
             importGateHeld = !DesktopImport.HasIncoming && await DesktopImport.Gate.WaitAsync(0);
             if (!importGateHeld)
             {
                 StorageStatus.Text = "Зачекайте, поки завершиться імпорт файла.";
                 return;
             }
+            StorageStatus.Text = "Видаляємо дані…";
             if (AppState.TranslationWorker is { } worker) await worker.PauseAsync();
             var session = AppState.Session;
             if (scope != "downloads") AppState.InvalidateReaderCache();
@@ -189,7 +195,12 @@ public partial class SettingsPage
                 if (scope == "all")
                     Preferences.Default.Clear();
                 await Task.Run(() => RemoveAuxiliaryFiles(scope));
-                StorageStatus.Text = "Готово.";
+                StorageStatus.Text = scope switch
+                {
+                    "cache" => "Кеш очищено. Фоновий переклад вимкнено.",
+                    "downloads" => "Завантажені ресурси видалено.",
+                    _ => "Усі локальні дані видалено."
+                };
             }
             finally
             {
