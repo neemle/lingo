@@ -74,17 +74,57 @@ fn background(pixels: &[u8], width: usize, height: usize, bounds: &SampleBox) ->
         return 0xff_ff_ff;
     }
     let mut samples = [0u64; 40];
-    for (index, sample) in samples.iter_mut().enumerate() {
-        let x = bounds.x + bounds.width * ((index % 8) as f64 + 0.5) / 8.0;
-        let y = bounds.y + bounds.height * ((index / 8) as f64 + 0.5) / 5.0;
+    let sample_at = |x: f64, y: f64| {
         let x = ((x * width as f64) as usize).min(width - 1);
         let y = ((y * height as f64) as usize).min(height - 1);
         let start = (y * width + x) * 4;
         let [red, green, blue] =
             [pixels[start], pixels[start + 1], pixels[start + 2]].map(u64::from);
         let bucket = ((red >> 3) << 10) | ((green >> 3) << 5) | (blue >> 3);
-        *sample = (bucket << 24) | (red << 16) | (green << 8) | blue;
+        (bucket << 24) | (red << 16) | (green << 8) | blue
+    };
+    for (index, sample) in samples.iter_mut().enumerate() {
+        let x = bounds.x + bounds.width * ((index % 8) as f64 + 0.5) / 8.0;
+        let y = bounds.y + bounds.height * ((index / 8) as f64 + 0.5) / 5.0;
+        *sample = sample_at(x, y);
     }
+    // Tight glyph boxes can contain more ink than paper. Prefer a color that
+    // dominates on both sides of the writing and also occurs inside the box.
+    let horizontal = bounds.width * width as f64 >= bounds.height * height as f64;
+    let (extent, lo, hi) = if horizontal {
+        (height, bounds.y, bounds.y + bounds.height)
+    } else {
+        (width, bounds.x, bounds.x + bounds.width)
+    };
+    let margin = 1.5 / extent as f64;
+    if lo >= margin && hi + margin < 1.0 {
+        let sides = [lo - margin, hi + margin].map(|edge| {
+            let mut colors = std::array::from_fn::<_, 8, _>(|index| {
+                let offset = (index as f64 + 0.5) / 8.0;
+                if horizontal {
+                    sample_at(bounds.x + bounds.width * offset, edge)
+                } else {
+                    sample_at(edge, bounds.y + bounds.height * offset)
+                }
+            });
+            colors.sort_unstable();
+            colors
+        });
+        let paper = sides[0][4];
+        let matches_paper = |sample: &&u64| {
+            [0, 8, 16]
+                .into_iter()
+                .all(|shift| ((**sample >> shift) & 255).abs_diff((paper >> shift) & 255) <= 32)
+        };
+        if sides
+            .iter()
+            .all(|side| side.iter().filter(matches_paper).count() >= 6)
+            && samples.iter().filter(matches_paper).count() >= 4
+        {
+            return (paper & 0xff_ff_ff) as u32;
+        }
+    }
+
     samples.sort_unstable();
     let mut best = (0, 0);
     let mut start = 0;
@@ -158,6 +198,45 @@ fn ink(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keeps_dense_ink_out_of_paper_masks_in_both_directions() {
+        let width = 24;
+        let height = 24;
+        for vertical in [false, true] {
+            let mut pixels = Vec::new();
+            for y in 0..height {
+                for x in 0..width {
+                    let (along, across) = if vertical { (y, x) } else { (x, y) };
+                    let rgb = if (9..15).contains(&across) && (2..22).contains(&along) {
+                        if (5..19).contains(&along) {
+                            [16, 18, 15]
+                        } else {
+                            // Tight boxes can contain only antialiased paper samples.
+                            [220, 228, 186]
+                        }
+                    } else {
+                        [234, 247, 208]
+                    };
+                    pixels.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+                }
+            }
+            let (x, y, w, h) = if vertical {
+                (9, 2, 6, 20)
+            } else {
+                (2, 9, 20, 6)
+            };
+            let bounds = SampleBox {
+                x: f64::from(x) / 24.0,
+                y: f64::from(y) / 24.0,
+                width: f64::from(w) / 24.0,
+                height: f64::from(h) / 24.0,
+            };
+            let colors = sample_colors(&pixels, width, height, &[bounds]).unwrap();
+            assert_eq!(colors[0].background, 0xea_f7_d0);
+            assert_eq!(colors[0].ink, Some(0x10_12_0f));
+        }
+    }
 
     #[test]
     fn distinguishes_colored_ink_light_ink_and_blank_paper() {
