@@ -8,6 +8,26 @@ public partial class SettingsPage
     private bool loadingStorage;
     private bool changingStorage;
     private BackgroundTranslation? monitoredWorker;
+    private IDispatcherTimer? storageRefreshTimer;
+    private Task? automaticStorageRefresh;
+
+    private void StartStorageRefreshTimer()
+    {
+        if (storageRefreshTimer is null)
+        {
+            storageRefreshTimer = Dispatcher.CreateTimer();
+            storageRefreshTimer.Interval = TimeSpan.FromSeconds(10);
+            storageRefreshTimer.Tick += RefreshStorageOnTick;
+        }
+        storageRefreshTimer.Start();
+    }
+
+    private void RefreshStorageOnTick(object? sender, EventArgs args)
+    {
+        if (!settingsVisible || changingStorage || loadingStorage ||
+            automaticStorageRefresh is { IsCompleted: false }) return;
+        automaticStorageRefresh = RefreshStorageTotalsAsync(automatic: true);
+    }
 
     private void MonitorBackgroundTranslation()
     {
@@ -59,11 +79,26 @@ public partial class SettingsPage
         StorageControls.IsEnabled = false;
         try
         {
+            if (automaticStorageRefresh is { } pending) await pending;
             var session = AppState.Session;
             var backgroundEnabled = session.GetReaderPreferences().BackgroundTranslation == true;
             BackgroundTranslationSwitch.IsToggled = backgroundEnabled;
             if (syncWorker) AppState.TranslationWorker?.SetEnabled(backgroundEnabled);
-            var usage = await session.StorageUsageAsync();
+            await RefreshStorageTotalsAsync(automatic: false);
+        }
+        catch (Exception error) { StorageStatus.Text = error.Message; }
+        finally
+        {
+            loadingStorage = false;
+            StorageControls.IsEnabled = !changingStorage;
+        }
+    }
+
+    private async Task RefreshStorageTotalsAsync(bool automatic)
+    {
+        try
+        {
+            var usage = await AppState.Session.StorageUsageAsync();
             var files = await Task.Run(() =>
             {
                 var downloads = DownloadStaging().Sum(EntrySize);
@@ -71,6 +106,7 @@ public partial class SettingsPage
                 var exports = FolderSize(NativeFiles.ExportRoot);
                 return (downloads, intake, exports);
             });
+            if (automatic && (!settingsVisible || changingStorage || loadingStorage)) return;
             var cache = usage.DatabaseCacheBytes + usage.AudioCacheBytes + files.exports;
             var downloads = usage.DownloadBytes + files.downloads;
             var library = usage.DatabaseBytes - usage.DatabaseCacheBytes + usage.OriginalBytes + files.intake;
@@ -79,11 +115,10 @@ public partial class SettingsPage
             CacheStorage.Text = DisplaySize(cache);
             DownloadStorage.Text = DisplaySize(downloads);
         }
-        catch (Exception error) { StorageStatus.Text = error.Message; }
-        finally
+        catch (Exception error)
         {
-            loadingStorage = false;
-            StorageControls.IsEnabled = !changingStorage;
+            if (!automatic) throw;
+            System.Diagnostics.Debug.WriteLine(error);
         }
     }
 
@@ -138,6 +173,7 @@ public partial class SettingsPage
                 return;
             }
             if (!await DisplayAlertAsync(title, detail, "Видалити", "Скасувати")) return;
+            if (automaticStorageRefresh is { } pending) await pending;
             importGateHeld = !DesktopImport.HasIncoming && await DesktopImport.Gate.WaitAsync(0);
             if (!importGateHeld)
             {

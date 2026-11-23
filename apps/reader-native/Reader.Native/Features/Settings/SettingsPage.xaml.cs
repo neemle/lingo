@@ -75,6 +75,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
         capabilityReport = null;
         ExportCapabilities.IsEnabled = false;
         MonitorBackgroundTranslation();
+        StartStorageRefreshTimer();
         await RefreshStorageAsync();
         await RefreshTranslationPackagesAsync();
         await RefreshKnowledgePackagesAsync();
@@ -89,6 +90,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
     protected override void OnDisappearing()
     {
         settingsVisible = false;
+        storageRefreshTimer?.Stop();
         StopMonitoringBackgroundTranslation();
         focusTranslationPending = false;
         base.OnDisappearing();
