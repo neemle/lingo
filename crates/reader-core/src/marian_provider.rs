@@ -51,6 +51,21 @@ const ASSETS: [&str; 5] = [
 ];
 const MAX_ARCHIVE_BYTES: u64 = 400_000_000;
 
+fn contextual_sentences(text: &str) -> impl Iterator<Item = &str> {
+    text.unicode_sentences()
+        .map(str::trim)
+        .filter(|sentence| !sentence.is_empty())
+        .take(4)
+}
+
+fn supports_contextual_recovery(text: &str, sentence_count: usize) -> bool {
+    text.len() <= 768 && (2..=3).contains(&sentence_count)
+}
+
+pub(crate) fn may_recover_group(text: &str) -> bool {
+    text.len() <= 768 && supports_contextual_recovery(text, contextual_sentences(text).count())
+}
+
 pub(crate) fn download_manifest(source: &str, target: &str) -> Result<crate::model_transfer::DownloadManifest> {
     let package = catalog::PACKAGES.iter()
         .find(|model| model.source == source && model.target == target)
@@ -1368,17 +1383,11 @@ impl MarianProvider<'_> {
                         &checkpoint,
                     )?)
                 };
-                let units: Vec<_> = segment
-                    .unicode_sentences()
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-                    .take(4)
-                    .collect();
+                let units: Vec<_> = contextual_sentences(segment).collect();
                 let mut alternatives = Vec::new();
                 if start == 0
                     && end == source_pieces.len()
-                    && segment.len() <= 768
-                    && (2..=3).contains(&units.len())
+                    && supports_contextual_recovery(segment, units.len())
                     && decoded.len() > 0
                 {
                     alternatives.push(translated.clone());
@@ -1405,7 +1414,16 @@ impl MarianProvider<'_> {
                         .collect::<Result<Vec<_>>>();
                     if let Ok(references) = references {
                         let chosen = rerank::choose(&alternatives, &references);
-                        translated.clone_from(&alternatives[chosen]);
+                        let recovered = rerank::recover_omission(&alternatives, chosen, &references, || {
+                            units.iter().zip(&references).all(|(source, target)| {
+                                !source.eq_ignore_ascii_case(target)
+                                    && !crate::language_detection::detect(target)
+                                        .is_some_and(|language| language != package.target)
+                                    && (package.target != "uk"
+                                        || !crate::marian_target_uk::clearly_russian(target))
+                            })
+                        });
+                        translated = recovered.unwrap_or_else(|| alternatives[chosen].clone());
                     }
                 }
                 // Retry only the observed clock-as-year artifact, using the same loaded model.

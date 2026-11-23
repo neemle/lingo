@@ -1880,6 +1880,8 @@ fn cache_key(
             .unwrap_or(4)
     };
     let version = match route {
+        _ if settings.beam_size > 1 && segments.iter().any(|text|
+            crate::marian_provider::may_recover_group(text.as_ref())) => 10,
         Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" &&
             segments.iter().any(|text| crate::translation_dates::contains_french_date(text.as_ref())) => 9,
         Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" &&

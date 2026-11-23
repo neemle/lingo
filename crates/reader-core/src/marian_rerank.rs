@@ -8,11 +8,13 @@ enum Feature {
     Pair(String, String),
 }
 
-fn features(text: &str) -> BTreeSet<Feature> {
-    let words: Vec<String> = text
-        .unicode_words()
+fn normalized_words(text: &str) -> impl Iterator<Item = String> + '_ {
+    text.unicode_words()
         .map(|word| word.nfkc().flat_map(char::to_lowercase).collect())
-        .collect();
+}
+
+fn features(text: &str) -> BTreeSet<Feature> {
+    let words: Vec<_> = normalized_words(text).collect();
     words
         .iter()
         .cloned()
@@ -23,6 +25,71 @@ fn features(text: &str) -> BTreeSet<Feature> {
                 .map(|pair| Feature::Pair(pair[0].clone(), pair[1].clone())),
         )
         .collect()
+}
+
+pub(super) fn recover_omission(
+    candidates: &[String],
+    chosen: usize,
+    references: &[String],
+    allow_standalone: impl FnOnce() -> bool,
+) -> Option<String> {
+    let selected = &candidates[chosen];
+    let selected_words: Vec<_> = normalized_words(selected).collect();
+    let reference_words: Vec<Vec<_>> = references
+        .iter()
+        .map(|text| normalized_words(text).collect())
+        .collect();
+    let expected_words: usize = reference_words.iter().map(Vec::len).sum();
+    if selected_words.len() * 5 > expected_words * 3
+        || reference_words.iter().any(|words| words.len() < 3)
+    {
+        return None;
+    }
+
+    // Shared words cannot show which sentence the translation covered.
+    let distinctive: Vec<BTreeSet<&str>> = reference_words
+        .iter()
+        .enumerate()
+        .map(|(index, words)| {
+            words
+                .iter()
+                .filter(|word| word.chars().any(char::is_alphabetic))
+                .filter(|word| {
+                    !reference_words
+                        .iter()
+                        .enumerate()
+                        .any(|(other, words)| other != index && words.contains(word))
+                })
+                .map(String::as_str)
+                .collect()
+        })
+        .collect();
+    if distinctive.iter().any(|words| words.len() < 2) {
+        return None;
+    }
+    let selected_set: BTreeSet<_> = selected_words.iter().map(String::as_str).collect();
+    if !distinctive
+        .iter()
+        .any(|words| words.is_disjoint(&selected_set))
+        || !distinctive
+            .iter()
+            .any(|words| words.intersection(&selected_set).count() * 2 >= words.len())
+    {
+        return None;
+    }
+
+    for alternative in candidates.iter().filter(|text| *text != selected) {
+        let words: Vec<_> = normalized_words(alternative).collect();
+        let set: BTreeSet<_> = words.iter().map(String::as_str).collect();
+        if words.len() <= expected_words * 2
+            && distinctive
+                .iter()
+                .all(|words| words.intersection(&set).count() * 2 >= words.len())
+        {
+            return Some(alternative.clone());
+        }
+    }
+    allow_standalone().then(|| references.join(" "))
 }
 
 pub(super) fn supported_reference(candidates: &[String], reference: &str) -> bool {
@@ -149,6 +216,48 @@ mod tests {
         assert_eq!(
             choose(&candidates, &["Il pleut.".into(), "Il pleut.".into()]),
             0
+        );
+    }
+
+    #[test]
+    fn omitted_sentence_uses_complete_contextual_alternative_or_standalone_references() {
+        let references = [
+            "Професор працював у лабораторії.",
+            "Вночі хтось намагався вбити його доньку.",
+        ]
+        .map(str::to_owned);
+        let candidates = [
+            "Професор працював у лабораторії.",
+            "Поки професор працював у лабораторії, вночі хтось намагався вбити його доньку.",
+        ]
+        .map(str::to_owned);
+        assert_eq!(
+            recover_omission(&candidates, 0, &references, || false),
+            Some(candidates[1].clone())
+        );
+        assert_eq!(
+            recover_omission(&candidates[..1], 0, &references, || true),
+            Some(references.join(" "))
+        );
+        assert_eq!(
+            recover_omission(&candidates[..1], 0, &references, || false),
+            None
+        );
+    }
+
+    #[test]
+    fn retains_a_contextual_merge_and_avoids_repeating_ambiguous_references() {
+        let references = [
+            "Професор працював у лабораторії.",
+            "Вночі хтось намагався вбити його доньку.",
+        ]
+        .map(str::to_owned);
+        let merged = ["Професор був у лабораторії під час замаху на доньку."].map(str::to_owned);
+        assert_eq!(recover_omission(&merged, 0, &references, || true), None);
+        let ambiguous = [references[0].clone(), references[0].clone()];
+        assert_eq!(
+            recover_omission(&references[..1], 0, &ambiguous, || true),
+            None
         );
     }
 }
