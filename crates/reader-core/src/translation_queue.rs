@@ -3,6 +3,7 @@ use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
 const RETRY_SECONDS: i64 = 15;
+const PDF_OCR_POLL_SECONDS: i64 = 15;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -23,7 +24,9 @@ pub struct TranslationWindowRequest {
 }
 
 pub(crate) fn initialize(db: &Connection) -> Result<()> {
-    db.execute_batch(
+    let tx = rusqlite::Transaction::new_unchecked(db, TransactionBehavior::Immediate)
+        .map_err(database_error)?;
+    tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS translation_windows (
             document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
             sentence_id TEXT NOT NULL,
@@ -40,10 +43,42 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
             cursor INTEGER NOT NULL,
             incomplete INTEGER NOT NULL,
             resume_at INTEGER,
+            ocr_generation INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY(document_id, target)
         );",
     )
-    .map_err(database_error)
+    .map_err(database_error)?;
+    let has_generation: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('background_translation_progress')
+         WHERE name='ocr_generation')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(database_error)?;
+    if !has_generation {
+        tx.execute_batch(
+            "ALTER TABLE background_translation_progress ADD COLUMN ocr_generation INTEGER NOT NULL DEFAULT 0;"
+        ).map_err(database_error)?;
+    }
+    tx.execute_batch(
+        "CREATE TRIGGER IF NOT EXISTS background_translation_new_pdf_text
+         AFTER INSERT ON pdf_detached_pages WHEN length(NEW.text) > 0
+         BEGIN
+             UPDATE background_translation_progress
+             SET cursor=min(cursor,max(0,NEW.page-1)), resume_at=0, ocr_generation=ocr_generation+1
+             WHERE document_id=NEW.document_id;
+         END;
+         CREATE TRIGGER IF NOT EXISTS background_translation_changed_pdf_text
+         AFTER UPDATE OF text ON pdf_detached_pages WHEN OLD.text <> NEW.text
+         BEGIN
+             UPDATE background_translation_progress
+             SET cursor=min(cursor,max(0,NEW.page-1)), resume_at=0, ocr_generation=ocr_generation+1
+             WHERE document_id=NEW.document_id;
+         END;",
+    )
+    .map_err(database_error)?;
+    tx.commit().map_err(database_error)
 }
 
 impl Store {
@@ -248,10 +283,19 @@ impl Store {
         {
             return Ok(done);
         }
-        let (cursor, incomplete, resume_at) = self
-            .connection
-            .query_row(
-                "SELECT cursor,incomplete,resume_at FROM background_translation_progress
+        let now = crate::now();
+        // Reserve before inference so concurrent OCR can invalidate the exact checkpoint.
+        self.connection.execute(
+            "INSERT INTO background_translation_progress(document_id,target,revision_id,cursor,incomplete,resume_at)
+             SELECT id,?2,?3,0,0,0 FROM documents
+             WHERE id=?1 AND json_extract(body,'$.currentRevisionId')=?3
+             ON CONFLICT(document_id,target) DO UPDATE SET revision_id=excluded.revision_id,
+               cursor=0,incomplete=0,resume_at=0
+             WHERE background_translation_progress.revision_id<>excluded.revision_id",
+            params![id, target, revision],
+        ).map_err(database_error)?;
+        let checkpoint = self.connection.query_row(
+                "SELECT cursor,incomplete,resume_at,ocr_generation FROM background_translation_progress
              WHERE document_id=?1 AND revision_id=?2 AND target=?3",
                 params![id, revision, target],
                 |row| {
@@ -259,13 +303,15 @@ impl Store {
                         row.get::<_, u32>(0)?,
                         row.get::<_, bool>(1)?,
                         row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, i64>(3)?,
                     ))
                 },
             )
             .optional()
-            .map_err(database_error)?
-            .unwrap_or((0, false, Some(0)));
-        let now = crate::now();
+            .map_err(database_error)?;
+        let Some((cursor, incomplete, resume_at, generation)) = checkpoint else {
+            return Ok(done);
+        };
         if resume_at.is_none() {
             return Ok(done);
         }
@@ -289,20 +335,22 @@ impl Store {
                     Some(0),
                     step.translated_page,
                 ),
-                None if incomplete || document.format == "pdf" => {
-                    (0, false, Some(crate::now() + 300), None)
+                None if incomplete => (0, false, Some(crate::now() + 300), None),
+                None if document.format == "pdf" => {
+                    (cursor as usize, false, Some(crate::now() + PDF_OCR_POLL_SECONDS), None)
                 }
                 None => (0, false, None, None),
             }
         };
-        self.connection.execute(
-            "INSERT INTO background_translation_progress(document_id,target,revision_id,cursor,incomplete,resume_at)
-             SELECT id,?2,?3,?4,?5,?6 FROM documents
-             WHERE id=?1 AND json_extract(body,'$.currentRevisionId')=?3
-             ON CONFLICT(document_id,target) DO UPDATE SET revision_id=excluded.revision_id,
-               cursor=excluded.cursor,incomplete=excluded.incomplete,resume_at=excluded.resume_at",
-            params![id, target, revision, i64::try_from(cursor).map_err(database_error)?, incomplete, resume_at],
+        let saved = self.connection.execute(
+            "UPDATE background_translation_progress SET cursor=?4,incomplete=?5,resume_at=?6
+             WHERE document_id=?1 AND target=?2 AND revision_id=?3 AND ocr_generation=?7
+               AND EXISTS(SELECT 1 FROM documents WHERE id=?1 AND json_extract(body,'$.currentRevisionId')=?3)",
+            params![id, target, revision, i64::try_from(cursor).map_err(database_error)?, incomplete, resume_at, generation],
         ).map_err(database_error)?;
+        if saved == 0 {
+            return Ok(BackgroundTranslationProgress { resume_at: Some(0), ..done });
+        }
         Ok(BackgroundTranslationProgress {
             resume_at,
             translated_page,
