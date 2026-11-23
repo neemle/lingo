@@ -6,12 +6,12 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage
 {
-    private bool explainingWord;
+    private CancellationTokenSource? wordExplanationRun;
 
     private async void ExplainWordClicked(object? sender, EventArgs args)
     {
         var session = AppState.Session;
-        if (explainingWord || selection is not { } word ||
+        if (wordExplanationRun is not null || selection is not { } word ||
             session.Document is not { CurrentRevisionId: { } revision } document) return;
         var sentence = Array.Find(document.Sentences,
             item => word.StartUtf16 >= item.StartUtf16 && word.StartUtf16 < item.EndUtf16);
@@ -24,13 +24,13 @@ public partial class ReadingPage
 
         await ExplainSelectionAsync(WordExplanationText, WordExplanationGloss, WordExplanationBusy,
             document.Id, target ?? "uk", CurrentSelection,
-            (model, cachedOnly) => session.ExplainWordAsync(model, document.Id, sentence.Id, word.Text,
-                cachedOnly: cachedOnly, startUtf16: word.StartUtf16, revisionId: revision));
+            (model, cachedOnly, token) => session.ExplainWordAsync(model, document.Id, sentence.Id, word.Text,
+                cachedOnly: cachedOnly, startUtf16: word.StartUtf16, revisionId: revision, cancellationToken: token));
     }
 
     private async void DetachedExplainWordClicked(object? sender, EventArgs args)
     {
-        if (explainingWord || loadingDetachedSentence || detachedAddress is not { } address ||
+        if (wordExplanationRun is not null || loadingDetachedSentence || detachedAddress is not { } address ||
             detachedSelection is not { } word || detachedSentence is not { RevisionId: { } revision }) return;
 
         var target = TargetCode;
@@ -41,8 +41,8 @@ public partial class ReadingPage
         var session = AppState.Session;
         await ExplainSelectionAsync(DetachedWordExplanationText, DetachedWordExplanationGloss, DetachedWordExplanationBusy,
             address.Document, target ?? "uk", CurrentSelection,
-            (model, cachedOnly) => session.ExplainDetachedWordAsync(model, address.Document, address.Page, word,
-                revisionId: revision, cachedOnly: cachedOnly));
+            (model, cachedOnly, token) => session.ExplainDetachedWordAsync(model, address.Document, address.Page, word,
+                revisionId: revision, cachedOnly: cachedOnly, cancellationToken: token));
     }
 
     private static void ResetExplanation(Label result, VerticalStackLayout glossHost)
@@ -54,41 +54,45 @@ public partial class ReadingPage
     }
 
     private async Task ExplainSelectionAsync(Label result, VerticalStackLayout glossHost, ActivityIndicator spinner,
-        string documentId, string target, Func<bool> isCurrent, Func<string, bool, Task<WordExplanation?>> explain)
+        string documentId, string target, Func<bool> isCurrent, Func<string, bool, CancellationToken, Task<WordExplanation?>> explain)
     {
         ResetExplanation(result, glossHost);
-        explainingWord = true;
+        using var run = new CancellationTokenSource();
+        wordExplanationRun = run;
+        var token = run.Token;
+        bool Current() => ReferenceEquals(wordExplanationRun, run) && !token.IsCancellationRequested && isCurrent();
         ExplainWord.IsEnabled = DetachedExplainWord.IsEnabled = false;
         try
         {
             var selected = (await AppState.Session.OptionalModelsAsync())
                 .FirstOrDefault(model => model.CanGenerateLanguageHints);
-            if (!isCurrent()) return;
-            if (selected is not null && await explain(selected.Id, true) is { } saved)
+            if (!Current()) return;
+            if (selected is not null && await explain(selected.Id, true, token) is { } saved)
             {
-                await ShowExplanationAsync(result, glossHost, spinner, documentId, target, selected.Name, saved, isCurrent);
+                await ShowExplanationAsync(result, glossHost, spinner, documentId, target, selected.Name, saved, Current);
                 return;
             }
-            if (!isCurrent()) return;
+            if (!Current()) return;
             if (selected is not { FilesPresent: true })
             {
                 if (await DisplayAlertAsync("Локальне пояснення",
                     "Для нових пояснень встановіть Qwen 2B у налаштуваннях.",
-                    "Налаштування", "Закрити") && isCurrent())
+                    "Налаштування", "Закрити") && Current())
                     await Shell.Current.GoToAsync(AppShell.SettingsRoute);
                 return;
             }
-            if (!isCurrent()) return;
+            if (!Current()) return;
             spinner.IsVisible = spinner.IsRunning = true;
             result.IsVisible = true;
             result.Text = $"{selected.Name} готує пояснення…";
-            var explanation = await explain(selected.Id, false);
+            var explanation = await explain(selected.Id, false, token);
             if (explanation is not null)
-                await ShowExplanationAsync(result, glossHost, spinner, documentId, target, selected.Name, explanation, isCurrent);
+                await ShowExplanationAsync(result, glossHost, spinner, documentId, target, selected.Name, explanation, Current);
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception error)
         {
-            if (isCurrent())
+            if (Current())
             {
                 result.IsVisible = true;
                 result.Text = error.Message;
@@ -96,18 +100,31 @@ public partial class ReadingPage
         }
         finally
         {
-            spinner.IsRunning = spinner.IsVisible = false;
-            explainingWord = false;
-            ExplainWord.IsEnabled = true;
-            UpdateDetachedExplainButton();
+            if (ReferenceEquals(wordExplanationRun, run)) FinishWordExplanation();
         }
+    }
+
+    private void CancelWordExplanation()
+    {
+        if (wordExplanationRun is not { } run) return;
+        _ = run.CancelAsync();
+        FinishWordExplanation();
+    }
+
+    private void FinishWordExplanation()
+    {
+        wordExplanationRun = null;
+        WordExplanationBusy.IsRunning = WordExplanationBusy.IsVisible = false;
+        DetachedWordExplanationBusy.IsRunning = DetachedWordExplanationBusy.IsVisible = false;
+        ExplainWord.IsEnabled = true;
+        UpdateDetachedExplainButton();
     }
 
     private void UpdateDetachedExplainButton()
     {
         DetachedExplainWord.IsVisible = !loadingDetachedSentence &&
             detachedSentence?.RevisionId is not null && detachedSelection is not null;
-        DetachedExplainWord.IsEnabled = DetachedExplainWord.IsVisible && !explainingWord;
+        DetachedExplainWord.IsEnabled = DetachedExplainWord.IsVisible && wordExplanationRun is null;
     }
 
     private async Task ShowExplanationAsync(Label result, VerticalStackLayout glossHost, ActivityIndicator spinner,

@@ -57,6 +57,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
     let cancellation = match &command {
         Command::CancelModelTranslation { request_id } => Some((ModelRequestKind::Passage, *request_id)),
         Command::CancelOcrPageReview { request_id } => Some((ModelRequestKind::OcrPageReview, *request_id)),
+        Command::CancelWordExplanation { request_id } => Some((ModelRequestKind::WordExplanation, *request_id)),
         Command::CancelPdfPageTranslation { request_id } => Some((ModelRequestKind::PdfPageTranslation, *request_id)),
         Command::CancelBackgroundTranslation { request_id } => Some((ModelRequestKind::BackgroundTranslation, *request_id)),
         Command::CancelSpeech { request_id, prefetch } => Some((speech_request_kind(*prefetch), *request_id)),
@@ -377,8 +378,10 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             return if canceled() { Err(canceled_error()) } else { encode_job(result) };
         }
         Command::ExplainWord {
-            model, document, sentence, word, start_utf16, revision_id, cached_only,
+            model, document, sentence, word, start_utf16, revision_id, cached_only, request_id,
         } => {
+            let canceled = request_cancellation(handle, *request_id, ModelRequestKind::WordExplanation)?;
+            if canceled() { return Err(word_explanation_canceled()); }
             let state = registry::lock()?;
             let store = state.store(handle)?;
             let job = if let Some((start, revision)) = start_utf16.zip(revision_id.as_deref()) {
@@ -389,18 +392,22 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 store.prepare_word_explanation(model, document, sentence, word, *cached_only)
             }.map_err(gateway::domain)?;
             drop(state);
-            return encode_job(job.run());
+            let result = job.run_until_canceled(&canceled);
+            return if canceled() { Err(word_explanation_canceled()) } else { encode_job(result) };
         }
         Command::ExplainDetachedWord {
-            model, document, page, start_utf16, word, revision_id, cached_only,
+            model, document, page, start_utf16, word, revision_id, cached_only, request_id,
         } => {
+            let canceled = request_cancellation(handle, *request_id, ModelRequestKind::WordExplanation)?;
+            if canceled() { return Err(word_explanation_canceled()); }
             let job = registry::lock()?
                 .store(handle)?
                 .prepare_detached_word_explanation(
                     model, document, *page, *start_utf16, word, revision_id.as_deref(), *cached_only,
                 )
                 .map_err(gateway::domain)?;
-            return encode_job(job.run());
+            let result = job.run_until_canceled(&canceled);
+            return if canceled() { Err(word_explanation_canceled()) } else { encode_job(result) };
         }
         Command::InspectBackupFile { path } => {
             registry::lock()?.store(handle)?;
@@ -570,6 +577,10 @@ fn request_cancellation(handle: u64, request_id: Option<u64>, kind: ModelRequest
 
 fn speech_canceled() -> Error {
     Error::new("canceled", "Озвучення скасовано.")
+}
+
+fn word_explanation_canceled() -> Error {
+    Error::new("canceled", "Пояснення слова скасовано.")
 }
 
 fn encode_speech_job<T: serde::Serialize>(

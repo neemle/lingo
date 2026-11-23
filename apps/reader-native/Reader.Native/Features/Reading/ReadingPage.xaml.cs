@@ -125,6 +125,7 @@ public partial class ReadingPage : ContentPage
         readingPageActive = false;
         readerOcrReview.CancelInference();
         CancelModelPassage();
+        CancelWordExplanation();
         RestoreCachedModelTranslation(null);
         dictionaryFocus = null;
         documentFindFocus = null;
@@ -156,6 +157,7 @@ public partial class ReadingPage : ContentPage
         readingPageActive = false;
         readerOcrReview.CancelInference();
         CancelModelPassage();
+        CancelWordExplanation();
         CancelScheduledTranslation();
         StopAnalysisPrefetch();
 #if MACCATALYST
@@ -477,6 +479,7 @@ public partial class ReadingPage : ContentPage
                 current.Id != document.Id || current.Language != document.Language) return;
 
             TargetCode = target;
+            CancelWordExplanation();
             SetSelectedSense(null);
             WordMeanings.Children.Clear();
             WordMeanings.IsVisible = false;

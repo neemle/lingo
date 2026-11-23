@@ -546,6 +546,8 @@ pub enum Command {
         revision_id: Option<String>,
         #[serde(default, rename = "cachedOnly")]
         cached_only: bool,
+        #[serde(rename = "requestId")]
+        request_id: Option<u64>,
     },
     ExplainDetachedWord {
         model: String,
@@ -558,6 +560,12 @@ pub enum Command {
         revision_id: Option<String>,
         #[serde(default, rename = "cachedOnly")]
         cached_only: bool,
+        #[serde(rename = "requestId")]
+        request_id: Option<u64>,
+    },
+    CancelWordExplanation {
+        #[serde(rename = "requestId")]
+        request_id: u64,
     },
     OptionalModels,
     ModelTransfer {

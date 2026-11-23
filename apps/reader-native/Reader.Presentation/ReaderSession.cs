@@ -546,13 +546,14 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         Task.Run(() => client.ReviewSentence(model, document, page, sentence, focus, revisionId, cachedOnly, explainSyntax));
 
     public Task<WordExplanation?> ExplainWordAsync(string model, string document, string sentence, string word,
-        bool cachedOnly = false, int? startUtf16 = null, string? revisionId = null) =>
-        Task.Run(() => client.ExplainWord(model, document, sentence, word, cachedOnly, startUtf16, revisionId));
+        bool cachedOnly = false, int? startUtf16 = null, string? revisionId = null, CancellationToken cancellationToken = default) =>
+        Task.Run(() => client.ExplainWord(model, document, sentence, word, cachedOnly, startUtf16, revisionId, cancellationToken),
+            cancellationToken);
 
     public Task<WordExplanation?> ExplainDetachedWordAsync(string model, string document, int page,
-        TextSelection selection, string? revisionId = null, bool cachedOnly = false) =>
+        TextSelection selection, string? revisionId = null, bool cachedOnly = false, CancellationToken cancellationToken = default) =>
         Task.Run(() => client.ExplainDetachedWord(model, document, page, selection.StartUtf16, selection.Text,
-            revisionId, cachedOnly));
+            revisionId, cachedOnly, cancellationToken), cancellationToken);
 
     public Task<string[]> SemanticVocabularyAsync(string query, string? documentId = null) =>
         Task.Run(() => client.SemanticVocabulary(query, documentId));

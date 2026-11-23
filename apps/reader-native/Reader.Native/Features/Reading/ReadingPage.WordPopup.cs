@@ -16,6 +16,7 @@ public partial class ReadingPage
         PdfWordAnchor? pdfAnchor = null)
     {
         StopWordDetail();
+        CancelWordExplanation();
         WordDetails.IsVisible = DetachedWordDetails.IsVisible = false;
         WordDetailsToggle.Text = DetachedWordDetailsToggle.Text = "Більше";
         wordPopup = (pdfAnchor?.View ?? view, selected, card, pdfAnchor);
@@ -37,7 +38,11 @@ public partial class ReadingPage
     {
         if (args.PropertyName != nameof(VisualElement.IsVisible)) return;
         WordOverlay.IsVisible = WordCard.IsVisible || DetachedWordCard.IsVisible;
-        if (!WordOverlay.IsVisible) StopWordDetail();
+        if (!WordOverlay.IsVisible)
+        {
+            StopWordDetail();
+            CancelWordExplanation();
+        }
         UpdatePopupTranslationHighlights();
         UpdateInlinePdfHighlight();
     }

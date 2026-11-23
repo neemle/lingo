@@ -14,6 +14,7 @@ public sealed class CoreClient : IDisposable
     private long nextPdfPageTranslationRequest;
     private long nextBackgroundTranslationRequest;
     private long nextOcrPageReviewRequest;
+    private long nextWordExplanationRequest;
     private long nextSpeechRequest;
     private long nextSpeechPrefetchRequest;
     public const int MaxImportBytes = 20 * 1024 * 1024;
@@ -421,20 +422,19 @@ public sealed class CoreClient : IDisposable
         });
 
     public WordExplanation? ExplainWord(string model, string document, string sentence, string word,
-        bool cachedOnly = false, int? startUtf16 = null, string? revisionId = null) =>
-        CallIndependent<WordExplanation?>(new
-        {
-            version = 1, operation = "explain_word", model, document, sentence, word,
-            startUtf16, revisionId, cachedOnly
-        });
+        bool cachedOnly = false, int? startUtf16 = null, string? revisionId = null, CancellationToken cancellationToken = default) =>
+        CallCancelable<WordExplanation?>(ref nextWordExplanationRequest, cancellationToken,
+            requestId => new { version = 1, operation = "explain_word", model, document, sentence, word,
+                startUtf16, revisionId, cachedOnly, requestId }, CancelWordExplanationRequest);
 
     public WordExplanation? ExplainDetachedWord(string model, string document, int page, int startUtf16,
-        string word, string? revisionId = null, bool cachedOnly = false) =>
-        CallIndependent<WordExplanation?>(new
-        {
-            version = 1, operation = "explain_detached_word", model, document, page,
-            startUtf16, word, revisionId, cachedOnly
-        });
+        string word, string? revisionId = null, bool cachedOnly = false, CancellationToken cancellationToken = default) =>
+        CallCancelable<WordExplanation?>(ref nextWordExplanationRequest, cancellationToken,
+            requestId => new { version = 1, operation = "explain_detached_word", model, document, page,
+                startUtf16, word, revisionId, cachedOnly, requestId }, CancelWordExplanationRequest);
+
+    private static object CancelWordExplanationRequest(long requestId) =>
+        new { version = 1, operation = "cancel_word_explanation", requestId };
     public string[] SemanticVocabulary(string query, string? documentId = null) =>
         CallIndependent<string[]>(new { version = 1, operation = "semantic_vocabulary", query, documentId });
 

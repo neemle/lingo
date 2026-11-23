@@ -273,6 +273,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         } => value(store.set_reviewed_translation(&id, &sentence_id, &target, &text)),
         Command::ExplainWord { .. }
         | Command::ExplainDetachedWord { .. }
+        | Command::CancelWordExplanation { .. }
         | Command::ReviewSentence { .. }
         | Command::ReviewOcrWord { .. }
         | Command::ReviewOcrLine { .. }

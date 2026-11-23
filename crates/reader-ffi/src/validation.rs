@@ -22,6 +22,9 @@ fn validate(command: &Command) -> Result<()> {
         Command::CancelModelTranslation { request_id: 0 }
         | Command::CancelOcrPageReview { request_id: 0 }
         | Command::ReviewOcrPage { request_id: Some(0), .. }
+        | Command::CancelWordExplanation { request_id: 0 }
+        | Command::ExplainWord { request_id: Some(0), .. }
+        | Command::ExplainDetachedWord { request_id: Some(0), .. }
         | Command::CancelBackgroundTranslation { request_id: 0 }
         | Command::AdvanceBackgroundTranslation { request_id: Some(0), .. }
         | Command::CancelPdfPageTranslation { request_id: 0 }

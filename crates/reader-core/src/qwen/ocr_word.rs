@@ -237,7 +237,7 @@ fn apply_line_edits(text: &str, mut edits: Vec<LineEdit>) -> Option<String> {
 impl ReviewOcrLineJob {
     pub fn run(self) -> Result<Option<OcrReview>> {
         let text = self.text;
-        let result = self.work.run(LINE_SYSTEM, LINE_GRAMMAR, |output| parse_line_review(&text, output))?;
+        let result = self.work.run(LINE_SYSTEM, LINE_GRAMMAR, None, |output| parse_line_review(&text, output))?;
         Ok(result.map(|(hint, cached)| OcrReview { replacement: hint.replacement, cached }))
     }
 }
@@ -406,7 +406,7 @@ fn plausible_replacement(word: &str, replacement: &str) -> bool {
 impl ReviewOcrWordJob {
     pub fn run(self) -> Result<Option<OcrReview>> {
         let word = self.word;
-        let result = self.work.run(SYSTEM, GRAMMAR, |output| {
+        let result = self.work.run(SYSTEM, GRAMMAR, None, |output| {
             let error = "Qwen не повернув перевірку слова у правильному форматі.";
             serde_json::from_str::<OcrSpelling>(super::json_output(output).ok_or(error)?)
                 .map_err(|_| error.into())

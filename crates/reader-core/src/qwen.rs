@@ -283,6 +283,7 @@ impl<T: Serialize + serde::de::DeserializeOwned> HintWork<T> {
         self,
         system: &str,
         grammar: &str,
+        canceled: Option<&dyn Fn() -> bool>,
         parse: impl Fn(&[u8]) -> Result<T>,
     ) -> Result<Option<(T, bool)>> {
         match self {
@@ -291,7 +292,7 @@ impl<T: Serialize + serde::de::DeserializeOwned> HintWork<T> {
                 model,
                 example,
                 cache,
-            } => run_prompt(model, system, &example, grammar, &cache, parse).map(Some),
+            } => run_prompt(model, system, &example, grammar, &cache, canceled, parse).map(Some),
         }
     }
 }
@@ -851,10 +852,14 @@ fn validate_word_request(model: &str, word: &str) -> Result<()> {
 
 impl ExplainWordJob {
     pub fn run(self) -> Result<Option<WordExplanation>> {
+        self.run_until_canceled(&|| false)
+    }
+
+    pub fn run_until_canceled(self, canceled: &dyn Fn() -> bool) -> Result<Option<WordExplanation>> {
         let word = self.word;
         let grammar = if self.glosses.is_empty() { EXPLANATION_GRAMMAR } else { DICTIONARY_GRAMMAR };
         self.work
-            .run(self.system, grammar, |output| {
+            .run(self.system, grammar, Some(canceled), |output| {
                 let invalid = "Qwen не повернув пояснення у правильному форматі.";
                 if !self.glosses.is_empty() {
                     let analysis: GeneratedAnalysis = serde_json::from_str(json_output(output).ok_or(invalid)?)
@@ -1136,10 +1141,11 @@ fn run_prompt<T: Serialize + serde::de::DeserializeOwned>(
     example: &str,
     grammar: &str,
     cache: &HintCache,
+    canceled: Option<&dyn Fn() -> bool>,
     parse: impl Fn(&[u8]) -> Result<T>,
 ) -> Result<(T, bool)> {
     job.run_requested_with_cache(
-        None,
+        canceled,
         || cache.load().map(|result| result.map(|hint| (hint, true))),
         |directory, should_yield| {
             let deadline = Instant::now() + Duration::from_secs(20);
@@ -1147,6 +1153,7 @@ fn run_prompt<T: Serialize + serde::de::DeserializeOwned>(
             with_prompt_context(directory, check, |model, context| {
                 let output = generate(model, context, system, example, grammar, check)?;
                 let result = parse(&output)?;
+                check()?;
                 cache.save(&result)?;
                 Ok((result, false))
             })

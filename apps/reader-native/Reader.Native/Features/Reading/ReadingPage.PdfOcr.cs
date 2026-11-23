@@ -258,6 +258,9 @@ public partial class ReadingPage
         CancelReaderPdfOcr();
         StopSpeech();
         CancelScheduledTranslation();
+        CancelModelPassage();
+        CancelWordExplanation();
+        pdfLayoutTranslationCancellation?.Cancel();
         selection = null;
         SetSelectedSense(null);
         WordCard.IsVisible = false;

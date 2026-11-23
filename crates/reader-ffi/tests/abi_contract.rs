@@ -85,6 +85,36 @@ fn canceled_pdf_translation_does_not_cancel_a_later_page_request() {
 }
 
 #[test]
+fn canceled_word_explanation_leaves_new_queries_available() {
+    let store = StoreFixture::new();
+    let imported = call(store.handle, json!({
+        "version": 1, "operation": "import", "name": "phrase.txt", "language": "fr",
+        "bytes": b"Le bateau arrive.",
+    }));
+    assert_eq!(imported["ok"], true, "{imported}");
+    let id = &imported["data"]["id"];
+    let sentence = &imported["data"]["sentences"][0]["id"];
+    let result = call(store.handle, json!({
+        "version": 1, "operation": "cancel_word_explanation", "requestId": 5,
+    }));
+    assert_eq!(result["ok"], true, "{result}");
+    let explain = |request_id| call(store.handle, json!({
+        "version": 1, "operation": "explain_word", "model": "qwen-2b",
+        "document": id, "sentence": sentence, "word": "bateau", "cachedOnly": true, "requestId": request_id,
+    }));
+    assert_error(&explain(Some(5)), "canceled");
+    let detached = call(store.handle, json!({
+        "version": 1, "operation": "explain_detached_word", "model": "qwen-2b",
+        "document": id, "page": 0, "startUtf16": 3, "word": "bateau", "cachedOnly": true, "requestId": 4,
+    }));
+    assert_error(&detached, "canceled");
+    for request_id in [Some(6), None] {
+        let fresh = explain(request_id);
+        assert_eq!(fresh["ok"], true, "{fresh}");
+    }
+}
+
+#[test]
 fn manual_pdf_ocr_retry_resumes_only_the_current_window_without_waiting() {
     let store = StoreFixture::new();
     let original = store.dir.join("scan.pdf");
