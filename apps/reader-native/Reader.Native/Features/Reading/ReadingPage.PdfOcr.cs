@@ -230,10 +230,7 @@ public partial class ReadingPage
             selected.StartUtf16 > current.Sentence.EndUtf16 - selected.LengthUtf16 ||
             selected.StartUtf16 > address.Text.Length - selected.LengthUtf16 ||
             !address.Text.AsSpan(selected.StartUtf16, selected.LengthUtf16).SequenceEqual(selected.Text)) return;
-        SetDetachedSelection(selected);
-        UpdateDetachedControls();
-        DetachedSelectedWord.Text = selected.Text;
-        ShowWordPopup(DetachedPdfText, selected, DetachedWordCard);
+        await ShowDetachedSelectionAsync(selected);
     }
 
     private async Task<int?> PdfNarrationBoundaryAsync(string documentId, Sentence completed, CancellationToken token)
