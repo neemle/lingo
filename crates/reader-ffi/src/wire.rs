@@ -673,6 +673,11 @@ pub enum Command {
         language: String,
         path: String,
     },
+    TranslationGlossMatches {
+        language: String,
+        gloss: String,
+        texts: Vec<String>,
+    },
     LookupWord {
         language: String,
         word: String,

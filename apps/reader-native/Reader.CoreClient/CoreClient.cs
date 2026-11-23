@@ -481,6 +481,9 @@ public sealed class CoreClient : IDisposable
         Call<KnowledgePackage[]>(new { version = 1, operation = "knowledge_packages" });
     public KnowledgePackage InstallKnowledgePackage(string language, string path) =>
         CallIndependent<KnowledgePackage>(new { version = 1, operation = "install_knowledge_package", language, path });
+    public OcrSpan[][] TranslationGlossMatches(string language, string gloss, string[] texts) =>
+        Call<OcrSpan[][]>(new { version = 1, operation = "translation_gloss_matches", language, gloss, texts });
+
     public WordLookup? LookupWord(string language, string word, WordContext? context = null) =>
         Call<WordLookup?>(new { version = 1, operation = "lookup_word", language, word, context });
     public OcrSuggestion[]? SuggestOcr(string language, string text) =>

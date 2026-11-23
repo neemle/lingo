@@ -619,9 +619,11 @@ public partial class ReadingPage
         background.IsVisible = background.Source is not null && source is { Lines.Length: > 0 } &&
             pdfLayoutRows.Length > 0;
         var gloss = (detached ? DetachedWordCard : WordCard).IsVisible ? PopupGloss(detached) : null;
+        QueueGlossAlignment(gloss, pdfLayoutRows.Select(row => row.Text));
         var query = PdfTranslationFindQuery();
         var drawing = new TranslatedPdfDrawing(pdfLayoutRows, source?.Lines ?? [], source?.Offset ?? 0,
-            pdfLayoutSentence, gloss, background.IsVisible, query, PdfReadingHorizontalBounds(), source?.Appearance);
+            pdfLayoutSentence, text => GlossRanges(text, gloss), background.IsVisible, query,
+            PdfReadingHorizontalBounds(), source?.Appearance);
         var overflow = detached ? DetachedPdfTranslationOverflow : PdfTranslationOverflow;
         drawing.OverflowChanged = rows => Dispatcher.Dispatch(() =>
         {
@@ -757,7 +759,7 @@ public partial class ReadingPage
     }
 
     private sealed class TranslatedPdfDrawing(PdfPageTranslationRow[] rows, OcrLine[] geometry, int offset,
-        Sentence? active, string? gloss, bool preserveArtwork, string? query,
+        Sentence? active, Func<string, IEnumerable<(int Start, int End)>> glossRanges, bool preserveArtwork, string? query,
         (double Left, double Right) visibleWidth, IReadOnlyDictionary<int, PdfBoxAppearance>? appearance) : IDrawable
     {
         private sealed record Region(RectF Bounds, float LineHeight, List<PdfPageTranslationRow> Rows,
@@ -855,7 +857,7 @@ public partial class ReadingPage
                     ? Math.Min((float)(page.Height * styled.RelativeFontSize), region.LineHeight * 0.90f)
                     : Math.Min(page.Width * 0.045f, region.LineHeight * 0.82f);
                 var minimumSize = Math.Max(2, preferredSize * 0.60f);
-                if (!DrawFitted(canvas, text.ToString(), region.Bounds, fragments, gloss, preferredSize, minimumSize,
+                if (!DrawFitted(canvas, text.ToString(), region.Bounds, fragments, preferredSize, minimumSize,
                     preserveArtwork ? () => MaskRegion(region.Rows) : null, region.Appearance))
                     overflow.AddRange(fragments.Select(fragment => fragment.Source));
             }
@@ -945,7 +947,7 @@ public partial class ReadingPage
                 if (top + height > bottom) return ordered[index..];
                 var isActive = active is not null && row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16;
                 var bounds = new RectF(page.Left + margin, top, width, height);
-                if (!DrawFitted(canvas, text, bounds, [MakeFragment(row, 0, text.Length, isActive)], gloss, size, 7))
+                if (!DrawFitted(canvas, text, bounds, [MakeFragment(row, 0, text.Length, isActive)], size, 7))
                     return ordered[index..];
                 top += height + size * 0.45f;
             }
@@ -1002,7 +1004,7 @@ public partial class ReadingPage
             return new RectF(left, top, Math.Max(a.Right, b.Right) - left, Math.Max(a.Bottom, b.Bottom) - top);
         }
 
-        private bool DrawFitted(ICanvas canvas, string text, RectF area, IReadOnlyList<Fragment> fragments, string? gloss,
+        private bool DrawFitted(ICanvas canvas, string text, RectF area, IReadOnlyList<Fragment> fragments,
             float preferredSize, float minimumSize, Action? beforePaint = null, PdfBoxAppearance? style = null)
         {
             if (area.Width < 2 || area.Height < 2) return false;
@@ -1059,18 +1061,15 @@ public partial class ReadingPage
                             canvas.FillRectangle(matchBounds);
                         }
                     }
-                    if (!HasPdfTranslation(fragment.Source) || string.IsNullOrWhiteSpace(gloss)) continue;
-                    var search = start;
-                    while (search <= end - gloss.Length)
+                    if (fragment.Source.Text is not { } translation) continue;
+                    foreach (var (glossStart, glossEnd) in glossRanges(translation))
                     {
-                        var index = line.IndexOf(gloss, search, end - search, StringComparison.OrdinalIgnoreCase);
-                        if (index < 0) break;
-                        search = index + gloss.Length;
-                        if ((index == 0 || !char.IsLetterOrDigit(line[index - 1])) &&
-                            (search == line.Length || !char.IsLetterOrDigit(line[search])))
+                        var left = Math.Max(fragment.Start + glossStart - range.Start, start);
+                        var right = Math.Min(fragment.Start + glossEnd - range.Start, end);
+                        if (left < right)
                         {
                             canvas.FillColor = Color.FromArgb(lightInk ? "#604321" : "#FFE48B");
-                            canvas.FillRectangle(BoundsFor(index, search));
+                            canvas.FillRectangle(BoundsFor(left, right));
                         }
                     }
                 }

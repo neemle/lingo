@@ -335,6 +335,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             "internal_error",
             "Knowledge package installation must run outside the store lock",
         )),
+        Command::TranslationGlossMatches { language, gloss, texts } =>
+            value(store.translation_gloss_matches(&language, &gloss, &texts)),
         Command::LookupWord {
             language,
             word,

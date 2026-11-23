@@ -589,6 +589,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<KnowledgePackage[]> KnowledgePackagesAsync() => Task.Run(client.KnowledgePackages);
     public Task<KnowledgePackage> InstallKnowledgePackageAsync(string language, string path) =>
         Task.Run(() => client.InstallKnowledgePackage(language, path));
+    public Task<OcrSpan[][]> TranslationGlossMatchesAsync(string language, string gloss, string[] texts) =>
+        Task.Run(() => client.TranslationGlossMatches(language, gloss, texts));
+
     public Task<WordLookup?> LookupWordAsync(string language, string word, WordContext? context = null) =>
         Task.Run(() => client.LookupWord(language, word, context));
     public Task<OcrSuggestion[]?> SuggestOcrAsync(string language, string text) =>

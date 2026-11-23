@@ -406,6 +406,74 @@ impl Store {
         self.lookup_word_with_index(language, word, context, versioned_index(&index)?)
     }
 
+    pub fn translation_gloss_matches(
+        &self, language: &str, gloss: &str, texts: &[String],
+    ) -> Result<Vec<Vec<crate::ocr::OcrSpan>>> {
+        crate::valid_language(language)?;
+        if gloss.len() > 512 || texts.len() > 64 || texts.iter().map(String::len).sum::<usize>() > 128_000 {
+            return Err("Забагато тексту для підсвічування перекладу.".into());
+        }
+        let index = self.open_knowledge_index(language)?;
+        let Some((_, db, _)) = versioned_index(&index)? else {
+            return Ok(vec![Vec::new(); texts.len()]);
+        };
+        let mut forms = db.prepare_cached("SELECT DISTINCT lemma FROM forms WHERE term=?1 LIMIT 2")
+            .map_err(|error| error.to_string())?;
+        let mut cache = std::collections::BTreeMap::<String, Option<String>>::new();
+        let mut unique_lemma = |term: &str| -> Result<Option<String>> {
+            if let Some(found) = cache.get(term) {
+                return Ok(found.clone());
+            }
+            let mut rows = forms.query([term]).map_err(|error| error.to_string())?;
+            let first: Option<String> = rows.next().map_err(|error| error.to_string())?
+                .map(|row| row.get(0)).transpose().map_err(|error| error.to_string())?;
+            let lemma = if rows.next().map_err(|error| error.to_string())?.is_none() {
+                first.as_deref().map(word_key)
+            } else { None };
+            cache.insert(term.to_owned(), lemma.clone());
+            Ok(lemma)
+        };
+        let needles = crate::document_tokens::word_parts(gloss)
+            .map(|(_, _, word)| {
+                let key = word_key(word);
+                let lemma = unique_lemma(&key)?;
+                Ok((key, lemma))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if needles.is_empty() {
+            return Ok(vec![Vec::new(); texts.len()]);
+        }
+        texts.iter().map(|text| {
+            let words = crate::document_tokens::word_parts(text).collect::<Vec<_>>();
+            let mut spans = Vec::new();
+            let mut next = 0;
+            for (index, candidate) in words.windows(needles.len()).enumerate() {
+                if index < next || candidate.windows(2).any(|pair| {
+                    let end = pair[0].0 + pair[0].2.len();
+                    !text[end..pair[1].0].chars().all(char::is_whitespace)
+                }) {
+                    continue;
+                }
+                let mut matched = true;
+                for ((_, _, word), (needle, lemma)) in candidate.iter().zip(&needles) {
+                    let key = word_key(word);
+                    if &key != needle && (lemma.is_none() || unique_lemma(&key)? != *lemma) {
+                        matched = false;
+                        break;
+                    }
+                }
+                if matched {
+                    let (start_utf8, start_utf16, _) = candidate[0];
+                    let (last_utf8, last_utf16, last) = candidate[candidate.len() - 1];
+                    spans.push(crate::ocr::OcrSpan { start_utf8, start_utf16,
+                        end_utf8: last_utf8 + last.len(), end_utf16: last_utf16 + last.encode_utf16().count() });
+                    next = index + candidate.len();
+                }
+            }
+            Ok(spans)
+        }).collect()
+    }
+
     fn lookup_word_with_index(
         &self,
         language: &str,
@@ -796,6 +864,29 @@ mod tests {
         assert!(store.lookup_word("fr", "village", Some(&unrelated)).unwrap().is_none());
         let punctuation = WordContext::at("L’un, des gens sont venus.", 0);
         assert!(store.lookup_word("fr", "l’un", Some(&punctuation)).unwrap().is_none());
+    }
+
+    #[test]
+    fn translated_gloss_matches_inflection_as_utf16_without_crossing_punctuation() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(&directory.path().join("user.sqlite")).unwrap();
+        let path = PACKS.iter().find(|pack| pack.language == "uk").unwrap().path(&store.knowledge_directory);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        build_pack(&path, concat!(
+            "1\tпідйомний\tпідйомний\tADJ\t_\t_\t0\troot\t_\t_\n",
+            "2\tпідйомним\tпідйомний\tADJ\t_\t_\t1\tdep\t_\t_\n",
+            "3\tкран\tкран\tNOUN\t_\t_\t1\tdep\t_\t_\n",
+            "4\tкраном\tкран\tNOUN\t_\t_\t1\tdep\t_\t_\n",
+        ).as_bytes()).unwrap();
+        let text = "📚 Працюють підйомним краном.";
+        let inputs = [text.into(), "Підйомним, краном.".into(), "Краном.".into()];
+        let matches = store.translation_gloss_matches("uk", "підйомний кран", &inputs).unwrap();
+        let [matched] = matches[0].as_slice() else { panic!("expected one phrase match"); };
+        assert_eq!(&text[matched.start_utf8..matched.end_utf8], "підйомним краном");
+        assert_eq!(matched.start_utf16, "📚 Працюють ".encode_utf16().count());
+        assert!(matches[1].is_empty());
+        assert!(matches[2].is_empty());
+        assert!(store.translation_gloss_matches("fr", "grue", &inputs).unwrap().iter().all(Vec::is_empty));
     }
 
     #[test]

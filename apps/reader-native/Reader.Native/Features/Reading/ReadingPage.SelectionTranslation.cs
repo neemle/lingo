@@ -9,6 +9,12 @@ public partial class ReadingPage
     private int popupTranslationRequest;
     private (string Document, string Revision, TextSelection Selection, string Target, string Text, string Source, bool Saved)? wordTranslation;
     private (string Target, string Text, string Source, bool Saved)? detachedWordTranslation;
+    private sealed record GlossAlignment(string Target, string Gloss)
+    {
+        internal readonly Dictionary<string, OcrSpan[]> Resolved = new(StringComparer.Ordinal);
+        internal readonly HashSet<string> Pending = new(StringComparer.Ordinal);
+    }
+    private GlossAlignment? glossAlignment;
 
     private async void TranslateSelectionClicked(object? sender, EventArgs args) =>
         await LoadPopupTranslationAsync(detached: false);
@@ -110,6 +116,11 @@ public partial class ReadingPage
     {
         var canonicalGloss = WordCard.IsVisible ? PopupGloss(detached: false) : null;
         var detachedGloss = DetachedWordCard.IsVisible ? PopupGloss(detached: true) : null;
+        if (canonicalGloss is null && detachedGloss is null) glossAlignment = null;
+        if (DetachedPdfReader.IsVisible)
+            QueueGlossAlignment(detachedGloss, [DetachedTranslation.Text, DetachedModelTranslationText.Text]);
+        else
+            QueueGlossAlignment(canonicalGloss, [SegmentTranslation.Text, ModelTranslationText.Text]);
         HighlightTranslation(SegmentTranslation, SegmentTranslationHighlighted, canonicalGloss);
         HighlightTranslation(ModelTranslationText, ModelTranslationTextHighlighted, canonicalGloss);
         HighlightTranslation(DetachedTranslation, DetachedTranslationHighlighted, detachedGloss);
@@ -117,7 +128,58 @@ public partial class ReadingPage
         DrawPdfTranslationLayout();
     }
 
-    private static void HighlightTranslation(Label original, Label highlighted, string? gloss)
+    private void QueueGlossAlignment(string? gloss, IEnumerable<string?> texts)
+    {
+        if (string.IsNullOrWhiteSpace(gloss) || TargetCode is not { } target ||
+            System.Text.Encoding.UTF8.GetByteCount(gloss) > 512) return;
+        if (glossAlignment is not { } state || state.Target != target || state.Gloss != gloss)
+            glossAlignment = state = new(target, gloss);
+        var batch = texts.OfType<string>()
+            .Where(text => !state.Resolved.ContainsKey(text) && !state.Pending.Contains(text) &&
+                text.Length > 0 && System.Text.Encoding.UTF8.GetByteCount(text) <= 8_000)
+            .Distinct(StringComparer.Ordinal).Take(16).ToArray();
+        if (batch.Length == 0) return;
+        state.Pending.UnionWith(batch);
+        _ = ResolveGlossAlignmentAsync(state, batch);
+    }
+
+    private async Task ResolveGlossAlignmentAsync(GlossAlignment state, string[] batch)
+    {
+        OcrSpan[][]? matches = null;
+        try { matches = await AppState.Session.TranslationGlossMatchesAsync(state.Target, state.Gloss, batch); }
+        catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
+        if (!ReferenceEquals(glossAlignment, state)) return;
+        for (var index = 0; index < batch.Length; index++)
+        {
+            state.Pending.Remove(batch[index]);
+            state.Resolved[batch[index]] = matches?.ElementAtOrDefault(index) ?? [];
+        }
+        if (readingPageActive) UpdatePopupTranslationHighlights();
+    }
+
+    private IEnumerable<(int Start, int End)> GlossRanges(string text, string? gloss)
+    {
+        if (string.IsNullOrWhiteSpace(gloss)) yield break;
+        if (glossAlignment is { } state && state.Target == TargetCode && state.Gloss == gloss &&
+            state.Resolved.TryGetValue(text, out var resolved) && resolved.Length > 0)
+        {
+            foreach (var match in resolved) yield return (match.StartUtf16, match.EndUtf16);
+            yield break;
+        }
+        var search = 0;
+        while (search <= text.Length - gloss.Length)
+        {
+            var match = text.IndexOf(gloss, search, StringComparison.OrdinalIgnoreCase);
+            if (match < 0) break;
+            var end = match + gloss.Length;
+            search = end;
+            if ((match > 0 && char.IsLetterOrDigit(text[match - 1])) ||
+                (end < text.Length && char.IsLetterOrDigit(text[end]))) continue;
+            yield return (match, end);
+        }
+    }
+
+    private void HighlightTranslation(Label original, Label highlighted, string? gloss)
     {
         var text = original.Text ?? "";
         var formatted = new FormattedString();
@@ -129,21 +191,12 @@ public partial class ReadingPage
             formatted.Spans.Add(span);
         }
         var start = 0;
-        if (!string.IsNullOrWhiteSpace(gloss))
+        foreach (var (match, end) in GlossRanges(text, gloss))
         {
-            var search = 0;
-            while (search <= text.Length - gloss.Length)
-            {
-                var match = text.IndexOf(gloss, search, StringComparison.OrdinalIgnoreCase);
-                if (match < 0) break;
-                var end = match + gloss.Length;
-                search = end;
-                if ((match > 0 && char.IsLetterOrDigit(text[match - 1])) ||
-                    (end < text.Length && char.IsLetterOrDigit(text[end]))) continue;
-                if (match > start) AddSpan(text[start..match]);
-                AddSpan(text[match..end], Color.FromArgb("#FFE48B"));
-                start = end;
-            }
+            if (match < start || end <= match || end > text.Length) continue;
+            if (match > start) AddSpan(text[start..match]);
+            AddSpan(text[match..end], Color.FromArgb("#FFE48B"));
+            start = end;
         }
         if (start > 0 && start < text.Length) AddSpan(text[start..]);
         highlighted.FormattedText = start > 0 ? formatted : null;
