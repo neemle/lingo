@@ -76,6 +76,17 @@ impl Store {
         expected_revision: &str,
         start_utf16: Option<usize>,
     ) -> Result<ReadingCursor> {
+        self.set_reading_cursor_for_page(id, sentence_id, expected_revision, start_utf16, None)
+    }
+
+    pub fn set_reading_cursor_for_page(
+        &mut self,
+        id: &str,
+        sentence_id: &str,
+        expected_revision: &str,
+        start_utf16: Option<usize>,
+        page: Option<u16>,
+    ) -> Result<ReadingCursor> {
         let mut cursor = None;
         self.edit_document(id, |document, tx| {
             let revision = revision_id(document)?;
@@ -92,7 +103,7 @@ impl Store {
                 return Err("Токен речення не знайдено".into());
             }
             cursor = Some(reading_cursor(revision, sentence, position, start_utf16));
-            apply_cursor(document, tx, position, start_utf16)
+            apply_cursor(document, tx, position, start_utf16, page)
         })?;
         cursor.ok_or_else(|| "Не вдалося оновити позицію читання".into())
     }
@@ -123,7 +134,7 @@ impl Store {
             let offset = word_parts(&sentence.text).take_while(|(_, offset, _)| *offset < end)
                 .find_map(|(_, offset, word)| (offset + word.encode_utf16().count() > start).then_some(offset));
             cursor = Some(reading_cursor(revision, sentence, position, offset));
-            apply_cursor(document, tx, position, offset)
+            apply_cursor(document, tx, position, offset, None)
         })?;
         Ok(cursor)
     }
@@ -240,9 +251,22 @@ impl Store {
     }
 }
 
-fn apply_cursor(document: &mut Document, db: &Connection, position: usize, offset: Option<usize>) -> Result<bool> {
-    let absolute = document.sentences[position].start_utf16 + offset.unwrap_or(0);
-    pdf_reading_position::focus_for_offset(db, document, absolute)?;
+fn apply_cursor(document: &mut Document, db: &Connection, position: usize, offset: Option<usize>, page: Option<u16>) -> Result<bool> {
+    let sentence = &document.sentences[position];
+    let absolute = sentence.start_utf16 + offset.unwrap_or(0);
+    if let Some(page) = page {
+        let overlaps = pdf_reading_position::page_bounds(document, page)
+            .is_some_and(|(start, end)| match offset {
+                Some(_) => start <= absolute && absolute < end,
+                None => sentence.start_utf16 < end && start < sentence.end_utf16,
+            });
+        if !overlaps {
+            return Err("Позиція читання поза вибраною сторінкою PDF.".into());
+        }
+        pdf_reading_position::set_page(db, document, page, false)?;
+    } else {
+        pdf_reading_position::focus_for_offset(db, document, absolute)?;
+    }
     let changed = document.position != position || document.reading_token_utf16 != offset;
     document.position = position;
     document.reading_token_utf16 = offset;
@@ -340,4 +364,52 @@ fn sentence_anchors(document: &Document, sentence: &Sentence) -> Vec<TokenOcrAnc
 
 fn overlaps(start: usize, end: usize, span: OcrSpan) -> bool {
     start < span.end_utf8 && span.start_utf8 < end
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selecting_a_pdf_continuation_retains_the_clicked_page() {
+        let root = tempfile::tempdir().unwrap();
+        let database = root.path().join("reader.db");
+        let mut store = Store::open(&database).unwrap();
+        let source = root.path().join("book.pdf");
+        std::fs::write(&source, b"%PDF-1.4\n").unwrap();
+        let prepared = crate::file_originals::prepare_pdf_import(
+            store.pdf_original_root(),
+            "book.pdf",
+            &source,
+            "fr",
+            vec!["Le marin regarde".into(), "la mer. Il attend.".into(), "Le vent se lève.".into()],
+            vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        // Simulate a saved text revision with a sentence spanning two physical pages.
+        store.edit_document(&document.id, |doc, _| {
+            doc.sentences = crate::segment(&doc.text.replace("\n\n", "  "), &doc.id);
+            for sentence in &mut doc.sentences {
+                sentence.text = doc.text[sentence.start_utf8..sentence.end_utf8].to_owned();
+            }
+            Ok(true)
+        }).unwrap();
+        let document = store.token_document(&document.id).unwrap();
+        let revision = revision_id(&document).unwrap();
+        let sentence = &document.sentences[0];
+        let second_page_start = document.pdf_page_starts.as_ref().unwrap()[1].unwrap();
+        assert!(sentence.start_utf16 < second_page_start && second_page_start < sentence.end_utf16);
+        store.set_reading_cursor(&document.id, &document.sentences[1].id, revision, None).unwrap();
+
+        let selected = store.set_reading_cursor_for_page(&document.id, &sentence.id, revision, None, Some(1)).unwrap();
+        assert_eq!(selected.sentence_id, sentence.id);
+        assert_eq!(store.pdf_reading_page(&document.id).unwrap(), Some(1));
+        assert!(store.set_reading_cursor_for_page(&document.id, &sentence.id, revision, None, Some(2)).is_err());
+        assert_eq!(store.pdf_reading_page(&document.id).unwrap(), Some(1));
+
+        drop(store);
+        let store = Store::open(&database).unwrap();
+        assert_eq!(store.reading_cursor(&document.id).unwrap().unwrap().sentence_id, sentence.id);
+        assert_eq!(store.pdf_reading_page(&document.id).unwrap(), Some(1));
+    }
 }

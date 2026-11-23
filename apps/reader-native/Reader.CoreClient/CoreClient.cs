@@ -314,8 +314,8 @@ public sealed class CoreClient : IDisposable
     public ReadingCursor? ReadingCursor(string id) =>
         Call<ReadingCursor?>(new { version = 1, operation = "reading_cursor", id });
 
-    public ReadingCursor SetReadingCursor(string id, string sentenceId, string revisionId) =>
-        Call<ReadingCursor>(new { version = 1, operation = "set_reading_cursor", id, sentenceId, revisionId });
+    public ReadingCursor SetReadingCursor(string id, string sentenceId, string revisionId, int? page = null) =>
+        Call<ReadingCursor>(new { version = 1, operation = "set_reading_cursor", id, sentenceId, revisionId, page });
 
     public ReadingCursor? AnchorReadingSelection(string id, string revisionId, int startUtf16, int lengthUtf16) =>
         Call<ReadingCursor?>(new

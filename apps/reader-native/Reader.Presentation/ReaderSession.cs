@@ -400,7 +400,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public void SetModelSpeechResume(string id, string sentenceId, string textHash, ModelSpeechResume model) =>
         client.SetModelSpeechResume(id, sentenceId, textHash, model);
 
-    public Task SelectSentenceAsync(int position) => RunAsync(() =>
+    public Task SelectSentenceAsync(int position, int? pdfPage = null) => RunAsync(() =>
     {
         var documents = snapshot.Documents;
         var index = Array.FindIndex(documents, document => document.Id == selectedId);
@@ -411,7 +411,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
             return (snapshot, selectedId);
 
         if (doc.CurrentRevisionId is { } revision)
-            client.SetReadingCursor(doc.Id, doc.Sentences[position].Id, revision);
+            client.SetReadingCursor(doc.Id, doc.Sentences[position].Id, revision, pdfPage);
         else
             client.Position(doc.Id, position);
         var updated = (Document[])documents.Clone();

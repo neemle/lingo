@@ -219,8 +219,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         } => value(store.correct_ocr_line(&id, index, correction)),
         Command::Position { id, position } => value(store.position(&id, position)),
         Command::ReadingCursor { id } => value(store.reading_cursor(&id)),
-        Command::SetReadingCursor { id, sentence_id, revision_id, start_utf16 } => {
-            value(store.set_reading_cursor(&id, &sentence_id, &revision_id, start_utf16))
+        Command::SetReadingCursor { id, sentence_id, revision_id, start_utf16, page } => {
+            value(store.set_reading_cursor_for_page(&id, &sentence_id, &revision_id, start_utf16, page))
         }
         Command::AnchorReadingSelection { id, revision_id, start_utf16, length_utf16 } => {
             value(store.anchor_reading_selection(&id, &revision_id, start_utf16, length_utf16))

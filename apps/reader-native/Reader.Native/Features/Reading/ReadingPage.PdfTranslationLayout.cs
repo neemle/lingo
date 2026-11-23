@@ -394,7 +394,8 @@ public partial class ReadingPage
         if (session.Document is not { } document || document.Id != address.Document) return;
         var position = Array.FindIndex(document.Sentences,
             sentence => sentence.StartUtf16 < fragment.EndUtf16 && sentence.EndUtf16 > fragment.StartUtf16);
-        if (position >= 0 && position != document.Position) await session.SelectSentenceAsync(position);
+        if (position >= 0 && position != document.Position)
+            await session.SelectSentenceAsync(position, pdfPage: address.Page);
     }
 
     private async Task FollowPdfTranslationScrollAsync(bool fromOriginal)

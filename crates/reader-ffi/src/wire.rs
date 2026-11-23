@@ -374,6 +374,7 @@ pub enum Command {
         revision_id: String,
         #[serde(rename = "startUtf16")]
         start_utf16: Option<usize>,
+        page: Option<u16>,
     },
     AnchorReadingSelection {
         id: String,
