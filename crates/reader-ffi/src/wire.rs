@@ -279,6 +279,8 @@ pub enum Command {
     ClaimPdfOcrPage {
         id: String,
         center: Option<u16>,
+        #[serde(default, rename = "retryNow")]
+        retry_now: bool,
     },
     CacheBackgroundPdfTextLayer {
         id: String,

@@ -417,6 +417,12 @@ impl Store {
     pub fn claim_pdf_ocr_page_for_window(
         &mut self, id: &str, center: Option<u16>,
     ) -> Result<Option<PdfOcrRequest>> {
+        self.claim_pdf_ocr_page_with_retry(id, center, false)
+    }
+
+    pub fn claim_pdf_ocr_page_with_retry(
+        &mut self, id: &str, center: Option<u16>, retry_now: bool,
+    ) -> Result<Option<PdfOcrRequest>> {
         if self.active_pdf_ocr.is_some() {
             return Ok(None);
         }
@@ -430,6 +436,16 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(database_error)?;
         let now = crate::now();
+        if let Some(center) = center.filter(|_| retry_now) {
+            tx.execute(
+                "UPDATE pdf_ocr_requests SET available_at=0
+                 WHERE document_id=?1 AND page BETWEEN ?2 - 1 AND ?2 + 1
+                   AND token IS NULL AND available_at>?3
+                   AND EXISTS (SELECT 1 FROM pdf_reading_positions
+                               WHERE document_id=?1 AND page=?2)",
+                params![id, center, now],
+            ).map_err(database_error)?;
+        }
         let page = tx
             .query_row(
                 "SELECT page FROM pdf_ocr_requests

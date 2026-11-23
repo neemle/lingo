@@ -229,8 +229,8 @@ public sealed class CoreClient : IDisposable
             version = 1, operation = "translate_detached_pdf_sentence", id, page, sentenceId, target,
         });
 
-    public PdfOcrRequest? ClaimPdfOcrPage(string id, int? center = null) =>
-        Call<PdfOcrRequest?>(new { version = 1, operation = "claim_pdf_ocr_page", id, center });
+    public PdfOcrRequest? ClaimPdfOcrPage(string id, int? center = null, bool retryNow = false) =>
+        Call<PdfOcrRequest?>(new { version = 1, operation = "claim_pdf_ocr_page", id, center, retryNow });
 
     public bool CacheBackgroundPdfTextLayer(string id, string revision, int page, string text) =>
         Call<bool>(new { version = 1, operation = "cache_background_pdf_text_layer", id, revision, page, text });

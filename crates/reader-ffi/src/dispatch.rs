@@ -177,7 +177,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             value(store.prefetch_linguistics(&id, &sentence_id, &revision_id, step, page))
         }
         Command::PdfOcrNeededPages { id, center } => value(store.pdf_ocr_needed_pages(&id, center)),
-        Command::ClaimPdfOcrPage { id, center } => value(store.claim_pdf_ocr_page_for_window(&id, center)),
+        Command::ClaimPdfOcrPage { id, center, retry_now } =>
+            value(store.claim_pdf_ocr_page_with_retry(&id, center, retry_now)),
         Command::CacheBackgroundPdfTextLayer { id, revision, page, text } =>
             value(store.cache_background_pdf_text_layer(&id, &revision, page, &text)),
         Command::RetryPdfOcrPage { id, page, token, canceled } => {

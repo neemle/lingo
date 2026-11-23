@@ -485,23 +485,23 @@ public partial class ReadingPage
 
     private static bool RequiresPdfOcr(PdfReadPage page) => page.State is "needsOcr" or "needsTextLayer" || page.RefreshPending;
 
-    private void StartReaderPdfOcr(ReaderSession session, Document document)
+    private void StartReaderPdfOcr(ReaderSession session, Document document, bool retryNow = false)
     {
         if (readerPdfOcr is not null || document.OcrPdfPages is null || pdfWindow is not { } window ||
             !window.Pages.Any(RequiresPdfOcr)) return;
         var run = new CancellationTokenSource();
         readerPdfOcr = run;
-        readerPdfOcrTask = RecognizeReaderPdfAsync(session, document, window.Center, run);
+        readerPdfOcrTask = RecognizeReaderPdfAsync(session, document, window.Center, run, retryNow);
     }
 
     private async Task RecognizeReaderPdfAsync(
-        ReaderSession session, Document document, int page, CancellationTokenSource run)
+        ReaderSession session, Document document, int page, CancellationTokenSource run, bool retryNow)
     {
         var cancellation = run.Token;
         try
         {
             var delay = pdfOcrRetryAt - DateTimeOffset.UtcNow;
-            if (delay > TimeSpan.Zero) await Task.Delay(delay, cancellation);
+            if (!retryNow && delay > TimeSpan.Zero) await Task.Delay(delay, cancellation);
             if (await session.OriginalFileAsync(document.Id) is not { } original)
                 throw new InvalidDataException("Оригінал PDF для розпізнавання недоступний.");
             cancellation.ThrowIfCancellationRequested();
@@ -510,7 +510,7 @@ public partial class ReadingPage
                 await session.WaitUntilIdleAsync();
                 if (!cancellation.IsCancellationRequested && readingPageActive && session.Document?.Id == document.Id)
                     await session.RefreshAsync();
-            }, updateFocus: false);
+            }, updateFocus: false, retryNow: retryNow);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) {}
         catch (Exception error) when (!cancellation.IsCancellationRequested)
@@ -610,7 +610,8 @@ public partial class ReadingPage
         var session = AppState.Session;
         if (session.Document is not { } document || document.Id != pdfSnapshot?.Id) return;
         pdfOcrError = null;
-        StartReaderPdfOcr(session, document);
+        pdfOcrRetryAt = default;
+        StartReaderPdfOcr(session, document, retryNow: true);
         UpdatePdfPageDisplay();
 #endif
     }

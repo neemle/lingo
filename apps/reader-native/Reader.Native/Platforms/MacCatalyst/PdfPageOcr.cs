@@ -23,7 +23,8 @@ internal static class PdfPageOcr
     }
 
     internal static async Task RecognizeWindowAsync(ReaderSession session, Document document,
-        string path, int page, CancellationToken cancellation, Func<Task> onCached, bool updateFocus = true)
+        string path, int page, CancellationToken cancellation, Func<Task> onCached,
+        bool updateFocus = true, bool retryNow = false)
     {
         if (document.OcrPdfPages is not int count) return;
         await Worker.WaitAsync(cancellation);
@@ -35,7 +36,7 @@ internal static class PdfPageOcr
             for (var attempt = 0; attempt < 3; attempt++)
             {
                 cancellation.ThrowIfCancellationRequested();
-                if (await session.ClaimPdfOcrPageAsync(document.Id, page) is not { } claim) break;
+                if (await session.ClaimPdfOcrPageAsync(document.Id, page, retryNow && attempt == 0) is not { } claim) break;
                 try
                 {
                     var textLayer = claim.ReadTextLayer

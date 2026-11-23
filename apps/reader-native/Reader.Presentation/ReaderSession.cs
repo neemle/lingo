@@ -291,8 +291,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<MachineTranslation?> TranslateDetachedPdfSentenceAsync(string id, int page, string sentenceId, string target) =>
         Task.Run(() => client.TranslateDetachedPdfSentence(id, page, sentenceId, target));
 
-    public Task<PdfOcrRequest?> ClaimPdfOcrPageAsync(string id, int? center = null) =>
-        Task.Run(() => client.ClaimPdfOcrPage(id, center));
+    public Task<PdfOcrRequest?> ClaimPdfOcrPageAsync(string id, int? center = null, bool retryNow = false) =>
+        Task.Run(() => client.ClaimPdfOcrPage(id, center, retryNow));
 
     public async Task CacheBackgroundPdfTextLayerAsync(string id, string revision, int page, string text)
     {

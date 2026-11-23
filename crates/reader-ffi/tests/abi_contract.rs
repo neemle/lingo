@@ -85,6 +85,50 @@ fn canceled_pdf_translation_does_not_cancel_a_later_page_request() {
 }
 
 #[test]
+fn manual_pdf_ocr_retry_resumes_only_the_current_window_without_waiting() {
+    let store = StoreFixture::new();
+    let original = store.dir.join("scan.pdf");
+    std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+    let imported = call(store.handle, json!({
+        "version": 1, "operation": "import_pdf_file", "name": "scan.pdf", "language": "fr",
+        "path": original, "pageTexts": ["", "", ""], "lines": [],
+    }));
+    assert_eq!(imported["ok"], true, "{imported}");
+    let id = &imported["data"]["id"];
+    let focused = call(store.handle, json!({
+        "version": 1, "operation": "set_pdf_reading_page", "id": id, "page": 1,
+    }));
+    assert_eq!(focused["ok"], true, "{focused}");
+    let claim = |center, retry_now| {
+        let reply = call(store.handle, json!({
+            "version": 1, "operation": "claim_pdf_ocr_page", "id": id, "center": center, "retryNow": retry_now,
+        }));
+        assert_eq!(reply["ok"], true, "{reply}");
+        reply["data"].clone()
+    };
+    let fail = |lease: serde_json::Value| {
+        let reply = call(store.handle, json!({
+            "version": 1, "operation": "retry_pdf_ocr_page", "id": id,
+            "page": lease["page"], "token": lease["token"],
+        }));
+        assert_eq!(reply["data"], true, "{reply}");
+    };
+    for page in [1, 0, 2] {
+        let lease = claim(1, false);
+        assert_eq!(lease["page"], page);
+        fail(lease);
+    }
+    assert!(claim(1, false).is_null());
+    assert!(claim(0, true).is_null());
+    assert!(claim(1, false).is_null());
+    let retried = claim(1, true);
+    assert_eq!(retried["page"], 1);
+    assert!(claim(1, true).is_null());
+    fail(retried);
+    assert_eq!(claim(1, false)["page"], 0);
+}
+
+#[test]
 fn canceling_ocr_page_review_leaves_later_requests_available() {
     let store = StoreFixture::new();
     let imported = call(store.handle, json!({
