@@ -347,6 +347,10 @@ pub(crate) fn reflow_ocr_paragraphs(document: &mut Document) {
         if document.text.get(page_start..page_end).is_none() { continue; }
         starts.insert(page_number);
         let mut geometry_breaks = Vec::new();
+        let numbered_notes = numbered_ocr_footnotes(page);
+        for note in &numbered_notes {
+            geometry_breaks.extend([note.start, note.end]);
+        }
         let mut unnumbered_notes = std::collections::BTreeSet::new();
         // OCR can omit the superscript numbers. A run of small definitions at the
         // bottom of a page is enough evidence to keep them out of the prose.
@@ -389,7 +393,9 @@ pub(crate) fn reflow_ocr_paragraphs(document: &mut Document) {
             for end in geometry_breaks[first..last].iter().copied().chain(std::iter::once(offset.end)) {
                 ranges.push(BlockRange {
                     offset: begin..end, page: Some(page_number), heading,
-                    footnote: unnumbered_notes.contains(&begin), ..BlockRange::default()
+                    footnote: unnumbered_notes.contains(&begin)
+                        || numbered_notes.iter().any(|note| note.contains(&begin)),
+                    ..BlockRange::default()
                 });
                 begin = end;
             }
@@ -401,6 +407,56 @@ pub(crate) fn reflow_ocr_paragraphs(document: &mut Document) {
     document.blocks.retain(|block| block.page.is_none_or(|page| !starts.contains(&page)));
     document.blocks.extend(blocks);
     document.blocks.sort_by_key(|block| block.start_utf8);
+}
+
+fn numbered_ocr_footnotes(page: &[crate::ocr::OcrLine]) -> Vec<Range<usize>> {
+    let mut body_sizes: Vec<_> = page.iter()
+        .filter(|line| line.y < 0.72 && line.width >= 0.20)
+        .map(|line| line.height).collect();
+    if body_sizes.len() < 3 {
+        return Vec::new();
+    }
+    body_sizes.sort_by(f64::total_cmp);
+    let body_height = body_sizes[body_sizes.len() / 2];
+    let is_note_sized = |line: &crate::ocr::OcrLine| line.y >= 0.72 && line.height <= body_height * 0.83;
+    let Some(first) = (1..page.len()).find(|&index| {
+        let (line, previous) = (&page[index], &page[index - 1]);
+        is_note_sized(line) && line.y - (previous.y + previous.height) >= body_height * 0.55
+            && numbered_note_label(line.reading_text()).is_some_and(|label| {
+                page[..index].iter().any(|line| !pdf_note_references(line.reading_text(), &[label]).is_empty())
+            })
+    }) else {
+        return Vec::new();
+    };
+
+    let mut notes = Vec::<Range<usize>>::new();
+    for (index, line) in page.iter().enumerate().skip(first) {
+        let text = line.reading_text();
+        let previous = &page[index - 1];
+        if !is_note_sized(line) || !text.chars().any(char::is_alphabetic) ||
+            index != first && line.y - (previous.y + previous.height) > body_height * 0.95 {
+            break;
+        }
+        let span = line.source_span.expect("verified OCR span");
+        if numbered_note_label(text).is_some() {
+            notes.push(span.start_utf8..span.end_utf8);
+        } else if let Some(note) = notes.last_mut() {
+            note.end = span.end_utf8;
+        }
+    }
+    notes
+}
+
+fn numbered_note_label(text: &str) -> Option<u32> {
+    let mut digits = text.chars().map_while(note_digit);
+    let (first, superscript) = digits.next()?;
+    let (number, len) = digits.try_fold((first, 1), |(number, len), (digit, kind)| {
+        (len < 3 && kind == superscript).then_some((number * 10 + digit, len + 1))
+    })?;
+    let remainder = &text[text.char_indices().nth(len)?.0..];
+    let remainder = remainder.strip_prefix(['.', ')', ']']).unwrap_or(remainder);
+    (number > 0 && remainder.starts_with(char::is_whitespace)
+        && remainder.trim_start().starts_with(char::is_alphabetic)).then_some(number)
 }
 
 pub(crate) fn from_ocr(
@@ -542,7 +598,7 @@ fn materialize_blocks(text: &str, ranges: Vec<BlockRange>) -> Vec<DocumentBlock>
     for page in blocks.chunk_by_mut(|left, right| left.page == right.page) {
         if page[0].page.is_none() { continue; }
         let numbers: Vec<_> = page.iter().filter(|block| block.footnote).filter_map(|block|
-            text[block.start_utf8..block.end_utf8].split_whitespace().next()?.parse::<u32>().ok()
+            numbered_note_label(&text[block.start_utf8..block.end_utf8])
         ).collect();
         if numbers.is_empty() { continue; }
         for block in page.iter_mut().filter(|block| !block.footnote) {
@@ -766,6 +822,53 @@ fn parse_pdf(bytes: &[u8]) -> Result<Extracted> {
 mod tests {
     use super::*;
     use crate::ocr::{OcrLine, OcrSpan};
+
+    #[test]
+    fn small_referenced_scan_footnotes_include_wrapped_lines_and_keep_offsets() {
+        let rows = [
+            ("📖 Le navire aborde à Naples.", 0.18, 0.030),
+            ("L’équipage⁷ attend sur le quai.", 0.23, 0.030),
+            ("Le capitaine8 reste à bord.", 0.28, 0.030),
+            ("7. Les marins viennent de Marseille.", 0.76, 0.018),
+            ("Ils connaissent la mer depuis longtemps.", 0.782, 0.018),
+            ("8) Le capitaine commande le navire.", 0.804, 0.018),
+            ("42", 0.94, 0.016),
+        ];
+        let raw = rows.iter().map(|(text, _, _)| *text).collect::<Vec<_>>().join("\n");
+        let mut offset = 0;
+        let lines: Vec<_> = rows.into_iter().map(|(text, y, height)| {
+            let start = offset;
+            let end = start + text.len();
+            offset = end + 1;
+            OcrLine {
+                page: 5, text: text.into(), x: 0.12, y, width: 0.72, height,
+                confidence: None, correction: None, words: Vec::new(),
+                source_span: Some(OcrSpan {
+                    start_utf8: start, end_utf8: end,
+                    start_utf16: raw[..start].encode_utf16().count(),
+                    end_utf16: raw[..end].encode_utf16().count(),
+                }),
+            }
+        }).collect();
+        let document = detached_pdf_document(raw.clone(), "fr", Some(lines.clone()));
+        let notes: Vec<_> = document.blocks.iter().filter(|block| block.footnote).map(|block| {
+            assert_eq!(block.page, Some(5));
+            assert_eq!(block.start_utf16, raw[..block.start_utf8].encode_utf16().count());
+            &document.text[block.start_utf8..block.end_utf8]
+        }).collect();
+        assert_eq!(notes, ["7. Les marins viennent de Marseille.\nIls connaissent la mer depuis longtemps.",
+            "8) Le capitaine commande le navire."]);
+        assert_eq!(document.text, raw);
+        let masked = mask_pdf_note_references(&document, &raw, 0).unwrap();
+        assert!(masked.contains("L’équipage  attend") && masked.contains("capitaine  reste"));
+        assert_eq!(masked.encode_utf16().count(), raw.encode_utf16().count());
+
+        let mut ordinary = lines;
+        for line in &mut ordinary[3..6] { line.height = 0.030; }
+        let document = detached_pdf_document(raw.clone(), "fr", Some(ordinary));
+        assert!(document.blocks.iter().all(|block| !block.footnote));
+        assert!(mask_pdf_note_references(&document, &raw, 0).is_none());
+    }
 
     #[test]
     fn pdf_layout_keeps_inline_dialogue_and_footnotes_when_ocr_boxes_are_present() {
