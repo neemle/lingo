@@ -239,7 +239,7 @@ pub(crate) fn pdf_name(name: &str) -> Result<&str> {
     Ok(name)
 }
 
-fn copy_pdf(input: impl Read, output: impl Write) -> Result<(u64, String)> {
+pub(crate) fn copy_pdf(input: impl Read, output: impl Write) -> Result<(u64, String)> {
     let mut digest = Sha256::new();
     let size = stream_pdf(input, output, |chunk| digest.update(chunk))?;
     Ok((size, format!("{:x}", digest.finalize())))

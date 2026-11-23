@@ -82,8 +82,10 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             }
             store.pdf_original_root().to_owned()
         };
-        let prepared = reader_core::intake::prepare_for_request(&root, input, request_id.as_deref())
-            .map_err(gateway::domain)?;
+        let prepared = reader_core::intake::prepare_for_request(&root, input, request_id.as_deref(), |bytes| {
+            registry::lock().and_then(|state| state.store(handle)?.has_pdf_of_size(bytes).map_err(gateway::domain))
+                .map_err(|error| error.message)
+        }).map_err(gateway::domain)?;
         let item = registry::lock()?.insert_intake(handle, prepared, request_id.as_deref())?;
         return encode_job(Ok(item));
     }

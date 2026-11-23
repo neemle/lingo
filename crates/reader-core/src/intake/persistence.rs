@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{file_originals, ocr, Result, Store};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
-use std::{fs, io::Read, path::{Path, PathBuf}};
+use std::{fs, io::{self, Read}, path::{Path, PathBuf}};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
@@ -12,14 +12,16 @@ pub struct PreparedIntake {
     metadata: Metadata,
     payload: Option<Vec<u8>>,
     file: Option<NamedTempFile>,
+    pdf_hash: Option<String>,
 }
 
 pub fn prepare(root: &Path, input: IntakeInput) -> Result<PreparedIntake> {
-    prepare_for_request(root, input, None)
+    prepare_for_request(root, input, None, |_| Ok(false))
 }
 
 pub fn prepare_for_request(
     root: &Path, input: IntakeInput, request_id: Option<&str>,
+    pdf_might_exist: impl FnOnce(u64) -> Result<bool>,
 ) -> Result<PreparedIntake> {
     let material = validate_input(input)?;
     let (payload, file, bytes) = match material.asset {
@@ -38,6 +40,18 @@ pub fn prepare_for_request(
             (None, Some(file), expected)
         }
     };
+    let pdf_hash = match &file {
+        Some(file) if pdf_might_exist(bytes)? => {
+            let (size, hash) = file_originals::copy_pdf(
+                file.reopen().map_err(intake_error)?, io::sink(),
+            )?;
+            if size != bytes {
+                return Err("Розмір PDF змінився під час прийому.".into());
+            }
+            Some(hash)
+        }
+        _ => None,
+    };
     Ok(PreparedIntake {
         metadata: Metadata {
             name: material.name,
@@ -47,6 +61,7 @@ pub fn prepare_for_request(
         },
         payload,
         file,
+        pdf_hash,
     })
 }
 
@@ -110,6 +125,13 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
 }
 
 impl Store {
+    pub fn has_pdf_of_size(&self, bytes: u64) -> Result<bool> {
+        self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM file_originals WHERE size=?1)",
+            [i64::try_from(bytes).map_err(intake_error)?], |row| row.get(0),
+        ).map_err(intake_error)
+    }
+
     pub fn insert_intake(&mut self, prepared: PreparedIntake, request_id: Option<&str>) -> Result<IntakeItem> {
         let id = request_id.map(Uuid::parse_str).transpose().map_err(intake_error)?
             .unwrap_or_else(Uuid::new_v4);
@@ -121,12 +143,21 @@ impl Store {
                 return Ok(existing);
             }
         }
+        let document_id: Option<String> = match prepared.pdf_hash {
+            Some(hash) => tx.query_row(
+                "SELECT d.id FROM documents d JOIN file_originals f ON f.document_id=d.id
+                 WHERE d.source_hash=?1 AND f.size=?2",
+                params![hash, i64::try_from(prepared.metadata.bytes).map_err(intake_error)?],
+                |row| row.get(0),
+            ).optional().map_err(intake_error)?,
+            None => None,
+        };
         let serialized = serde_json::to_string(&prepared.metadata).map_err(intake_error)?;
         tx.execute(
-            "INSERT INTO intake (id,metadata,payload) VALUES (?1,?2,?3)",
-            params![id.to_string(), serialized, prepared.payload],
+            "INSERT INTO intake (id,metadata,payload,document_id) VALUES (?1,?2,?3,?4)",
+            params![id.to_string(), serialized, prepared.payload, document_id],
         ).map_err(intake_error)?;
-        if let Some(file) = prepared.file {
+        if let Some(file) = prepared.file.filter(|_| document_id.is_none()) {
             let path = publish_pdf(&self.file_original_directory, id, file)?;
             if let Err(error) = file_originals::sync_directory(&self.file_original_directory)
                 .and_then(|_| tx.commit().map_err(intake_error))
@@ -137,7 +168,7 @@ impl Store {
         } else {
             tx.commit().map_err(intake_error)?;
         }
-        Ok(IntakeItem::new(id.to_string(), prepared.metadata, None))
+        Ok(IntakeItem::new(id.to_string(), prepared.metadata, document_id))
     }
 
     pub fn list_intake(&self, start: usize) -> Result<Vec<IntakeItem>> {

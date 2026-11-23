@@ -113,7 +113,9 @@ pub enum IntakePayload {
 
 impl Store {
     pub fn stage_intake(&mut self, input: IntakeInput) -> Result<IntakeItem> {
-        let prepared = prepare(&self.file_original_directory, input)?;
+        let prepared = prepare_for_request(&self.file_original_directory, input, None, |bytes| {
+            self.has_pdf_of_size(bytes)
+        })?;
         self.insert_intake(prepared, None)
     }
 

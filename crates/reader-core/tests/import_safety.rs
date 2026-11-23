@@ -1,5 +1,5 @@
-use reader_core::Store;
-use std::io::{Cursor, Write};
+use reader_core::{file_originals, intake::IntakeInput, Store};
+use std::{fs, io::{Cursor, Write}};
 
 fn pdf_with_catalog_nesting(depth: usize) -> Vec<u8> {
     let contents = "BT /F1 18 Tf 72 700 Td (Safe reader.) Tj ET";
@@ -44,6 +44,36 @@ fn excessive_pdf_nesting_is_rejected_and_original_is_preserved() {
     assert_eq!(snapshot.documents.len(), 1);
     assert_eq!(snapshot.documents[0].id, document.id);
     assert_eq!(store.original(&document.id).unwrap().bytes, valid);
+}
+
+#[test]
+fn staged_pdf_matches_existing_original_by_content_not_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&dir.path().join("reader.db")).unwrap();
+    let path = dir.path().join("book.pdf");
+    let original = pdf_with_catalog_nesting(4);
+    fs::write(&path, &original).unwrap();
+    let prepared = file_originals::prepare_pdf_import(
+        store.pdf_original_root(), "book.pdf", &path, "en", vec!["Safe reader.".into()], vec![],
+    ).unwrap();
+    let saved = store.import_pdf_file(prepared).unwrap();
+    let staged = |store: &mut Store| {
+        let item = store.stage_intake(IntakeInput::PdfFile {
+            name: "book.pdf".into(),
+            path: path.clone(),
+        }).unwrap();
+        serde_json::to_value(item).unwrap()
+    };
+    let duplicate = staged(&mut store);
+    assert_eq!(duplicate["nextAction"], "complete");
+    assert_eq!(duplicate["documentId"], saved.id);
+
+    let mut different = original;
+    *different.last_mut().unwrap() = b'\r';
+    fs::write(&path, different).unwrap();
+    let same_size = staged(&mut store);
+    assert_eq!(same_size["nextAction"], "readPdfPages");
+    assert!(same_size["documentId"].is_null());
 }
 
 fn docx(xml: &[u8], method: zip::CompressionMethod) -> Vec<u8> {
