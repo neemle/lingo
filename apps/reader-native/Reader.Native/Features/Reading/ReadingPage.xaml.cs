@@ -259,12 +259,20 @@ public partial class ReadingPage : ContentPage
 
     private void PauseSpeechChanged(object? sender, PropertyChangedEventArgs args)
     {
-        if (PrimarySpeech is null || sender is not Button pause ||
-            args.PropertyName is not (nameof(Button.IsEnabled) or nameof(Button.Text))) return;
+        if (args.PropertyName is nameof(Button.IsEnabled) or nameof(Button.Text))
+            UpdatePrimarySpeechButton();
+    }
 
-        var playing = pause.IsEnabled && !speechPaused;
+    private void UpdatePrimarySpeechButton()
+    {
+        if (PrimarySpeech is null || PauseSpeech is null) return;
+        var playing = PauseSpeech.IsEnabled && !speechPaused;
         PrimarySpeech.Text = playing ? "Ⅱ" : "▶";
-        DescribeButton(PrimarySpeech, playing ? "Призупинити озвучення" : "Відтворити озвучення");
+        var label = playing ? "Призупинити озвучення"
+            : PauseSpeech.IsEnabled && speechPaused ? "Продовжити озвучення"
+            : speechResume is not null && !utteranceActive && ResumeSpeech.Text is { } resumeLabel ? resumeLabel
+            : "Відтворити озвучення";
+        DescribeButton(PrimarySpeech, label);
     }
 
     private void ArrangeReadingColumns()
@@ -917,10 +925,10 @@ public partial class ReadingPage : ContentPage
         speechResume = null;
         ResumeSpeech.IsVisible = false;
         var session = AppState.Session;
-        if (session.Busy || session.Document is not { } document || session.Sentence is not { } sentence) return;
 
         try
         {
+            if (session.Busy || session.Document is not { } document || session.Sentence is not { } sentence) return;
             var resume = session.GetSpeechResume(document.Id);
             var speechText = EffectiveSpeechText(document, sentence);
             if (resume is null || !SpeechProgress.Matches(sentence, resume, speechText)) return;
@@ -934,6 +942,7 @@ public partial class ReadingPage : ContentPage
             ResumeSpeech.IsVisible = true;
         }
         catch (Exception error) { SpeechStatus.Text = $"Не вдалося прочитати позицію озвучення. {error.Message}"; }
+        finally { UpdatePrimarySpeechButton(); }
     }
 
     internal void CheckpointSpeechPosition()
