@@ -9,7 +9,7 @@ use std::{
 };
 
 // Bump when audio generation or the cached format changes.
-const VERSION: &[u8] = b"reader-speech-v1";
+const VERSION: &[u8] = b"reader-speech-v2";
 const MAX_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_ENTRIES: usize = 96;
 const WAV_HEADER_BYTES: usize = 44;

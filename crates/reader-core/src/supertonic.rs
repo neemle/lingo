@@ -5,7 +5,7 @@
 //! The independently distributed model weights are licensed under OpenRAIL.
 
 use crate::optional_models::OptionalModelJob;
-use crate::tts::{cache::SpeechCacheKey, to_wav, ukrainian_stress, SpeechAudio, STRESS_MARK};
+use crate::tts::{cache::SpeechCacheKey, speech_signal_bounds, to_wav, ukrainian_stress, SpeechAudio, STRESS_MARK};
 use crate::{
     onnx_runtime, resources::InferencePriority,
     speech::{RenderedSpeech, SpeechAdapter, SpeechSource},
@@ -361,6 +361,7 @@ impl Engine {
         let samples = samples
             .get(..sample_count)
             .ok_or("Supertonic повернув неповне аудіо")?;
+        speech_signal_bounds(samples)?;
         Ok(samples.to_vec())
     }
 }

@@ -197,6 +197,7 @@ fn synthesize_at(
             [1, 1, 1, count] if *count > 0 && *count as usize == samples.len() => {}
             _ => return Err("Некоректний формат аудіо голосового пакета".into()),
         }
+        speech_signal_bounds(samples)?;
         let silence = if waveform.is_empty() {
             0
         } else {
@@ -548,18 +549,27 @@ impl PiperConfig {
     }
 }
 
-pub(crate) fn to_wav(samples: &[f32], sample_rate: u32) -> Result<SpeechAudio> {
-    if samples.is_empty()
-        || samples.len() > sample_rate as usize * MAX_SECONDS
-        || samples.iter().any(|x| !x.is_finite())
-    {
-        return Err("Некоректні зразки голосового пакета".into());
+pub(crate) fn speech_signal_bounds(samples: &[f32]) -> Result<(f32, f32)> {
+    let mut minimum = f32::INFINITY;
+    let mut maximum = f32::NEG_INFINITY;
+    for &sample in samples {
+        if !sample.is_finite() {
+            return Err("Некоректні зразки голосового пакета".into());
+        }
+        minimum = minimum.min(sample);
+        maximum = maximum.max(sample);
     }
-    let (minimum, maximum) = samples.iter().fold((f32::INFINITY, f32::NEG_INFINITY),
-        |(minimum, maximum), &sample| (minimum.min(sample), maximum.max(sample)));
     if maximum - minimum <= 0.00001 {
         return Err("Локальний голос повернув аудіо без мовлення.".into());
     }
+    Ok((minimum, maximum))
+}
+
+pub(crate) fn to_wav(samples: &[f32], sample_rate: u32) -> Result<SpeechAudio> {
+    if samples.len() > sample_rate as usize * MAX_SECONDS {
+        return Err("Некоректні зразки голосового пакета".into());
+    }
+    let (minimum, maximum) = speech_signal_bounds(samples)?;
     let peak = 0.01_f32.max(minimum.abs()).max(maximum.abs());
     let scale = f32::from(i16::MAX) / peak;
     let sample_bytes = (samples.len() * 2) as u32;
@@ -593,7 +603,19 @@ fn speech_error(error: impl std::fmt::Display) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::ukrainian_stress;
+    use super::{speech_signal_bounds, to_wav, ukrainian_stress, SAMPLE_RATE};
+
+    #[test]
+    fn silent_phrase_cannot_hide_between_audible_phrases() {
+        let speech = [-0.2, 0.15, 0.3, -0.1];
+        let silent = [0.0; 1024];
+        let complete: Vec<_> = speech.into_iter().chain(silent).chain(speech).collect();
+        assert!(to_wav(&complete, SAMPLE_RATE).is_ok());
+        assert!(speech_signal_bounds(&speech).is_ok());
+        for broken in [&silent[..], &[], &[0.02, 0.02], &[0.1, f32::NAN]] {
+            assert!(speech_signal_bounds(broken).is_err());
+        }
+    }
 
     #[test]
     fn marks_contextual_window_stress_without_rewriting_source() {
