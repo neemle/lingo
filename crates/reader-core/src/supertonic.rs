@@ -94,7 +94,7 @@ impl MultilingualSpeechJob {
         };
         let synthesis_rate = crate::tts::model_synthesis_rate(self.rate);
         let cache = SpeechCacheKey::new(
-            "supertonic-3-narration-v5",
+            "supertonic-3-narration-v6",
             self.model.revision(),
             &self.language,
             self.voice,
@@ -394,6 +394,10 @@ struct SpeechChunk {
     pause_after_ms: usize,
 }
 
+fn pause_punctuation(text: &str) -> Option<char> {
+    text.trim_end_matches(['"', '\'', ')']).chars().next_back()
+}
+
 fn text_chunks(text: &str, indexer: &[i64]) -> Result<Vec<SpeechChunk>> {
     let mut normalized = String::with_capacity(text.len());
     for grapheme in text.graphemes(true) {
@@ -432,10 +436,14 @@ fn text_chunks(text: &str, indexer: &[i64]) -> Result<Vec<SpeechChunk>> {
             return Err("Текст містить надто довге слово для Supertonic.".into());
         }
         if !chunk.is_empty() && width + 1 + word_width > TEXT_WINDOW {
-            if let Some((pause, ch)) = chunk.rmatch_indices([',', ';', ':', '!', '?']).find(|(pause, _)| {
-                chunk[..*pause].chars().count() >= TEXT_WINDOW / 2
+            // Prefer a clause boundary between tokens. Punctuation inside a
+            // token, such as 12,50 or 10:30, belongs to the token.
+            if let Some((pause, _)) = chunk.rmatch_indices(' ').find(|(pause, _)| {
+                let prefix = &chunk[..*pause];
+                matches!(pause_punctuation(prefix), Some(',' | ';' | ':' | '!' | '?'))
+                    && prefix.chars().count() >= TEXT_WINDOW / 2
             }) {
-                let next = chunk.split_off(pause + ch.len());
+                let next = chunk.split_off(pause);
                 chunks.push(std::mem::replace(&mut chunk, next.trim_start().to_owned()));
                 width = chunk.chars().count();
                 if width + 1 + word_width > TEXT_WINDOW {
@@ -466,7 +474,7 @@ fn text_chunks(text: &str, indexer: &[i64]) -> Result<Vec<SpeechChunk>> {
     let count = chunks.len();
     Ok(chunks.into_iter().enumerate().map(|(index, mut text)| {
         let continued = index + 1 < count;
-        let pause_after_ms = match text.trim_end_matches(['"', '\'', ')']).chars().next_back() {
+        let pause_after_ms = match pause_punctuation(&text) {
             Some('.' | '!' | '?') => 210,
             Some(',' | ';' | ':') => 140,
             _ => 70,
@@ -555,6 +563,20 @@ mod tests {
         assert_eq!(chunks[0].pause_after_ms, 70);
         assert!(chunks[1].text.ends_with("arrive."));
         assert!(text_chunks(&"a".repeat(TEXT_WINDOW + 1), &indexer).is_err());
+    }
+
+    #[test]
+    fn numeric_punctuation_inside_a_token_does_not_create_a_pause() {
+        let indexer = vec![1; 0x0400];
+        let source = format!(
+            "{}arrive a 10:30 avec 12,50 francs pour retrouver son equipage.",
+            "le bateau ".repeat(7)
+        );
+        let chunks = text_chunks(&source, &indexer).unwrap();
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks[0].text.contains("10:30 avec 12,50"));
+        assert_eq!(chunks[0].pause_after_ms, 70);
+        assert!(chunks[1].text.ends_with("son equipage."));
     }
 
     #[test]

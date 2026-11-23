@@ -157,7 +157,7 @@ public partial class ReadingPage
     }
 
     private static string ModelTimelineRevision(VoiceChoice voice) =>
-        $"{voice.Revision}:narration-v{(voice.Engine == "supertonic-3" ? 5 : 3)}";
+        $"{voice.Revision}:narration-v{(voice.Engine == "supertonic-3" ? 6 : 3)}";
 
     private static int? ModelResumePosition(SpeechResume? resume, VoiceChoice? voice, string language, int ratePercent) =>
         resume?.Model is { } model && voice?.Revision is not null &&
