@@ -140,7 +140,8 @@ public partial class ReadingPage
     private VoiceChoice? SelectedVoice() => PickedVoice() ?? AutomaticVoice(availableVoices, voiceLanguage);
 
     private static VoiceChoice? AutomaticVoice(VoiceChoice[] choices, string? language) =>
-        (language == "uk" ? Array.Find(choices, voice => voice.Engine == "piper-uk") : null)
+        Array.Find(choices, voice => voice.Id == SystemDefaultVoice)
+        ?? (language == "uk" ? Array.Find(choices, voice => voice.Engine == "piper-uk") : null)
         ?? Array.Find(choices, voice => voice.Engine == "supertonic-3");
 
     private async Task<VoiceChoice?> WordDetailVoiceAsync(string language, CancellationToken token)
@@ -156,7 +157,7 @@ public partial class ReadingPage
     }
 
     private static string ModelTimelineRevision(VoiceChoice voice) =>
-        $"{voice.Revision}:narration-v{(voice.Engine == "supertonic-3" ? 4 : 2)}";
+        $"{voice.Revision}:narration-v{(voice.Engine == "supertonic-3" ? 5 : 3)}";
 
     private static int? ModelResumePosition(SpeechResume? resume, VoiceChoice? voice, string language, int ratePercent) =>
         resume?.Model is { } model && voice?.Revision is not null &&

@@ -88,7 +88,7 @@ impl SpeechJob {
         let spoken = ukrainian_stress(&normalized);
         let synthesis_rate = model_synthesis_rate(self.rate);
         let cache = cache::SpeechCacheKey::new(
-            MODEL,
+            "piper-uk-narration-v3",
             self.model.revision(),
             "uk",
             &self.speaker.to_string(),
@@ -123,6 +123,18 @@ impl SpeechJob {
 // remaining slowdown after synthesis without lowering pitch.
 pub(crate) fn model_synthesis_rate(requested: f32) -> f32 {
     requested.max(0.8)
+}
+
+pub(crate) fn spoken_grapheme(text: &str, compatibility: bool, supports: impl Fn(char) -> bool) -> Result<String> {
+    let decomposed: String = if compatibility { text.nfkd().collect() } else { text.nfd().collect() };
+    if decomposed.chars().all(&supports) {
+        return Ok(decomposed);
+    }
+    let composed: String = decomposed.nfc().collect();
+    if composed.chars().all(supports) {
+        return Ok(composed);
+    }
+    Err("Локальний голос не підтримує всі літери або наголоси в цьому тексті.".into())
 }
 
 impl SpeechAdapter for SpeechJob {
@@ -445,7 +457,13 @@ impl PiperConfig {
 
     fn chunks(&self, text: &str) -> Result<Vec<String>> {
         let mut normalized = String::new();
-        for symbol in text.chars().flat_map(char::to_lowercase).nfd() {
+        let lower = text.to_lowercase();
+        for grapheme in lower.graphemes(true) {
+            if grapheme.chars().any(char::is_alphanumeric) && !grapheme.bytes().all(|byte| byte.is_ascii_digit()) {
+                normalized.push_str(&spoken_grapheme(grapheme, false, |ch| self.phoneme_id_map.contains_key(&ch))?);
+                continue;
+            }
+            let symbol = grapheme.chars().next().unwrap_or(' ');
             match symbol {
                 '0' => normalized.push_str(" нуль "),
                 '1' => normalized.push_str(" один "),

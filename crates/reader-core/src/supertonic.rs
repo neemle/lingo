@@ -16,7 +16,7 @@ use ort::value::Tensor;
 use serde::{de::DeserializeOwned, Deserialize};
 use sha2::{Digest, Sha256};
 use std::{fs::File, io::BufReader, path::Path};
-use unicode_normalization::UnicodeNormalization;
+use unicode_segmentation::UnicodeSegmentation;
 
 const MODEL: &str = "supertonic-3";
 const CORE_LANGUAGES: &[&str] = &[
@@ -93,13 +93,8 @@ impl MultilingualSpeechJob {
             self.text.as_str().into()
         };
         let synthesis_rate = crate::tts::model_synthesis_rate(self.rate);
-        let narration = if spoken.nfkd().take(TEXT_WINDOW + 1).count() > TEXT_WINDOW {
-            "supertonic-3-narration-v4"
-        } else {
-            "supertonic-3-narration-v3"
-        };
         let cache = SpeechCacheKey::new(
-            narration,
+            "supertonic-3-narration-v5",
             self.model.revision(),
             &self.language,
             self.voice,
@@ -400,17 +395,25 @@ struct SpeechChunk {
 }
 
 fn text_chunks(text: &str, indexer: &[i64]) -> Result<Vec<SpeechChunk>> {
-    let characters = text.nfkd()
-        .map(|c| match c {
+    let mut normalized = String::with_capacity(text.len());
+    for grapheme in text.graphemes(true) {
+        if grapheme.chars().any(char::is_alphanumeric) {
+            normalized.push_str(&crate::tts::spoken_grapheme(grapheme, true, |ch| index(indexer, ch) >= 0)?);
+            continue;
+        }
+        let ch = match grapheme.chars().next().unwrap_or(' ') {
+            '…' => {
+                normalized.truncate(normalized.trim_end().len());
+                normalized.push_str("...");
+                continue;
+            }
             '–' | '—' | '‑' | '‐' => '-',
             '„' | '«' | '»' | '“' | '”' => '"',
             '‘' | '’' | 'ʼ' | '`' => '\'',
             '[' | ']' | '<' | '>' | '_' | '|' | '/' | '#' | '\\' => ' ',
             c if c.is_whitespace() || index(indexer, c) < 0 => ' ',
             c => c,
-        });
-    let mut normalized = String::with_capacity(text.len());
-    for ch in characters {
+        };
         if matches!(ch, ',' | '.' | '!' | '?' | ';' | ':') {
             normalized.truncate(normalized.trim_end().len());
         }
@@ -552,6 +555,17 @@ mod tests {
         assert_eq!(chunks[0].pause_after_ms, 70);
         assert!(chunks[1].text.ends_with("arrive."));
         assert!(text_chunks(&"a".repeat(TEXT_WINDOW + 1), &indexer).is_err());
+    }
+
+    #[test]
+    fn missing_characters_do_not_turn_into_spaces_inside_spoken_words() {
+        let mut indexer = vec![1; 0x0400];
+        indexer['\u{301}' as usize] = -1;
+        let composed = text_chunks("répond… 📖", &indexer).unwrap();
+        assert_eq!(composed[0].text, "répond...");
+        indexer['é' as usize] = -1;
+        assert!(text_chunks("répond", &indexer).is_err());
+        assert!(text_chunks("Привіт", &indexer).is_err());
     }
 
     #[test]

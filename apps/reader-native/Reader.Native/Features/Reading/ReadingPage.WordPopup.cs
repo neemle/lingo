@@ -156,22 +156,30 @@ public partial class ReadingPage
             token.ThrowIfCancellationRequested();
             if (voice?.Engine is { } engine)
             {
-                await modelInference.WaitAsync(token);
-                SpeechAudio clip;
                 try
                 {
+                    await modelInference.WaitAsync(token);
+                    SpeechAudio clip;
+                    try
+                    {
+                        token.ThrowIfCancellationRequested();
+                        clip = await AppState.Session.SynthesizeSpeechTextAsync(text, language, voice.Speaker, rate, engine, token);
+                    }
+                    finally { modelInference.Release(); }
                     token.ThrowIfCancellationRequested();
-                    clip = await AppState.Session.SynthesizeSpeechTextAsync(text, language, voice.Speaker, rate, engine, token);
+                    status = await wordPopupSpeech.PlayWaveAsync(clip, 0, _ => { });
                 }
-                finally { modelInference.Release(); }
+                catch (Exception error) when (!token.IsCancellationRequested) { status = error.Message; }
                 token.ThrowIfCancellationRequested();
-                status = await wordPopupSpeech.PlayWaveAsync(clip, 0, _ => { });
+                if (status is not null && status != LocalSpeech.CompletedStatus)
+                {
+                    var fallback = await SpeakSystemVoiceAsync(null);
+                    status = fallback is null || fallback == LocalSpeech.CompletedStatus ? fallback : $"{status} {fallback}";
+                }
             }
             else
             {
-                wordPopupSpeech.Rate = rate;
-                wordPopupSpeech.PreferredVoice = voice?.Id == SystemDefaultVoice ? null : voice?.Id;
-                status = await wordPopupSpeech.SpeakAsync(text, language);
+                status = await SpeakSystemVoiceAsync(voice?.Id);
             }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
@@ -182,6 +190,14 @@ public partial class ReadingPage
         }
         if (!token.IsCancellationRequested && status is not null && status != LocalSpeech.CompletedStatus)
             await (Navigation.ModalStack.LastOrDefault() ?? this).DisplayAlertAsync("Озвучення", status, "Гаразд");
+
+        Task<string?> SpeakSystemVoiceAsync(string? voiceId)
+        {
+            token.ThrowIfCancellationRequested();
+            wordPopupSpeech.Rate = rate;
+            wordPopupSpeech.PreferredVoice = voiceId == SystemDefaultVoice ? null : voiceId;
+            return wordPopupSpeech.SpeakAsync(text, language);
+        }
     }
 
     private Grid WordDetailAudioRow(string text, string language, double fontSize)
