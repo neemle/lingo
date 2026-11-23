@@ -562,9 +562,7 @@ public partial class ReadingPage
         var source = pdfSourceLayout is { } layout && layout.Matches(pdfLayoutRequest) ? layout : null;
         background.IsVisible = background.Source is not null && source is { Lines.Length: > 0 } &&
             pdfLayoutRows.Length > 0;
-        var gloss = detached
-            ? (DetachedWordCard.IsVisible && detachedWordTranslation?.Target == TargetCode ? detachedWordTranslation?.Text : null)
-            : (WordCard.IsVisible && wordTranslation?.Target == TargetCode ? wordTranslation?.Text : null);
+        var gloss = (detached ? DetachedWordCard : WordCard).IsVisible ? PopupGloss(detached) : null;
         var drawing = new TranslatedPdfDrawing(pdfLayoutRows, source?.Lines ?? [], source?.Offset ?? 0,
             pdfLayoutSentence, gloss, background.IsVisible);
         var overflow = detached ? DetachedPdfTranslationOverflow : PdfTranslationOverflow;

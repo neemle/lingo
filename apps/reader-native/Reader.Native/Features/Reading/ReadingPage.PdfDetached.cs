@@ -195,7 +195,7 @@ public partial class ReadingPage
         var reconstructed = draft is { } result && result.Source != selected.Text.Trim() ? result.Source : null;
         try
         {
-            var meaning = detachedSense;
+            var meaning = detachedSense?.Target == target ? detachedSense : null;
             var sense = meaning?.Sense;
             if (sense is not null) reconstructed = null;
             var description = $"«{reconstructed ?? selected.Text}» · {DocumentLanguages.Name(target)}";

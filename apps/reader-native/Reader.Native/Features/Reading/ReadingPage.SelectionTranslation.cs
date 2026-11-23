@@ -20,7 +20,6 @@ public partial class ReadingPage
     {
         var request = ++popupTranslationRequest;
         var session = AppState.Session;
-        var label = detached ? DetachedWordTranslationGloss : WordTranslationGloss;
         var card = detached ? DetachedWordCard : WordCard;
         var selected = detached ? detachedSelection : selection;
         var document = session.Document;
@@ -28,13 +27,13 @@ public partial class ReadingPage
         var revision = detached ? detachedSentence?.RevisionId : document?.CurrentRevisionId;
         var target = TargetCode;
         var source = detached ? address?.Language : document?.Language;
-        var listen = detached ? DetachedSpeakWordTranslation : SpeakWordTranslation;
-        listen.IsEnabled = false;
-        label.Text = "Виберіть мову перекладу.";
         if (!detached) wordTranslation = null;
         else detachedWordTranslation = null;
-        UpdatePopupTranslationHighlights();
-        if (selected is null || document is null || revision is null || target is null || target == source) return;
+        if (selected is null || document is null || revision is null || target is null || target == source)
+        {
+            UpdatePopupGloss(detached, "Виберіть мову перекладу.");
+            return;
+        }
 
         bool Current() => request == popupTranslationRequest && readingPageActive && card.IsVisible &&
             TargetCode == target && session.Document?.Id == document.Id &&
@@ -42,7 +41,7 @@ public partial class ReadingPage
                 ? ReferenceEquals(detachedAddress, address) && detachedSelection == selected && detachedSentence?.RevisionId == revision
                 : selection == selected && session.Document?.CurrentRevisionId == revision);
 
-        label.Text = "Перекладаємо виділене…";
+        UpdatePopupGloss(detached, "Перекладаємо виділене…");
         try
         {
             await Task.Delay(120);
@@ -52,25 +51,50 @@ public partial class ReadingPage
             if (!Current()) return;
             if (result is null)
             {
-                label.Text = "Для перекладу потрібні мовні пакети.";
+                UpdatePopupGloss(detached, "Для перекладу потрібні мовні пакети.");
                 return;
             }
 
             var original = result.SourceText ?? selected.Text.Trim();
-            label.Text = result.Text;
-            listen.IsEnabled = !string.IsNullOrWhiteSpace(result.Text);
             if (detached) detachedWordTranslation = (target, result.Text, original);
             else
             {
                 wordTranslation = (document.Id, revision, selected, target, result.Text, original);
-                if (string.IsNullOrWhiteSpace(Translation.Text)) Translation.Text = result.Text;
+                if (canonicalSense is null && string.IsNullOrWhiteSpace(Translation.Text)) Translation.Text = result.Text;
             }
-            UpdatePopupTranslationHighlights();
+            UpdatePopupGloss(detached);
         }
         catch (Exception error)
         {
-            if (Current()) label.Text = error.Message;
+            if (Current()) UpdatePopupGloss(detached, error.Message);
         }
+    }
+
+    private string? PopupMachineGloss(bool detached)
+    {
+        var target = TargetCode;
+        if (detached)
+            return detachedWordTranslation is { } pdf && pdf.Target == target ? pdf.Text : null;
+        return wordTranslation is { } word && word.Target == target && word.Selection == selection &&
+            AppState.Session.Document is { } document && document.Id == word.Document &&
+            document.CurrentRevisionId == word.Revision ? word.Text : null;
+    }
+
+    private string? PopupGloss(bool detached)
+    {
+        var meaning = detached ? detachedSense : canonicalSense;
+        return meaning is not null && meaning.Target == TargetCode
+            ? meaning.Translation : PopupMachineGloss(detached);
+    }
+
+    private void UpdatePopupGloss(bool detached, string? status = null)
+    {
+        var gloss = PopupGloss(detached);
+        var label = detached ? DetachedWordTranslationGloss : WordTranslationGloss;
+        var listen = detached ? DetachedSpeakWordTranslation : SpeakWordTranslation;
+        label.Text = gloss ?? status;
+        listen.IsEnabled = !string.IsNullOrWhiteSpace(gloss);
+        UpdatePopupTranslationHighlights();
     }
 
     private void PopupTranslationTextChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
@@ -80,10 +104,8 @@ public partial class ReadingPage
 
     private void UpdatePopupTranslationHighlights()
     {
-        var target = TargetCode;
-        var canonicalGloss = WordCard.IsVisible && wordTranslation is { } word && word.Target == target ? word.Text : null;
-        var detachedGloss = DetachedWordCard.IsVisible && detachedWordTranslation is { } detached && detached.Target == target
-            ? detached.Text : null;
+        var canonicalGloss = WordCard.IsVisible ? PopupGloss(detached: false) : null;
+        var detachedGloss = DetachedWordCard.IsVisible ? PopupGloss(detached: true) : null;
         HighlightTranslation(SegmentTranslation, SegmentTranslationHighlighted, canonicalGloss);
         HighlightTranslation(ModelTranslationText, ModelTranslationTextHighlighted, canonicalGloss);
         HighlightTranslation(DetachedTranslation, DetachedTranslationHighlighted, detachedGloss);

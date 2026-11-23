@@ -105,7 +105,7 @@ public partial class ReadingPage
     private async void SpeakPopupTranslationClicked(object? sender, EventArgs args)
     {
         if (TargetCode is not { } target) return;
-        var text = DetachedWordCard.IsVisible ? detachedSense?.Translation ?? detachedWordTranslation?.Text : wordTranslation?.Text;
+        var text = PopupGloss(DetachedWordCard.IsVisible);
         if (text is not null) await SpeakWordDetailAsync(text, target);
     }
 

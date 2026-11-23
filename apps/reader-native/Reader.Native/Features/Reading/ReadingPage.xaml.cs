@@ -648,7 +648,7 @@ public partial class ReadingPage : ContentPage
             lemma = null;
         var session = AppState.Session;
         var text = Translation.Text ?? "";
-        var reconstructed = wordTranslation is { } draft && draft.Selection == selected &&
+        var reconstructed = selectedSense is null && wordTranslation is { } draft && draft.Selection == selected &&
             draft.Target == target && draft.Text == text && session.Document is { } document &&
             document.Id == draft.Document && document.CurrentRevisionId == draft.Revision ? draft.Source : null;
         await session.SaveWordAsync(selected, text, target, lemma, reading?.Expression, selectedSense, reconstructed);

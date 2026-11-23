@@ -7,16 +7,42 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage
 {
     private WordMeaning[] meanings = [];
-    private SenseSnapshot? selectedSense;
-    private (SenseSnapshot Sense, string Translation)? detachedSense;
+    private sealed record ChosenWordMeaning(SenseSnapshot Sense, string Translation, string Target);
+    private ChosenWordMeaning? canonicalSense;
+    private ChosenWordMeaning? detachedSense;
+    private SenseSnapshot? selectedSense => canonicalSense?.Sense;
 
-    private void SetSelectedSense(SenseSnapshot? sense)
+    private void SetSelectedSense(ChosenWordMeaning? meaning)
     {
-        selectedSense = sense;
-        SelectedSenseRow.IsVisible = sense is not null;
+        canonicalSense = meaning;
+        SelectedSense.Text = meaning?.Translation;
+        SelectedSenseRow.IsVisible = meaning is not null;
+        if (WordCard.IsVisible) UpdatePopupGloss(detached: false);
     }
 
-    private void ClearSenseClicked(object? sender, EventArgs args) => SetSelectedSense(null);
+    private void SetDetachedSense(ChosenWordMeaning? meaning)
+    {
+        detachedSense = meaning;
+        DetachedClearSense.IsVisible = meaning is not null;
+        if (DetachedWordCard.IsVisible) UpdatePopupGloss(detached: true);
+    }
+
+    private void ClearSenseClicked(object? sender, EventArgs args)
+    {
+        if (DetachedWordCard.IsVisible)
+        {
+            SetDetachedSense(null);
+            if (PopupMachineGloss(detached: true) is null)
+                _ = LoadPopupTranslationAsync(detached: true);
+            return;
+        }
+        var previous = canonicalSense;
+        SetSelectedSense(null);
+        if (previous is not null && Translation.Text == previous.Translation)
+            Translation.Text = PopupMachineGloss(detached: false);
+        if (PopupMachineGloss(detached: false) is null)
+            _ = LoadPopupTranslationAsync(detached: false);
+    }
 
     private void ShowMeanings(WordLookup? lookup)
     {
@@ -29,7 +55,7 @@ public partial class ReadingPage
 
     private void ResetDetachedMeanings()
     {
-        detachedSense = null;
+        SetDetachedSense(null);
         DetachedMeaningsButton.Text = "Значення";
         DetachedMeanings.Children.Clear();
         DetachedMeanings.IsVisible = false;
@@ -45,8 +71,7 @@ public partial class ReadingPage
         if (WordMeanings.IsVisible && WordMeanings.Children.Count == 0)
             await ShowMeaningRowsAsync(WordMeanings, word, document.Id, document.Language, target, meanings, (sense, text) =>
             {
-                SetSelectedSense(sense);
-                SelectedSense.Text = text;
+                SetSelectedSense(new(sense, text, target));
                 Translation.Text = text;
                 if (VocabularyReading.SelectedIndex > 0 &&
                     vocabularyReadings.ElementAtOrDefault(VocabularyReading.SelectedIndex - 1)?.Expression is not null)
@@ -74,12 +99,7 @@ public partial class ReadingPage
             DetachedMeanings.Children.Clear();
             SetDetachedSyntaxHint(lookup?.SyntaxHint);
             await ShowMeaningRowsAsync(DetachedMeanings, word, address.Document, address.Language, target,
-                lookup?.Meanings ?? [], (sense, text) =>
-                {
-                    detachedSense = (sense, text);
-                    DetachedWordTranslationGloss.Text = text;
-                    DetachedSpeakWordTranslation.IsEnabled = true;
-                });
+                lookup?.Meanings ?? [], (sense, text) => SetDetachedSense(new(sense, text, target)));
         }
         catch (Exception error) { status.Text = error.Message; }
     }
