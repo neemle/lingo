@@ -126,6 +126,7 @@ public partial class ReadingPage : ContentPage
         CancelModelPassage();
         RestoreCachedModelTranslation(null);
         dictionaryFocus = null;
+        documentFindFocus = null;
         StopReaderPdf();
         inlineOriginalDocumentId = null;
         ClearInlineOriginal();
@@ -184,7 +185,8 @@ public partial class ReadingPage : ContentPage
         SourceLanguageName.Text = document is null ? "" : DocumentLanguages.Name(document.Language);
         var word = document is not null && sentence is not null ? ReadingWord(document, sentence) : null;
         var focus = document is not null && sentence is not null
-            ? DictionaryFocus(document.Id, document.CurrentRevisionId, sentence, page: null) : null;
+            ? DictionaryFocus(document.Id, document.CurrentRevisionId, sentence, page: null) ??
+                FindSourceFocus(document.Id, document.CurrentRevisionId, sentence, page: null) : null;
         SourceText.HighlightStart = focus?.StartUtf16 ?? word?.Start ?? sentence?.StartUtf16 ?? 0;
         SourceText.HighlightLength = focus?.LengthUtf16 ?? word?.Length ??
             (sentence is null ? 0 : sentence.EndUtf16 - sentence.StartUtf16);
@@ -747,6 +749,7 @@ public partial class ReadingPage : ContentPage
 
     private async Task MoveActiveSentenceAsync(int direction)
     {
+        documentFindFocus = null;
         if (DetachedPdfReader.IsVisible)
         {
             await MoveDetachedSentenceAsync(direction);

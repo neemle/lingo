@@ -8,7 +8,11 @@ public partial class ReadingPage
 {
     private bool findingInDocument;
     private sealed record DocumentFindSelection(int Position, bool Translation,
-        int? PhysicalPage = null, string? SentenceId = null, DetachedPdfTranslation? CachedMachine = null);
+        int? PhysicalPage = null, string? SentenceId = null, DetachedPdfTranslation? CachedMachine = null,
+        string? SourceQuery = null);
+    private sealed record DocumentFindFocus(string Document, string? Revision, int? Page,
+        string Sentence, TextSelection Span);
+    private DocumentFindFocus? documentFindFocus;
     private sealed record DocumentFindCursor(int Position, int? PhysicalPage = null, bool UnreadLayer = false);
     private sealed record DocumentFindHit(string Text, DocumentFindSelection Selection);
     private sealed record DocumentFindPage(DocumentFindHit[] Matches, DocumentFindCursor? Next);
@@ -26,17 +30,19 @@ public partial class ReadingPage
             if (!readingPageActive || session.Document is not { } current || current.Id != document.Id ||
                 current.Language != document.Language || (match.Translation && TargetCode != target))
                 return;
+            documentFindFocus = null;
+            if ((match.Translation && readingLayout == ReaderLayout.Source) ||
+                (!match.Translation && readingLayout == ReaderLayout.Translation))
+            {
+                readingLayout = ReaderLayout.Automatic;
+                ArrangeReadingColumns();
+            }
 
 #if MACCATALYST
             if (match.PhysicalPage is int unreadPage && match.SentenceId is null && !match.Translation)
             {
                 await pdfWindowRead;
                 if (!readingPageActive || session.Document?.Id != document.Id) return;
-                if (readingLayout == ReaderLayout.Translation)
-                {
-                    readingLayout = ReaderLayout.Automatic;
-                    ArrangeReadingColumns();
-                }
                 await OpenPdfPageAsync(unreadPage);
                 return;
             }
@@ -48,6 +54,15 @@ public partial class ReadingPage
                 if (detachedAddress is { } address && address.Document == document.Id && address.Page == page)
                 {
                     await LoadDetachedSentenceAsync(address, match.Position, sentenceId);
+                    if (ReferenceEquals(detachedAddress, address) && !loadingDetachedSentence &&
+                        detachedSentence is { } found && found.Sentence.Id == sentenceId &&
+                        SetDocumentFindFocus(document.Id, found.RevisionId, page, found.Sentence, match.SourceQuery) is { } span)
+                    {
+                        DetachedPdfText.HighlightStart = span.StartUtf16;
+                        DetachedPdfText.HighlightLength = span.LengthUtf16;
+                        DetachedPdfText.RevealOffset(span.StartUtf16);
+                        UpdateInlinePdfHighlight();
+                    }
                     if (ReferenceEquals(detachedAddress, address) && !loadingDetachedSentence &&
                         detachedSentence is { } loaded && loaded.Sentence.Id == sentenceId &&
                         match.CachedMachine is { } cached && target is not null && TargetCode == target &&
@@ -62,14 +77,8 @@ public partial class ReadingPage
 #endif
             var position = match.Position;
             if (current.CurrentRevisionId != document.CurrentRevisionId ||
-                position >= current.Sentences.Length || current.Sentences[position] != document.Sentences[position]) return;
-
-            if ((match.Translation && readingLayout == ReaderLayout.Source) ||
-                (!match.Translation && readingLayout == ReaderLayout.Translation))
-            {
-                readingLayout = ReaderLayout.Automatic;
-                ArrangeReadingColumns();
-            }
+                position < 0 || position >= current.Sentences.Length || position >= document.Sentences.Length ||
+                current.Sentences[position] != document.Sentences[position]) return;
 #if MACCATALYST
             if (current.Format == "pdf" && position == current.Position)
             {
@@ -80,10 +89,29 @@ public partial class ReadingPage
 #endif
             StopSpeech();
             await session.SelectSentenceAsync(position);
+            if (readingPageActive && session.Error.Length == 0 && session.Document is { } opened &&
+                opened.Id == document.Id && opened.CurrentRevisionId == current.CurrentRevisionId &&
+                session.Sentence is { } sentence && sentence.Id == current.Sentences[position].Id &&
+                SetDocumentFindFocus(opened.Id, opened.CurrentRevisionId, null, sentence, match.SourceQuery) is { } foundSpan)
+            {
+                UpdateHighlight();
+                SourceText.RevealOffset(foundSpan.StartUtf16);
+            }
         }
         catch (Exception error) { await DisplayAlertAsync("Пошук у документі", error.Message, "Гаразд"); }
         finally { findingInDocument = false; }
     }
+
+    private TextSelection? SetDocumentFindFocus(string document, string? revision, int? page, Sentence sentence, string? query)
+    {
+        if (query is null || DocumentFind.SourceMatch(sentence, query) is not { } span) return null;
+        documentFindFocus = new(document, revision, page, sentence.Id, span);
+        return span;
+    }
+
+    private TextSelection? FindSourceFocus(string document, string? revision, Sentence sentence, int? page) =>
+        documentFindFocus is { } focus && focus.Document == document && focus.Revision == revision &&
+        focus.Sentence == sentence.Id && focus.Page == page ? focus.Span : null;
 
     private async Task<DocumentFindSelection?> ShowDocumentFindAsync(ReaderSession session, Document document, string? target)
     {
@@ -200,7 +228,8 @@ public partial class ReadingPage
                 foreach (var match in page.Matches)
                 {
                     var selection = match.Selection;
-                    var text = selection.Translation ? DocumentFind.MatchingExcerpt(match.Text, query) : match.Text;
+                    if (!selection.Translation) selection = selection with { SourceQuery = query };
+                    var text = DocumentFind.MatchingExcerpt(match.Text, query);
                     var label = selection.PhysicalPage is int physicalPage
                         ? $"PDF {physicalPage + 1} · {(selection.SentenceId is null ? text : BookmarkLabel(selection.Position, text))}"
                         : BookmarkLabel(selection.Position, text);

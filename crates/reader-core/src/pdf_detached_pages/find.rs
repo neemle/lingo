@@ -127,8 +127,36 @@ impl Store {
 }
 
 fn search_text(value: &str) -> String {
-    value.nfc().map(|ch| match ch {
+    let normalized: String = value.nfc().map(|ch| match ch {
         '’' | 'ʼ' => '\'',
         ch => ch,
-    }).flat_map(char::to_lowercase).collect()
+    }).flat_map(char::to_lowercase).collect();
+    normalized.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_wrapped_phrase_in_detached_page_with_original_sentence_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&directory.path().join("reader.sqlite")).unwrap();
+        let path = directory.path().join("source.pdf");
+        std::fs::write(&path, b"%PDF-1.4\n").unwrap();
+        let prepared = crate::file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "source.pdf", &path, "fr", vec![String::new(); 3], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let text = "L’e\u{301}quipage attend\n  sur le quai.";
+        super::super::write_text_layer(&store.connection, &document.id, 2, text).unwrap();
+        let cursor = DetachedPdfFindCursor { page: 0, position: 0 };
+        let found = store.find_detached_pdf_text(&document.id, "L'équipage attend sur", cursor, 1, None).unwrap();
+        let cached = store.detached_pdf_sentences(&document.id, 2).unwrap().unwrap();
+        assert_eq!(found.matches.len(), 1);
+        let hit = &found.matches[0];
+        assert_eq!((hit.page, hit.position), (2, 0));
+        assert_eq!(hit.sentence_id, cached.sentences[0].id);
+        assert_eq!(hit.text, text);
+    }
 }

@@ -60,6 +60,7 @@ public partial class ReadingPage
         if (!automatic)
         {
             dictionaryFocus = null;
+            documentFindFocus = null;
             CancelDetachedSpeechTravel();
         }
         var request = ++detachedSentenceRequest;

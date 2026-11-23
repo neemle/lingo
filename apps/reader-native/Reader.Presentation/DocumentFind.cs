@@ -32,16 +32,46 @@ public static class DocumentFind
 
     public static string MatchingExcerpt(string text, string query)
     {
-        var normalized = text.Normalize();
-        var match = Normalize(normalized).IndexOf(Normalize(query.Trim()), StringComparison.OrdinalIgnoreCase);
-        if (match < 0) return text;
+        if (MatchRange(text, query) is not { } match) return text;
 
-        var starts = System.Globalization.StringInfo.ParseCombiningCharacters(normalized);
-        var matchStart = Array.BinarySearch(starts, match);
-        if (matchStart < 0) matchStart = Math.Max(0, ~matchStart - 1);
-        var start = matchStart >= 40 ? matchStart - 8 : 0;
-        return start == 0 ? normalized : "…" + normalized[starts[start]..];
+        var starts = System.Globalization.StringInfo.ParseCombiningCharacters(text);
+        var matchStart = Array.BinarySearch(starts, match.Start);
+        return matchStart < 40 ? text : "…" + text[starts[matchStart - 8]..];
     }
 
-    private static string Normalize(string text) => text.Normalize().Replace('’', '\'').Replace('ʼ', '\'');
+    public static TextSelection? SourceMatch(Sentence sentence, string query) =>
+        MatchRange(sentence.Text, query) is { } range
+            ? new TextSelection(sentence.StartUtf16 + range.Start, range.End - range.Start,
+                sentence.Text[range.Start..range.End])
+            : null;
+
+    private static (int Start, int End)? MatchRange(string source, string query)
+    {
+        var needle = Normalize(query.Trim());
+        if (needle.Length == 0) return null;
+        var match = Normalize(source).IndexOf(needle, StringComparison.OrdinalIgnoreCase);
+        if (match < 0) return null;
+        var endOfMatch = match + needle.Length;
+        var normalizedOffset = 0;
+        var sourceStart = -1;
+        var previousWhitespace = true;
+        var elements = System.Globalization.StringInfo.GetTextElementEnumerator(source);
+        while (elements.MoveNext())
+        {
+            var value = elements.GetTextElement();
+            var whitespace = string.IsNullOrWhiteSpace(value);
+            if (whitespace && previousWhitespace) continue;
+            previousWhitespace = whitespace;
+            normalizedOffset += whitespace ? 1 : Canonical(value).Length;
+            if (sourceStart < 0 && normalizedOffset > match) sourceStart = elements.ElementIndex;
+            if (normalizedOffset >= endOfMatch)
+                return (sourceStart, elements.ElementIndex + value.Length);
+        }
+        return null;
+    }
+
+    private static string Normalize(string text) =>
+        string.Join(" ", Canonical(text).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+    private static string Canonical(string text) => text.Normalize().Replace('’', '\'').Replace('ʼ', '\'');
 }

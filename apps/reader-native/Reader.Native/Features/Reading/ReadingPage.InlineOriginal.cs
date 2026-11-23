@@ -332,6 +332,9 @@ public partial class ReadingPage
             selected ??= DictionaryFocus(document.Id,
                 detached ? detachedSentence?.RevisionId : document.CurrentRevisionId,
                 sentence, detached ? address.Page : null);
+            selected ??= FindSourceFocus(document.Id,
+                detached ? detachedSentence?.RevisionId : document.CurrentRevisionId,
+                sentence, detached ? address.Page : null);
             var spoken = view.SpokenWord;
             highlight.SetFocus(spoken, selected);
             overlay.Invalidate();
