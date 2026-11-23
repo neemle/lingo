@@ -77,23 +77,23 @@ public partial class LibraryPage
             case "readPdfPages":
             {
                 string? path = null;
-                var excerpt = await session.IntakePdfTextSampleAsync(item.Id);
-                if (excerpt is null)
+                if (await session.IntakePdfTextSampleAsync(item.Id) is null)
                 {
                     path = (await session.IntakeFileAsync(item.Id)).Path;
                     ImportStatus.Text = "Читаємо текстовий шар PDF…";
                     var (pageTexts, deferredFrom) = await PdfScan.ReadTextForIntakeAsync(path);
-                    excerpt = await session.SaveIntakePdfTextAsync(item.Id, pageTexts, deferredFrom);
+                    await session.SaveIntakePdfTextAsync(item.Id, pageTexts, deferredFrom);
                 }
                 var language = await ChooseAsync(async () =>
                 {
-                    var detected = await session.DetectLanguageAsync(excerpt);
+                    ImportStatus.Text = "Визначаємо мову за кількома сторінками PDF…";
+                    path ??= (await session.IntakeFileAsync(item.Id)).Path;
+                    var samples = await PdfScan.ReadLanguageSamplesAsync(path, optical: false);
+                    var detected = await PdfRecognition.DetectSampleLanguageAsync(samples, session.DetectLanguageAsync);
                     if (detected is not null) return detected;
 
-                    ImportStatus.Text = "Визначаємо мову за першими сторінками PDF…";
-                    path ??= (await session.IntakeFileAsync(item.Id)).Path;
-                    var sample = await PdfScan.ReadLanguageSampleAsync(path);
-                    return await session.DetectLanguageAsync(sample);
+                    samples = await PdfScan.ReadLanguageSamplesAsync(path, optical: true);
+                    return await PdfRecognition.DetectSampleLanguageAsync(samples, session.DetectLanguageAsync);
                 });
                 if (language is null) return null;
                 ImportStatus.Text = "Зберігаємо документ…";

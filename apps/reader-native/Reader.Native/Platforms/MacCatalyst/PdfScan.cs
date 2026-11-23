@@ -103,25 +103,37 @@ internal static class PdfScan
             return page.Text?.Trim() ?? "";
         }, cancellation);
 
-    internal static Task<string> ReadLanguageSampleAsync(string path) => Task.Run(() =>
+    internal static Task<string[]> ReadLanguageSamplesAsync(string path, bool optical) => Task.Run(() =>
     {
         using var pool = new NSAutoreleasePool();
         using var document = Open(path);
         var pageCount = checked((int)document.PageCount);
+        PdfRecognition.CheckPageCount(pageCount);
         var lastPage = pageCount - 1;
-        int[] probes = [0, Math.Min(1, lastPage), pageCount / 2, Math.Min(4, lastPage)];
-        var sample = new StringBuilder();
-        var letters = 0;
+        int[] probes = [Math.Min(4, lastPage), pageCount / 3, 2 * pageCount / 3, Math.Min(1, lastPage), 0];
+        var samples = new List<string>(probes.Length);
         foreach (var index in probes.Distinct())
         {
             using var pagePool = new NSAutoreleasePool();
-            // A cover and title page may contain too little prose to identify a language.
-            var text = PhotoOcr.ReadLanguageSample(Render(document, index, 1800).Bytes);
-            sample.AppendLine(text);
-            letters += text.Count(char.IsLetter);
-            if (letters >= 200) break;
+            var text = "";
+            try
+            {
+                if (optical) text = PhotoOcr.ReadLanguageSample(Render(document, index, 1800).Bytes);
+                else
+                {
+                    using var page = document.GetPage(index);
+                    text = page?.Text?.Trim() ?? "";
+                }
+            }
+            catch (Exception error) when (error is InvalidDataException or InvalidOperationException)
+            {
+                System.Diagnostics.Debug.WriteLine(error.Message);
+            }
+            var length = Math.Min(text.Length, 1600);
+            if (length > 0 && char.IsHighSurrogate(text[length - 1])) length--;
+            samples.Add(text[..length]);
         }
-        return sample.ToString();
+        return samples.ToArray();
     });
 
     internal static Task<PhotoPreview> PreviewAsync(string path, int page) => Task.Run(() =>
