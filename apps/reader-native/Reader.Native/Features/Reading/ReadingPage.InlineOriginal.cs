@@ -251,12 +251,14 @@ public partial class ReadingPage
 
     private void InlinePdfWordChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
     {
-        if (args.PropertyName == nameof(NativeReaderView.SpokenWord)) UpdateInlinePdfHighlight();
+        var activeView = DetachedPdfReader.IsVisible ? DetachedPdfText : SourceText;
+        if (ReferenceEquals(sender, activeView) && args.PropertyName == nameof(NativeReaderView.SpokenWord))
+            UpdateInlinePdfHighlight(wordOnly: true);
     }
 
-    private void UpdateInlinePdfHighlight()
+    private void UpdateInlinePdfHighlight(bool wordOnly = false)
     {
-        RefreshPdfTranslationLayout();
+        if (!wordOnly) RefreshPdfTranslationLayout();
         if (!showInlineOriginal || inlinePdfAddress is not { } address || inlinePdfPreview is not { } preview ||
             AppState.Session.Document is not { } document || document.Id != address.Document) return;
 
@@ -270,6 +272,14 @@ public partial class ReadingPage
             (detached && detachedAddress?.Page != address.Page))
         {
             overlay.IsVisible = false;
+            return;
+        }
+
+        if (wordOnly)
+        {
+            if (overlay.IsVisible && overlay.Drawable is PdfReadingHighlight existing &&
+                existing.Matches(sentence.StartUtf16, sentence.EndUtf16))
+                UpdatePdfWordFocus(existing);
             return;
         }
 
@@ -299,24 +309,44 @@ public partial class ReadingPage
             overlay.Drawable = null;
             return;
         }
-        var selected = detached ? (DetachedWordCard.IsVisible ? detachedSelection : null)
-            : (WordCard.IsVisible ? selection : null);
-        var dictionarySelection = DictionaryFocus(document.Id,
-            detached ? detachedSentence?.RevisionId : document.CurrentRevisionId,
-            sentence, detached ? address.Page : null);
-        var focus = selected ?? view.SpokenWord ?? dictionarySelection;
         var drawing = new PdfReadingHighlight(preview.Width, preview.Height, lines, offset,
-            sentence.StartUtf16, sentence.EndUtf16, focus?.StartUtf16, focus?.LengthUtf16 ?? 0,
-            ReferenceEquals(lines, inlineNativeBoxes));
+            sentence.StartUtf16, sentence.EndUtf16, ReferenceEquals(lines, inlineNativeBoxes));
         overlay.Drawable = drawing;
-        overlay.Invalidate();
-        FollowInlinePdf(drawing, document.Id, address.Page, focus?.StartUtf16 ?? sentence.StartUtf16,
-            focus is null ? sentence.EndUtf16 : focus.StartUtf16 + focus.LengthUtf16);
+        UpdatePdfWordFocus(drawing);
+
+        void UpdatePdfWordFocus(PdfReadingHighlight highlight)
+        {
+            var selected = detached ? (DetachedWordCard.IsVisible ? detachedSelection : null)
+                : (WordCard.IsVisible ? selection : null);
+            selected ??= DictionaryFocus(document.Id,
+                detached ? detachedSentence?.RevisionId : document.CurrentRevisionId,
+                sentence, detached ? address.Page : null);
+            var spoken = view.SpokenWord;
+            highlight.SetFocus(spoken, selected);
+            overlay.Invalidate();
+            var focus = spoken ?? selected;
+            FollowInlinePdf(highlight, document.Id, address.Page, focus?.StartUtf16 ?? sentence.StartUtf16,
+                focus is null ? sentence.EndUtf16 : focus.StartUtf16 + focus.LengthUtf16);
+        }
     }
 
     private sealed class PdfReadingHighlight(int width, int height, OcrLine[] lines, int offset,
-        int start, int end, int? spokenStart, int spokenLength, bool nativeWords) : IDrawable
+        int start, int end, bool nativeWords) : IDrawable
     {
+        private static readonly Color SentenceFill = Color.FromArgb("#65FFCF4D");
+        private static readonly Color SelectionFill = Color.FromArgb("#A5F4A536");
+        private static readonly Color SpeechFill = Color.FromArgb("#B5BCD68A");
+        private TextSelection? spokenWord;
+        private TextSelection? selectedWord;
+
+        internal bool Matches(int sentenceStart, int sentenceEnd) => start == sentenceStart && end == sentenceEnd;
+
+        internal void SetFocus(TextSelection? spoken, TextSelection? selected)
+        {
+            spokenWord = spoken;
+            selectedWord = selected;
+        }
+
         public void Draw(ICanvas canvas, RectF area)
         {
             var fitted = OriginalPage.AspectFit(area, width, height);
@@ -329,16 +359,15 @@ public partial class ReadingPage
                 {
                     if (!Overlaps(word.SourceSpan, start, end)) continue;
                     usedWord = true;
-                    DrawBox(word.X, word.Y, word.Width, word.Height, word.SourceSpan);
+                    DrawBox(word.X, word.Y, word.Width, word.Height, word.SourceSpan, exactWord: true);
                 }
-                if (!usedWord) DrawBox(line.X, line.Y, line.Width, line.Height, line.SourceSpan);
+                if (!usedWord) DrawBox(line.X, line.Y, line.Width, line.Height, line.SourceSpan, exactWord: nativeWords);
             }
 
-            void DrawBox(double x, double y, double w, double h, OcrSpan? span)
+            void DrawBox(double x, double y, double w, double h, OcrSpan? span, bool exactWord)
             {
-                var speaking = spokenStart is int wordStart &&
-                    Overlaps(span, wordStart, wordStart + spokenLength);
-                canvas.FillColor = Color.FromArgb(speaking ? "#A5F4A536" : "#65FFCF4D");
+                canvas.FillColor = exactWord && IsFocus(span, spokenWord) ? SpeechFill
+                    : exactWord && IsFocus(span, selectedWord) ? SelectionFill : SentenceFill;
                 canvas.FillRoundedRectangle(fitted.X + (float)x * fitted.Width,
                     fitted.Y + (float)y * fitted.Height, (float)w * fitted.Width, (float)h * fitted.Height, 2);
             }
@@ -358,8 +387,9 @@ public partial class ReadingPage
 
         internal (double Top, double Bottom)? FocusBounds()
         {
-            if (spokenStart is int wordStart && RangeBounds(wordStart, wordStart + spokenLength) is { } word)
-                return word;
+            var focus = spokenWord ?? selectedWord;
+            if (focus is not null &&
+                RangeBounds(focus.StartUtf16, focus.StartUtf16 + focus.LengthUtf16) is { } word) return word;
             return RangeBounds(start, end);
         }
 
@@ -411,5 +441,8 @@ public partial class ReadingPage
 
         private bool Overlaps(OcrSpan? span, int rangeStart, int rangeEnd) =>
             span is { } box && box.StartUtf16 + offset < rangeEnd && box.EndUtf16 + offset > rangeStart;
+
+        private bool IsFocus(OcrSpan? span, TextSelection? focus) =>
+            focus is not null && Overlaps(span, focus.StartUtf16, focus.StartUtf16 + focus.LengthUtf16);
     }
 }
