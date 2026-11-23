@@ -26,6 +26,8 @@
  </ContentPage.Resources>
  <ContentPage.MenuBarItems>
   <MenuBarItem Text="Читання">
+   <MenuFlyoutItem x:Name="ReviewReaderOcrMenu" Text="Звірити сторінку із Qwen…" IsEnabled="False"
+    Clicked="ReviewReaderOcrClicked" />
    <MenuFlyoutItem Text="Знайти в документі…" Clicked="FindInDocumentClicked" IsEnabled="{Binding CanInteract}">
     <MenuFlyoutItem.KeyboardAccelerators>
      <KeyboardAccelerator Modifiers="{OnPlatform MacCatalyst=Cmd, WinUI=Ctrl}" Key="F" />
@@ -67,7 +69,7 @@
  </ContentPage.MenuBarItems>
  <Grid x:Name="ReaderRoot" SizeChanged="WordPopupResized">
  <Grid Padding="30,22,30,16" RowDefinitions="Auto,Auto,*,Auto" RowSpacing="13">
-  <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="16">
+  <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="16">
    <VerticalStackLayout Spacing="7">
     <Label Text="{Binding Document.Format}" Style="{StaticResource ReaderMeta}" />
     <Label Text="{Binding Document.Title, TargetNullValue='Читання'}" Style="{StaticResource SerifTitle}"
@@ -96,6 +98,11 @@
     <Button Grid.Column="4" x:Name="RepairPdfText" Text="Розпізнати зі скану" Style="{StaticResource PlayerButton}"
      Clicked="RepairPdfTextClicked" IsVisible="False"
      SemanticProperties.Description="Уточнити розпізнаний текст цієї сторінки PDF" />
+   </Grid>
+   <Grid Grid.Row="2" Grid.ColumnSpan="2" x:Name="OcrReviewFeedback" IsVisible="False"
+    ColumnDefinitions="Auto,*" ColumnSpacing="8" Margin="0,6,0,0">
+    <ActivityIndicator x:Name="OcrReviewActivity" WidthRequest="16" HeightRequest="16" />
+    <Label x:Name="OcrReviewMessage" Grid.Column="1" Style="{StaticResource ReaderMeta}" />
    </Grid>
   </Grid>
 

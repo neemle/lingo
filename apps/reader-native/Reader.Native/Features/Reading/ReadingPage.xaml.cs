@@ -745,7 +745,7 @@ public partial class ReadingPage : ContentPage
                         !active.Text.AsSpan(selected.StartUtf16, selected.LengthUtf16).SequenceEqual(selected.Text))
                         return Task.CompletedTask;
                     return ShowWordAsync(selected);
-                }, recognizeWindow, showDetachedWord));
+                }, readerOcrReview, recognizeWindow, showDetachedWord));
         }
         catch (Exception error) { await DisplayAlertAsync("Оригінал", error.Message, "Гаразд"); }
         finally { openingOriginal = false; }
@@ -775,6 +775,7 @@ public partial class ReadingPage : ContentPage
             ? !loadingDetachedSentence && detachedSentence is not null
             : !PdfPageNotice.IsVisible && session.Sentence is not null);
         EditSpeechTextMenu.IsEnabled = SentenceAnalysisMenu.IsEnabled = enabled;
+        UpdateOcrPageReviewMenu();
     }
     private async void JumpSentenceClicked(object? sender, EventArgs args)
     {

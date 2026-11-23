@@ -43,9 +43,7 @@ internal sealed class OriginalPage : ContentPage
     private readonly Button suggest = new() { Text = "Підказки" };
     private readonly Button reviewOcrLine = new() { Text = "Звірити рядок із Qwen" };
     private readonly Button reviewOcrPage = new() { Text = "Звірити сторінку із Qwen" };
-    private (int Page, bool Detached, string Revision)? ocrReviewProgressAddress;
-    private readonly HashSet<int> reviewedOcrIndices = [];
-    private int remainingOcrReviewLines;
+    private readonly OcrPageReviewFlow ocrPageReview;
     private readonly Button reset = new() { Text = "Скинути" };
     private readonly Label editStatus = new();
     private int[] currentLineIndices = [];
@@ -64,12 +62,13 @@ internal sealed class OriginalPage : ContentPage
 
     internal OriginalPage(string filename, int pageCount, int initialPage, bool isPdf,
         Func<int, Task<PhotoPreview>> loadPage, string documentId, ReaderSession session, OcrLine[] lines,
-        TextSelection? selection, Func<TextSelection, Task> showWord,
+        TextSelection? selection, Func<TextSelection, Task> showWord, OcrPageReviewFlow ocrPageReview,
         Func<int, CancellationToken, Func<Task>, Task>? recognizeWindow = null,
         Func<int, TextSelection, Task>? showDetachedWord = null)
     {
         this.loadPage = loadPage;
         this.showWord = showWord;
+        this.ocrPageReview = ocrPageReview;
         this.showDetachedWord = showDetachedWord;
         this.recognizeWindow = recognizeWindow;
         this.lines = lines;
@@ -600,9 +599,8 @@ internal sealed class OriginalPage : ContentPage
         reviewOcrLine.IsEnabled = edit.IsEnabled && !session.Busy;
         reviewOcrPage.IsEnabled = canInteract && !session.Busy && currentLineIndices.Length > 0;
         var revision = detachedOcr?.Revision ?? session.Document?.CurrentRevisionId;
-        reviewOcrPage.Text = remainingOcrReviewLines > 0 && revision is not null &&
-            ocrReviewProgressAddress == (pageIndex, detachedOcr is not null, revision)
-            ? "Звірити наступні рядки" : "Звірити сторінку із Qwen";
+        reviewOcrPage.Text = ocrPageReview.ButtonText(revision is null ? null :
+            new OcrPageReviewFlow.Source(documentId, pageIndex, detachedOcr is not null, revision));
         reset.IsEnabled = edit.IsEnabled && lines[index].Correction is not null;
     }
 
@@ -627,9 +625,9 @@ internal sealed class OriginalPage : ContentPage
         UpdateEditButtons();
         try
         {
-            var hint = await ReadOcrReviewAsync(
-                cachedOnly => session.ReviewOcrWordAsync(documentId, page, revision, active.Selection, cachedOnly),
-                IsCurrent, "Qwen перевіряє слово…");
+            var hint = await OcrPageReviewFlow.LoadAsync(session, IsCurrent, value => editStatus.Text = value,
+                "Qwen перевіряє слово…",
+                cachedOnly => session.ReviewOcrWordAsync(documentId, page, revision, active.Selection, cachedOnly));
             if (hint is null || !IsCurrent()) return;
             if (hint.Replacement is not { } replacement)
             {
@@ -679,9 +677,9 @@ internal sealed class OriginalPage : ContentPage
         UpdateEditButtons();
         try
         {
-            var hint = await ReadOcrReviewAsync(
-                cachedOnly => session.ReviewOcrLineAsync(documentId, cached is null ? null : line.Page, revision, index, cachedOnly),
-                IsCurrent, "Qwen перевіряє рядок…");
+            var hint = await OcrPageReviewFlow.LoadAsync(session, IsCurrent, value => editStatus.Text = value,
+                "Qwen перевіряє рядок…",
+                cachedOnly => session.ReviewOcrLineAsync(documentId, cached is null ? null : line.Page, revision, index, cachedOnly));
             if (hint is null || !IsCurrent()) return;
             if (hint.Replacement is not { } correction)
             {
@@ -709,60 +707,26 @@ internal sealed class OriginalPage : ContentPage
 
     private async Task ReviewOcrPageAsync()
     {
-        if (!reviewOcrPage.IsEnabled || session.Document is not { } document || document.Id != documentId)
+        if (!reviewOcrPage.IsEnabled || ocrPageReview.IsRunning ||
+            session.Document is not { } document || document.Id != documentId)
             return;
         var page = pageIndex;
         var detached = detachedOcr is not null;
         var revision = detachedOcr?.Revision ?? document.CurrentRevisionId;
         if (revision is null) return;
-        if (ocrReviewProgressAddress != (page, detached, revision) || remainingOcrReviewLines == 0)
-        {
-            reviewedOcrIndices.Clear();
-            remainingOcrReviewLines = 0;
-        }
-        var reviewed = reviewedOcrIndices.ToArray();
         bool IsCurrent() => visible && page == pageIndex && detached == (detachedOcr is not null) &&
-            session.Document is { } current && current.Id == documentId &&
-            (detachedOcr?.Revision ?? current.CurrentRevisionId) == revision;
+            (!detached || detachedOcr?.Revision == revision);
 
         editing = true;
         UpdateEditButtons();
         try
         {
-            var review = await ReadOcrReviewAsync(
-                cachedOnly => session.ReviewOcrPageAsync(documentId, page, detached, revision, cachedOnly, reviewed),
-                IsCurrent, "Qwen перевіряє рядки з низькою впевненістю OCR…");
-            if (review is null || !IsCurrent()) return;
-            if (review.Corrections.Length == 0)
-            {
-                FinishOcrReviewBatch(review, page, detached, revision,
-                    review.CheckedLines == 0 ? "Немає рядків із низькою впевненістю OCR."
-                        : $"Перевірено рядків: {review.CheckedLines}. Виправлень немає.");
-                return;
-            }
-            var selected = await OcrCorrectionReviewPage.ChooseAsync(Navigation, review.Corrections);
-            if (selected is null || !IsCurrent() || session.Busy) return;
-            if (selected.Length == 0)
-            {
-                FinishOcrReviewBatch(review, page, detached, revision, "Рядки залишено як є.");
-                return;
-            }
-            await session.ApplyOcrPageReviewAsync(documentId, page, detached, revision, selected);
-            if (!visible || page != pageIndex || session.Document?.Id != documentId) return;
-            if (session.Error.Length > 0)
-            {
-                editStatus.Text = session.Error;
-                return;
-            }
+            var source = new OcrPageReviewFlow.Source(documentId, page, detached, revision);
+            var applied = await ocrPageReview.RunAsync(session, Navigation, source, IsCurrent, value => editStatus.Text = value);
+            if (applied is null) return;
             activeWord = null;
             focus = detached ? null : SentenceRange();
-            var updatedPage = detached ? await session.DetachedPdfOcrAsync(documentId, page) : null;
-            if (!visible || page != pageIndex || session.Document?.Id != documentId ||
-                (detached && updatedPage is null)) return;
-            ApplyOcrLines(updatedPage);
-            var updatedRevision = updatedPage?.Revision ?? session.Document?.CurrentRevisionId;
-            if (updatedRevision is not null)
-                FinishOcrReviewBatch(review, page, detached, updatedRevision, $"Виправлено рядків: {selected.Length}.");
+            ApplyOcrLines(applied.DetachedPage);
         }
         catch (Exception error) { if (visible && page == pageIndex) editStatus.Text = error.Message; }
         finally
@@ -772,31 +736,6 @@ internal sealed class OriginalPage : ContentPage
             if (visible && page == pageIndex && pageOcr?.IsCancellationRequested != false)
                 QueuePageOcr(page);
         }
-    }
-
-    private void FinishOcrReviewBatch(OcrPageReview review, int page, bool detached, string revision, string status)
-    {
-        reviewedOcrIndices.UnionWith(review.ReviewedIndices);
-        ocrReviewProgressAddress = (page, detached, revision);
-        remainingOcrReviewLines = review.RemainingLines;
-        editStatus.Text = remainingOcrReviewLines == 0 ? status : $"{status} Ще рядків для перевірки: {remainingOcrReviewLines}.";
-    }
-
-    private async Task<T?> ReadOcrReviewAsync<T>(Func<bool, Task<T?>> review, Func<bool> isCurrent,
-        string loadingMessage) where T : class
-    {
-        editStatus.Text = "Шукаємо збережену перевірку…";
-        var hint = await review(true);
-        if (hint is not null || !isCurrent()) return hint;
-        var model = (await session.OptionalModelsAsync()).FirstOrDefault(item => item.CanGenerateLanguageHints);
-        if (!isCurrent()) return null;
-        if (model is not { FilesPresent: true })
-        {
-            editStatus.Text = "Установіть Qwen 2B у налаштуваннях.";
-            return null;
-        }
-        editStatus.Text = loadingMessage;
-        return await review(false);
     }
 
     private async Task ProofreadPhotoAsync()
