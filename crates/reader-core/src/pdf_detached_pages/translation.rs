@@ -48,6 +48,7 @@ pub struct PdfPageTranslationRow {
     source_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pivot_language: Option<String>,
+    legacy_group: bool,
 }
 
 impl PageProjection {
@@ -129,14 +130,14 @@ impl Store {
             Some((first, local.last().unwrap_or(first)))
         };
         let block_starts = pdf_layout_block_starts(&document, &document.sentences[physical.clone()]);
-        let row = |first: usize, last: usize, text, source_text, pivot_language| {
+        let row = |first: usize, last: usize, text, source_text, pivot_language, legacy_group| {
             let source = &document.sentences[physical.start + first];
             let end = &document.sentences[physical.start + last];
             PdfPageTranslationRow {
                 start_utf16: offsets[first].0, end_utf16: offsets[last].1,
                 source_sentence_id: source.id.clone(),
                 source_block_index: source_block_index(&document, &block_starts, source, end),
-                text, source_text, pivot_language,
+                text, source_text, pivot_language, legacy_group,
             }
         };
         let mut generation_error = None;
@@ -147,7 +148,7 @@ impl Store {
                 {
                     return Ok(generated.into_iter().filter_map(|unit| {
                         let (first, last) = page_range(&unit.sentence_ids)?;
-                        Some(row(first, last, unit.translation, unit.pdf_source, unit.pivot_language))
+                        Some(row(first, last, unit.translation, unit.pdf_source, unit.pivot_language, false))
                     }).collect());
                 }
                 Ok(_) => {}
@@ -174,13 +175,14 @@ impl Store {
                 let Some((first, last)) = page_range(&unit.sentence_ids) else { continue; };
                 if covered[first..=last].contains(&true) { continue; }
                 covered[first..=last].fill(true);
-                rows.insert(first, row(first, last, unit.translation, unit.pdf_source, unit.pivot_language));
+                let legacy_group = grouping == UnitGrouping::LegacyContext && first < last;
+                rows.insert(first, row(first, last, unit.translation, unit.pdf_source, unit.pivot_language, legacy_group));
             }
         }
         if let Some(error) = generation_error.filter(|_| rows.is_empty()) { return Err(error); }
         for (local, sentence) in document.sentences[physical.clone()].iter().enumerate() {
             if !covered[local] && !document_layout::skip_in_translation(&document, sentence) {
-                rows.insert(local, row(local, local, None, Some(sentence.text.clone()), None));
+                rows.insert(local, row(local, local, None, Some(sentence.text.clone()), None, false));
             }
         }
         Ok(rows.into_values().collect())

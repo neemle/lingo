@@ -42,6 +42,7 @@ public partial class ReadingPage
     private static readonly Color PdfSearchMatchColor = Color.FromArgb("#FFD27A");
 
     private static bool HasPdfTranslation(PdfPageTranslationRow row) => !string.IsNullOrWhiteSpace(row.Text);
+    private static bool NeedsPdfTranslation(PdfPageTranslationRow row) => row.LegacyGroup || !HasPdfTranslation(row);
 
     private (ScrollView Viewport, GraphicsView Surface) ActivePdfTranslationLayout() =>
         DetachedPdfReader.IsVisible
@@ -133,7 +134,7 @@ public partial class ReadingPage
     {
         var address = CurrentPdfLayoutAddress();
         var alreadyCached = address == pdfLayoutRequest && pdfLayoutRows.Length > 0 &&
-            pdfLayoutRows.All(row => row.Text is not null);
+            !pdfLayoutRows.Any(NeedsPdfTranslation);
         AppState.TranslationWorker?.SetVisiblePdf(readingPageActive && TranslationVisible &&
             !alreadyCached && !(autoTranslate && PdfUsesPageTranslation) &&
             address is { Revision: { } revision }
@@ -246,7 +247,7 @@ public partial class ReadingPage
             inlinePdfLoading is not null || translatingPdfLayout is not null ||
             readiness is not { Ready: true } || session.Document is not { } document ||
             pdfLayoutRequest is not { } address || CurrentPdfLayoutAddress() != address ||
-            readinessPair != (document.Language, address.Target) || !pdfLayoutRows.Any(row => row.Text is null))
+            readinessPair != (document.Language, address.Target) || !pdfLayoutRows.Any(NeedsPdfTranslation))
             return null;
 
         var request = new PdfAutoTranslation(address, readinessRequest);
@@ -442,7 +443,7 @@ public partial class ReadingPage
     {
         bool Current() => !translation.IsCompleted && readingPageActive && pdfTranslationLayout &&
             request == pdfLayoutRequestId && CurrentPdfLayoutAddress() == address &&
-            (pdfLayoutRows.Length == 0 || pdfLayoutRows.Any(row => row.Text is null));
+            (pdfLayoutRows.Length == 0 || pdfLayoutRows.Any(NeedsPdfTranslation));
         while (Current())
         {
             await Task.WhenAny(translation, Task.Delay(1200));

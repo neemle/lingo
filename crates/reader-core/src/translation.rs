@@ -1815,6 +1815,7 @@ mod tests {
         let grouped = store.pdf_page_translation(&document.id, 0, "uk", true).unwrap();
         assert_eq!(grouped.len(), 1);
         assert_eq!(grouped[0].text.as_deref(), Some("Старий груповий переклад."));
+        assert_eq!(serde_json::to_value(&grouped[0]).unwrap()["legacyGroup"], true);
 
         let sentence = &document.sentences[1];
         let sentence_key = unit_cache_key(&route, &sentence.text).unwrap();
@@ -1827,6 +1828,7 @@ mod tests {
         assert_eq!(rows[1]["text"], "Моряк вирушає.");
         assert_eq!(rows[1]["sourceText"], sentence.text);
         assert_eq!(rows[1]["startUtf16"], sentence.start_utf16);
+        assert!(rows.as_array().unwrap().iter().all(|row| row["legacyGroup"] == false));
     }
 
     #[test]

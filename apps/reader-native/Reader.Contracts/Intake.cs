@@ -39,7 +39,8 @@ public sealed record DetachedPdfTranslation(string Text, string? PivotLanguage, 
 public sealed record DetachedPdfPassage(DetachedPdfTranslation? Active, DetachedPdfPassageRow[] Rows);
 public sealed record DetachedPdfPassageRow(int Position, int SentenceCount, string Text);
 public sealed record PdfPageTranslationRow(int StartUtf16, int EndUtf16, string? Text,
-    string? SourceText = null, string? PivotLanguage = null, string? SourceSentenceId = null, int? SourceBlockIndex = null);
+    string? SourceText = null, string? PivotLanguage = null, string? SourceSentenceId = null, int? SourceBlockIndex = null,
+    bool LegacyGroup = false);
 public sealed record PdfTextOrderEdit(int StartUtf16, int EndUtf16, string Replacement);
 public readonly record struct PdfLayoutWord(int Start, int End, double Left, double Right, double CenterY, double Height);
 public sealed record PdfLayoutSlice(int Start, int End, string Separator);
