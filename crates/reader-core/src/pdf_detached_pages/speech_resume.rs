@@ -13,6 +13,18 @@ pub(super) struct ArchivedSpeechResume {
 }
 
 impl ArchivedSpeechResume {
+    pub(super) fn remap(mut self, before: &[Sentence], after: &[Sentence]) -> Option<Self> {
+        let original = before.get(self.position)?;
+        let position = after
+            .binary_search_by_key(&original.start_utf16, |sentence| sentence.start_utf16)
+            .ok()?;
+        if after[position].text != original.text {
+            return None;
+        }
+        self.position = position;
+        Some(self)
+    }
+
     pub(super) fn for_sentences<'a>(
         &self,
         sentences: &[Sentence],

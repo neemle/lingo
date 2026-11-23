@@ -622,6 +622,7 @@ pub(crate) fn adopt_cached_page(db: &Connection, document: &crate::Document, mut
                 return Err("Архів і локальна копія PDF мають різні межі для збережених приміток.".into());
             }
             page.position = page.position.map(|position| remap_position(position, &from, &to));
+            page.speech_resume = page.speech_resume.and_then(|checkpoint| checkpoint.remap(&from, &to));
             page.set_layout(local_mode);
         }
     } else {
@@ -684,4 +685,58 @@ fn sqlite_offset(value: usize) -> Result<u32> {
 
 fn database_error(error: impl std::fmt::Display) -> String {
     format!("Помилка кешу сторінки PDF. {error}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backup_restores_detached_audio_after_an_earlier_sentence_boundary_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("book.pdf");
+        let archive = root.path().join("library.zip");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let import = |store: &mut Store| {
+            let prepared = crate::file_originals::prepare_pdf_import(
+                store.pdf_original_root(), "book.pdf", &original, "fr",
+                vec![String::new(); 2], vec![],
+            ).unwrap();
+            store.import_pdf_file(prepared).unwrap()
+        };
+        let text = "Le marchand, M. Morrel, attend sur le quai. Il regarde le bateau.";
+        let spoken = "Il regarde le bateau.";
+        let page = 1;
+
+        let mut source = Store::open(&root.path().join("source.db")).unwrap();
+        let archived = import(&mut source);
+        write(&source.connection, &archived.id, page, text, None, None, Layout::Structured).unwrap();
+        let old_position = Layout::Structured.segment(text, "").iter().position(|s| s.text == spoken).unwrap();
+        source.set_pdf_reading_page(&archived.id, page).unwrap();
+        let old_sentence = source.detached_pdf_sentence(&archived.id, page, Some(old_position)).unwrap().unwrap().sentence;
+        source.set_detached_pdf_speech_resume(&archived.id, page, &old_sentence.id, Some(crate::SpeechResume {
+            sentence_id: old_sentence.id.clone(),
+            text_hash: format!("{:x}", Sha256::digest(spoken.as_bytes())),
+            offset_utf16: 3,
+            model: None,
+            boundary_text: None,
+        })).unwrap();
+        source.export_backup_file(&archive).unwrap();
+
+        let mut destination = Store::open(&root.path().join("destination.db")).unwrap();
+        let local = import(&mut destination);
+        assert_ne!(local.id, archived.id);
+        write_text_layer(&destination.connection, &local.id, page, text).unwrap();
+        let new_position = Layout::ClosingQuotes.segment(text, "").iter().position(|s| s.text == spoken).unwrap();
+        assert_ne!(old_position, new_position);
+        destination.restore_backup_file(&archive).unwrap();
+
+        assert_eq!(destination.pdf_reading_page(&local.id).unwrap(), Some(page));
+        let resumed = destination.detached_pdf_sentence(&local.id, page, None).unwrap().unwrap();
+        assert_eq!(resumed.position, new_position);
+        assert_eq!(resumed.sentence.text, spoken);
+        let checkpoint = resumed.speech_resume.unwrap();
+        assert_eq!(checkpoint.sentence_id, resumed.sentence.id);
+        assert_eq!(checkpoint.offset_utf16, 3);
+    }
 }
