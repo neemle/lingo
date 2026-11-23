@@ -1009,7 +1009,7 @@ impl Store {
             if text_changed {
                 document_revisions::append(document, tx)?;
                 dictionary_transfer::reanchor_canonical_selections(
-                    tx, previous_revision.as_deref(), document, &before, &edits,
+                    tx, previous_revision.as_deref(), document, &before, None, &edits,
                 )?;
             }
             Self::discard_changed_speech_resume(tx, document)?;

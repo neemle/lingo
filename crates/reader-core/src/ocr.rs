@@ -135,7 +135,7 @@ impl crate::Store {
             refresh_provenance(document);
             crate::document_revisions::append(document, tx)?;
             crate::dictionary_transfer::reanchor_canonical_selections(
-                tx, previous_revision.as_deref(), document, &before, &edits,
+                tx, previous_revision.as_deref(), document, &before, None, &edits,
             )?;
             Self::discard_changed_speech_resume(tx, document)?;
             Ok(true)
@@ -488,11 +488,18 @@ pub(crate) fn corresponding_pdf_sentences<'a>(
     if from.format != "pdf" || to_format != "pdf" || old_starts.len() != new_starts.len() {
         return None;
     }
-    let old_pages = page_anchors(old_starts);
+    let matching = matching_pdf_sentence(old_starts, new_starts, to_sentences);
     Some(from.sentences.iter().filter_map(|old| {
-        let index = match_page_sentence(&old_pages, new_starts, to_sentences, old)?;
+        let index = matching(old)?;
         Some((old.id.as_str(), to_sentences[index].id.as_str()))
     }).collect())
+}
+
+pub(crate) fn matching_pdf_sentence<'a>(
+    old_starts: &[Option<usize>], new_starts: &'a [Option<usize>], sentences: &'a [crate::Sentence],
+) -> impl Fn(&crate::Sentence) -> Option<usize> + 'a {
+    let old_pages = page_anchors(old_starts);
+    move |old| match_page_sentence(&old_pages, new_starts, sentences, old)
 }
 
 fn page_anchors(starts: &[Option<usize>]) -> Vec<(usize, usize)> {

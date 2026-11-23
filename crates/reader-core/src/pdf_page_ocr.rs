@@ -1247,13 +1247,13 @@ fn reflow_pdf_document(
         parsed.pdf_page_starts.as_deref(),
         edits,
     )?;
-    document.pdf_page_starts = parsed.pdf_page_starts;
+    let old_pages = std::mem::replace(&mut document.pdf_page_starts, parsed.pdf_page_starts);
     document.blocks = parsed.blocks;
     ocr::refresh_provenance(document);
     if changed {
         document_revisions::append(document, db)?;
         crate::dictionary_transfer::reanchor_canonical_selections(
-            db, previous_revision.as_deref(), document, &before, edits,
+            db, previous_revision.as_deref(), document, &before, old_pages.as_deref(), edits,
         )?;
     }
     if let (Some(previous), Some(revision)) = (previous_revision.as_deref(), document.current_revision_id.as_deref()) {
@@ -1367,6 +1367,16 @@ mod drop_cap_tests {
         ).unwrap();
         let document = store.import_pdf_file(prepared).unwrap();
         let previous = document.current_revision_id.as_deref().unwrap();
+        let page = 11;
+        let old_start = document.pdf_page_starts.as_ref().unwrap()[page].unwrap();
+        let card = store.save_selected_word(crate::Vocabulary {
+            id: String::new(), word: "bateau".into(), document_id: document.id.clone(),
+            language: "fr".into(), target_language: "uk".into(), translation: "човен".into(),
+            context: String::new(), forward: Default::default(), reverse: Default::default(),
+            analysis: None, expression: None, sense: None, accepted_translations: Vec::new(),
+        }, crate::dictionary_transfer::DictionarySelection {
+            revision_id: previous.to_owned(), start_utf16: old_start + 3, reconstructed_text: None,
+        }).unwrap();
         for (target, cursor) in [("uk", 12), ("en", 3)] {
             store.connection.execute(
                 "INSERT INTO background_translation_progress
@@ -1379,8 +1389,14 @@ mod drop_cap_tests {
             page: 8, text: "Le marin part.".into(), x: 0.1, y: 0.1, width: 0.5, height: 0.05,
             confidence: None, correction: None, words: Vec::new(), source_span: None,
         }]).unwrap();
-        let revision = revised.current_revision_id.unwrap();
+        let revision = revised.current_revision_id.as_deref().unwrap();
         assert_ne!(previous, revision);
+        let new_start = revised.pdf_page_starts.as_ref().unwrap()[page].unwrap();
+        assert!(new_start > old_start);
+        let links = serde_json::to_value(store.dictionary_source_locations(&card.id).unwrap()).unwrap();
+        assert_eq!(links.as_array().unwrap().len(), 1);
+        assert_eq!(links[0]["selection"]["startUtf16"], new_start + 3);
+        assert_eq!(links[0]["revisionId"], revision);
         for (target, expected) in [("uk", 7), ("en", 3)] {
             let saved: (String, u16, bool, i64, u32, String) = store.connection.query_row(
                 "SELECT revision_id,cursor,incomplete,resume_at,ocr_generation,route_identity
@@ -1388,7 +1404,7 @@ mod drop_cap_tests {
                 params![document.id, target],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
             ).unwrap();
-            assert_eq!(saved, (revision.clone(), expected, true, 0, 6, "installed route".into()));
+            assert_eq!(saved, (revision.to_owned(), expected, true, 0, 6, "installed route".into()));
         }
     }
 

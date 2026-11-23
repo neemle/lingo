@@ -247,7 +247,7 @@ fn move_sentence_anchors(
     let new_sentences = layout.segment(new, &super::sentence_prefix(id, page, &new_revision));
     crate::dictionary_transfer::reanchor_selections(
         db, (id, Some(page), &old_revision, &new_revision), &old_sentences, &new_sentences,
-        |start, length| {
+        |_, start, length| {
             let end = start.checked_add(length)?;
             (!edits.iter().any(|edit| edit.start < end && edit.old_end > start)).then(|| map_start(start))
         },

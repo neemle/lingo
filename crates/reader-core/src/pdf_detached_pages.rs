@@ -379,7 +379,7 @@ pub(crate) fn repair_cached_text_order(
     }
     crate::dictionary_transfer::reanchor_selections(
         db, (id, Some(page), &old_revision, &new_revision), &before, &after,
-        |start, length| ocr::map_unchanged_range_start(start, length, edits),
+        |_, start, length| ocr::map_unchanged_range_start(start, length, edits),
     )?;
     write_text_layer(db, id, page, corrected)?;
     if !anchors.is_empty() { annotations::replace_page(db, id, page, &anchors)?; }

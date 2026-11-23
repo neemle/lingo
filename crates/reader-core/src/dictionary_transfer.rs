@@ -192,13 +192,24 @@ fn location_in_revision(
 
 pub(crate) fn reanchor_canonical_selections(
     db: &Connection, previous_revision: Option<&str>, document: &Document,
-    before: &[crate::Sentence], edits: &[crate::ocr::TranscriptEdit],
+    before: &[crate::Sentence], old_pages: Option<&[Option<usize>]>, edits: &[crate::ocr::TranscriptEdit],
 ) -> Result<()> {
     let Some((previous, current)) = previous_revision.zip(document.current_revision_id.as_deref())
-        .filter(|(previous, current)| previous != current && !edits.is_empty())
+        .filter(|(previous, current)| previous != current)
         else { return Ok(()); };
-    reanchor_selections(db, (&document.id, None, previous, current), before, &document.sentences,
-        |start, length| crate::ocr::map_unchanged_range_start(start, length, edits))
+    let address = (document.id.as_str(), None, previous, current);
+    if !edits.is_empty() {
+        return reanchor_selections(db, address, before, &document.sentences,
+            |_, start, length| crate::ocr::map_unchanged_range_start(start, length, edits));
+    }
+    let Some((old_pages, new_pages)) = old_pages.zip(document.pdf_page_starts.as_deref())
+        .filter(|(old, new)| old.len() == new.len())
+        else { return Ok(()); };
+    let matching = crate::ocr::matching_pdf_sentence(old_pages, new_pages, &document.sentences);
+    reanchor_selections(db, address, before, &document.sentences, |sentence, start, _| {
+        let next = matching(sentence)?;
+        document.sentences[next].start_utf16.checked_add(start.checked_sub(sentence.start_utf16)?)
+    })
 }
 
 pub(crate) fn reanchor_selections(
@@ -206,7 +217,7 @@ pub(crate) fn reanchor_selections(
     (id, page, before_revision, after_revision): (&str, Option<u16>, &str, &str),
     before: &[crate::Sentence],
     after: &[crate::Sentence],
-    map: impl Fn(usize, usize) -> Option<usize>,
+    map: impl Fn(&crate::Sentence, usize, usize) -> Option<usize>,
 ) -> Result<()> {
     let mut query = db.prepare(
         "SELECT card_id, surface, sentence, anchor FROM dictionary_context_anchors
@@ -220,11 +231,11 @@ pub(crate) fn reanchor_selections(
     ))).map_err(error)?.collect::<rusqlite::Result<Vec<_>>>().map_err(error)?;
     for (card, surface, text, encoded) in rows {
         let old: DictionarySentenceAnchor = serde_json::from_str(&encoded).map_err(error)?;
-        let Some((_, _, _, Some(mut selection))) = location_in_revision(
+        let Some((position, _, _, Some(mut selection))) = location_in_revision(
             &old, &text, before_revision, before, None,
         ) else { continue; };
         let length = selection.text.encode_utf16().count();
-        let Some(start) = map(selection.start_utf16, length) else { continue; };
+        let Some(start) = map(&before[position], selection.start_utf16, length) else { continue; };
         let Some(sentence) = after.get(after.partition_point(|sentence| sentence.end_utf16 <= start))
             else { continue; };
         let matched = start.checked_sub(sentence.start_utf16)
