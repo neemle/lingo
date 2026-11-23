@@ -330,6 +330,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         }
         Command::KnowledgePackages => value(Ok(store.knowledge_packages())),
         Command::LexicalPackages => value(Ok(store.lexical_packages())),
+        Command::RemoveKnowledgePackage { language } => value(store.remove_knowledge_package(&language)),
+        Command::RemoveLexicalPackage { language } => value(store.remove_lexical_package(&language)),
         Command::DictionarySources => value(store.dictionary_sources()),
         Command::DictionarySourceLocations { card_id } => value(store.dictionary_source_locations(&card_id)),
         Command::DictionaryCollection { document_id } => {

@@ -1,5 +1,5 @@
 use super::{word_key, WordAnalysis, WordContext};
-use crate::{space::ensure_capacity, Result, Store};
+use crate::{model_storage::lock_package, space::ensure_capacity, Result, Store};
 use flate2::read::MultiGzDecoder;
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
@@ -245,6 +245,8 @@ pub struct LexicalPackageInstall {
     destination: PathBuf,
 }
 
+const LEXICAL_INSTALL_LOCK: &str = ".install-lexical.lock";
+
 impl Store {
     pub fn lexical_packages(&self) -> Vec<LexicalPackage> {
         PACKS
@@ -269,6 +271,12 @@ impl Store {
     pub fn install_lexical_package(&self, language: &str, source: &Path) -> Result<LexicalPackage> {
         self.prepare_lexical_package(language, source)?.run()
     }
+
+    pub fn remove_lexical_package(&self, language: &str) -> Result<bool> {
+        let pack = find_pack(language).ok_or("Для цієї мови немає словникового пакета.")?;
+        super::remove_indexes(&[LEGACY_INDEX_VERSION, INDEX_VERSION]
+            .map(|version| pack.path(&self.knowledge_directory, version)), LEXICAL_INSTALL_LOCK)
+    }
 }
 
 impl LexicalPackageInstall {
@@ -288,6 +296,7 @@ impl LexicalPackageInstall {
             .parent()
             .ok_or("Невірний шлях словникового пакета.")?;
         fs::create_dir_all(directory).map_err(lexical_error)?;
+        let _lock = lock_package(&directory.join(LEXICAL_INSTALL_LOCK), true)?;
         ensure_capacity([(directory, pack.bytes * 4)])?;
         let staging = tempfile::NamedTempFile::new_in(directory).map_err(lexical_error)?;
         // Verify the exact bytes used to build the index even if another process
@@ -772,6 +781,31 @@ fn lexical_error(error: impl Display) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn removing_one_language_resource_preserves_the_library_and_other_indexes() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let document = store.import("Reader.txt", b"Text from the library.", "en").unwrap();
+        let lexical = find_pack("en").unwrap();
+        let current = lexical.path(&store.knowledge_directory, INDEX_VERSION);
+        let legacy = lexical.path(&store.knowledge_directory, LEGACY_INDEX_VERSION);
+        let other = find_pack("fr").unwrap().path(&store.knowledge_directory, INDEX_VERSION);
+        let grammar = super::super::PACKS.iter().find(|pack| pack.language == "en")
+            .unwrap().path(&store.knowledge_directory);
+        for path in [&current, &legacy, &other, &grammar] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            Connection::open(path).unwrap().execute_batch("PRAGMA user_version=5;").unwrap();
+        }
+        assert!(store.remove_lexical_package("en").unwrap());
+        assert!(!current.exists() && !legacy.exists());
+        assert!(other.exists() && grammar.exists());
+        assert!(!store.remove_lexical_package("en").unwrap());
+        assert!(store.remove_knowledge_package("en").unwrap());
+        assert!(!grammar.exists() && other.exists());
+        assert!(store.remove_knowledge_package("../fr").is_err());
+        assert_eq!(store.snapshot().unwrap().documents[0].id, document.id);
+    }
 
     #[test]
     fn indexed_dictionary_context_recovers_senses_after_the_exact_cutoff() {

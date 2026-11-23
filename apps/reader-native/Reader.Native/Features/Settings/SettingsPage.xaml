@@ -208,6 +208,8 @@
       Style="{StaticResource OutlineButton}" HorizontalOptions="Start" />
      <Button x:Name="OpenKnowledge" Text="Встановити з файлу .conllu" Clicked="OpenKnowledgeClicked"
       Style="{StaticResource OutlineButton}" HorizontalOptions="Start" />
+     <Button x:Name="RemoveKnowledge" Text="Видалити пакет аналізу…" Clicked="RemoveKnowledgeClicked"
+      Style="{StaticResource OutlineButton}" HorizontalOptions="Start" IsVisible="False" />
      <Button x:Name="ResumeKnowledge" Text="Продовжити завантаження пакета аналізу" Clicked="ResumeKnowledgeClicked"
       Style="{StaticResource OutlineButton}" HorizontalOptions="Start" IsVisible="False" />
      <ProgressBar x:Name="KnowledgeProgress" IsVisible="False" SemanticProperties.Description="Завантаження граматичного пакета" />
@@ -227,6 +229,8 @@
       <Button x:Name="DownloadLexical" Text="Завантажити словник" Clicked="DownloadLexicalClicked" IsEnabled="False"
        Style="{StaticResource AccentButton}" Margin="0,0,8,8" />
       <Button x:Name="OpenLexical" Text="Встановити з файлу GZ" Clicked="OpenLexicalClicked" IsEnabled="False"
+       Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
+      <Button x:Name="RemoveLexical" Text="Видалити словник…" Clicked="RemoveLexicalClicked" IsVisible="False"
        Style="{StaticResource OutlineButton}" Margin="0,0,8,8" />
       <Button x:Name="StopLexical" Text="Зупинити" Clicked="StopLexicalClicked" IsVisible="False"
        Style="{StaticResource OutlineButton}" Margin="0,0,0,8" />

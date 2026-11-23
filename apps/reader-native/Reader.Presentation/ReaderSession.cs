@@ -595,6 +595,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<KnowledgePackage[]> KnowledgePackagesAsync() => Task.Run(client.KnowledgePackages);
     public Task<KnowledgePackage> InstallKnowledgePackageAsync(string language, string path) =>
         Task.Run(() => client.InstallKnowledgePackage(language, path));
+    public Task<bool> RemoveKnowledgePackageAsync(string language) =>
+        Task.Run(() => client.RemoveKnowledgePackage(language));
     public Task<OcrSpan[][]> TranslationGlossMatchesAsync(string language, string gloss, string[] texts) =>
         Task.Run(() => client.TranslationGlossMatches(language, gloss, texts));
 
@@ -631,6 +633,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<LexicalPackage[]> LexicalPackagesAsync() => Task.Run(client.LexicalPackages);
     public Task<LexicalPackage> InstallLexicalPackageAsync(string language, string path) =>
         Task.Run(() => client.InstallLexicalPackage(language, path));
+    public Task<bool> RemoveLexicalPackageAsync(string language) =>
+        Task.Run(() => client.RemoveLexicalPackage(language));
     public Task<DictionarySource[]> DictionarySourcesAsync() => Task.Run(client.DictionarySources);
     public Task<DictionarySourceLocation[]> DictionarySourceLocationsAsync(string cardId) =>
         Task.Run(() => client.DictionarySourceLocations(cardId));

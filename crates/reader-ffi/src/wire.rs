@@ -669,6 +669,8 @@ pub enum Command {
     },
     KnowledgePackages,
     LexicalPackages,
+    RemoveKnowledgePackage { language: String },
+    RemoveLexicalPackage { language: String },
     InstallLexicalPackage {
         language: String,
         path: String,

@@ -107,11 +107,13 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
                 (package.DependencyParseAvailable ? "встановлено" : package.Installed
                     ? "доступне оновлення індексу" : "доступно для завантаження")));
             InstallKnowledge.IsVisible = packages.Any(package => !package.DependencyParseAvailable);
+            RemoveKnowledge.IsVisible = packages.Any(package => package.Installed);
             UpdateCapabilityMatrix();
         }
         catch (Exception error)
         {
             knowledgeInventory = null;
+            RemoveKnowledge.IsVisible = false;
             KnowledgeStatus.Text = error.Message;
             UpdateCapabilityMatrix();
         }
@@ -138,7 +140,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
 
     private async Task InstallKnowledgeAsync(bool download, KnowledgePackage? resume = null)
     {
-        if (changingKnowledgePackage) return;
+        if (changingStorage || changingKnowledgePackage || removingLanguageResource) return;
         changingKnowledgePackage = true;
         InstallKnowledge.IsEnabled = OpenKnowledge.IsEnabled = ResumeKnowledge.IsEnabled = false;
         string? cleanupPath = null;

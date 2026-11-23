@@ -537,6 +537,8 @@ public sealed class CoreClient : IDisposable
         Call<KnowledgePackage[]>(new { version = 1, operation = "knowledge_packages" });
     public KnowledgePackage InstallKnowledgePackage(string language, string path) =>
         CallIndependent<KnowledgePackage>(new { version = 1, operation = "install_knowledge_package", language, path });
+    public bool RemoveKnowledgePackage(string language) =>
+        Call<bool>(new { version = 1, operation = "remove_knowledge_package", language });
     public OcrSpan[][] TranslationGlossMatches(string language, string gloss, string[] texts) =>
         Call<OcrSpan[][]>(new { version = 1, operation = "translation_gloss_matches", language, gloss, texts });
 
@@ -572,6 +574,8 @@ public sealed class CoreClient : IDisposable
         Call<LexicalPackage[]>(new { version = 1, operation = "lexical_packages" });
     public LexicalPackage InstallLexicalPackage(string language, string path) =>
         CallIndependent<LexicalPackage>(new { version = 1, operation = "install_lexical_package", language, path });
+    public bool RemoveLexicalPackage(string language) =>
+        Call<bool>(new { version = 1, operation = "remove_lexical_package", language });
     public DictionarySource[] DictionarySources() =>
         Call<DictionarySource[]>(new { version = 1, operation = "dictionary_sources" });
     public DictionarySourceLocation[] DictionarySourceLocations(string cardId) =>

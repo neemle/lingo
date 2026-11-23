@@ -176,7 +176,8 @@ public partial class SettingsPage
 
     private bool ResourceOperationActive => activeDownload is not null || changingTranslationFiles
         || changingKnowledgePackage || knowledgeDownload is not null || optionalModelBusy
-        || optionalDownload is not null || choosingLexical || lexicalCopy is not null || restoringBackup;
+        || optionalDownload is not null || choosingLexical || lexicalCopy is not null || restoringBackup
+        || removingLanguageResource;
 
     private async void ClearStorageClicked(object? sender, EventArgs args)
     {

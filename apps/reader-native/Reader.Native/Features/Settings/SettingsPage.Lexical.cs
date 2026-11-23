@@ -10,6 +10,7 @@ public partial class SettingsPage
     private CancellationTokenSource? lexicalCopy;
     private string? lexicalLanguage;
     private bool choosingLexical;
+    private bool removingLanguageResource;
 
     private async Task RefreshLexicalPackagesAsync()
     {
@@ -44,8 +45,11 @@ public partial class SettingsPage
     {
         var package = SelectedLexicalPackage();
         LexicalChoice.Text = package is null ? "Вибрати мову словника" : $"{LexicalPackageLabel(package)} ▾";
-        LexicalChoice.IsEnabled = lexicalCopy is null && !choosingLexical && lexicalPackages.Length > 0;
-        DownloadLexical.IsEnabled = OpenLexical.IsEnabled = lexicalCopy is null && !choosingLexical && package is not null;
+        var available = lexicalCopy is null && !choosingLexical && !removingLanguageResource;
+        LexicalChoice.IsEnabled = available && lexicalPackages.Length > 0;
+        DownloadLexical.IsEnabled = OpenLexical.IsEnabled = available && package is not null;
+        RemoveLexical.IsVisible = package?.Installed == true;
+        RemoveLexical.IsEnabled = available;
     }
 
     private async void LexicalChoiceClicked(object? sender, EventArgs args)
@@ -71,9 +75,45 @@ public partial class SettingsPage
     private async void OpenLexicalClicked(object? sender, EventArgs args) => await InstallLexicalAsync(download: false);
     private void StopLexicalClicked(object? sender, EventArgs args) => lexicalCopy?.Cancel();
 
+    private async void RemoveKnowledgeClicked(object? sender, EventArgs args) => await RemoveLanguageResourceAsync(grammar: true);
+    private async void RemoveLexicalClicked(object? sender, EventArgs args) => await RemoveLanguageResourceAsync(grammar: false);
+
+    private async Task RemoveLanguageResourceAsync(bool grammar)
+    {
+        if (changingStorage || ResourceOperationActive) return;
+        removingLanguageResource = true;
+        RemoveKnowledge.IsEnabled = false;
+        UpdateLexicalControls();
+        var status = grammar ? KnowledgeStatus : LexicalStatus;
+        try
+        {
+            var language = grammar
+                ? await NativeChoices.ChooseAsync(this, "Видалити пакет аналізу", null,
+                    (knowledgeInventory ?? []).Where(package => package.Installed)
+                        .Select(package => (package.Language, DocumentLanguages.Name(package.Language))))
+                : SelectedLexicalPackage() is { Installed: true } package ? package.Language : null;
+            if (language is null) return;
+            var title = grammar ? "Видалити пакет аналізу?" : "Видалити словниковий пакет?";
+            if (!await DisplayAlertAsync(title, DocumentLanguages.Name(language), "Видалити", "Скасувати")) return;
+            var session = AppState.Session;
+            var removed = grammar ? await session.RemoveKnowledgePackageAsync(language) : await session.RemoveLexicalPackageAsync(language);
+            if (grammar) await RefreshKnowledgePackagesAsync();
+            else await RefreshLexicalPackagesAsync();
+            await RefreshStorageAsync();
+            status.Text = removed ? $"Пакет видалено · {DocumentLanguages.Name(language)}." : "Пакет уже відсутній.";
+        }
+        catch (Exception error) { status.Text = error.Message; }
+        finally
+        {
+            removingLanguageResource = false;
+            RemoveKnowledge.IsEnabled = true;
+            UpdateLexicalControls();
+        }
+    }
+
     private async Task InstallLexicalAsync(bool download)
     {
-        if (lexicalCopy is not null || SelectedLexicalPackage() is not { } package) return;
+        if (changingStorage || removingLanguageResource || lexicalCopy is not null || SelectedLexicalPackage() is not { } package) return;
         using var cancellation = new CancellationTokenSource();
         lexicalCopy = cancellation;
         UpdateLexicalControls();

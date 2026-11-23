@@ -20,6 +20,27 @@ pub(crate) use scoped_analysis::BoundaryAnalysis;
 mod syntax;
 mod syntax_parse;
 
+const KNOWLEDGE_INSTALL_LOCK: &str = ".install-knowledge.lock";
+
+fn remove_indexes(paths: &[PathBuf], lock_name: &str) -> Result<bool> {
+    let directory = paths.first().and_then(|path| path.parent())
+        .ok_or("Невірний шлях мовного пакета.")?;
+    if !directory.try_exists().map_err(|error| error.to_string())? {
+        return Ok(false);
+    }
+    let _lock = crate::file_originals::try_worker_lock(directory, lock_name)?
+        .ok_or("Мовний пакет зараз оновлюється. Спробуйте пізніше.")?;
+    let mut removed = false;
+    for path in paths {
+        match fs::remove_file(path) {
+            Ok(()) => removed = true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(removed)
+}
+
 pub(crate) use scoped_analysis::{resolve_text_selection, select_words};
 pub use scoped_analysis::{AnalysisScope, DetachedPageAnalysis, DetachedVocabularyInput, LinguisticAnalysis};
 
@@ -304,7 +325,7 @@ impl KnowledgePackageInstall {
             .parent()
             .ok_or("Невірний шлях мовного пакета.")?;
         fs::create_dir_all(directory).map_err(|error| error.to_string())?;
-        let _lock = lock_package(&directory.join(".install-knowledge.lock"), true)?;
+        let _lock = lock_package(&directory.join(KNOWLEDGE_INSTALL_LOCK), true)?;
         let staging =
             tempfile::NamedTempFile::new_in(directory).map_err(|error| error.to_string())?;
         build_pack(staging.path(), BufReader::new(Cursor::new(data)))?;
@@ -362,6 +383,12 @@ impl Store {
         source: &Path,
     ) -> Result<KnowledgePackage> {
         self.prepare_knowledge_package(language, source)?.run()
+    }
+
+    pub fn remove_knowledge_package(&self, language: &str) -> Result<bool> {
+        let pack = PACKS.iter().find(|pack| pack.language == language)
+            .ok_or("Для цієї мови немає пакета граматичного аналізу.")?;
+        remove_indexes(&[pack.path(&self.knowledge_directory)], KNOWLEDGE_INSTALL_LOCK)
     }
 
     pub(crate) fn repair_pdf_ocr(&self, language: &str, lines: &mut [crate::ocr::OcrLine]) -> Result<()> {
