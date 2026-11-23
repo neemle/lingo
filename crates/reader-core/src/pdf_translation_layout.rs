@@ -1,6 +1,7 @@
 use crate::Result;
 use serde::{Deserialize, Serialize};
 
+mod masks;
 mod source;
 pub mod text;
 pub use source::{project, SourceRow, SourceStyle, SourceStyleAnchor};
@@ -59,6 +60,7 @@ pub struct Region {
     limit_font_by_width: bool,
     fragments: Vec<usize>,
     style_fragment: Option<usize>,
+    masks: Vec<masks::BackgroundMask>,
 }
 
 #[derive(Default, Serialize)]
@@ -91,6 +93,7 @@ fn plan(fragments: &[SourceFragment]) -> Result<PageLayout> {
             limit_font_by_width: false,
             fragments: vec![index],
             style_fragment: fragment.style.as_ref().map(|_| index),
+            masks: Vec::new(),
         };
         while let Some(position) = page
             .regions

@@ -21,7 +21,7 @@ pub struct SourceStyle {
     weight: u16,
     italic: bool,
     ink: Option<[f64; 4]>,
-    background: [f64; 4],
+    pub(super) background: [f64; 4],
 }
 
 #[derive(Deserialize)]
@@ -83,6 +83,7 @@ pub fn project(
     geometry: &[OcrLine],
     offset: usize,
     styles: &[SourceStyleAnchor],
+    preserve_artwork: bool,
 ) -> Result<ProjectedLayout> {
     let styles = styles
         .iter()
@@ -92,7 +93,24 @@ pub fn project(
         .iter()
         .map(|row| project_row(row, geometry, offset, &styles))
         .collect::<Vec<_>>();
-    let layout = plan(&fragments)?;
+    let mut layout = plan(&fragments)?;
+    if preserve_artwork {
+        let (regions, overflow) = (&mut layout.regions, &mut layout.overflow);
+        regions.retain_mut(|region| {
+            let spans = region
+                .fragments
+                .iter()
+                .map(|&index| rows[index].page_span(offset));
+            if let Some(masks) = super::masks::plan(spans, geometry, &styles) {
+                region.masks = masks;
+                true
+            } else {
+                overflow.append(&mut region.fragments);
+                false
+            }
+        });
+        overflow.sort_unstable_by_key(|&index| (rows[index].start_utf16, index));
+    }
     let anchors = fragments
         .into_iter()
         .map(|fragment| Anchor {
@@ -103,13 +121,19 @@ pub fn project(
     Ok(ProjectedLayout { layout, anchors })
 }
 
+impl SourceRow {
+    fn page_span(&self, offset: usize) -> Range<usize> {
+        self.start_utf16.saturating_sub(offset)..self.end_utf16.saturating_sub(offset)
+    }
+}
+
 fn project_row(
     row: &SourceRow,
     geometry: &[OcrLine],
     offset: usize,
     styles: &BTreeMap<usize, &SourceStyle>,
 ) -> SourceFragment {
-    let span = row.start_utf16.saturating_sub(offset)..row.end_utf16.saturating_sub(offset);
+    let span = row.page_span(offset);
     let mut fragment = SourceFragment {
         bounds: None,
         line_height: 0.0,
@@ -183,7 +207,7 @@ fn project_row(
     }
 }
 
-fn different_color(a: [f64; 4], b: [f64; 4]) -> bool {
+pub(super) fn different_color(a: [f64; 4], b: [f64; 4]) -> bool {
     (0..3).any(|channel| (a[channel] - b[channel]).abs() > 0.12)
 }
 
@@ -249,11 +273,11 @@ mod tests {
                 style: SourceStyle::test_style([1.0; 3], 0.014),
             },
         ];
-        let page = project(&rows, &geometry, 100, &styles).unwrap();
+        let page = project(&rows, &geometry, 100, &styles, false).unwrap();
         assert_eq!(page.anchors[1].bounds.unwrap().width, 0.2);
         assert_eq!(page.layout.regions.len(), 2);
         assert_eq!(
-            project(&rows, &geometry, 100, &[])
+            project(&rows, &geometry, 100, &[], false)
                 .unwrap()
                 .layout
                 .regions

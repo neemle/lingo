@@ -44,6 +44,8 @@ pub enum Command {
         geometry: Vec<reader_core::ocr::OcrLine>,
         offset: usize,
         styles: Vec<reader_core::pdf_translation_layout::SourceStyleAnchor>,
+        #[serde(rename = "preserveArtwork")]
+        preserve_artwork: bool,
     },
     FindPdfLigatureJoins {
         text: String,

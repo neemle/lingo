@@ -25,8 +25,9 @@ public sealed record PdfTranslationSourceStyle(string? FontFamily, double? FontH
     double[]? Ink, double[] Background);
 public sealed record PdfTranslationStyleAnchor(int StartUtf16, PdfTranslationSourceStyle Style);
 public sealed record PdfTranslationAnchor(PdfSampleBox? Bounds, PdfTranslationSourceStyle? Style);
+public sealed record PdfTranslationMask(PdfSampleBox Bounds, double[] Background);
 public sealed record PdfTranslationRegion(PdfSampleBox Bounds, double PreferredFontHeight, bool LimitFontByWidth,
-    int[] Fragments, int? StyleFragment);
+    int[] Fragments, int? StyleFragment, PdfTranslationMask[] Masks);
 public sealed record PdfTranslationLayout(PdfTranslationRegion[] Regions, int[] Pending, int[] Overflow,
     PdfTranslationAnchor[] Anchors);
 public sealed record PdfTextLine(int Start, int End);
