@@ -345,6 +345,17 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         return Read();
     });
 
+    public async Task<bool> ReconcilePhotoOcrAsync(string id, string revisionId)
+    {
+        var changed = false;
+        await RunAsync(() =>
+        {
+            changed = client.ReconcilePhotoOcr(id, revisionId);
+            return Read();
+        });
+        return changed;
+    }
+
     public Task MoveAsync(int delta) => SelectSentenceAsync((Document?.Position ?? 0) + delta);
 
     public Task SetDocumentLanguageAsync(string id, string language) => RunAsync(() =>

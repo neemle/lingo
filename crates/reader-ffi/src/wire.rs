@@ -313,6 +313,11 @@ pub enum Command {
         #[serde(default)]
         detached: bool,
     },
+    ReconcilePhotoOcr {
+        id: String,
+        #[serde(rename = "revisionId")]
+        revision_id: String,
+    },
     PdfOcrJob {
         job: reader_core::ocr_jobs::JobRequest,
     },

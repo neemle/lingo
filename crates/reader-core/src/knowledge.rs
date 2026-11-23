@@ -920,6 +920,45 @@ mod tests {
     }
 
     #[test]
+    fn photo_proofreading_preserves_annotations_when_ocr_offsets_shift() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("reader.db")).unwrap();
+        let line = |text: &str, y| crate::ocr::OcrLine {
+            page: 0, text: text.into(), x: 0.1, y, width: 0.8, height: 0.1,
+            confidence: Some(0.8), correction: None, words: vec![], source_span: None,
+        };
+        let original = b"\x89PNG\r\n\x1a\n";
+        let photo = store.import_image("photo.png", original, "en", vec![
+            line("A rnagic book.", 0.1),
+            line("Read it again.", 0.4),
+        ]).unwrap();
+        let revision = photo.current_revision_id.as_deref().unwrap();
+        store.set_bookmark(&photo.id, &photo.sentences[0].id, true).unwrap();
+        store.set_sentence_note(&photo.id, &photo.sentences[1].id, "A note").unwrap();
+        store.set_reviewed_translation(&photo.id, &photo.sentences[0].id, "uk", "Чарівна книжка.").unwrap();
+        assert!(store.reconcile_photo_ocr(&photo.id, revision).is_err());
+
+        let path = PACKS[0].path(&store.knowledge_directory);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        build_pack(&path, concat!(
+            "1\tA\ta\tDET\t_\t_\n",
+            "2\tmagic\tmagic\tADJ\t_\t_\n",
+            "3\tbook\tbook\tNOUN\t_\t_\n",
+        ).as_bytes()).unwrap();
+        assert!(store.reconcile_photo_ocr(&photo.id, revision).unwrap());
+        let revised = store.translation_document(&photo.id).unwrap();
+        assert_eq!(revised.text, "A magic book.\nRead it again.");
+        assert_eq!(revised.sentences[1].start_utf16 + 1, photo.sentences[1].start_utf16);
+        assert_eq!(revised.bookmarks, [revised.sentences[0].id.clone()]);
+        assert_eq!(revised.notes[&revised.sentences[1].id], "A note");
+        assert_eq!(revised.reviewed_translations["uk"][&revised.sentences[0].id], "Чарівна книжка.");
+        assert_eq!(revised.ocr_lines.unwrap()[0].text, "A rnagic book.");
+        assert_eq!(store.original(&photo.id).unwrap().bytes, original);
+        assert!(store.reconcile_photo_ocr(&photo.id, revision).is_err());
+        assert!(!store.reconcile_photo_ocr(&photo.id, revised.current_revision_id.as_deref().unwrap()).unwrap());
+    }
+
+    #[test]
     fn recheck_scan_without_text_layer_uses_corpus_on_canonical_and_detached_pages() {
         use crate::{file_originals, ocr::OcrLine, pdf_detached_pages};
         let directory = tempfile::tempdir().unwrap();

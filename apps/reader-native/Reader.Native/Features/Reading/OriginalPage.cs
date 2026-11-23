@@ -24,6 +24,7 @@ internal sealed class OriginalPage : ContentPage
     private readonly Button toggle = new();
     private readonly Button readPage = new() { Text = "Читати й перекладати" };
     private readonly Button wordCard = new() { Text = "Картка слова" };
+    private readonly Button proofreadPhoto = new() { Text = "Звірити текст фото" };
     private readonly Func<int, Task<PhotoPreview>> loadPage;
     private readonly Func<TextSelection, Task> showWord;
     private readonly Func<int, TextSelection, Task>? showDetachedWord;
@@ -101,8 +102,10 @@ internal sealed class OriginalPage : ContentPage
         wordCard.Clicked += async (_, _) => await OpenWordAsync();
         readPage.IsVisible = isPdf;
         readPage.Clicked += async (_, _) => await ReadPageAsync();
+        proofreadPhoto.IsVisible = !isPdf && lines.Length > 0;
+        proofreadPhoto.Clicked += async (_, _) => await ProofreadPhotoAsync();
         var controls = new FlexLayout { Wrap = Microsoft.Maui.Layouts.FlexWrap.Wrap };
-        foreach (var control in new View[] { previous, next, jump, readPage, zoomOut, zoomIn, fit, toggle, wordCard, status })
+        foreach (var control in new View[] { previous, next, jump, readPage, zoomOut, zoomIn, fit, toggle, wordCard, proofreadPhoto, status })
         {
             control.Margin = new Thickness(0, 0, 8, 5);
             controls.Children.Add(control);
@@ -572,6 +575,7 @@ internal sealed class OriginalPage : ContentPage
         jump.IsEnabled = canInteract && pageCount > 1;
         lineButton.IsEnabled = canInteract && currentLineIndices.Length > 0;
         wordCard.IsEnabled = canInteract && activeWord is not null;
+        proofreadPhoto.IsEnabled = canInteract && !session.Busy;
         readPage.IsEnabled = readPage.IsVisible && canInteract && image.Source is not null &&
             session.Document is { } document && document.Id == documentId &&
             (HasPhysicalPageAddress(document) || DocumentPages.SentencePosition(document, pageIndex).HasValue);
@@ -581,6 +585,39 @@ internal sealed class OriginalPage : ContentPage
     }
 
     private enum LineAction { Edit, Suggest, Reset }
+
+    private async Task ProofreadPhotoAsync()
+    {
+        if (!proofreadPhoto.IsEnabled || session.Busy ||
+            session.Document is not { CurrentRevisionId: { } revision } document || document.Id != documentId)
+            return;
+
+        editing = true;
+        editStatus.Text = "Звіряємо текст із мовним пакетом…";
+        UpdateEditButtons();
+        try
+        {
+            var changed = await session.ReconcilePhotoOcrAsync(documentId, revision);
+            if (!visible || session.Document?.Id != documentId) return;
+            if (session.Error.Length > 0)
+            {
+                editStatus.Text = session.Error;
+                return;
+            }
+            if (changed)
+            {
+                activeWord = null;
+                focus = SentenceRange();
+                ApplyOcrLines(null);
+            }
+            editStatus.Text = changed ? "Текст фото уточнено." : "Впевнених виправлень не знайдено.";
+        }
+        finally
+        {
+            editing = false;
+            UpdateEditButtons();
+        }
+    }
 
     private async Task CorrectAsync(LineAction action)
     {

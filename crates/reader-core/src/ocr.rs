@@ -76,6 +76,42 @@ impl OcrLine {
 }
 
 impl crate::Store {
+    pub fn reconcile_photo_ocr(&mut self, id: &str, revision: &str) -> Result<bool> {
+        let document = self.translation_document(id)?;
+        if document.format == "pdf" || document.ocr_lines.as_ref().is_none_or(Vec::is_empty) {
+            return Err("Розпізнаний текст фото недоступний.".into());
+        }
+        if document.current_revision_id.as_deref() != Some(revision) {
+            return Err("Текст фото змінився. Відкрийте оригінал знову.".into());
+        }
+        let language = document.language;
+        let corpus = self.pdf_ocr_corpus(&language)?.ok_or(
+            "Встановіть пакет аналізу цієї мови в налаштуваннях, щоб звірити текст фото.",
+        )?;
+        let mut changed = false;
+        self.edit_document(id, |document, tx| {
+            if document.current_revision_id.as_deref() != Some(revision) || document.language != language {
+                return Err("Текст або мова фото змінилися. Відкрийте оригінал знову.".into());
+            }
+            let lines = document.ocr_lines.as_mut().ok_or("Розпізнаний текст фото недоступний.")?;
+            let previous: Vec<_> = lines.iter().map(|line| line.reading_text().to_owned()).collect();
+            let uncorrected = lines.iter_mut().filter(|line| line.correction.is_none());
+            changed = Self::repair_pdf_ocr_with_corpus(&corpus, &language, uncorrected)?;
+            if !changed {
+                return Ok(false);
+            }
+            let edits = line_transcript_edits(lines, &previous)?;
+            let parsed = crate::document_layout::from_ocr(recognized_lines(lines, 1)?, lines, None);
+            update_transcript_with_edits(document, parsed.text, None, &edits)?;
+            document.blocks = parsed.blocks;
+            refresh_provenance(document);
+            crate::document_revisions::append(document, tx)?;
+            Self::discard_changed_speech_resume(tx, document)?;
+            Ok(true)
+        })?;
+        Ok(changed)
+    }
+
     pub(crate) fn read_ocr_import(
         &self, name: &str, bytes: &[u8], language: &str, lines: &mut [OcrLine],
         pages: Option<u16>, mixed: bool,
@@ -478,6 +514,24 @@ pub(crate) struct TranscriptEdit {
     pub start_utf16: usize,
     pub old_len: usize,
     pub new_len: usize,
+}
+
+pub(crate) fn line_transcript_edits(lines: &[OcrLine], previous: &[String]) -> Result<Vec<TranscriptEdit>> {
+    let mut edits = Vec::new();
+    for (line, old) in lines.iter().zip(previous.iter().map(String::as_str)) {
+        let new = line.reading_text();
+        if new == old {
+            continue;
+        }
+        let span = line.source_span.ok_or("Розпізнаний рядок не має позиції в тексті.")?;
+        edits.extend(word_replacement_edits(span.start_utf16, old, new)
+            .unwrap_or_else(|| vec![TranscriptEdit {
+                start_utf16: span.start_utf16,
+                old_len: old.encode_utf16().count(),
+                new_len: new.encode_utf16().count(),
+            }]));
+    }
+    Ok(edits)
 }
 
 pub(crate) fn word_replacement_edits(start: usize, old: &str, new: &str) -> Option<Vec<TranscriptEdit>> {
