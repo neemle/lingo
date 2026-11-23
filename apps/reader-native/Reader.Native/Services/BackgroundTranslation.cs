@@ -11,6 +11,7 @@ internal sealed class BackgroundTranslation
     private readonly IDispatcher dispatcher;
     private readonly IDispatcherTimer timer;
     private readonly Dictionary<JobKey, BackgroundTranslationProgress> jobs = [];
+    private readonly Dictionary<JobKey, LibraryFailure> libraryFailures = [];
     private Task pending = Task.CompletedTask;
     private CancellationTokenSource? stepCancellation;
     private bool prefetchingVisiblePage;
@@ -26,9 +27,11 @@ internal sealed class BackgroundTranslation
     internal string Status { get; private set; } = "";
     internal bool Running { get; private set; }
     internal IReadOnlyList<TranslationPair> RequiredPackages { get; private set; } = [];
+    internal int ParkedDocuments => libraryFailures.Values.Count(failure => failure.RetryAt is null);
     internal event Action? StatusChanged;
 
     private sealed record JobKey(string Document, string Revision, string Target);
+    private sealed record LibraryFailure(int Attempts, long? RetryAt);
 
     internal BackgroundTranslation(ReaderSession session, IDispatcher dispatcher)
     {
@@ -65,6 +68,7 @@ internal sealed class BackgroundTranslation
         {
             stepCancellation?.Cancel();
             jobs.Clear();
+            libraryFailures.Clear();
             lastLibraryJob = null;
             UpdateRequiredPackages();
         }
@@ -94,11 +98,21 @@ internal sealed class BackgroundTranslation
     {
         stepCancellation?.Cancel();
         jobs.Clear();
+        libraryFailures.Clear();
         libraryStepInvalidated = true;
         lastLibraryJob = null;
         retryAt = default;
         visibleAttempt = null;
         UpdateRequiredPackages();
+        StatusChanged?.Invoke();
+        Wake();
+    }
+
+    internal void RetryParkedDocuments()
+    {
+        foreach (var key in libraryFailures.Where(entry => entry.Value.RetryAt is null).Select(entry => entry.Key).ToArray())
+            libraryFailures.Remove(key);
+        StatusChanged?.Invoke();
         Wake();
     }
 
@@ -189,9 +203,11 @@ internal sealed class BackgroundTranslation
         {
             timer.Stop();
             jobs.Clear();
+            libraryFailures.Clear();
             lastLibraryJob = null;
             UpdateRequiredPackages();
             SetStatus("У бібліотеці ще немає документів.");
+            StatusChanged?.Invoke();
         }
         else pending = RunStepAsync();
     }
@@ -213,8 +229,11 @@ internal sealed class BackgroundTranslation
     private async Task RunStepAsync()
     {
         using var cancellation = new CancellationTokenSource();
+        using var libraryTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
         stepCancellation = cancellation;
         var token = cancellation.Token;
+        JobKey? attemptedJob = null;
+        string? attemptedTitle = null;
         try
         {
             var wake = wakeVersion;
@@ -237,6 +256,16 @@ internal sealed class BackgroundTranslation
                 if (target == document.Language) continue;
                 var key = new JobKey(document.Id, revision, target);
                 live.Add(key);
+                if (libraryFailures.TryGetValue(key, out var failure))
+                {
+                    if (failure.RetryAt is not long retryAt) continue;
+                    if (retryAt > now)
+                    {
+                        waiting = true;
+                        if (retry is null || retryAt < retry) retry = retryAt;
+                        continue;
+                    }
+                }
                 if (!jobs.TryGetValue(key, out var job) || job.ResumeAt is { } deadline && deadline <= now)
                     ready.Add((key, document));
                 else if (job.MissingPackages is { } packages)
@@ -251,6 +280,9 @@ internal sealed class BackgroundTranslation
                     retry = due;
             }
             foreach (var key in jobs.Keys.Where(key => !live.Contains(key)).ToArray()) jobs.Remove(key);
+            var previouslyParked = ParkedDocuments;
+            foreach (var key in libraryFailures.Keys.Where(key => !live.Contains(key)).ToArray()) libraryFailures.Remove(key);
+            if (ParkedDocuments != previouslyParked) StatusChanged?.Invoke();
             UpdateRequiredPackages();
             if (visiblePdf is { } visible && current == visible.Address.DocumentId &&
                 (visibleAttempt is not { } attempted || attempted.Page != visible || attempted.RetryAt <= now))
@@ -278,6 +310,7 @@ internal sealed class BackgroundTranslation
             {
                 SetStatus(missing ?? (waiting ? "Очікує на повторну спробу."
                     : waitingForScan is not null ? $"Відкрийте сторінки «{waitingForScan}», щоб розпізнати текст для перекладу."
+                    : ParkedDocuments > 0 ? "Фоновий переклад призупинено для окремих документів."
                     : "Чергу перекладу опрацьовано."));
                 if (visibleAttempt is { RetryAt: var visibleRetry } attempt && attempt.Page == visiblePdf &&
                     visibleRetry > now && visibleRetry < long.MaxValue && (retry is null || visibleRetry < retry))
@@ -292,8 +325,12 @@ internal sealed class BackgroundTranslation
             var previous = ready.FindIndex(candidate => candidate.Key == lastLibraryJob);
             var work = ready[(previous + 1) % ready.Count];
             var title = work.Document.Title;
+            attemptedJob = work.Key;
+            attemptedTitle = title;
             lastLibraryJob = work.Key;
             libraryStepInvalidated = false;
+            libraryTimeout.CancelAfter(TimeSpan.FromMinutes(2));
+            token = libraryTimeout.Token;
             SetStatus($"Опрацьовуємо «{title}»…", running: true);
             var progress = await session.AdvanceBackgroundTranslationAsync(work.Key.Document, work.Key.Revision, work.Key.Target, token);
             token.ThrowIfCancellationRequested();
@@ -301,10 +338,12 @@ internal sealed class BackgroundTranslation
             jobs[work.Key] = progress;
             UpdateRequiredPackages();
 #if MACCATALYST
-            if (progress.PendingPdfTextPage is int pendingPage &&
-                work.Document.PdfPageStarts?.Length is int pageCount &&
-                await session.OriginalFileAsync(work.Key.Document) is { } original)
+            if (progress.PendingPdfTextPage is int pendingPage)
             {
+                var pageCount = work.Document.PdfPageStarts?.Length ?? work.Document.OcrPdfPages
+                    ?? throw new InvalidDataException("Кількість сторінок PDF невідома.");
+                var original = await session.OriginalFileAsync(work.Key.Document)
+                    ?? throw new InvalidDataException("Оригінал PDF недоступний.");
                 if (!enabled || paused || libraryStepInvalidated) return;
                 token.ThrowIfCancellationRequested();
                 SetStatus($"Читаємо текстовий шар сторінки {pendingPage + 1} · «{title}»…", running: true);
@@ -312,27 +351,47 @@ internal sealed class BackgroundTranslation
                 token.ThrowIfCancellationRequested();
                 if (!enabled || paused || libraryStepInvalidated) return;
                 await session.CacheBackgroundPdfTextLayerAsync(work.Key.Document, work.Key.Revision, pendingPage, text);
+                token.ThrowIfCancellationRequested();
+                libraryFailures.Remove(work.Key);
                 if (enabled && !paused) SetStatus("Черга перекладу продовжується.");
                 return;
             }
 #endif
+            libraryFailures.Remove(work.Key);
             SetStatus(progress.MissingPackages is not null
                 ? $"Для «{title}» бракує офлайн-маршруту."
                 : progress.TranslatedPage is int page
                     ? $"Переклад сторінки {page + 1} · «{title}»."
                     : $"Перевірено кеш · «{title}».");
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
             if (prefetchingVisiblePage) visibleAttempt = null;
             if (enabled && !paused) SetStatus("Перевіряємо чергу перекладу…");
         }
         catch (Exception error)
         {
-            System.Diagnostics.Debug.WriteLine(error);
-            retryAt = DateTimeOffset.UtcNow.AddSeconds(10);
-            Schedule(TimeSpan.FromSeconds(10));
-            if (enabled && !paused) SetStatus("Фоновий переклад повторить спробу.");
+            if (!enabled || paused || cancellation.IsCancellationRequested) return;
+            if (attemptedJob is { } key)
+            {
+                if (libraryStepInvalidated) return;
+                var attempts = (libraryFailures.GetValueOrDefault(key)?.Attempts ?? 0) + 1;
+                long? due = attempts < 3 ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() + attempts * 20 : null;
+                libraryFailures[key] = new(attempts, due);
+                jobs.Remove(key);
+                System.Diagnostics.Trace.TraceWarning("Background translation job {0}, attempt {1}, parked={2}, timeout={3}, error={4}",
+                    key.Document, attempts, due is null, libraryTimeout.IsCancellationRequested, error.GetType().Name);
+                SetStatus(due is null ? $"Переклад «{attemptedTitle}» призупинено."
+                    : $"Переклад «{attemptedTitle}» повторить спробу.");
+                StatusChanged?.Invoke();
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine(error);
+                retryAt = DateTimeOffset.UtcNow.AddSeconds(10);
+                Schedule(TimeSpan.FromSeconds(10));
+                SetStatus("Фоновий переклад повторить спробу.");
+            }
         }
         finally
         {

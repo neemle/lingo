@@ -56,6 +56,11 @@
      <Button x:Name="BackgroundRequiredPackages" Text="Відкрити потрібні мовні пакети"
       Clicked="OpenBackgroundPackagesClicked" IsVisible="False" HorizontalOptions="Start"
       Style="{StaticResource OutlineButton}" />
+     <VerticalStackLayout x:Name="BackgroundRetryPanel" Spacing="6" IsVisible="False">
+      <Label x:Name="BackgroundRetryText" Style="{StaticResource ResourceDetail}" />
+      <Button Text="Повторити фоновий переклад" Clicked="RetryBackgroundTranslationClicked"
+       HorizontalOptions="Start" Style="{StaticResource OutlineButton}" />
+     </VerticalStackLayout>
      <BoxView HeightRequest="1" Color="{StaticResource BorderTone}" />
      <Label x:Name="StorageTotal" Text="Обчислюємо зайняте місце…" FontAttributes="Bold" />
      <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="6">

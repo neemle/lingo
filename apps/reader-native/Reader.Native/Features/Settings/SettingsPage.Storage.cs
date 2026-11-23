@@ -54,7 +54,13 @@ public partial class SettingsPage
         BackgroundStatus.IsVisible = status.Length > 0;
         BackgroundActivity.IsVisible = BackgroundActivity.IsRunning = monitoredWorker?.Running == true;
         BackgroundRequiredPackages.IsVisible = RequiredBackgroundPackages().Length > 0;
+        var parked = monitoredWorker?.ParkedDocuments ?? 0;
+        BackgroundRetryPanel.IsVisible = parked > 0;
+        BackgroundRetryText.Text = $"Документів із призупиненим перекладом: {parked}.";
     }
+
+    private void RetryBackgroundTranslationClicked(object? sender, EventArgs args) =>
+        monitoredWorker?.RetryParkedDocuments();
 
     private TranslationPair[] RequiredBackgroundPackages() =>
         (monitoredWorker?.RequiredPackages ?? []).Where(pair => translationInventory is null ||
