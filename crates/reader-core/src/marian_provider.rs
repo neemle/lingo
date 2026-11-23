@@ -967,7 +967,7 @@ impl Store {
                 .ok_or("Текст сторінки PDF недоступний.")?;
             let sentence = resolve(&cached.sentences, Some(cached.revision.as_str()), selection)?;
             let projected = word_break::project_selection(
-                self, (id, page), &cached.sentences, sentence, selection.start_utf16, &selection.text,
+                self, (id, page, &cached.language), &cached.sentences, sentence, selection.start_utf16, &selection.text,
             )?;
             let layout = crate::document_layout::detached_pdf_document(
                 cached.text, &cached.language, self.detached_pdf_ocr(id, page)?.map(|ocr| ocr.lines),

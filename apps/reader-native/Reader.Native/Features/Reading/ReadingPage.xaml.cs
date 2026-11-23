@@ -515,7 +515,7 @@ public partial class ReadingPage : ContentPage
         wordTranslation = null;
         vocabularyReadings = [];
         VocabularyReading.IsVisible = false;
-        SelectedWord.Text = selected.Text;
+        SelectedWord.Text = selected.ReadingText;
         ShowMeanings(null);
         ShowLocalSyntax(null);
         OpenSpelling.IsVisible = !selected.Text.Any(char.IsWhiteSpace);
@@ -547,11 +547,20 @@ public partial class ReadingPage : ContentPage
                 Reader.Presentation.SourceRanges.MaskFootnoteReferences(
                     doc.Sentences[index].Text, doc.Sentences[index].StartUtf16, doc.Blocks),
                 selected.StartUtf16 - doc.Sentences[index].StartUtf16);
-            var lookup = anchored is { SentenceStartUtf16: int offset, TokenLengthUtf16: int length }
+            if (selected.RejoinedWord is { } word && context is { } prior &&
+                prior.StartUtf16 >= 0 && prior.StartUtf16 <= prior.Sentence.Length - selected.LengthUtf16 &&
+                prior.Sentence.AsSpan(prior.StartUtf16, selected.LengthUtf16).SequenceEqual(selected.Text))
+                context = prior with
+                {
+                    Sentence = prior.Sentence[..prior.StartUtf16] + word +
+                        prior.Sentence[(prior.StartUtf16 + selected.LengthUtf16)..],
+                };
+            var lookup = selected.RejoinedWord is null &&
+                anchored is { SentenceStartUtf16: int offset, TokenLengthUtf16: int length }
                 && doc.Sentences.ElementAtOrDefault(anchored.Position) is { } canonical
                 && canonical.StartUtf16 + offset == selected.StartUtf16 && length == selected.LengthUtf16
                 ? await session.LookupSentenceTokenAsync(doc.Id, canonical.Id, anchored.RevisionId, offset)
-                : await session.LookupWordAsync(doc.Language, selected.Text, context);
+                : await session.LookupWordAsync(doc.Language, selected.ReadingText, context);
             if (selection != selected || session.Document is not { } current || current.Id != doc.Id
                 || current.Language != doc.Language || current.CurrentRevisionId != doc.CurrentRevisionId
                 || !WordCard.IsVisible) return;
@@ -587,7 +596,7 @@ public partial class ReadingPage : ContentPage
             var version = $"{lookup.Package.Version} · {lookup.Package.Revision}";
             var lemmas = lookup.Analyses.DistinctBy(analysis => (analysis.Lemma, analysis.PartOfSpeech))
                 .Select(analysis => new VocabularyReadingOption($"Лема · {analysis.Lemma} · {analysis.PartOfSpeech}",
-                    Lemma: new LemmaSnapshot(analysis.Lemma, selected.Text, analysis.PartOfSpeech,
+                    Lemma: new LemmaSnapshot(analysis.Lemma, selected.ReadingText, analysis.PartOfSpeech,
                         analysis.Features, lookup.Package.Name, version)));
             var expressions = lookup.Expressions.DistinctBy(expression => (expression.Canonical, expression.Kind))
                 .Select(expression => new VocabularyReadingOption($"Вираз · {expression.Text}",
@@ -597,7 +606,7 @@ public partial class ReadingPage : ContentPage
                 .ToArray();
             if (vocabularyReadings.Length > 0)
             {
-                VocabularyReading.ItemsSource = new[] { $"Виділена форма · {selected.Text}" }
+                VocabularyReading.ItemsSource = new[] { $"Виділена форма · {selected.ReadingText}" }
                     .Concat(vocabularyReadings.Select(reading => reading.Label)).ToArray();
                 VocabularyReading.SelectedIndex = vocabularyReadings is [{ Lemma: not null }] ? 1 : 0;
                 VocabularyReading.IsVisible = true;

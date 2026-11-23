@@ -122,7 +122,7 @@ public sealed class SourceRanges(string text)
                 if (marker.StartUtf16 >= end || marker.EndUtf16 < end) continue;
                 if (marker.StartUtf16 <= selection.StartUtf16) return null;
                 var length = marker.StartUtf16 - selection.StartUtf16;
-                return selection with { LengthUtf16 = length, Text = selection.Text[..length] };
+                return selection with { LengthUtf16 = length, Text = selection.Text[..length], RejoinedWord = null };
             }
         }
         return selection;

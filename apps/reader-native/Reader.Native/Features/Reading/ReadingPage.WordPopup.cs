@@ -99,7 +99,7 @@ public partial class ReadingPage
     {
         var selected = DetachedWordCard.IsVisible ? detachedSelection : selection;
         var language = DetachedWordCard.IsVisible ? detachedAddress?.Language : AppState.Session.Document?.Language;
-        if (selected is not null && language is not null) await SpeakWordDetailAsync(selected.Text, language);
+        if (selected is not null && language is not null) await SpeakWordDetailAsync(selected.ReadingText, language);
     }
 
     private async void SpeakPopupTranslationClicked(object? sender, EventArgs args)

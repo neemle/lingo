@@ -11,6 +11,13 @@ public sealed class NativeReaderView : View
     public static readonly BindableProperty ReflowPdfProperty = BindableProperty.Create(
         nameof(ReflowPdf), typeof(bool), typeof(NativeReaderView), false);
     public bool ReflowPdf { get => (bool)GetValue(ReflowPdfProperty); set => SetValue(ReflowPdfProperty, value); }
+    public static readonly BindableProperty SourceLanguageProperty = BindableProperty.Create(
+        nameof(SourceLanguage), typeof(string), typeof(NativeReaderView));
+    public string? SourceLanguage
+    {
+        get => GetValue(SourceLanguageProperty) as string;
+        set => SetValue(SourceLanguageProperty, value);
+    }
     public static readonly BindableProperty BlocksProperty = BindableProperty.Create(
         nameof(Blocks), typeof(DocumentBlock[]), typeof(NativeReaderView));
     public static readonly BindableProperty HighlightStartProperty = BindableProperty.Create(
@@ -56,11 +63,12 @@ public sealed class NativeReaderView : View
 
     internal TextSelection? HighlightedSpan() => GetSourceRanges().Selection(HighlightStart, HighlightLength);
 
-    public void SelectSource(int start, int length)
+    public void SelectSource(int start, int length, string? rejoinedWord = null)
     {
         var ranges = GetSourceRanges();
         var selection = length == 0 ? ranges.WordAt(start) : ranges.Selection(start, length);
-        if (selection is not null) SourceSelected?.Invoke(this, selection);
+        if (selection is not null)
+            SourceSelected?.Invoke(this, rejoinedWord is null ? selection : selection with { RejoinedWord = rejoinedWord });
     }
 
     private SourceRanges GetSourceRanges()

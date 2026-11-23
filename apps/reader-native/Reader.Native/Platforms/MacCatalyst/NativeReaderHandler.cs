@@ -14,6 +14,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
     private ReaderTextProjection? projection;
     private DocumentBlock[] renderedBlocks = [];
     private bool renderedReflow;
+    private string? renderedLanguage;
     private int renderedFontSize;
     private Reader.Presentation.TextSelection? highlightedSentence;
     private Reader.Presentation.TextSelection? spokenWord;
@@ -23,6 +24,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
             [nameof(NativeReaderView.Text)] = MapText,
             [nameof(NativeReaderView.Blocks)] = MapText,
             [nameof(NativeReaderView.ReflowPdf)] = MapText,
+            [nameof(NativeReaderView.SourceLanguage)] = MapText,
             [nameof(NativeReaderView.HighlightStart)] = MapText,
             [nameof(NativeReaderView.HighlightLength)] = MapText,
             [nameof(NativeReaderView.SpokenWord)] = MapSpokenWord,
@@ -120,7 +122,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
     private void SelectDisplayedRange(int start, int length)
     {
         if (projection?.ToSource(start, length) is { } source)
-            VirtualView.SelectSource(source.Start, source.Length);
+            VirtualView.SelectSource(source.Start, source.Length, projection.RejoinedWord(start, length));
     }
 
     private Microsoft.Maui.Graphics.Rect? SelectionAnchor(int start, int length)
@@ -154,12 +156,14 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
         var newFont = handler.renderedFontSize != view.ReadingFontSize;
         var blocks = view.Blocks;
         var reflowChanged = handler.renderedReflow != view.ReflowPdf;
+        var languageChanged = handler.renderedLanguage != view.SourceLanguage;
         handler.renderedReflow = view.ReflowPdf;
+        handler.renderedLanguage = view.SourceLanguage;
         var newBlocks = !ReferenceEquals(handler.renderedBlocks, blocks) &&
             !handler.renderedBlocks.AsSpan().SequenceEqual(blocks);
         handler.renderedBlocks = blocks;
         var sentence = view.HighlightedSpan();
-        var newLayout = newText || newBlocks || reflowChanged;
+        var newLayout = newText || newBlocks || reflowChanged || languageChanged && view.ReflowPdf;
         var newSentence = newLayout || sentence != handler.highlightedSentence;
         if (!newSentence && !newFont && !newBlocks) return;
 
@@ -172,7 +176,7 @@ public sealed class NativeReaderHandler : ViewHandler<NativeReaderView, UITextVi
                     ?? UIFont.SystemFontOfSize(view.ReadingFontSize);
                 if (newLayout)
                 {
-                    handler.projection = new ReaderTextProjection(source, blocks, view.ReflowPdf);
+                    handler.projection = new ReaderTextProjection(source, blocks, view.ReflowPdf, view.SourceLanguage);
                     using var paragraph = new NSMutableParagraphStyle { LineSpacing = 6, ParagraphSpacing = view.ReflowPdf ? 8 : 0 };
                     using var text = new NSAttributedString(handler.projection.Text, new UIStringAttributes
                     {

@@ -570,7 +570,7 @@ impl Store {
         }
         let (sentence, _) = resolve_text_selection(&cached.sentences, start_utf16, word)?;
         let projected = word_break::project_selection(
-            self, (document, page), &cached.sentences, sentence, start_utf16, word,
+            self, (document, page, &cached.language), &cached.sentences, sentence, start_utf16, word,
         )?;
         validate_word_request(model, &projected.text)?;
         let (context, offset) = word_context(&projected.context, &projected.text, projected.start_utf8);

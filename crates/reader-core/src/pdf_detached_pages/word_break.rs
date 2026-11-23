@@ -186,39 +186,54 @@ pub(crate) struct ProjectedSelection<'a> {
 }
 
 pub(crate) fn project_selection<'a>(
-    store: &Store, location: (&str, u16), sentences: &[Sentence], sentence: &'a Sentence,
+    store: &Store, location: (&str, u16, &str), sentences: &[Sentence], sentence: &'a Sentence,
     start_utf16: usize, selected: &'a str,
 ) -> Result<ProjectedSelection<'a>> {
-    let (id, page) = location;
+    let (id, page, language) = location;
     let (previous, next) = neighboring_fragments(
         store, id, page, None, sentences.first().filter(|first| first.id == sentence.id),
         sentences.last().filter(|last| last.id == sentence.id),
     )?;
-    project_fragments(sentence, start_utf16, selected, previous.as_deref(), next.as_deref())
+    project_fragments(Some(language), sentence, start_utf16, selected, previous.as_deref(), next.as_deref())
 }
 
 pub(crate) fn project_canonical_selection<'a>(
     store: &Store, document: &Document, sentence: &'a Sentence, start_utf16: usize, selected: &'a str,
 ) -> Result<ProjectedSelection<'a>> {
     let (previous, next) = canonical_fragments(store, document, sentence)?;
-    project_fragments(sentence, start_utf16, selected, previous.as_deref(), next.as_deref())
+    let language = (document.format == "pdf").then_some(document.language.as_str());
+    project_fragments(language, sentence, start_utf16, selected, previous.as_deref(), next.as_deref())
 }
 
 fn project_fragments<'a>(
-    sentence: &'a Sentence, start_utf16: usize, selected: &'a str, previous: Option<&str>, next: Option<&str>,
+    language: Option<&str>, sentence: &'a Sentence, start_utf16: usize, selected: &'a str,
+    previous: Option<&str>, next: Option<&str>,
 ) -> Result<ProjectedSelection<'a>> {
     let trimmed = selected.trim_start();
     let leading = selected[..selected.len() - trimmed.len()].encode_utf16().count();
     let local = start_utf16 + leading - sentence.start_utf16;
     let start_utf8 = ocr::byte_at_utf16(&sentence.text, local)
         .ok_or("Некоректна позиція виділення.")?;
+    let trimmed = trimmed.trim_end();
+    if let Some(language) = language.filter(|_| trimmed.contains('\n') && trimmed.contains(['-', '\u{00ad}', '\u{2010}'])) {
+        let layout = Document { language: language.to_owned(), ..Document::default() };
+        let word = crate::translation::normalize_ocr_input(&layout, trimmed, 0);
+        let end = start_utf8 + trimmed.len();
+        if word != trimmed && word.chars().all(|ch| ch.is_alphabetic() || matches!(ch, '-' | '\u{2010}'))
+            && sentence.text.get(start_utf8..end) == Some(trimmed)
+        {
+            let mut context = sentence.text.clone();
+            context.replace_range(start_utf8..end, &word);
+            return Ok(ProjectedSelection { text: word.into(), context: context.into(), start_utf8 });
+        }
+    }
     let Some(joined) = join_fragments(&sentence.text, previous, next) else {
         return Ok(ProjectedSelection {
-            text: trimmed.trim_end().into(), context: sentence.text.as_str().into(), start_utf8,
+            text: trimmed.into(), context: sentence.text.as_str().into(), start_utf8,
         });
     };
     let start = start_utf8 + joined.center.start;
-    let end = (start + trimmed.trim_end().len()).min(joined.center.end);
+    let end = (start + trimmed.len()).min(joined.center.end);
     let mut extent = start..end;
     for (offset, _, word) in word_parts(&joined.text) {
         let word_end = offset + word.len();
@@ -351,5 +366,28 @@ pub(super) fn boundary_sentence(text: &str, id: &str, page: u16) -> Sentence {
         end_utf8: text.len(),
         start_utf16: 0,
         end_utf16: text.encode_utf16().count(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selected_wrapped_word_is_reconstructed_at_its_original_anchor() {
+        for (raw, expected) in [("marchan-\r\n  dise", "marchandise"),
+            ("est-\nil", "est-il"), ("arc-en-\nciel", "arc-en-ciel")]
+        {
+            let prefix = "📖 Puis ";
+            let text = format!("{prefix}{raw} arrive.");
+            let sentence = boundary_sentence(&text, "test", 0);
+            let projected = project_fragments(
+                Some("fr"), &sentence, prefix.encode_utf16().count(), raw, None, None,
+            ).unwrap();
+            assert_eq!(projected.text, expected);
+            assert_eq!(projected.context, format!("{prefix}{expected} arrive."));
+            assert_eq!(projected.start_utf8, prefix.len());
+            assert_eq!(sentence.text, text);
+        }
     }
 }

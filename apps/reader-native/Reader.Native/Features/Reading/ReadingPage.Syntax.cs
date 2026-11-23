@@ -35,7 +35,9 @@ public partial class ReadingPage
         if (detachedLookup is { } lookup && ReferenceEquals(lookup.Address, address) &&
             lookup.Revision == revision && lookup.Selection == selected &&
             !lookup.Pending.IsFaulted && !lookup.Pending.IsCanceled) return lookup.Pending;
-        var pending = AppState.Session.LookupDetachedPdfWordAsync(address.Document, address.Page, selected);
+        var pending = selected.RejoinedWord is { } word
+            ? AppState.Session.LookupWordAsync(address.Language, word)
+            : AppState.Session.LookupDetachedPdfWordAsync(address.Document, address.Page, selected);
         detachedLookup = (address, revision, selected, pending);
         return pending;
     }

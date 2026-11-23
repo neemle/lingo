@@ -1200,7 +1200,8 @@ pub(crate) fn normalize_ocr_input(
                 "il" | "ils" | "elle" | "elles" | "on" | "tu" | "vous" | "nous" | "je" => true,
                 _ => false,
             };
-            normalized.push_str(if inversion { word } else { prefix });
+            let compound = prefix.trim_start_matches(['-', '\u{2010}']).contains(['-', '\u{2010}']);
+            normalized.push_str(if inversion || compound { word } else { prefix });
         } else if drop_cap {
             normalized.push_str(word);
         } else {

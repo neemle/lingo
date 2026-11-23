@@ -133,7 +133,7 @@ public partial class ReadingPage
         dictionaryFocus = null;
         SetDetachedSelection(selected);
         UpdateDetachedControls();
-        DetachedSelectedWord.Text = selected.Text;
+        DetachedSelectedWord.Text = selected.ReadingText;
         ShowWordPopup(DetachedPdfText, selected, DetachedWordCard, pdfAnchor);
         await LoadDetachedSyntaxHintAsync(address, sentence.RevisionId, selected);
     }

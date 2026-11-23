@@ -317,7 +317,7 @@ impl Store {
         }
         let (sentence, _) = resolve_text_selection(&cached.sentences, input.start_utf16, &input.selected_text)?;
         let projected = crate::pdf_detached_pages::word_break::project_selection(
-            self, (document_id, page), &cached.sentences, sentence, input.start_utf16, &input.selected_text,
+            self, (document_id, page, &cached.language), &cached.sentences, sentence, input.start_utf16, &input.selected_text,
         )?;
         if input.reconstructed_text.as_deref().is_some_and(|expected| projected.text != expected) {
             return Err("Текст сусідньої сторінки змінився. Перекладіть виділення знову.".into());
