@@ -315,6 +315,17 @@ pub trait TranslationProvider {
         context: Option<&str>,
         settings: TranslationSettings,
     ) -> Result<Vec<String>>;
+
+    /// Independent inputs may fail separately. An outer error interrupts the batch.
+    fn translate_independent(
+        &mut self,
+        model: &ModelEdge,
+        segments: &[String],
+        settings: TranslationSettings,
+    ) -> Result<Vec<Result<String>>> {
+        checked_inference(self, model, segments, None, settings)
+            .map(|output| output.into_iter().map(Ok).collect())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -399,6 +410,8 @@ pub struct ParagraphUnit {
     pub sentence_ids: Vec<String>,
     pub translation: Option<String>,
     pub reviewed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pivot_language: Option<String>,
     #[serde(skip)]
     pub(crate) pdf_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -442,13 +455,16 @@ pub(crate) fn translate_paragraph(
     } = paragraph_plan(store, document, selected, target, boundaries, UnitGrouping::Sentence)?;
     if !pending.is_empty() {
         let (indices, input): (Vec<_>, Vec<_>) = pending.into_iter().unzip();
-        if let Some(aligned) =
-            store.translate_units(provider, &document.language, target, &input)?
-        {
-            store.record_translation_cache_use(&document.id, &aligned.route, &input)?;
-            result.pivot_language = aligned.route.pivot_language().map(str::to_owned);
-            for (index, text) in indices.into_iter().zip(aligned.segments) {
-                result.units[index].set_translation(text);
+        let translated = store.translate_units(provider, &document.id, &document.language, target, &input)?;
+        result.pivot_language = translated.preferred_pivot;
+        for (index, translation) in indices.into_iter().zip(translated.segments) {
+            if let Some(translation) = translation {
+                let unit = &mut result.units[index];
+                if unit.sentence_ids.contains(&document.sentences[selected].id) {
+                    result.pivot_language = translation.pivot_language.clone();
+                }
+                unit.set_translation(translation.text);
+                unit.pivot_language = translation.pivot_language;
             }
         }
     }
@@ -504,10 +520,12 @@ pub(crate) fn translate_pdf_page(
             batch.push(text);
             indices.push(index);
         }
-        let Some(aligned) = store.translate_units(provider, &document.language, target, &batch)? else { break; };
-        store.record_translation_cache_use(&document.id, &aligned.route, &batch)?;
-        for (index, text) in indices.into_iter().zip(aligned.segments) {
-            units[index].set_translation(text);
+        let translated = store.translate_units(provider, &document.id, &document.language, target, &batch)?;
+        for (index, translation) in indices.into_iter().zip(translated.segments) {
+            if let Some(translation) = translation {
+                units[index].set_translation(translation.text);
+                units[index].pivot_language = translation.pivot_language;
+            }
         }
     }
     Ok(units)
@@ -662,58 +680,60 @@ fn read_cached_plan(
         .iter()
         .any(|unit| unit.reviewed && unit.sentence_ids.iter().any(|id| id == active_id));
     let standalone = (!active_reviewed && !input.0.is_empty() && input.0.len() <= MAX_BATCH_BYTES).then_some(input);
-    let mut best = None;
+    let active = |unit: &ParagraphUnit| unit.sentence_ids.iter().any(|id| id == active_id);
+    let active_input = pending.iter().find(|(index, _)| active(&paragraph.units[*index]));
+    let cached_unit = |route: &Route, text: &str| -> Result<Option<String>> {
+        Ok(store.cached_segments(&unit_cache_key(route, text)?, 1, target)?
+            .and_then(|mut segments| segments.pop()))
+    };
+    let mut sentence = None;
+    let mut anchored_route = None;
     for route in &routes.candidates {
-        let mut units = Vec::new();
-        let mut active_hit = false;
-        for (index, text) in &pending {
-            let active = paragraph.units[*index].sentence_ids.iter().any(|id| id == active_id);
-            if !matches!(scope, CacheScope::Window) && !active {
-                continue;
-            }
-            if let Some(mut segments) =
-                store.cached_segments(&unit_cache_key(route, text)?, 1, target)?
-            {
-                active_hit |= active;
-                units.push((*index, segments.remove(0)));
+        if let Some((index, text)) = active_input {
+            if let Some(translation) = cached_unit(route, text)? {
+                let unit = &mut paragraph.units[*index];
+                unit.set_translation(translation);
+                unit.pivot_language = route.pivot_language().map(str::to_owned);
+                anchored_route = Some(route);
+                break;
             }
         }
-
-        let mut sentence = None;
-        if !active_hit {
-            if let Some((text, sentence_ids)) = standalone {
-                if let Some(segments) =
-                    store.cached_segments(&unit_cache_key(route, text)?, 1, target)?
-                {
-                    let mut translated = AlignedTranslation {
-                        route: route.clone(),
-                        segments,
-                        joined_lines: false,
-                        alignment: None,
-                    };
-                    translated.attach_source_sentences(sentence_ids.clone());
-                    sentence = Some(translated);
+        if let Some((text, sentence_ids)) = standalone {
+            if let Some(translation) = cached_unit(route, text)? {
+                let mut aligned = AlignedTranslation {
+                    route: route.clone(),
+                    segments: vec![translation],
+                    joined_lines: false,
+                    alignment: None,
+                };
+                aligned.attach_source_sentences(sentence_ids.clone());
+                sentence = Some(aligned);
+                anchored_route = Some(route);
+                break;
+            }
+        }
+    }
+    if let Some(route) = anchored_route {
+        paragraph.pivot_language = route.pivot_language().map(str::to_owned);
+    }
+    if matches!(scope, CacheScope::Window) {
+        // Prefer the active sentence's route when it has neighboring translations.
+        // Fill missing neighbors from other cached routes with their own provenance.
+        let neighbors = anchored_route.into_iter().chain(
+            routes.candidates.iter().filter(|route| Some(*route) != anchored_route)
+        );
+        for route in neighbors {
+            for (index, text) in &pending {
+                let unit = &mut paragraph.units[*index];
+                if unit.translation.is_some() || active(unit) {
+                    continue;
+                }
+                if let Some(translation) = cached_unit(route, text)? {
+                    unit.set_translation(translation);
+                    unit.pivot_language = route.pivot_language().map(str::to_owned);
                 }
             }
         }
-        // Prefer the first route with the active result. If no route has it, retain the
-        // first partial window. Never merge machine output from different routes.
-        if active_hit || sentence.is_some() {
-            best = Some((route, units, sentence));
-            break;
-        }
-        if best.is_none() && !units.is_empty() {
-            best = Some((route, units, sentence));
-        }
-    }
-
-    let mut sentence = None;
-    if let Some((route, units, active_sentence)) = best {
-        paragraph.pivot_language = route.pivot_language().map(str::to_owned);
-        for (index, translation) in units {
-            paragraph.units[index].set_translation(translation);
-        }
-        sentence = active_sentence;
     }
     Ok(CachedTranslation {
         paragraph,
@@ -950,6 +970,7 @@ fn paragraph_plan(
                 .map(|sentence| sentence.id.clone())
                 .collect(),
             reviewed: review.is_some(),
+            pivot_language: None,
             translation: None,
             pdf_source,
             alignment: None,
@@ -1284,6 +1305,87 @@ mod tests {
             assert!(rows.iter().all(|row| row.translation.is_some()));
         }
         assert_eq!(provider.0, [vec!["Le marin part.".to_owned(), "Le port est ouvert.".to_owned()]]);
+    }
+
+    #[test]
+    fn paragraph_keeps_direct_sentences_and_reuses_only_the_needed_pivot() {
+        #[derive(Default)]
+        struct Provider {
+            pivot_installed: bool,
+            calls: Vec<(String, Vec<String>)>,
+        }
+
+        impl TranslationProvider for Provider {
+            fn installed_models(&self) -> Result<Vec<ModelEdge>> {
+                let pairs = if self.pivot_installed {
+                    &[("fr", "uk"), ("fr", "en"), ("en", "uk")][..]
+                } else {
+                    &[("fr", "uk")][..]
+                };
+                Ok(pairs.iter().map(|&(source, target)| ModelEdge {
+                    source: source.into(),
+                    target: target.into(),
+                    revision: "test".into(),
+                    quality: None,
+                }).collect())
+            }
+
+            fn translate(&mut self, _: &ModelEdge, _: &[String], _: Option<&str>,
+                _: TranslationSettings) -> Result<Vec<String>> {
+                unreachable!("reader batches use independent inputs");
+            }
+
+            fn translate_independent(&mut self, edge: &ModelEdge, input: &[String],
+                _: TranslationSettings) -> Result<Vec<Result<String>>> {
+                self.calls.push((format!("{}-{}", edge.source, edge.target), input.to_vec()));
+                Ok(input.iter().map(|text| match (edge.source.as_str(), edge.target.as_str(), text.as_str()) {
+                    ("fr", "uk", "Le bateau arrive.") => Ok("Корабель прибуває.".into()),
+                    ("fr", "uk", "Le marin part.") => Err("invalid target language".into()),
+                    ("fr", "uk", "Le port est ouvert.") => Ok("Порт відкритий.".into()),
+                    ("fr", "en", "Le marin part.") => Ok("The sailor leaves.".into()),
+                    ("en", "uk", "The sailor leaves.") => Ok("Моряк вирушає.".into()),
+                    (_, _, text) => panic!("unexpected model input: {text}"),
+                }).collect())
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let database = temp.path().join("reader.db");
+        let mut store = Store::open(&database).unwrap();
+        let document = store.import("reader.txt", b"Le bateau arrive. Le marin part. Le port est ouvert.", "fr").unwrap();
+        let mut provider = Provider::default();
+        let partial = translate_paragraph(&mut store, &mut provider, &document, 1, "uk", PageBoundaries::Canonical).unwrap();
+        assert_eq!(partial.units.iter().map(|unit| unit.translation.as_deref()).collect::<Vec<_>>(),
+            [Some("Корабель прибуває."), None, Some("Порт відкритий.")]);
+        assert_eq!(provider.calls.len(), 1);
+        provider.calls.clear();
+        provider.pivot_installed = true;
+
+        let full = translate_paragraph(&mut store, &mut provider, &document, 1, "uk", PageBoundaries::Canonical).unwrap();
+        assert_eq!(full.pivot_language.as_deref(), Some("en"));
+        assert_eq!(full.units[1].translation.as_deref(), Some("Моряк вирушає."));
+        assert_eq!(full.units.iter().map(|unit| unit.pivot_language.as_deref()).collect::<Vec<_>>(),
+            [None, Some("en"), None]);
+        assert_eq!(provider.calls, [
+            ("fr-uk".into(), vec!["Le marin part.".into()]),
+            ("fr-en".into(), vec!["Le marin part.".into()]),
+            ("en-uk".into(), vec!["The sailor leaves.".into()]),
+        ]);
+        assert_eq!(store.connection.query_row(
+            "SELECT count(*) FROM translation_cache_owners WHERE document_id=?1",
+            [&document.id], |row| row.get::<_, u32>(0),
+        ).unwrap(), 3);
+
+        drop(store);
+        let mut reopened = Store::open(&database).unwrap();
+        provider.calls.clear();
+        let models = provider.installed_models().unwrap();
+        let cached = cached_translation(&reopened, &models, &models, &document, 1, "uk").unwrap();
+        let full = serde_json::to_value(full).unwrap();
+        assert_eq!(serde_json::to_value(cached.paragraph).unwrap(), full);
+        let fresh_request = translate_paragraph(&mut reopened, &mut provider, &document, 1, "uk", PageBoundaries::Canonical).unwrap();
+        assert_eq!(serde_json::to_value(fresh_request).unwrap(), full);
+        assert!(provider.calls.is_empty());
     }
 
     #[test]
@@ -1648,6 +1750,23 @@ enum RouteAttemptError {
     Inference(String),
 }
 
+pub(crate) struct UnitsTranslation {
+    pub(crate) segments: Vec<Option<UnitTranslation>>,
+    preferred_pivot: Option<String>,
+}
+
+#[derive(Clone)]
+pub(crate) struct UnitTranslation {
+    pub(crate) text: String,
+    pivot_language: Option<String>,
+}
+
+impl UnitTranslation {
+    fn from_route(text: String, route: &Route) -> Self {
+        Self { text, pivot_language: route.pivot_language().map(str::to_owned) }
+    }
+}
+
 impl From<String> for RouteAttemptError {
     fn from(error: String) -> Self {
         Self::Storage(error)
@@ -1658,6 +1777,11 @@ impl Store {
     pub(crate) fn record_translation_cache_use(
         &self, document: &str, route: &Route, input: &[String],
     ) -> Result<()> {
+        let keys = input.iter().map(|text| unit_cache_key(route, text)).collect::<Result<Vec<_>>>()?;
+        self.link_translation_cache_keys(document, keys.iter().map(String::as_str))
+    }
+
+    fn link_translation_cache_keys<'a>(&self, document: &str, keys: impl Iterator<Item = &'a str>) -> Result<()> {
         let tx = self.connection.unchecked_transaction().map_err(|error| error.to_string())?;
         {
             let mut link = tx.prepare_cached(
@@ -1666,8 +1790,7 @@ impl Store {
                  WHERE cache.key=?1 AND docs.id=?2
                  ON CONFLICT(cache_key) DO UPDATE SET document_id=excluded.document_id",
             ).map_err(|error| error.to_string())?;
-            for text in input {
-                let key = unit_cache_key(route, text)?;
+            for key in keys {
                 link.execute(params![key, document]).map_err(|error| error.to_string())?;
             }
         }
@@ -1707,37 +1830,70 @@ impl Store {
     pub(crate) fn translate_units(
         &mut self,
         provider: &mut impl TranslationProvider,
+        document: &str,
         source: &str,
         target: &str,
         input: &[String],
-    ) -> Result<Option<AlignedTranslation>> {
-        self.translate_using_routes(provider, source, target, |store, provider, route| {
-            let mut uncached = Vec::new();
-            let mut output = vec![String::new(); input.len()];
-            for (index, text) in input.iter().enumerate() {
+    ) -> Result<UnitsTranslation> {
+        let routes = ranked_routes(&provider.installed_models()?, source, target)?;
+        let allow_fallback = provider.allow_alternative_routes();
+        let mut segments = vec![None; input.len()];
+        let preferred_pivot = routes.first().and_then(Route::pivot_language).map(str::to_owned);
+        let mut first_failure = None;
+        // A cached fallback remains reusable even if the preferred package is present.
+        for route in &routes {
+            let mut used = Vec::new();
+            for (text, output) in input.iter().zip(&mut segments).filter(|(_, output)| output.is_none()) {
                 let key = unit_cache_key(route, text)?;
-                if let Some(mut value) = store.cached_segments(&key, 1, target)? {
-                    output[index] = value.remove(0);
-                } else {
-                    uncached.push((index, key, text));
+                if let Some(mut value) = self.cached_segments(&key, 1, target)? {
+                    *output = value.pop().map(|text| UnitTranslation::from_route(text, route));
+                    used.push(key);
                 }
             }
-            if !uncached.is_empty() {
-                let batch: Vec<_> = uncached.iter().map(|(_, _, text)| (*text).clone()).collect();
-                let translated =
-                    infer_route(provider, route, &batch, None, TranslationSettings::default())?;
-                let mut rows = Vec::with_capacity(translated.len());
-                for ((index, key, _), text) in uncached.into_iter().zip(translated) {
-                    output[index] = text;
-                    rows.push((key, index));
-                }
-                store.save_cached_segments(
-                    rows.into_iter()
-                        .map(|(key, index)| (key, std::slice::from_ref(&output[index]))),
-                )?;
+            if !used.is_empty() {
+                self.link_translation_cache_keys(document, used.iter().map(String::as_str))?;
             }
-            Ok(output)
-        })
+        }
+        let inference_count = if allow_fallback { routes.len() } else { 1 };
+        for route in routes.iter().take(inference_count) {
+            let pending: Vec<_> = segments.iter().enumerate()
+                .filter_map(|(index, value)| value.is_none().then_some(index)).collect();
+            if pending.is_empty() {
+                break;
+            }
+            let batch: Vec<_> = pending.iter().map(|&index| input[index].clone()).collect();
+            let outcomes = match infer_independent_units(provider, route, &batch) {
+                Ok(outcomes) => outcomes,
+                Err(error) if !allow_fallback => return Err(error),
+                Err(error) => {
+                    first_failure.get_or_insert(error);
+                    continue;
+                }
+            };
+            let mut rows = Vec::new();
+            for (index, outcome) in pending.into_iter().zip(outcomes) {
+                match outcome {
+                    Ok(text) => {
+                        rows.push((unit_cache_key(route, &input[index])?, index));
+                        segments[index] = Some(UnitTranslation::from_route(text, route));
+                    }
+                    Err(error) => { first_failure.get_or_insert(error); }
+                }
+            }
+            if !rows.is_empty() {
+                self.save_cached_segments(rows.iter().map(|(key, index)| {
+                    let output = segments[*index].as_ref().expect("completed translation");
+                    (key.clone(), std::slice::from_ref(&output.text))
+                }))?;
+                self.link_translation_cache_keys(document, rows.iter().map(|(key, _)| key.as_str()))?;
+            }
+        }
+        if segments.iter().all(Option::is_none) {
+            if let Some(error) = first_failure {
+                return Err(error);
+            }
+        }
+        Ok(UnitsTranslation { segments, preferred_pivot })
     }
 
     fn translate_using_routes<P: TranslationProvider>(
@@ -1859,6 +2015,42 @@ fn infer_route(
     }
 }
 
+fn infer_independent_units(
+    provider: &mut impl TranslationProvider,
+    route: &Route,
+    input: &[String],
+) -> Result<Vec<Result<String>>> {
+    let mut infer = |edge: &ModelEdge, input: &[String]| {
+        let mut outcomes = provider.translate_independent(edge, input, TranslationSettings::default())?;
+        if outcomes.len() != input.len() {
+            return Err("Мовний пакет повернув некоректне вирівнювання перекладу".into());
+        }
+        for outcome in &mut outcomes {
+            if outcome.as_ref().is_ok_and(|text| {
+                text.trim().is_empty() || text.len() > MAX_BATCH_BYTES
+                    || (edge.target == "uk" && crate::marian_target_uk::clearly_russian(text))
+            }) {
+                *outcome = Err("Мовний пакет повернув некоректний переклад речення".into());
+            }
+        }
+        Ok(outcomes)
+    };
+    match route {
+        Route::Direct(edge) => infer(edge, input),
+        Route::Pivot { first, second } => {
+            let mut outcomes = infer(first, input)?;
+            let pivot_input: Vec<_> = outcomes.iter().filter_map(|outcome| outcome.as_ref().ok()).cloned().collect();
+            if !pivot_input.is_empty() {
+                let translated = infer(second, &pivot_input)?;
+                for (outcome, text) in outcomes.iter_mut().filter(|outcome| outcome.is_ok()).zip(translated) {
+                    *outcome = text;
+                }
+            }
+            Ok(outcomes)
+        }
+    }
+}
+
 fn unit_cache_key(route: &Route, text: &str) -> Result<String> {
     cache_key(route, &[text], None, TranslationSettings::default())
 }
@@ -1906,7 +2098,7 @@ fn valid_segments(segments: &[String]) -> bool {
 }
 
 fn checked_inference(
-    provider: &mut impl TranslationProvider,
+    provider: &mut (impl TranslationProvider + ?Sized),
     model: &ModelEdge,
     source: &[String],
     context: Option<&str>,

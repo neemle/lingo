@@ -919,14 +919,13 @@ impl Store {
             return Ok(input.into_iter().map(Some).collect());
         }
         let directory = self.model_directory.clone();
-        if let Some(result) =
-            self.translate_units(&mut MarianProvider::interactive(&directory), source, target, &input)?
-        {
-            self.record_translation_cache_use(id, &result.route, &input)?;
-            return Ok(result.segments.into_iter().map(Some).collect());
-        }
+        let result =
+            self.translate_units(&mut MarianProvider::interactive(&directory), id, source, target, &input)?;
         let routes = self.translation_cache_routes(source, target)?;
-        input.iter().map(|gloss| {
+        input.iter().zip(result.segments).map(|(gloss, translated)| {
+            if let Some(translated) = translated {
+                return Ok(Some(translated.text));
+            }
             let Some(result) = routes.cached_sentence(self, gloss, target)? else { return Ok(None); };
             self.record_translation_cache_use(id, &result.route, std::slice::from_ref(gloss))?;
             Ok(result.segments.into_iter().next())
@@ -1101,7 +1100,8 @@ impl<'a> MarianProvider<'a> {
                 .ok_or("Для цього пакета немає контрольного речення.")?;
             let result = Self::translate_package(
                 stage, package, &[sample.to_owned()], TranslationSettings { beam_size: 1 }, checkpoint,
-            ).map_err(|error| format!("Новий пакет не пройшов пробний переклад. {error}"))?;
+            ).and_then(|units| units.into_iter().collect::<Result<Vec<_>>>())
+                .map_err(|error| format!("Новий пакет не пройшов пробний переклад. {error}"))?;
             if !matches!(result.as_slice(), [output] if output.chars().any(char::is_alphanumeric)) {
                 return Err("Новий пакет не повернув текст пробного перекладу.".into());
             }
@@ -1183,6 +1183,15 @@ impl TranslationProvider for MarianProvider<'_> {
         _context: Option<&str>,
         settings: TranslationSettings,
     ) -> Result<Vec<String>> {
+        self.translate_independent(edge, segments, settings)?.into_iter().collect()
+    }
+
+    fn translate_independent(
+        &mut self,
+        edge: &ModelEdge,
+        segments: &[String],
+        settings: TranslationSettings,
+    ) -> Result<Vec<Result<String>>> {
         if !(1..=8).contains(&settings.beam_size) {
             return Err("Некоректні параметри декодування перекладу".into());
         }
@@ -1215,7 +1224,7 @@ impl MarianProvider<'_> {
         segments: &[String],
         settings: TranslationSettings,
         checkpoint: impl Fn() -> Result<()>,
-    ) -> Result<Vec<String>> {
+    ) -> Result<Vec<Result<String>>> {
         verify_files(directory, package, &ASSETS[..4], &checkpoint)?;
         let mut configuration: serde_json::Value =
             serde_json::from_slice(&fs::read(directory.join("config.json")).map_err(model_error)?)
@@ -1290,7 +1299,7 @@ impl MarianProvider<'_> {
         let mut results = Vec::with_capacity(segments.len());
         let mut clock_retry_budget = 2;
         let mut ukrainian_retry_budget = 2;
-        for segment in segments {
+        'segments: for segment in segments {
             checkpoint()?;
             let source_pieces = input
                 .encode(normalized_translation_input(package, segment).as_ref())
@@ -1348,9 +1357,10 @@ impl MarianProvider<'_> {
                     &checkpoint,
                 )?
                 .into_iter();
-                let best = decoded
-                    .next()
-                    .ok_or("Модель не завершила переклад речення")?;
+                let Some(best) = decoded.next() else {
+                    results.push(Err("Модель не завершила переклад речення".into()));
+                    continue 'segments;
+                };
                 let mut translated = decode_text(&best)?;
                 let mut reference = |text: &str, width| -> Result<String> {
                     checkpoint()?;
@@ -1482,8 +1492,8 @@ impl MarianProvider<'_> {
                         .into_iter()
                         .chain(decoded.filter_map(|tokens| decode_text(&tokens).ok()))
                         .find(|text| crate::marian_target_uk::clearly_ukrainian(text));
-                    translated = match candidate {
-                        Some(text) => text,
+                    let candidate = match candidate {
+                        Some(text) => Some(text),
                         None if ukrainian_retry_budget > 0
                             && start == 0
                             && end == source_pieces.len()
@@ -1513,14 +1523,14 @@ impl MarianProvider<'_> {
                                 }),
                             };
                             retry
-                                .ok_or("Модель повернула російський текст замість українського.")?
                         }
-                        None => {
-                            return Err(
-                                "Модель повернула російський текст замість українського.".into()
-                            )
-                        }
+                        None => None,
                     };
+                    let Some(candidate) = candidate else {
+                        results.push(Err("Модель повернула російський текст замість українського.".into()));
+                        continue 'segments;
+                    };
+                    translated = candidate;
                 }
                 // Reranking/retry tolerate inference errors. A yield must not cache their fallback.
                 checkpoint()?;
@@ -1534,8 +1544,9 @@ impl MarianProvider<'_> {
             if package.source == "fr" && package.target == "uk" {
                 crate::translation_dates::preserve_french_dates(segment, &mut translated);
             }
-            results.push(translated);
+            results.push(Ok(translated));
         }
+        checkpoint()?;
         Ok(results)
     }
 }

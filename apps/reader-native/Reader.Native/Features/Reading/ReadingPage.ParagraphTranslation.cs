@@ -374,7 +374,7 @@ public partial class ReadingPage
     }
 
     private sealed record AlignedUnit(int First, Sentence[] Sources, string? MachineText, bool JoinedLines,
-        string? SourceSpan)
+        string? SourceSpan, string? Pivot)
     {
         public bool Contains(int index) => index >= First && index < First + Sources.Length;
 
@@ -396,8 +396,12 @@ public partial class ReadingPage
     }
 
     private bool IsPreferredRoute(TranslationWindow window) =>
+        IsPreferredRoute(window, AppState.Session.Document?.Position ?? window.Anchor);
+
+    private bool IsPreferredRoute(TranslationWindow window, int position) =>
         readiness is { Ready: true } current && readinessPair == (window.Scope.Source, window.Scope.Target)
-            && window.Pivot == current.PivotLanguage;
+            && (window.UnitFor(position) is { MachineText: not null } unit ? unit.Pivot : window.Pivot)
+                == current.PivotLanguage;
 
     private IEnumerable<TranslationWindow> MatchingTranslationWindows(Document document, string target, int? position = null)
     {
@@ -426,7 +430,8 @@ public partial class ReadingPage
 
     private bool HasMachineAt(Document document, string target, int position) =>
         MatchingTranslationWindows(document, target, position).Any(window =>
-            IsPreferredRoute(window) && window.UnitFor(position) is { } unit && MachineFor(document, window, unit) is not null);
+            IsPreferredRoute(window, position) && window.UnitFor(position) is { } unit
+                && MachineFor(document, window, unit) is not null);
 
     private static string? ReviewedFor(Document document, string target, string sentenceId) =>
         document.ReviewedTranslations.GetValueOrDefault(target)?.GetValueOrDefault(sentenceId);
@@ -436,7 +441,7 @@ public partial class ReadingPage
         if (unit.MachineText is not { } text || !unit.Matches(document)
             || unit.Sources.Any(source => ReviewedFor(document, window.Scope.Target, source.Id) is not null))
             return null;
-        return new MachineTranslation(text, window.Pivot, unit.JoinedLines);
+        return new MachineTranslation(text, unit.Pivot, unit.JoinedLines);
     }
 
     private bool HasUntranslatedUnits(Document document, TranslationWindow window) =>
@@ -477,7 +482,8 @@ public partial class ReadingPage
                 continue;
             var joined = sources.Length > 1;
             var span = joined ? document.Text[sources[0].StartUtf16..sources[^1].EndUtf16] : null;
-            units.Add(new AlignedUnit(first, sources, unit.Reviewed ? null : unit.Translation, joined, span));
+            units.Add(new AlignedUnit(first, sources, unit.Reviewed ? null : unit.Translation, joined, span,
+                unit.PivotLanguage));
         }
         return new TranslationWindow(scope, document.Position, units.ToArray(),
             paragraph.PivotLanguage, true, paragraph.MoreBefore, paragraph.MoreAfter);
@@ -487,7 +493,7 @@ public partial class ReadingPage
         MachineTranslation sentence)
     {
         var unit = new AlignedUnit(document.Position, [document.Sentences[document.Position]],
-            sentence.Text, sentence.JoinedLines, null);
+            sentence.Text, sentence.JoinedLines, null, sentence.PivotLanguage);
         return new TranslationWindow(scope, document.Position, [unit], sentence.PivotLanguage, false, false, false);
     }
 

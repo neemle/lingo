@@ -346,7 +346,8 @@ public partial class ReadingPage : ContentPage
         if (alignment is { Window.Scope: var scope, Translation.PivotLanguage: { } pivot })
             machineLabel += $" · {DocumentLanguages.PivotRoute(scope.Source, pivot, scope.Target)}";
         var currentStatus = key == statusKey ? machineStatus : null;
-        if (alignment is { } result && !IsPreferredRoute(result.Window))
+        if (alignment is { } result && !IsPreferredRoute(result.Window)
+            && (readiness is not { Ready: true } || result.Translation.PivotLanguage is null))
             machineLabel = $"Збережено раніше · {machineLabel}. {currentStatus ?? ReadinessMessage()}";
 
         TranslationNotice.Text = footnote ? "Виноски залишаються в оригіналі."
