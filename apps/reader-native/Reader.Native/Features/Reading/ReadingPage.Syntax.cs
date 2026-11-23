@@ -147,6 +147,9 @@ public partial class ReadingPage
                 }
             }
 
+            if (analysis is { } result)
+                lines.InsertRange(0, result.SyntaxHints.Where(text => !hint.IsVisible || text != hint.Text));
+
             if (lines.Count > 0)
                 details.Text = string.Join(Environment.NewLine, lines);
             else if (hint.IsVisible) details.Text = "";

@@ -649,9 +649,21 @@ impl WordContext {
                 && parts.get(index + 1).is_some_and(|(_, token)| token == "des")
         })?;
         let word_after_des = parts.get(start + 2).map(|(_, token)| token.as_str());
+        let qualifier = parts.get(start + 3).map(|(_, token)| token.as_str());
+        if qualifier.is_some_and(|token| token == "de" || token.starts_with("d'")) {
+            match word_after_des {
+                Some("plus") => return Some(
+                    "«plus de» означає «понад» і уточнює кількість у групі. «L’un / l’une» виділяє одного з цієї групи."
+                ),
+                Some("moins") => return Some(
+                    "«moins de» означає «менше ніж» і уточнює кількість у групі. «L’un / l’une» виділяє одного з цієї групи."
+                ),
+                _ => {}
+            }
+        }
         let superlative = match word_after_des {
-            Some(word @ ("plus" | "moins")) if parts.get(start + 3)
-                .is_some_and(|(_, token)| token.chars().any(char::is_alphabetic)) => Some(word),
+            Some(word @ ("plus" | "moins")) if qualifier
+                .is_some_and(|token| token.chars().any(char::is_alphabetic)) => Some(word),
             _ => None,
         };
         if focus > start + 1 && superlative.is_none() {
@@ -864,6 +876,32 @@ mod tests {
         assert!(store.lookup_word("fr", "village", Some(&unrelated)).unwrap().is_none());
         let punctuation = WordContext::at("L’un, des gens sont venus.", 0);
         assert!(store.lookup_word("fr", "l’un", Some(&punctuation)).unwrap().is_none());
+    }
+
+    #[test]
+    fn french_partitive_quantity_hint_reaches_every_analysis_scope() {
+        use crate::knowledge::scoped_analysis::AnalysisScope;
+
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let text = "C’est l’un des plus de trois cents candidats.";
+        let doc = store.import("sample.txt", text.as_bytes(), "fr").unwrap();
+        let sentence = &doc.sentences[0];
+        let revision = doc.current_revision_id.as_deref().unwrap();
+        let offset = |word| text[..text.find(word).unwrap()].encode_utf16().count();
+        let word = offset("l’un");
+        for scope in [
+            AnalysisScope::Word { start_utf16: word },
+            AnalysisScope::Expression { member_starts_utf16: vec![word, offset("des"), offset("plus")] },
+            AnalysisScope::Sentence { start: 0 },
+        ] {
+            let analysis = store.cached_linguistic_analysis(&doc.id, &sentence.id, revision, scope).unwrap();
+            let hints = analysis["syntaxHints"].as_array().unwrap();
+            assert_eq!(hints.len(), 1);
+            assert!(hints[0].as_str().unwrap().contains("«понад»"));
+            let selected = analysis["words"].as_array().unwrap().iter()
+                .find(|word| word["text"] == "l’un").unwrap();
+            assert_eq!(selected["spellingStatus"], "unavailable");
+        }
     }
 
     #[test]

@@ -9,6 +9,7 @@ public sealed record LinguisticAnalysis(string RevisionId, string SentenceId, st
     LinguisticSyntaxLink[] SyntaxCandidates, DependencyParse? SyntaxParse, int? NextStart)
 {
     public SpacingSuggestion[] SpacingSuggestions { get; init; } = [];
+    public string[] SyntaxHints { get; init; } = [];
 }
 
 public sealed record SpacingSuggestion(OcrSpan Span, string Source, string Replacement);

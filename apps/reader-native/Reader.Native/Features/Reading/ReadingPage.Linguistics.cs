@@ -174,6 +174,7 @@ public partial class ReadingPage
         private readonly Button more = new() { Text = "Наступні слова", IsVisible = false };
         private readonly HashSet<(string Dependent, string Head, string Relation)> displayedLinks = [];
         private readonly HashSet<(int Start, int End, string Replacement)> displayedSpacing = [];
+        private readonly HashSet<string> displayedHints = [];
         private int? nextStart = 0;
         private bool started;
         private bool loading;
@@ -282,8 +283,11 @@ public partial class ReadingPage
                 {
                     { DependencyParseAvailable: true } package => $"{package.Name} {package.Version}",
                     { Installed: true } package => $"{package.Name} {package.Version} · доступне оновлення індексу",
+                    _ when page.SyntaxHints.Length > 0 || displayedHints.Count > 0 => "Синтаксичні підказки за правилами",
                     _ => "Мовний пакет недоступний. Встановіть його в налаштуваннях.",
                 };
+                foreach (var hint in page.SyntaxHints)
+                    if (displayedHints.Add(hint)) Add(hint);
                 if (page.SyntaxParse is { } parse) ShowParse(parse);
                 foreach (var expression in page.Expressions)
                     Add($"«{expression.Text}» · сталий вираз · {expression.Observations} збігів");

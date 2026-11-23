@@ -17,8 +17,8 @@ const SENTENCE_PAGE_SIZE: usize = 24;
 const MAX_READINGS: usize = 8;
 const MAX_PREFETCH_SENTENCE_BYTES: usize = 4096;
 // Bump when generated annotations or their serialized representation changes.
-const SENTENCE_ANNOTATION_VERSION: u32 = 2;
-const SELECTION_ANNOTATION_VERSION: u32 = 3;
+const SENTENCE_ANNOTATION_VERSION: u32 = 3;
+const SELECTION_ANNOTATION_VERSION: u32 = 4;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
@@ -77,6 +77,7 @@ pub struct LinguisticAnalysis {
     words: Vec<AnalyzedWord>,
     spacing_suggestions: Vec<SpacingSuggestion>,
     expressions: Vec<ExpressionMatch>,
+    syntax_hints: Vec<&'static str>,
     syntax_candidates: Vec<SyntaxCandidate>,
     syntax_parse: Option<syntax_parse::SyntaxParse>,
     next_start: Option<usize>,
@@ -493,6 +494,7 @@ impl Store {
         let mut words = Vec::with_capacity(selected.len());
         let mut expressions = BTreeMap::new();
         let mut dependencies = BTreeMap::new();
+        let mut syntax_hints = Vec::new();
         let mut context = WordContext::new(analysis_text.to_owned(), 0);
         for (byte, offset, visible_text) in selected {
             let (analysis_offset, text) = boundary.and_then(|boundary| boundary.project_word(offset))
@@ -518,12 +520,17 @@ impl Store {
                         SpellingStatus::Attested
                     } else if !lookup.spelling_suggestions.is_empty() {
                         SpellingStatus::Suggested
-                    } else {
+                    } else if lookup.package.installed || lookup.lexical_package.as_ref().is_some_and(|pack| pack.installed) {
                         SpellingStatus::Unattested
+                    } else {
+                        SpellingStatus::Unavailable
                     };
                     morphology = lookup.analyses;
                     morphology.truncate(MAX_READINGS);
                     spelling_suggestions = lookup.spelling_suggestions;
+                    if let Some(hint) = lookup.syntax_hint.filter(|hint| !syntax_hints.contains(hint)) {
+                        syntax_hints.push(hint);
+                    }
                     for expression in lookup.expressions {
                         if members.is_none_or(|members| {
                             members.as_slice() == expression.part_starts_utf16.as_slice()
@@ -579,6 +586,7 @@ impl Store {
             words,
             spacing_suggestions,
             expressions: expressions.into_values().collect(),
+            syntax_hints,
             syntax_candidates: dependencies.into_values().collect(),
             next_start,
             syntax_parse,
