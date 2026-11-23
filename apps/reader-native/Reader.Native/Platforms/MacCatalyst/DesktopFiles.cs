@@ -13,6 +13,7 @@ internal static class DesktopFiles
     private static readonly Dictionary<string, string> DocumentTypes = new(StringComparer.Ordinal)
     {
         ["public.plain-text"] = ".txt",
+        ["public.utf8-plain-text"] = ".txt",
         ["org.openxmlformats.wordprocessingml.document"] = ".docx",
         ["com.adobe.pdf"] = ".pdf",
         ["public.jpeg"] = ".jpg",
@@ -21,6 +22,21 @@ internal static class DesktopFiles
         ["public.heic"] = ".heic",
         ["public.heif"] = ".heif",
     };
+
+    private static (string Type, string Name)? DropFileRepresentation(string name, string[] types, bool hasFileUrl)
+    {
+        if (DesktopFile.Supports(name))
+        {
+            var extension = Path.GetExtension(name).ToLowerInvariant();
+            if (extension == ".jpeg") extension = ".jpg";
+            var exact = Array.Find(types, type => DocumentTypes.TryGetValue(type, out var suffix) && suffix == extension);
+            return exact is null ? null : (exact, name);
+        }
+
+        if (hasFileUrl) return null;
+        var native = Array.Find(types, type => DocumentTypes.TryGetValue(type, out var suffix) && suffix != ".txt");
+        return native is null ? null : (native, name + DocumentTypes[native]);
+    }
 
     internal static bool QueueFiles(IEnumerable<NSUrl> urls)
     {
@@ -138,18 +154,18 @@ internal static class DesktopFiles
             {
                 var provider = item.ItemProvider;
                 suggested = Path.GetFileName(provider.SuggestedName ?? suggested);
-                var declaredType = provider.RegisteredTypeIdentifiers.FirstOrDefault(type => DocumentTypes.ContainsKey(type)
-                    && (type != "public.plain-text" || DesktopFile.Supports(suggested)));
-                if (declaredType is not null)
-                {
-                    var filename = DesktopFile.Supports(suggested) ? suggested : suggested + DocumentTypes[declaredType];
-                    staged.Add(await StageProviderAsync(provider, declaredType, filename));
-                }
-                else if (provider.HasItemConformingTo("public.file-url"))
+                var hasFileUrl = provider.HasItemConformingTo("public.file-url");
+                if (DropFileRepresentation(suggested, provider.RegisteredTypeIdentifiers, hasFileUrl) is { } file)
+                    staged.Add(await StageProviderAsync(provider, file.Type, file.Name));
+                else if (hasFileUrl)
                 {
                     if (await StageFileItemAsync(provider) is { } original)
                         staged.Add(original);
+                    else if (DesktopFile.Supports(suggested))
+                        throw new InvalidDataException("Не вдалося отримати оригінальний файл.");
                 }
+                else if (DesktopFile.Supports(suggested))
+                    throw new InvalidDataException("Перетягування не надало файл у його оригінальному форматі.");
                 else
                 {
                     var address = await GetDropAddressAsync(provider);
