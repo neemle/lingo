@@ -240,6 +240,12 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 return dispatch::selected_translation(worker.translate_selection(id, target, selection));
             }
         }
+        Command::TranslateOfflinePassage { id, page, sentence_id, target } => {
+            let worker = registry::lock()?.store(handle)?.prepare_translation_worker();
+            if let Some(worker) = worker {
+                return encode_job(worker.translate_offline_passage(id, *page, sentence_id, target));
+            }
+        }
         Command::TranslateParagraph {
             id,
             sentence_id,

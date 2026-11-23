@@ -1,5 +1,6 @@
 using Reader.Contracts;
 using Reader.Native.Services;
+using Reader.Presentation;
 
 namespace Reader.Native.Features.Reading;
 
@@ -10,7 +11,7 @@ public partial class ReadingPage
     private ModelPassage? runningPassage;
     private CancellationTokenSource? passageCancellation;
     private (ModelPassage Address, ModelPassageTranslation Translation)? modelPassageResult;
-    private ModelPassage? inspectingModelSource;
+    private bool openingPassageComparison;
     private ModelPassage? requestedCachedPassage;
     private int cachedPassageRequest;
     private (ModelPassage Address, string Text)? modelPassageError;
@@ -83,7 +84,6 @@ public partial class ReadingPage
         requestedCachedPassage = null;
         modelPassageResult = null;
         modelPassageError = null;
-        inspectingModelSource = null;
     }
 
     private void UpdateModelTranslation()
@@ -115,19 +115,9 @@ public partial class ReadingPage
         var textChanged = label.Text != text;
         label.Text = text;
 
-        var source = translation?.SourceText;
-        var hasSource = !running && !string.IsNullOrWhiteSpace(source);
-        var showSource = hasSource && inspectingModelSource == address;
-        ModelTranslationActions.IsVisible = hasSource && !detached;
-        DetachedModelTranslationActions.IsVisible = hasSource && detached;
-        ModelSourcePreview.IsVisible = showSource && !detached;
-        DetachedModelSourcePreview.IsVisible = showSource && detached;
-        ModelSourceToggle.Text = DetachedModelSourceToggle.Text = showSource ? "Сховати уривок" : "Що переклав Qwen";
-        if (showSource)
-        {
-            if (detached) DetachedModelSourceText.Text = source;
-            else ModelSourceText.Text = source;
-        }
+        var canCompare = !running && !string.IsNullOrWhiteSpace(translation?.SourceText);
+        ModelTranslationActions.IsVisible = canCompare && !detached;
+        DetachedModelTranslationActions.IsVisible = canCompare && detached;
         if (textChanged && (running || result is not null))
         {
             var viewport = detached ? DetachedModelTranslationViewport : ModelTranslationViewport;
@@ -165,17 +155,54 @@ public partial class ReadingPage
     private ModelPassageTranslation? CurrentModelTranslation(ModelPassage? address) =>
         modelPassageResult is { } saved && saved.Address == address ? saved.Translation : null;
 
-    private async void ToggleModelSourceClicked(object? sender, EventArgs args)
+    private async void CompareModelTranslationClicked(object? sender, EventArgs args)
     {
         var address = CurrentModelPassage();
-        if (CurrentModelTranslation(address)?.SourceText is null) return;
-        inspectingModelSource = inspectingModelSource == address ? null : address;
-        UpdateModelTranslation();
-        if (inspectingModelSource == address)
+        if (openingPassageComparison || address is null ||
+            CurrentModelTranslation(address) is not { SourceText: { Length: > 0 } source } translation)
+            return;
+
+        var content = new VerticalStackLayout { Padding = new Thickness(22, 14), Spacing = 12 };
+        AddPassageComparisonSection(content, "Оригінал", source);
+        var (offlineHeading, offlineText) = AddPassageComparisonSection(content, "Офлайн-переклад", "Перекладаємо уривок…");
+        AddPassageComparisonSection(content, "Qwen", translation.Text);
+        var close = new Button { Text = "Закрити", HorizontalOptions = LayoutOptions.End, Margin = new Thickness(12) };
+        var layout = new Grid { RowDefinitions = { new(GridLength.Auto), new(GridLength.Star) } };
+        layout.Add(close);
+        layout.Add(new ScrollView { Content = content }, 0, 1);
+        var page = new ContentPage { Title = "Порівняння перекладів", Content = layout };
+        close.Clicked += async (_, _) =>
         {
-            var detached = address?.Page is not null;
-            await RevealModelTranslationAsync(detached, detached ? DetachedModelSourcePreview : ModelSourcePreview);
+            if (Navigation.ModalStack.LastOrDefault() == page) await Navigation.PopModalAsync();
+        };
+        openingPassageComparison = true;
+        try
+        {
+            await Navigation.PushModalAsync(page);
+            var offline = await AppState.Session.TranslateOfflinePassageAsync(
+                address.Document, address.Page, address.Sentence, address.Target);
+            if (offline is null)
+                offlineText.Text = "Офлайн-переклад уривка недоступний. Перевірте мовні пакети в налаштуваннях.";
+            else if (!string.Equals(offline.SourceText, source, StringComparison.Ordinal))
+                offlineText.Text = "Уривок змінився. Оновіть переклад Qwen і порівняйте знову.";
+            else
+            {
+                offlineText.Text = offline.Text;
+                if (offline.PivotLanguage is { } pivot)
+                    offlineHeading.Text += $" · {DocumentLanguages.PivotRoute(address.SourceLanguage, pivot, address.Target)}";
+            }
         }
+        catch (Exception error) { offlineText.Text = error.Message; }
+        finally { openingPassageComparison = false; }
+    }
+
+    private static (Label Heading, Label Text) AddPassageComparisonSection(VerticalStackLayout content, string title, string text)
+    {
+        var heading = new Label { Text = title, FontAttributes = FontAttributes.Bold, FontSize = 15 };
+        SemanticProperties.SetHeadingLevel(heading, SemanticHeadingLevel.Level2);
+        var body = new Label { Text = text, FontFamily = "Georgia", FontSize = 19, LineHeight = 1.3 };
+        content.Children.Add(new VerticalStackLayout { Spacing = 5, Children = { heading, body } });
+        return (heading, body);
     }
 
     private async Task RevealModelTranslationAsync(bool detached, VisualElement element)

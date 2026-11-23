@@ -1612,6 +1612,25 @@ mod tests {
     }
 
     #[test]
+    fn offline_passage_comparison_reuses_the_full_source_and_cached_translation() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("library.sqlite")).unwrap();
+        let source = "Le bateau arrive. Le marin part.";
+        let document = store.import("reader.txt", source.as_bytes(), "fr").unwrap();
+        let sentence = &document.sentences[1].id;
+        let route = french_uk_route_with_invalid_assets(&store);
+        let input = [source.to_owned()];
+        let translated = ["Корабель прибуває. Моряк вирушає.".to_owned()];
+        let key = cache_key(&route, &input, None, TranslationSettings::default()).unwrap();
+        store.save_cached_segments([(key, translated.as_slice())]).unwrap();
+        let comparison = store.translate_offline_passage(&document.id, None, sentence, "uk").unwrap().unwrap();
+        assert_eq!(comparison.source_text, source);
+        assert_eq!(comparison.text, translated[0]);
+        assert!(comparison.pivot_language.is_none());
+        assert!(store.translate_offline_passage(&document.id, None, sentence, "fr").is_err());
+    }
+
+    #[test]
     fn pdf_page_translation_reports_the_pivot_of_the_cached_row() {
         let root = tempfile::tempdir().unwrap();
         let mut store = Store::open(&root.path().join("library.sqlite")).unwrap();

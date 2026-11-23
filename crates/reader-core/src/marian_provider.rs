@@ -39,6 +39,14 @@ mod rerank;
 #[path = "marian_time.rs"]
 mod time;
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfflinePassageTranslation {
+    pub text: String,
+    pub source_text: String,
+    pub pivot_language: Option<String>,
+}
+
 mod catalog {
     include!("marian_catalog.rs");
 }
@@ -483,6 +491,12 @@ impl StoreWorker {
         self, id: &str, target: &str, selection: &TranslationSelection,
     ) -> Result<Option<SelectedTranslation>> {
         self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?.translate_selected_text(id, target, selection)
+    }
+
+    pub fn translate_offline_passage(
+        self, id: &str, page: Option<u16>, sentence_id: &str, target: &str,
+    ) -> Result<Option<OfflinePassageTranslation>> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?.translate_offline_passage(id, page, sentence_id, target)
     }
 
     pub fn lookup_detached_pdf_word(
@@ -1065,6 +1079,45 @@ impl Store {
         Ok(result.map(|mut translation| {
             translation.attach_source_sentences(sentence_ids);
             translation
+        }))
+    }
+
+    pub fn translate_offline_passage(
+        &mut self, id: &str, page: Option<u16>, sentence_id: &str, target: &str,
+    ) -> Result<Option<OfflinePassageTranslation>> {
+        crate::valid_language(target)?;
+        let (source, source_text) = self.passage_translation_source(id, page, sentence_id)?;
+        if source == target {
+            return Err("Виберіть іншу мову перекладу.".into());
+        }
+        let segments: Vec<_> = crate::translation_passage::passage_chunks(&source_text)?
+            .into_iter()
+            .map(|text| crate::translation::normalize_cardinals(&source, target, text.to_owned()))
+            .collect();
+        let directory = self.model_directory.clone();
+        let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
+        let translated = self.translate_aligned_with_catalog(
+            &mut MarianProvider::interactive(&directory),
+            TranslationRequest {
+                source: &source,
+                target,
+                segments: &segments,
+                context: None,
+                settings: TranslationSettings::default(),
+            },
+            &catalog,
+            Some(id),
+        )?;
+        Ok(translated.map(|result| {
+            let mut text = result.segments.join(" ");
+            if source == "fr" && target == "uk" {
+                crate::translation_dates::preserve_french_dates(&source_text, &mut text);
+            }
+            OfflinePassageTranslation {
+                text,
+                source_text,
+                pivot_language: result.route.pivot_language().map(str::to_owned),
+            }
         }))
     }
 }

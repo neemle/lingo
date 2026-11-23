@@ -440,6 +440,13 @@ pub enum Command {
         #[serde(rename = "requestId")]
         request_id: Option<u64>,
     },
+    TranslateOfflinePassage {
+        id: String,
+        page: Option<u16>,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        target: String,
+    },
     CancelModelTranslation {
         #[serde(rename = "requestId")]
         request_id: u64,

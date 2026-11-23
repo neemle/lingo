@@ -271,6 +271,7 @@ fn validate(command: &Command) -> Result<()> {
         }
         Command::TranslateDetachedPdfSentence { id, sentence_id, target, .. }
         | Command::TranslateWithModel { id, sentence_id, target, .. }
+        | Command::TranslateOfflinePassage { id, sentence_id, target, .. }
         | Command::DetachedPdfPassage { id, sentence_id, target, .. }
         | Command::DetachedPdfTranslation { id, sentence_id, target, .. }
             if !valid_token_address(id, sentence_id) || target.len() > 8 =>
@@ -298,6 +299,7 @@ fn validate(command: &Command) -> Result<()> {
         | Command::TranslateDictionaryGlosses { id, .. }
         | Command::TranslateSelection { id, .. }
         | Command::TranslateWithModel { id, .. }
+        | Command::TranslateOfflinePassage { id, .. }
         | Command::SaveDetachedPdfWord { id, .. }
         | Command::DetachedPdfOcr { id, .. }
         | Command::CorrectDetachedPdfOcr { id, .. }

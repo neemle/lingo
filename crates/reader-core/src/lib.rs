@@ -54,6 +54,7 @@ mod space;
 pub mod speech;
 pub mod supertonic;
 pub mod translation;
+mod translation_passage;
 pub mod translation_queue;
 pub mod storage_management;
 pub mod tts;

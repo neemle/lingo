@@ -355,6 +355,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             value(store.translate_dictionary_glosses(&id, &source, &target, &glosses)),
         Command::TranslateSelection { id, target, selection } =>
             selected_translation(store.translate_selected_text(&id, &target, &selection)),
+        Command::TranslateOfflinePassage { id, page, sentence_id, target } =>
+            value(store.translate_offline_passage(&id, page, &sentence_id, &target)),
         Command::ScheduleTranslationWindow { id, sentence_id, revision_id, target } => {
             value(store.schedule_translation_window(&id, &sentence_id, &revision_id, &target))
         }

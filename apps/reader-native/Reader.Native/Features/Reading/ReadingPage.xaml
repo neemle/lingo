@@ -221,15 +221,11 @@
          <Label Grid.Column="1" x:Name="ModelTranslationTextHighlighted" IsVisible="False" FontFamily="Georgia" FontSize="19" />
         </Grid>
         <FlexLayout x:Name="ModelTranslationActions" IsVisible="False" Wrap="Wrap">
-         <Button x:Name="ModelSourceToggle" Text="Що переклав Qwen" Clicked="ToggleModelSourceClicked"
+         <Button Text="Порівняти переклади" Clicked="CompareModelTranslationClicked"
           Style="{StaticResource PlayerButton}" Margin="0,0,6,0" />
          <Button Text="Поширити переклад Qwen" Clicked="ShareModelTranslationClicked"
           Style="{StaticResource PlayerButton}" />
         </FlexLayout>
-        <Border x:Name="ModelSourcePreview" IsVisible="False" Padding="12,8"
-         BackgroundColor="#F6F4EB" StrokeThickness="0" StrokeShape="RoundRectangle 7">
-         <Label x:Name="ModelSourceText" FontFamily="Georgia" FontSize="16" LineBreakMode="WordWrap" />
-        </Border>
        </VerticalStackLayout>
       </ScrollView>
       <FlexLayout Grid.Row="3" Padding="10,2,10,8" Wrap="Wrap" JustifyContent="Start">
@@ -331,14 +327,10 @@
             FontFamily="Georgia" FontSize="18" />
           </Grid>
           <FlexLayout x:Name="DetachedModelTranslationActions" IsVisible="False" Wrap="Wrap">
-           <Button x:Name="DetachedModelSourceToggle" Text="Що переклав Qwen" Clicked="ToggleModelSourceClicked"
+           <Button Text="Порівняти переклади" Clicked="CompareModelTranslationClicked"
             Style="{StaticResource PlayerButton}" Margin="0,0,6,0" />
            <Button Text="Поширити переклад Qwen" Clicked="ShareModelTranslationClicked" Style="{StaticResource PlayerButton}" />
           </FlexLayout>
-          <Border x:Name="DetachedModelSourcePreview" IsVisible="False" Padding="12,8"
-           BackgroundColor="#F6F4EB" StrokeThickness="0" StrokeShape="RoundRectangle 7">
-           <Label x:Name="DetachedModelSourceText" FontFamily="Georgia" FontSize="16" LineBreakMode="WordWrap" />
-          </Border>
          </VerticalStackLayout>
         </ScrollView>
        </Grid>

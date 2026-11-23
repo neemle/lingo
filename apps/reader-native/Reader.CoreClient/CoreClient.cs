@@ -537,6 +537,8 @@ public sealed class CoreClient : IDisposable
     }
     public ModelPassageTranslation? CachedModelTranslation(string id, int? page, string sentenceId, string target) =>
         CallIndependent<ModelPassageTranslation?>(new { version = 1, operation = "translate_with_model", id, page, sentenceId, target, cachedOnly = true });
+    public OfflinePassageTranslation? TranslateOfflinePassage(string id, int? page, string sentenceId, string target) =>
+        CallIndependent<OfflinePassageTranslation?>(new { version = 1, operation = "translate_offline_passage", id, page, sentenceId, target });
     public MachineTranslation? TranslateDictionaryGloss(string id, string source, string gloss, string target = "uk") =>
         CallIndependent<MachineTranslation?>(new { version = 1, operation = "translate_dictionary_gloss", id, source, gloss, target });
     public string?[] TranslateDictionaryGlosses(string id, string source, string target, string[] glosses) =>
