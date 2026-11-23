@@ -214,7 +214,11 @@
        SizeChanged="PdfTranslationViewportChanged" Scrolled="PdfTranslationViewportScrolled">
        <Grid x:Name="PdfTranslationPaper" HorizontalOptions="Center" VerticalOptions="Start">
         <Image x:Name="PdfTranslationBackground" Aspect="AspectFit" InputTransparent="True" />
-        <GraphicsView x:Name="PdfTranslationSurface" />
+        <GraphicsView x:Name="PdfTranslationSurface">
+         <GraphicsView.GestureRecognizers>
+          <TapGestureRecognizer Tapped="TranslatedPdfTapped" />
+         </GraphicsView.GestureRecognizers>
+        </GraphicsView>
        </Grid>
       </ScrollView>
       <FlexLayout Grid.Row="2" Padding="10,2,10,8" Wrap="Wrap" JustifyContent="Start">
@@ -308,7 +312,11 @@
          SizeChanged="PdfTranslationViewportChanged" Scrolled="PdfTranslationViewportScrolled">
          <Grid x:Name="DetachedPdfTranslationPaper" HorizontalOptions="Center" VerticalOptions="Start">
           <Image x:Name="DetachedPdfTranslationBackground" Aspect="AspectFit" InputTransparent="True" />
-          <GraphicsView x:Name="DetachedPdfTranslationSurface" />
+          <GraphicsView x:Name="DetachedPdfTranslationSurface">
+           <GraphicsView.GestureRecognizers>
+            <TapGestureRecognizer Tapped="TranslatedPdfTapped" />
+           </GraphicsView.GestureRecognizers>
+          </GraphicsView>
          </Grid>
         </ScrollView>
        </Grid>

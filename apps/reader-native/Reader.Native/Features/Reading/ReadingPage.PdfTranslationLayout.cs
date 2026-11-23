@@ -176,6 +176,27 @@ public partial class ReadingPage
             await FollowPdfTranslationScrollAsync(fromOriginal: false);
     }
 
+    private async void TranslatedPdfTapped(object? sender, TappedEventArgs args)
+    {
+        var (viewport, surface) = ActivePdfTranslationLayout();
+        var session = AppState.Session;
+        if (!ReferenceEquals(sender, surface) || !viewport.IsVisible || session.Busy ||
+            CurrentPdfLayoutAddress() is not { } address || address != pdfLayoutRequest ||
+            args.GetPosition(surface) is not { } point || surface.Drawable is not TranslatedPdfDrawing drawing ||
+            drawing.HitTest(point) is not { } fragment) return;
+
+        if (DetachedPdfReader.IsVisible)
+        {
+            if (detachedAddress is { } detached && !loadingDetachedSentence)
+                await LoadDetachedSentenceAsync(detached, position: null, sourceOffset: fragment.StartUtf16);
+            return;
+        }
+        if (session.Document is not { } document || document.Id != address.Document) return;
+        var position = Array.FindIndex(document.Sentences,
+            sentence => sentence.StartUtf16 < fragment.EndUtf16 && sentence.EndUtf16 > fragment.StartUtf16);
+        if (position >= 0 && position != document.Position) await session.SelectSentenceAsync(position);
+    }
+
     private async Task FollowPdfTranslationScrollAsync(bool fromOriginal)
     {
         var (original, originalSurface) = ActiveInlinePdf();
@@ -219,11 +240,22 @@ public partial class ReadingPage
         Sentence? active, string? gloss, string? status, bool preserveArtwork) : IDrawable
     {
         private sealed record Region(RectF Bounds, List<PdfPageTranslationRow> Rows);
-        private readonly record struct TextRange(int Start, int End);
+        private readonly record struct Fragment(PdfPageTranslationRow Source, int Start, int End, bool Active);
         private readonly record struct WrappedLine(int Start, int End);
+        private readonly List<(RectF Bounds, PdfPageTranslationRow Source)> hitTargets = [];
+
+        internal PdfPageTranslationRow? HitTest(Point point)
+        {
+            foreach (var (bounds, source) in hitTargets)
+                if (point.X >= bounds.Left && point.X <= bounds.Right &&
+                    point.Y >= bounds.Top && point.Y <= bounds.Bottom)
+                    return source;
+            return null;
+        }
 
         public void Draw(ICanvas canvas, RectF page)
         {
+            hitTargets.Clear();
             canvas.FillColor = Colors.White;
             if (page.Width <= 0 || page.Height <= 0) return;
             if (preserveArtwork)
@@ -258,7 +290,7 @@ public partial class ReadingPage
             foreach (var region in regions)
             {
                 var text = new StringBuilder();
-                var highlights = new List<TextRange>();
+                var fragments = new List<Fragment>();
                 var untranslatedActive = false;
                 foreach (var row in region.Rows.OrderBy(row => row.StartUtf16))
                 {
@@ -271,14 +303,14 @@ public partial class ReadingPage
                     if (text.Length > 0) text.Append(' ');
                     var start = text.Length;
                     text.Append(row.Text);
-                    if (isActive) highlights.Add(new TextRange(start, text.Length));
+                    fragments.Add(new Fragment(row, start, text.Length, isActive));
                 }
-                if (untranslatedActive && highlights.Count == 0)
+                if (untranslatedActive && !fragments.Any(fragment => fragment.Active))
                 {
                     canvas.FillColor = Color.FromArgb("#FFF1CF");
                     canvas.FillRoundedRectangle(region.Bounds, 3);
                 }
-                if (text.Length > 0) DrawFitted(canvas, text.ToString(), region.Bounds, highlights, gloss);
+                if (text.Length > 0) DrawFitted(canvas, text.ToString(), region.Bounds, fragments, gloss);
             }
 
             var message = !string.IsNullOrWhiteSpace(status) ? status :
@@ -320,8 +352,8 @@ public partial class ReadingPage
             return new RectF(left, top, Math.Max(a.Right, b.Right) - left, Math.Max(a.Bottom, b.Bottom) - top);
         }
 
-        private static void DrawFitted(ICanvas canvas, string text, RectF area,
-            IReadOnlyList<TextRange>? highlights = null, string? gloss = null)
+        private void DrawFitted(ICanvas canvas, string text, RectF area,
+            IReadOnlyList<Fragment>? fragments = null, string? gloss = null)
         {
             if (area.Width < 2 || area.Height < 2) return;
             var font = new Microsoft.Maui.Graphics.Font("Georgia");
@@ -344,12 +376,16 @@ public partial class ReadingPage
             {
                 if (y + size * 1.16f > area.Bottom + 0.01f) break;
                 var line = text[range.Start..range.End];
-                foreach (var active in highlights ?? [])
+                foreach (var fragment in fragments ?? [])
                 {
-                    var start = Math.Max(active.Start, range.Start) - range.Start;
-                    var end = Math.Min(active.End, range.End) - range.Start;
+                    var start = Math.Max(fragment.Start, range.Start) - range.Start;
+                    var end = Math.Min(fragment.End, range.End) - range.Start;
                     if (start >= end) continue;
-                    Highlight(start, end, "#FFF1CF");
+                    var bounds = BoundsFor(start, end);
+                    hitTargets.Add((bounds, fragment.Source));
+                    if (!fragment.Active) continue;
+                    canvas.FillColor = Color.FromArgb("#FFF1CF");
+                    canvas.FillRectangle(bounds);
                     if (string.IsNullOrWhiteSpace(gloss)) continue;
                     var search = start;
                     while (search <= end - gloss.Length)
@@ -359,19 +395,21 @@ public partial class ReadingPage
                         search = index + gloss.Length;
                         if ((index == 0 || !char.IsLetterOrDigit(line[index - 1])) &&
                             (search == line.Length || !char.IsLetterOrDigit(line[search])))
-                            Highlight(index, search, "#FFE48B");
+                        {
+                            canvas.FillColor = Color.FromArgb("#FFE48B");
+                            canvas.FillRectangle(BoundsFor(index, search));
+                        }
                     }
                 }
                 canvas.DrawString(line, area.Left, y, area.Width, size * 1.16f,
                     HorizontalAlignment.Left, VerticalAlignment.Center);
                 y += size * 1.16f;
 
-                void Highlight(int start, int end, string color)
+                RectF BoundsFor(int start, int end)
                 {
                     var left = canvas.GetStringSize(line[..start], font, size).Width;
                     var width = canvas.GetStringSize(line[start..end], font, size).Width;
-                    canvas.FillColor = Color.FromArgb(color);
-                    canvas.FillRectangle(area.Left + left, y, width, size * 1.16f);
+                    return new RectF(area.Left + left, y, width, size * 1.16f);
                 }
             }
 
