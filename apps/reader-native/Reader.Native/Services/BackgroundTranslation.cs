@@ -12,6 +12,7 @@ internal sealed class BackgroundTranslation
     private DateTimeOffset retryAt;
     private bool enabled;
     private bool paused;
+    private JobKey? lastLibraryJob;
     private (BackgroundTranslatedPage Address, string? DetachedText)? visiblePdf;
     private ((BackgroundTranslatedPage Address, string? DetachedText) Page, long RetryAt)? visibleAttempt;
     internal string Status { get; private set; } = "";
@@ -40,6 +41,7 @@ internal sealed class BackgroundTranslation
         if (!value)
         {
             jobs.Clear();
+            lastLibraryJob = null;
             UpdateRequiredPackages();
         }
         UpdateTimer();
@@ -59,6 +61,7 @@ internal sealed class BackgroundTranslation
         if (clearProgress)
         {
             jobs.Clear();
+            lastLibraryJob = null;
             UpdateRequiredPackages();
             retryAt = default;
             visibleAttempt = null;
@@ -95,6 +98,7 @@ internal sealed class BackgroundTranslation
         if (session.Snapshot.Documents.Length == 0)
         {
             jobs.Clear();
+            lastLibraryJob = null;
             UpdateRequiredPackages();
             SetStatus("У бібліотеці ще немає документів.");
         }
@@ -123,7 +127,7 @@ internal sealed class BackgroundTranslation
             var preferences = session.GetReaderPreferences();
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var live = new HashSet<JobKey>();
-            (JobKey Key, string Title)? candidate = null;
+            var ready = new List<(JobKey Key, string Title)>();
             string? missing = null;
             var waiting = false;
             foreach (var document in session.Snapshot.Documents.OrderByDescending(doc => doc.Id == current))
@@ -135,7 +139,7 @@ internal sealed class BackgroundTranslation
                 var key = new JobKey(document.Id, revision, target);
                 live.Add(key);
                 if (!jobs.TryGetValue(key, out var job) || job.ResumeAt is { } deadline && deadline <= now)
-                    candidate ??= (key, document.Title);
+                    ready.Add((key, document.Title));
                 else if (job.MissingPackages is { } packages)
                     missing ??= packages.Length == 0
                         ? $"Офлайн-маршрут недоступний · {PairName(document.Language, target)}."
@@ -164,13 +168,16 @@ internal sealed class BackgroundTranslation
                     return;
                 }
             }
-            if (candidate is not { } work)
+            if (ready.Count == 0)
             {
                 SetStatus(missing ?? (waiting ? "Очікує на доступний текст PDF або повторну спробу."
                     : "Чергу перекладу опрацьовано."));
                 return;
             }
 
+            var previous = ready.FindIndex(candidate => candidate.Key == lastLibraryJob);
+            var work = ready[(previous + 1) % ready.Count];
+            lastLibraryJob = work.Key;
             SetStatus($"Опрацьовуємо «{work.Title}»…", running: true);
             var progress = await session.AdvanceBackgroundTranslationAsync(work.Key.Document, work.Key.Revision, work.Key.Target);
             if (!enabled || paused) return;
