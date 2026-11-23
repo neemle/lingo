@@ -552,13 +552,19 @@ public partial class ReadingPage
         if (sentence is not null && pdfFragmentFocus is { } focus &&
             focus.Address == pdfLayoutRequest && focus.Address.Source == page && focus.SentenceId == sentence.Id)
             return sentence with { StartUtf16 = focus.Start, EndUtf16 = focus.End };
+        if (sentence is not null && documentFindFocus is { PdfFragment: { } fragment } found &&
+            page.DetachedText is null && found.Document == page.Document && found.Revision == page.Revision &&
+            found.Target == TargetCode && found.Sentence == sentence.Id && fragment.Page == page.Page)
+            return sentence with { StartUtf16 = fragment.StartUtf16, EndUtf16 = fragment.EndUtf16 };
         return sentence;
     }
 
     private void ClearPdfFragmentFocus()
     {
-        if (pdfFragmentFocus is null) return;
+        var foundFragment = documentFindFocus?.PdfFragment is not null;
+        if (pdfFragmentFocus is null && !foundFragment) return;
         pdfFragmentFocus = null;
+        if (foundFragment) documentFindFocus = null;
         UpdateInlinePdfHighlight();
     }
 

@@ -894,9 +894,20 @@ pub struct TranslationSearchPage {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TranslationSearchMatch {
     pub position: usize,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdf_fragment: Option<TranslationSearchFragment>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationSearchFragment {
+    page: u16,
+    start_utf16: usize,
+    end_utf16: usize,
 }
 
 pub(crate) fn search_cached_translation(
@@ -924,10 +935,45 @@ pub(crate) fn search_cached_translation(
 
     let end = len.min(start.saturating_add(SCAN_LIMIT));
     let mut previous_unit = None;
+    let mut projected_page = None;
+    let mut projection = None;
     // The preceding position lets us suppress a repeated contextual unit at a page boundary.
     let scan_start = start.saturating_sub(1);
     for position in scan_start..end {
-        let active_id = &document.sentences[position].id;
+        let sentence = &document.sentences[position];
+        let active_id = &sentence.id;
+        if position >= start && document.ocr_lines.is_some() {
+            let physical_page = crate::pdf_reading_position::page_for_offset(document, sentence.start_utf16);
+            if physical_page != projected_page {
+                projected_page = physical_page;
+                projection = physical_page.and_then(|page| crate::pdf_detached_pages::canonical_ocr_search_projection(document, page, target));
+            }
+            if let (Some(physical_page), Some(projected)) = (physical_page, &projection) {
+                let first = projected.sentences.partition_point(|part| part.end_utf16 <= sentence.start_utf16);
+                let last = projected.sentences.partition_point(|part| part.start_utf16 < sentence.end_utf16);
+                if last > first + 1 {
+                    previous_unit = None;
+                    for fragment in first..last {
+                        let Some(text) = routes.cached_pdf_row(
+                            store, projected, fragment, target, PageBoundaries::Canonical, UnitGrouping::Sentence,
+                        )?.and_then(|row| row.translation) else { continue; };
+                        if !normalize_translation_search(&text).contains(&query) { continue; }
+                        let part = &projected.sentences[fragment];
+                        page.matches.push(TranslationSearchMatch {
+                            position, text, pdf_fragment: Some(TranslationSearchFragment {
+                                page: physical_page, start_utf16: part.start_utf16, end_utf16: part.end_utf16,
+                            }),
+                        });
+                        break;
+                    }
+                    if page.matches.len() == MATCH_LIMIT {
+                        page.next_start = (position + 1 < len).then_some(position + 1);
+                        return Ok(page);
+                    }
+                    continue;
+                }
+            }
+        }
         let cached = cached_translation_with_routes(
             store,
             &routes,
@@ -961,6 +1007,7 @@ pub(crate) fn search_cached_translation(
             page.matches.push(TranslationSearchMatch {
                 position,
                 text: text.to_owned(),
+                pdf_fragment: None,
             });
             if page.matches.len() == MATCH_LIMIT {
                 page.next_start = (position + 1 < len).then_some(position + 1);

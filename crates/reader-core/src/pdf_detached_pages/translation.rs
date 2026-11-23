@@ -373,7 +373,26 @@ impl Store {
 fn split_page_ocr_units(
     document: &mut Document, physical: Range<usize>, page: Option<u16>, target: &str,
 ) -> Range<usize> {
-    let Some(lines) = document.ocr_lines.as_deref() else { return physical; };
+    let Some(units) = split_ocr_sentences(document, physical.clone(), page, target) else { return physical; };
+    let end = physical.start + units.len();
+    document.sentences.splice(physical.clone(), units);
+    physical.start..end
+}
+
+pub(crate) fn canonical_ocr_search_projection(document: &Document, page: u16, target: &str) -> Option<Document> {
+    let (start, end) = crate::pdf_reading_position::page_bounds(document, page)?;
+    let physical = document.sentences.partition_point(|s| s.end_utf16 <= start)
+        ..document.sentences.partition_point(|s| s.start_utf16 < end);
+    let units = split_ocr_sentences(document, physical.clone(), Some(page), target)?;
+    let mut projection = document.clone();
+    projection.sentences.splice(physical, units);
+    Some(projection)
+}
+
+fn split_ocr_sentences(
+    document: &Document, physical: Range<usize>, page: Option<u16>, target: &str,
+) -> Option<Vec<Sentence>> {
+    let lines = document.ocr_lines.as_deref()?;
     let mut cuts = Vec::new();
     for pair in lines.windows(2) {
         let [left, right] = pair else { continue; };
@@ -384,7 +403,7 @@ fn split_page_ocr_units(
             cuts.push(right_span.start_utf8);
         }
     }
-    if cuts.is_empty() { return physical; }
+    if cuts.is_empty() { return None; }
     cuts.sort_unstable();
     cuts.dedup();
 
@@ -419,9 +438,7 @@ fn split_page_ocr_units(
             start = end;
         }
     }
-    let end = physical.start + units.len();
-    document.sentences.splice(physical.clone(), units);
-    physical.start..end
+    (units.len() > physical.len()).then_some(units)
 }
 
 fn same_ocr_flow(left: &ocr::OcrLine, right: &ocr::OcrLine) -> bool {
