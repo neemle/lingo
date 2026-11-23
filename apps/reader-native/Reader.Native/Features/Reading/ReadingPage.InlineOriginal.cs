@@ -73,7 +73,18 @@ public partial class ReadingPage
     {
         showInlineOriginal = false;
         inlinePdfRequest++;
-        inlinePdfAddress = inlinePdfLoading = null;
+        inlinePdfLoading = null;
+        ClearInlinePdfFrame();
+        SourceText.IsVisible = DetachedPdfText.IsVisible = true;
+        InlinePdfViewport.IsVisible = DetachedInlinePdfViewport.IsVisible = PendingInlinePdfViewport.IsVisible = false;
+        InlinePdfFitToggle.IsVisible = false;
+        InlinePdfToggle.Text = AppState.Session.Document?.Format == "pdf" ? "Сторінка PDF" : "Фото";
+        RefreshPdfTranslationLayout();
+    }
+
+    private void ClearInlinePdfFrame()
+    {
+        inlinePdfAddress = null;
         inlinePdfPreview = null;
         pdfSourceLayout = null;
         inlineDetachedLines = inlineNativeBoxes = [];
@@ -81,13 +92,8 @@ public partial class ReadingPage
         inlinePdfAppearance = null;
         InlinePdfHighlight.IsVisible = DetachedInlinePdfHighlight.IsVisible = false;
         InlinePdfHighlight.Drawable = DetachedInlinePdfHighlight.Drawable = null;
-        SourceText.IsVisible = DetachedPdfText.IsVisible = true;
-        InlinePdfViewport.IsVisible = DetachedInlinePdfViewport.IsVisible = PendingInlinePdfViewport.IsVisible = false;
-        InlinePdfFitToggle.IsVisible = false;
         lastInlinePdfFollow = null;
         InlinePdfImage.Source = DetachedInlinePdfImage.Source = PendingInlinePdfImage.Source = null;
-        InlinePdfToggle.Text = AppState.Session.Document?.Format == "pdf" ? "Сторінка PDF" : "Фото";
-        RefreshPdfTranslationLayout();
     }
 
     private async Task ShowInlineOriginalAsync()
@@ -132,6 +138,12 @@ public partial class ReadingPage
             request = ++inlinePdfRequest;
             inlinePdfLoading = address;
             InlinePdfHighlight.IsVisible = DetachedInlinePdfHighlight.IsVisible = false;
+            if (inlinePdfAddress is { } displayed &&
+                (displayed.Document != address.Document || displayed.Page != address.Page))
+            {
+                ClearInlinePdfFrame();
+                RefreshPdfTranslationLayout();
+            }
 
             InlinePdfToggle.Text = isPdf ? "Завантажуємо PDF…" : "Завантажуємо фото…";
             PhotoPreview preview;

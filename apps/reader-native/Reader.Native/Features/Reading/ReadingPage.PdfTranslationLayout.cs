@@ -142,6 +142,7 @@ public partial class ReadingPage
         var available = address is not null;
         var detached = DetachedPdfReader.IsVisible;
         var shown = available && pdfTranslationLayout;
+        var waitingForPreview = PdfUsesPageTranslation && inlinePdfAddress is null && inlinePdfLoading is not null;
         if (translatingPdfLayout is not null && (!shown || !TranslationVisible || !readingPageActive ||
             translatingPdfLayout != address))
             pdfLayoutTranslationCancellation?.Cancel();
@@ -150,8 +151,8 @@ public partial class ReadingPage
         PdfTranslationMode.Text = DetachedPdfTranslationMode.Text = shown ? "Список" : "Верстка";
         PdfTranslationViewport.IsVisible = TranslatePdfPage.IsVisible = shown && !detached;
         DetachedPdfTranslationViewport.IsVisible = DetachedTranslatePdfPage.IsVisible = shown && detached;
-        TranslationViewport.IsVisible = !PdfTranslationViewport.IsVisible;
-        DetachedTranslationViewport.IsVisible = !DetachedPdfTranslationViewport.IsVisible;
+        TranslationViewport.IsVisible = !waitingForPreview && !PdfTranslationViewport.IsVisible;
+        DetachedTranslationViewport.IsVisible = !waitingForPreview && !DetachedPdfTranslationViewport.IsVisible;
         var translatingPage = translatingPdfLayout == address && address is not null;
         if (address != pdfLayoutRequest)
         {
