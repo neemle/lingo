@@ -49,6 +49,8 @@ pub struct PdfPageTranslationRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pivot_language: Option<String>,
     legacy_group: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure: Option<String>,
 }
 
 impl PageProjection {
@@ -153,10 +155,11 @@ impl Store {
                 start_utf16: offsets[first].0, end_utf16: offsets[last].1,
                 source_sentence_id: original[original.partition_point(|&(end, _)| end <= source.start_utf16)].1.clone(),
                 source_block_index: source_block_index(&document, &block_starts, source, end),
-                text, source_text, pivot_language, legacy_group,
+                text, source_text, pivot_language, legacy_group, failure: None,
             }
         };
         let mut generation_error = None;
+        let mut failures = BTreeMap::new();
         if !cached_only {
             match self.translate_document_page(&document, physical.clone(), target, boundaries, background, canceled) {
                 Ok(generated) if generated.iter().any(|unit| !unit.reviewed && unit.translation.is_some())
@@ -167,7 +170,15 @@ impl Store {
                         Some(row(first, last, unit.translation, unit.pdf_source, unit.pivot_language, false))
                     }).collect());
                 }
-                Ok(_) => {}
+                Ok(generated) => {
+                    for unit in generated {
+                        if let Some(((first, last), failure)) = page_range(&unit.sentence_ids).zip(unit.translation_failure) {
+                            for local in first..=last {
+                                failures.insert(local, failure.clone());
+                            }
+                        }
+                    }
+                }
                 Err(error) if canceled() || (background && matches!(&error, TranslationBatchError::Deferred { .. })) =>
                     return Err(error),
                 // Earlier batches may already be in SQLite, alongside translations from prior routes.
@@ -195,10 +206,15 @@ impl Store {
                 rows.insert(first, row(first, last, unit.translation, unit.pdf_source, unit.pivot_language, legacy_group));
             }
         }
-        if let Some(error) = generation_error.filter(|_| rows.is_empty()) { return Err(error); }
+        if rows.is_empty() {
+            if let Some(error) = generation_error { return Err(error); }
+            if let Some(failure) = failures.values().next() { return Err(failure.clone().into()); }
+        }
         for (local, sentence) in document.sentences[physical.clone()].iter().enumerate() {
             if !covered[local] && !document_layout::skip_in_translation(&document, sentence) {
-                rows.insert(local, row(local, local, None, Some(sentence.text.clone()), None, false));
+                let mut pending = row(local, local, None, Some(sentence.text.clone()), None, false);
+                pending.failure = failures.remove(&local);
+                rows.insert(local, pending);
             }
         }
         Ok(rows.into_values().collect())

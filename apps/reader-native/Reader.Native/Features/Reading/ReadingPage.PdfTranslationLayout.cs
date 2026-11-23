@@ -227,6 +227,8 @@ public partial class ReadingPage
             }
             else if (text is null && translated == 0 && pdfLayoutRows.Length > 0)
                 text = photo ? "Фото очікує перекладу." : "Сторінка очікує перекладу.";
+            if (pdfLayoutRows.Select(row => row.Failure).FirstOrDefault(message => message is not null) is { } failure)
+                text = text is null ? failure : $"{text} {failure}";
             if (PdfPagePivotNotice(address) is { } pivotNotice)
                 text = text is null ? pivotNotice : $"{text} {pivotNotice}";
         }
@@ -377,13 +379,13 @@ public partial class ReadingPage
 
     private bool IsCurrentPdfTranslationSource(PdfLayoutAddress address) =>
         readingPageActive && !AppState.Session.Busy && TargetCode == address.Target &&
-        AppState.Session.Document is { Format: "pdf" } document &&
+        AppState.Session.Document is { } document && SupportsOriginalTranslationLayout(document) &&
         document.Id == address.Document && document.CurrentRevisionId == address.Revision;
 
     private Label PdfTranslationTextLabel(PdfPageTranslationRow row, double size, string? query = null)
     {
         if (row.Text is not { } text || !HasPdfTranslation(row))
-            return new Label { Text = UntranslatedPdfFragment, Style = (Style)Resources["ReaderMeta"] };
+            return new Label { Text = row.Failure ?? UntranslatedPdfFragment, Style = (Style)Resources["ReaderMeta"] };
         var label = new Label { FontFamily = "Georgia", FontSize = size, LineHeight = 1.3 };
         if (pdfLayoutSentence is { } active && row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16 &&
             query is not null && DocumentFind.SourceMatch(text, query) is { } match)
@@ -423,6 +425,14 @@ public partial class ReadingPage
             if (!cachedOnly) _ = FollowPdfTranslationBatchesAsync(address, request, translation);
             var rows = await translation;
             if (request != pdfLayoutRequestId || CurrentPdfLayoutAddress() != address) return;
+            if (cachedOnly)
+            {
+                var failures = pdfLayoutRows.Where(row => row.Failure is not null).ToDictionary(
+                    row => (row.StartUtf16, row.EndUtf16), row => row.Failure);
+                rows = Array.ConvertAll(rows, row => !HasPdfTranslation(row) &&
+                    failures.TryGetValue((row.StartUtf16, row.EndUtf16), out var failure)
+                    ? row with { Failure = failure } : row);
+            }
             pdfLayoutRows = rows;
             pdfLayoutStatus = rows.Length == 0 ? "На сторінці немає тексту для перекладу."
                 : !cachedOnly && rows.All(row => row.Text is null) ? "Переклад сторінки поки недоступний." : "";

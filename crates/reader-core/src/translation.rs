@@ -519,6 +519,8 @@ pub struct ParagraphUnit {
     pub pivot_language: Option<String>,
     #[serde(skip)]
     pub(crate) pdf_source: Option<String>,
+    #[serde(skip)]
+    pub(crate) translation_failure: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alignment: Option<TranslationAlignment>,
 }
@@ -632,11 +634,22 @@ pub(crate) fn translate_pdf_page(
             batch.push(text);
             indices.push(index);
         }
-        let translated = store.translate_units(provider, &document.id, &document.language, target, &batch)?;
-        for (index, translation) in indices.into_iter().zip(translated.segments) {
+        let translated = match store.translate_units(provider, &document.id, &document.language, target, &batch) {
+            Ok(translated) => translated,
+            Err(TranslationBatchError::Failed(failure)) => {
+                for index in indices {
+                    units[index].translation_failure = Some(failure.clone());
+                }
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        for ((index, translation), failure) in indices.into_iter().zip(translated.segments).zip(translated.failures) {
             if let Some(translation) = translation {
                 units[index].set_translation(translation.text);
                 units[index].pivot_language = translation.pivot_language;
+            } else {
+                units[index].translation_failure = failure;
             }
         }
     }
@@ -708,6 +721,7 @@ impl CacheRoutes {
             reviewed: false,
             pivot_language: aligned.route.pivot_language().map(str::to_owned),
             pdf_source: Some(source),
+            translation_failure: None,
             alignment: aligned.alignment,
         })))
     }
@@ -1166,6 +1180,7 @@ fn paragraph_plan(
             pivot_language: None,
             translation: None,
             pdf_source,
+            translation_failure: None,
             alignment: None,
         };
         if let Some(text) = review {
@@ -2387,6 +2402,7 @@ pub struct TranslationRequest<'a> {
 
 pub(crate) struct UnitsTranslation {
     pub(crate) segments: Vec<Option<UnitTranslation>>,
+    failures: Vec<Option<String>>,
     preferred_pivot: Option<String>,
 }
 
@@ -2490,6 +2506,7 @@ impl Store {
     ) -> std::result::Result<UnitsTranslation, TranslationBatchError> {
         let routes = ranked_routes(&provider.installed_models()?, source, target)?;
         let mut segments = vec![None; input.len()];
+        let mut failures = vec![None; input.len()];
         let preferred_pivot = routes.first().and_then(Route::pivot_language).map(str::to_owned);
         let mut first_failure = None;
         // A cached fallback remains reusable even if the preferred package is present.
@@ -2527,8 +2544,12 @@ impl Store {
                     Ok(text) => {
                         rows.push((unit_cache_key(route, &input[index])?, index));
                         segments[index] = Some(UnitTranslation::from_route(text, route));
+                        failures[index] = None;
                     }
-                    Err(error) => { first_failure.get_or_insert(error); }
+                    Err(error) => {
+                        failures[index].get_or_insert_with(|| error.clone());
+                        first_failure.get_or_insert(error);
+                    }
                 }
             }
             if !rows.is_empty() {
@@ -2547,7 +2568,7 @@ impl Store {
                 return Err(error.into());
             }
         }
-        Ok(UnitsTranslation { segments, preferred_pivot })
+        Ok(UnitsTranslation { segments, failures, preferred_pivot })
     }
 
     fn cached_segments(
