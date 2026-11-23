@@ -73,24 +73,30 @@ internal static partial class PdfScan
         return (pages, pageLimit);
     }
 
-    internal static Task<(int Page, string Text)[]> FindUnreadTextAsync(string path, int[] pages,
-        string query, int limit, CancellationToken cancellation) =>
+    internal static Task<(int Page, int Occurrence, string Text)[]> FindUnreadTextAsync(string path, int[] pages,
+        int firstOccurrence, string query, int limit, CancellationToken cancellation) =>
         Task.Run(() =>
         {
             using var pool = new NSAutoreleasePool();
             using var document = Open(path);
-            var matches = new List<(int Page, string Text)>(limit);
+            var matches = new List<(int Page, int Occurrence, string Text)>(limit);
             foreach (var index in pages)
             {
                 cancellation.ThrowIfCancellationRequested();
                 using var pagePool = new NSAutoreleasePool();
                 using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
                 var text = TextLayer(page, out _).Text;
-                if (!DocumentFind.Contains(text, query)) continue;
-                var excerpt = new System.Globalization.StringInfo(DocumentFind.MatchingExcerpt(text, query));
-                matches.Add((index, excerpt.LengthInTextElements > 240
-                    ? excerpt.SubstringByTextElements(0, 240) + "…" : excerpt.String));
-                if (matches.Count == limit) break;
+                var occurrence = 0;
+                foreach (var match in DocumentFind.SourceMatches(text, query))
+                {
+                    cancellation.ThrowIfCancellationRequested();
+                    var position = occurrence++;
+                    if (index == pages[0] && position < firstOccurrence) continue;
+                    var excerpt = new System.Globalization.StringInfo(DocumentFind.MatchingExcerpt(text, match));
+                    matches.Add((index, position, excerpt.LengthInTextElements > 240
+                        ? excerpt.SubstringByTextElements(0, 240) + "…" : excerpt.String));
+                    if (matches.Count == limit) return matches.ToArray();
+                }
             }
             return matches.ToArray();
         }, cancellation);

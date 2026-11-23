@@ -32,44 +32,52 @@ public static class DocumentFind
 
     public static string MatchingExcerpt(string text, string query)
     {
-        if (MatchRange(text, query) is not { } match) return text;
+        return SourceMatch(text, query) is { } match ? MatchingExcerpt(text, match, keepOpening: true) : text;
+    }
 
+    public static string MatchingExcerpt(string text, TextSelection match, bool keepOpening = false)
+    {
         var starts = System.Globalization.StringInfo.ParseCombiningCharacters(text);
-        var matchStart = Array.BinarySearch(starts, match.Start);
-        return matchStart < 40 ? text : "…" + text[starts[matchStart - 8]..];
+        var matchStart = Array.BinarySearch(starts, match.StartUtf16);
+        return matchStart <= (keepOpening ? 39 : 8) ? text : "…" + text[starts[matchStart - 8]..];
     }
 
     public static TextSelection? SourceMatch(Sentence sentence, string query) =>
         SourceMatch(sentence.Text, query, sentence.StartUtf16);
 
     public static TextSelection? SourceMatch(string source, string query, int startUtf16 = 0) =>
-        MatchRange(source, query) is { } range
-            ? new TextSelection(startUtf16 + range.Start, range.End - range.Start, source[range.Start..range.End])
-            : null;
+        SourceMatches(source, query, startUtf16).FirstOrDefault();
 
-    private static (int Start, int End)? MatchRange(string source, string query)
+    public static IEnumerable<TextSelection> SourceMatches(string source, string query, int startUtf16 = 0)
     {
         var needle = Normalize(query.Trim());
-        if (needle.Length == 0) return null;
-        var match = Normalize(source).IndexOf(needle, StringComparison.OrdinalIgnoreCase);
-        if (match < 0) return null;
-        var endOfMatch = match + needle.Length;
+        if (needle.Length == 0) yield break;
+        var normalized = Normalize(source);
+        var match = normalized.IndexOf(needle, StringComparison.OrdinalIgnoreCase);
         var normalizedOffset = 0;
-        var sourceStart = -1;
+        var elementStart = 0;
+        var elementEnd = 0;
         var previousWhitespace = true;
         var elements = System.Globalization.StringInfo.GetTextElementEnumerator(source);
-        while (elements.MoveNext())
+        while (match >= 0)
         {
-            var value = elements.GetTextElement();
-            var whitespace = string.IsNullOrWhiteSpace(value);
-            if (whitespace && previousWhitespace) continue;
-            previousWhitespace = whitespace;
-            normalizedOffset += whitespace ? 1 : Canonical(value).Length;
-            if (sourceStart < 0 && normalizedOffset > match) sourceStart = elements.ElementIndex;
-            if (normalizedOffset >= endOfMatch)
-                return (sourceStart, elements.ElementIndex + value.Length);
+            var endOfMatch = match + needle.Length;
+            var sourceStart = normalizedOffset > match ? elementStart : -1;
+            while (normalizedOffset < endOfMatch && elements.MoveNext())
+            {
+                var value = elements.GetTextElement();
+                var whitespace = string.IsNullOrWhiteSpace(value);
+                if (whitespace && previousWhitespace) continue;
+                previousWhitespace = whitespace;
+                normalizedOffset += whitespace ? 1 : Canonical(value).Length;
+                elementStart = elements.ElementIndex;
+                elementEnd = elementStart + value.Length;
+                if (sourceStart < 0 && normalizedOffset > match) sourceStart = elementStart;
+            }
+            if (sourceStart < 0 || normalizedOffset < endOfMatch) yield break;
+            yield return new TextSelection(startUtf16 + sourceStart, elementEnd - sourceStart, source[sourceStart..elementEnd]);
+            match = normalized.IndexOf(needle, endOfMatch, StringComparison.OrdinalIgnoreCase);
         }
-        return null;
     }
 
     private static string Normalize(string text) =>

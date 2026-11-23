@@ -14,7 +14,7 @@ public partial class ReadingPage
         string Sentence, TextSelection? Span = null, string? Target = null, string? Query = null);
     private DocumentFindFocus? documentFindFocus;
 #if MACCATALYST
-    private sealed record UnreadPdfFind(string Document, int Page, string Query);
+    private sealed record UnreadPdfFind(string Document, int Page, string Query, int Occurrence);
     private UnreadPdfFind? pendingUnreadPdfFind;
 #endif
     private sealed record DocumentFindCursor(int Position, int? PhysicalPage = null, bool UnreadLayer = false);
@@ -51,7 +51,7 @@ public partial class ReadingPage
                 if (match.Query is { } query && readingPageActive && session.Document?.Id == document.Id &&
                     pdfWindow?.Center == unreadPage)
                 {
-                    pendingUnreadPdfFind = new(document.Id, unreadPage, query);
+                    pendingUnreadPdfFind = new(document.Id, unreadPage, query, match.Position);
                     ScheduleUnreadPdfFind();
                 }
                 return;
@@ -164,7 +164,7 @@ public partial class ReadingPage
             {
                 if (page.State == "detached" && detachedAddress is { } address &&
                     address.Document == find.Document && address.Page == find.Page &&
-                    DocumentFind.SourceMatch(address.Text, find.Query) is { } local)
+                    DocumentFind.SourceMatches(address.Text, find.Query).ElementAtOrDefault(find.Occurrence) is { } local)
                 {
                     await LoadDetachedSentenceAsync(address, position: null, sourceOffset: local.StartUtf16);
                     if (readingPageActive && ReferenceEquals(detachedAddress, address) && !loadingDetachedSentence &&
@@ -174,7 +174,8 @@ public partial class ReadingPage
                     return;
                 }
                 if (page.Span is not { } range || document.CurrentRevisionId is not { } revision ||
-                    DocumentFind.SourceMatch(page.Text, find.Query, range.StartUtf16) is not { } original ||
+                    DocumentFind.SourceMatches(page.Text, find.Query, range.StartUtf16)
+                        .ElementAtOrDefault(find.Occurrence) is not { } original ||
                     original.StartUtf16 > document.Text.Length - original.LengthUtf16 ||
                     !document.Text.AsSpan(original.StartUtf16, original.LengthUtf16).SequenceEqual(original.Text))
                     return;
@@ -256,6 +257,9 @@ public partial class ReadingPage
         var inTranslation = false;
         var currentStart = new DocumentFindCursor(0);
         DocumentFindCursor? nextStart = null;
+#if MACCATALYST
+        int[]? unreadPages = null;
+#endif
         var searching = false;
         page.Disappearing += (_, _) => closed.TrySetResult(null);
         page.Loaded += (_, _) => page.Dispatcher.Dispatch(() => entry.Focus());
@@ -286,6 +290,9 @@ public partial class ReadingPage
             query = entry.Text?.Trim() ?? "";
             inTranslation = target is not null && scope.SelectedIndex == 1;
             earlierPages.Clear();
+#if MACCATALYST
+            unreadPages = null;
+#endif
             await ShowResultsAsync(new DocumentFindCursor(0));
         }
 
@@ -316,7 +323,8 @@ public partial class ReadingPage
                 foreach (var match in page.Matches)
                 {
                     var selection = match.Selection with { Query = query };
-                    var text = DocumentFind.MatchingExcerpt(match.Text, query);
+                    var text = selection is { PhysicalPage: not null, SentenceId: null } && !selection.Translation
+                        ? match.Text : DocumentFind.MatchingExcerpt(match.Text, query);
                     var label = selection.PhysicalPage is int physicalPage
                         ? $"PDF {physicalPage + 1} · {(selection.SentenceId is null ? text : BookmarkLabel(selection.Position, text))}"
                         : BookmarkLabel(selection.Position, text);
@@ -344,7 +352,7 @@ public partial class ReadingPage
         {
             var matches = new List<DocumentFindHit>(DocumentFind.PageSize);
 #if MACCATALYST
-            if (start.UnreadLayer) return await AppendUnreadAsync(matches, start.PhysicalPage ?? 0, token);
+            if (start.UnreadLayer) return await AppendUnreadAsync(matches, start.PhysicalPage ?? 0, start.Position, token);
 #endif
             if (start.PhysicalPage is null)
             {
@@ -357,24 +365,27 @@ public partial class ReadingPage
             var cached = await AppendDetachedAsync(matches, start, null, token);
 #if MACCATALYST
             if (cached.Next is null && document.Format == "pdf")
-                return await AppendUnreadAsync(matches, 0, token);
+                return await AppendUnreadAsync(matches, 0, 0, token);
 #endif
             return cached;
         }
 
 #if MACCATALYST
-        async Task<DocumentFindPage> AppendUnreadAsync(List<DocumentFindHit> matches, int start, CancellationToken token)
+        async Task<DocumentFindPage> AppendUnreadAsync(List<DocumentFindHit> matches, int start, int occurrence,
+            CancellationToken token)
         {
-            var pages = await session.UnreadPdfTextPagesAsync(document.Id, token);
-            var pending = pages.Where(page => page >= start).ToArray();
+            unreadPages ??= await session.UnreadPdfTextPagesAsync(document.Id, token);
+            var pending = unreadPages.Where(page => page >= start).ToArray();
             if (pending.Length == 0 || await session.OriginalFileAsync(document.Id) is not { } original)
                 return new(matches.ToArray(), null);
 
             var space = DocumentFind.PageSize - matches.Count;
-            var found = await PdfScan.FindUnreadTextAsync(original.Path, pending, query, space + 1, token);
+            var found = await PdfScan.FindUnreadTextAsync(original.Path, pending, pending[0] == start ? occurrence : 0,
+                query, space + 1, token);
             matches.AddRange(found.Take(space).Select(hit => new DocumentFindHit(hit.Text,
-                new DocumentFindSelection(0, Translation: false, PhysicalPage: hit.Page))));
-            var next = found.Length > space ? new DocumentFindCursor(0, found[space].Page, UnreadLayer: true) : null;
+                new DocumentFindSelection(hit.Occurrence, Translation: false, PhysicalPage: hit.Page))));
+            var next = found.Length > space
+                ? new DocumentFindCursor(found[space].Occurrence, found[space].Page, UnreadLayer: true) : null;
             return new(matches.ToArray(), next);
         }
 
