@@ -173,7 +173,7 @@ internal sealed class OriginalPage : ContentPage
         base.OnAppearing();
         visible = true;
         if (image.Source is null) await LoadAsync(pageIndex);
-        else QueuePageOcr(pageIndex);
+        else if (!editing) QueuePageOcr(pageIndex);
     }
 
     protected override void OnDisappearing()
@@ -740,15 +740,14 @@ internal sealed class OriginalPage : ContentPage
                         : $"Перевірено рядків: {review.CheckedLines}. Виправлень немає.");
                 return;
             }
-            var preview = string.Join("\n\n", review.Corrections.Select(edit => $"{edit.Source}\n→ {edit.Replacement}"));
-            var apply = await DisplayAlertAsync("Застосувати виправлення OCR?", preview, "Застосувати", "Залишити");
-            if (!IsCurrent() || session.Busy) return;
-            if (!apply)
+            var selected = await OcrCorrectionReviewPage.ChooseAsync(Navigation, review.Corrections);
+            if (selected is null || !IsCurrent() || session.Busy) return;
+            if (selected.Length == 0)
             {
                 FinishOcrReviewBatch(review, page, detached, revision, "Рядки залишено як є.");
                 return;
             }
-            await session.ApplyOcrPageReviewAsync(documentId, page, detached, revision, review.Corrections);
+            await session.ApplyOcrPageReviewAsync(documentId, page, detached, revision, selected);
             if (!visible || page != pageIndex || session.Document?.Id != documentId) return;
             if (session.Error.Length > 0)
             {
@@ -763,13 +762,15 @@ internal sealed class OriginalPage : ContentPage
             ApplyOcrLines(updatedPage);
             var updatedRevision = updatedPage?.Revision ?? session.Document?.CurrentRevisionId;
             if (updatedRevision is not null)
-                FinishOcrReviewBatch(review, page, detached, updatedRevision, $"Виправлено рядків: {review.Corrections.Length}.");
+                FinishOcrReviewBatch(review, page, detached, updatedRevision, $"Виправлено рядків: {selected.Length}.");
         }
         catch (Exception error) { if (visible && page == pageIndex) editStatus.Text = error.Message; }
         finally
         {
             editing = false;
             UpdateEditButtons();
+            if (visible && page == pageIndex && pageOcr?.IsCancellationRequested != false)
+                QueuePageOcr(page);
         }
     }
 
