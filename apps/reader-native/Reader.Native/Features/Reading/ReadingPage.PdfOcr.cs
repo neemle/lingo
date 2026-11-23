@@ -108,6 +108,7 @@ public partial class ReadingPage
     private (string Id, int Page, string Language)? pdfOcrFocus;
     private CancellationTokenSource? readerPdfOcr;
     private Task readerPdfOcrTask = Task.CompletedTask;
+    private TaskCompletionSource? narrationPageUpdated;
     private Task detachedInitialSentence = Task.CompletedTask;
     private string? pdfOcrError;
     private DateTimeOffset pdfOcrRetryAt;
@@ -185,6 +186,7 @@ public partial class ReadingPage
             }
             var revealingText = PdfPageNotice.IsVisible;
             UpdatePdfPageDisplay();
+            narrationPageUpdated?.TrySetResult();
             if (!PdfPageNotice.IsVisible && (pageChanged || revealingText))
             {
                 var span = window.Pages.FirstOrDefault(item => item.Page == window.Center)?.Span;
@@ -349,16 +351,7 @@ public partial class ReadingPage
                     !readingPageActive || !ContinueSpeech.IsChecked) return;
                 await OpenPdfPageAsync(nextPage, narration);
                 token.ThrowIfCancellationRequested();
-                if (pdfWindow is not { } opened || opened.Center != nextPage) return;
-
-                var page = opened.Pages.FirstOrDefault(candidate => candidate.Page == nextPage);
-                if (page is { State: "needsOcr" or "needsTextLayer" } or { State: "empty", RefreshPending: true })
-                {
-                    if (readerPdfOcr is null) return;
-                    await readerPdfOcrTask.WaitAsync(token);
-                    await pdfWindowRead.WaitAsync(token);
-                    page = pdfWindow?.Pages.FirstOrDefault(candidate => candidate.Page == nextPage);
-                }
+                var page = await WaitForNarrationPageAsync(documentId, nextPage, token);
                 if (!readingPageActive || session.Document?.Id != documentId || !ContinueSpeech.IsChecked)
                     return;
                 if (page is { State: "empty", RefreshPending: false }) continue;
@@ -416,6 +409,31 @@ public partial class ReadingPage
         {
             if (ReferenceEquals(detachedSpeechTravel, narration)) detachedSpeechTravel = null;
         }
+    }
+
+    private async Task<PdfReadPage?> WaitForNarrationPageAsync(string documentId, int page, CancellationToken token)
+    {
+        while (pdfSnapshot?.Id == documentId && pdfWindow is { } window && window.Center == page)
+        {
+            var current = Array.Find(window.Pages, candidate => candidate.Page == page);
+            if (current is not ({ State: "needsOcr" or "needsTextLayer" } or { State: "empty", RefreshPending: true }))
+                return current;
+            if (readerPdfOcr is null) return null;
+
+            // A window can keep processing neighbouring pages after this page is ready.
+            var updated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            narrationPageUpdated = updated;
+            try
+            {
+                await Task.WhenAny(updated.Task, readerPdfOcrTask).WaitAsync(token);
+                await pdfWindowRead.WaitAsync(token);
+            }
+            finally
+            {
+                if (ReferenceEquals(narrationPageUpdated, updated)) narrationPageUpdated = null;
+            }
+        }
+        return null;
     }
 
     private static bool OverlapsPdfPage(Sentence? sentence, OcrSpan span) =>
