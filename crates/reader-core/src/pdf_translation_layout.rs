@@ -40,6 +40,11 @@ impl Bounds {
             self.bottom().min(other.bottom()) - self.y.max(other.y),
         )
     }
+
+    fn reading_box(self, rotation: u16) -> Self {
+        let (x, y, width, height) = crate::ocr::reading_box((self.x, self.y, self.width, self.height), rotation);
+        Self { x, y, width, height }
+    }
 }
 
 struct SourceFragment {
@@ -156,9 +161,9 @@ fn plan(fragments: &[SourceFragment]) -> Result<PageLayout> {
     });
     remove_overlapping_regions(&mut page);
     for region in &mut page.regions {
-        if region.rotation != 0 { continue; }
         region.alignment = infer_alignment(
-            region.fragments.iter().flat_map(|&index| fragments[index].ink_boxes.iter().copied()),
+            region.fragments.iter().flat_map(|&index| fragments[index].ink_boxes.iter()
+                .map(|bounds| bounds.reading_box(region.rotation))),
             region.line_height,
         );
     }
@@ -233,7 +238,7 @@ fn fits(
     block: Option<usize>,
     fragments: &[SourceFragment],
 ) -> bool {
-    if previous.rotation != region.rotation || region.rotation != 0 {
+    if previous.rotation != region.rotation || (region.rotation != 0 && block.is_none()) {
         return false;
     }
     if fragments[previous.fragments[0]].block_index != block {
@@ -252,11 +257,13 @@ fn fits(
     {
         return false;
     }
-    let (horizontal, vertical) = previous.bounds.overlap(region.bounds);
+    let previous_bounds = previous.bounds.reading_box(region.rotation);
+    let bounds = region.bounds.reading_box(region.rotation);
+    let (horizontal, vertical) = previous_bounds.overlap(bounds);
     horizontal > 0.0
         && (vertical > 0.001
             || (block.is_some()
-                && horizontal >= 0.4 * previous.bounds.width.min(region.bounds.width)
+                && horizontal >= 0.4 * previous_bounds.width.min(bounds.width)
                 && -vertical <= 0.9 * previous.line_height.min(region.line_height)))
 }
 
@@ -318,6 +325,22 @@ mod tests {
         .unwrap();
         assert_eq!(page.overflow, [0, 1]);
         assert_eq!(page.regions[0].fragments, [2]);
+    }
+
+    #[test]
+    fn groups_adjacent_rotated_fragments_inside_only_their_document_block() {
+        let make = |x, block, index| {
+            let mut result = fragment(x, 0.2, block, index);
+            result.bounds = Some(Bounds { x, y: 0.2, width: 0.02, height: 0.3 });
+            result.rotation = Some(90);
+            result
+        };
+        let page = plan(&[make(0.8, 1, 0), make(0.773, 1, 7), make(0.746, 2, 14)]).unwrap();
+        assert_eq!(page.regions.len(), 2);
+        assert_eq!(page.regions[0].fragments, [0, 1]);
+        assert_eq!(page.regions[1].fragments, [2]);
+        assert_eq!(page.regions[0].rotation, 90);
+        assert!((page.regions[0].bounds.width - 0.047).abs() < 0.00001);
     }
 
     #[test]

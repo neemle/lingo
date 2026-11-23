@@ -1,6 +1,18 @@
 use super::OcrLine;
 use crate::Result;
 
+/// Convert an original-page rectangle to reading coordinates for a quarter turn.
+pub(crate) fn reading_box((x, y, width, height): (f64, f64, f64, f64), angle: u16)
+    -> (f64, f64, f64, f64)
+{
+    match angle {
+        90 => (y, 1.0 - x - width, height, width),
+        180 => (1.0 - x - width, 1.0 - y - height, width, height),
+        270 => (1.0 - y - height, x, height, width),
+        _ => (x, y, width, height),
+    }
+}
+
 /// Fold trustworthy sideways or inverted lines into the portable result.
 /// Both recognizers report coordinates in the original preview.
 pub fn merge_rotated_lines(

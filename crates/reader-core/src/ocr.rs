@@ -6,6 +6,7 @@ use crate::{Result, MAX_IMPORT};
 mod tesseract;
 mod orientation;
 pub use orientation::merge_rotated_lines;
+pub(crate) use orientation::reading_box;
 pub use tesseract::{parse_tesseract_tsv, recover_tesseract_lines};
 pub(crate) use tesseract::merge_missing_lines;
 

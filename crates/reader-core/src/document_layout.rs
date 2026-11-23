@@ -347,10 +347,11 @@ pub(crate) fn reflow_ocr_paragraphs(document: &mut Document) {
     for page in lines.chunk_by(|left, right| left.page == right.page) {
         if page.iter().any(|line| line.source_span.is_none()) { continue; }
         let page_number = usize::from(page[0].page);
-        let mut heights: Vec<f64> = page.iter().map(|line| line.height).collect();
+        let mut heights: Vec<f64> = page.iter().filter(|line| !line.is_rotated()).map(|line| line.height).collect();
         heights.sort_by(f64::total_cmp);
-        let height = heights[heights.len() / 2];
-        let mut left_edges: Vec<f64> = page.iter().filter(|line| line.width >= 0.2).map(|line| line.x).collect();
+        let height = heights.get(heights.len() / 2).copied().unwrap_or(0.0);
+        let mut left_edges: Vec<f64> = page.iter().filter(|line| !line.is_rotated() && line.width >= 0.2)
+            .map(|line| line.x).collect();
         left_edges.sort_by(f64::total_cmp);
         let body_left = left_edges.get(left_edges.len() / 4).copied().unwrap_or(page[0].x);
         let page_start = page[0].source_span.expect("verified OCR span").start_utf8;
@@ -366,7 +367,8 @@ pub(crate) fn reflow_ocr_paragraphs(document: &mut Document) {
         // OCR can omit the superscript numbers. A run of small definitions at the
         // bottom of a page is enough evidence to keep them out of the prose.
         for run in page.chunk_by(|left, right| {
-            let definition = |line: &crate::ocr::OcrLine| line.reading_text().starts_with(char::is_uppercase)
+            let definition = |line: &crate::ocr::OcrLine| !line.is_rotated()
+                && line.reading_text().starts_with(char::is_uppercase)
                 && glossary_definition(line.reading_text());
             definition(left) && definition(right)
         }) {
@@ -384,6 +386,7 @@ pub(crate) fn reflow_ocr_paragraphs(document: &mut Document) {
         }
         for pair in page.windows(2) {
             let [previous, next] = pair else { continue; };
+            if previous.is_rotated() || next.is_rotated() { continue; }
             let previous_text = previous.reading_text().trim();
             let next_text = next.reading_text().trim_start();
             let close_lines = next.y - previous.y <= (height * 1.9).max(0.045);
@@ -426,14 +429,16 @@ pub(crate) fn reflow_ocr_paragraphs(document: &mut Document) {
 
 fn numbered_ocr_footnotes(page: &[crate::ocr::OcrLine]) -> Vec<Range<usize>> {
     let mut body_sizes: Vec<_> = page.iter()
-        .filter(|line| line.y < 0.72 && line.width >= 0.20)
+        .filter(|line| !line.is_rotated() && line.y < 0.72 && line.width >= 0.20)
         .map(|line| line.height).collect();
     if body_sizes.len() < 3 {
         return Vec::new();
     }
     body_sizes.sort_by(f64::total_cmp);
     let body_height = body_sizes[body_sizes.len() / 2];
-    let is_note_sized = |line: &crate::ocr::OcrLine| line.y >= 0.72 && line.height <= body_height * 0.83;
+    let is_note_sized = |line: &crate::ocr::OcrLine| {
+        !line.is_rotated() && line.y >= 0.72 && line.height <= body_height * 0.83
+    };
     let Some(first) = (1..page.len()).find(|&index| {
         let (line, previous) = (&page[index], &page[index - 1]);
         is_note_sized(line) && line.y - (previous.y + previous.height) >= body_height * 0.55

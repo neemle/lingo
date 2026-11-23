@@ -15,9 +15,42 @@ pub(crate) fn reconstruct_blocks(lines: &mut Vec<OcrLine>) {
         while let Some(line) = input.next_if(|line| line.page == page_number) {
             page.push(line);
         }
+        group_rotated_lines(&mut page);
         result.extend(reconstruct_with_drop_caps(&page).unwrap_or(page));
     }
     *lines = result;
+}
+
+fn group_rotated_lines(page: &mut [OcrLine]) {
+    let reading_box = |line: &OcrLine| {
+        crate::ocr::reading_box((line.x, line.y, line.width, line.height), line.rotation.unwrap_or(0))
+    };
+    for paragraph in page.chunk_by_mut(|first, second| {
+        if !first.is_rotated() || first.rotation != second.rotation
+            || [first, second].into_iter().any(|line| {
+                line.correction.is_some() || line.reading_text().split_whitespace().take(2).count() < 2
+            })
+        {
+            return false;
+        }
+        let (a, b) = if reading_box(first).1 <= reading_box(second).1 { (first, second) } else { (second, first) };
+        let (ax, ay, aw, ah) = reading_box(a);
+        let (bx, by, bw, bh) = reading_box(b);
+        let thickness = ah.min(bh);
+        let overlap = (ax + aw).min(bx + bw) - ax.max(bx);
+        let gap = by - (ay + ah);
+        thickness > 0.0 && ah.max(bh) <= 1.45 * thickness
+            && (-0.18 * thickness..=0.85 * thickness).contains(&gap)
+            && (ax - bx).abs() <= 0.15 * aw.min(bw)
+            && overlap >= 0.65 * aw.min(bw)
+            && !crate::document_layout::keep_pdf_sentence_break(a.reading_text(), b.reading_text())
+    }) {
+        if !paragraph[0].is_rotated() { continue; }
+        paragraph.sort_by(|first, second| reading_box(first).1.total_cmp(&reading_box(second).1));
+        for (index, line) in paragraph.iter_mut().enumerate() {
+            line.block_start = index == 0;
+        }
+    }
 }
 
 pub(crate) fn upgrade_cached_page(lines: &[OcrLine], text: &str) -> Option<(Vec<OcrLine>, String, Vec<TranscriptEdit>)> {
@@ -138,7 +171,7 @@ fn reconstruct_page(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
     }
     let starts = ordered.as_deref().unwrap_or(lines).windows(2).enumerate()
         .filter_map(|(index, pair)| {
-            (pair[0].is_rotated() != pair[1].is_rotated()
+            (pair[0].rotation != pair[1].rotation && (pair[0].is_rotated() || pair[1].is_rotated())
                 || (!pair[0].is_rotated() && vertical_block_break(&pair[0], &pair[1])))
                 .then_some(index + 1)
         })
@@ -302,6 +335,25 @@ fn slice_line(line: &OcrLine, start: usize, end: usize) -> Option<OcrLine> {
 mod tests {
     use super::*;
     use crate::ocr::OcrWord;
+
+    #[test]
+    fn restores_rotated_reading_order_without_joining_an_independent_label() {
+        let line = |text: &str, x| OcrLine {
+            rotation: Some(90), page: 0, text: text.into(), x, y: 0.1, width: 0.02, height: 0.4,
+            confidence: Some(0.98), correction: None, block_start: true,
+            source_span: None, words: vec![],
+        };
+        let mut lines = vec![
+            line("les voyageurs du village.", 0.77),
+            line("Le marin retrouve", 0.80),
+            line("Jardin", 0.74),
+        ];
+        reconstruct_blocks(&mut lines);
+        assert_eq!(crate::ocr::recognized_lines(&lines, 1).unwrap(),
+            "Le marin retrouve\nles voyageurs du village.\n\nJardin");
+        assert_eq!(lines[0].x, 0.80);
+        assert_eq!(lines[1].x, 0.77);
+    }
 
     #[test]
     fn scanned_drop_cap_joins_word_and_updates_geometry() {
