@@ -79,6 +79,7 @@ public partial class ReadingPage : ContentPage
             pdfLayoutRows = [];
             lastCacheRestore = null;
             detachedMachineTranslation = null;
+            InvalidateModelPassageCache();
         }
         LoadReaderPreferences();
         inlinePdfFitWidth = readerPreferences.PdfFitWidth ?? true;

@@ -161,6 +161,15 @@ fn write(db: &Connection, preferences: &ReaderPreferences) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn disable_background_translation(db: &Connection) -> Result<()> {
+    let mut preferences = read(db)?;
+    if preferences.background_translation == Some(true) {
+        preferences.background_translation = Some(false);
+        write(db, &preferences)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn restore(db: &Connection, incoming: ReaderPreferences) -> Result<()> {
     if incoming.is_empty() {
         return Ok(());

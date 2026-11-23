@@ -53,14 +53,16 @@ public partial class SettingsPage
 
     private async void RefreshStorageClicked(object? sender, EventArgs args) => await RefreshStorageAsync();
 
-    private async Task RefreshStorageAsync()
+    private async Task RefreshStorageAsync(bool syncWorker = false)
     {
         loadingStorage = true;
         StorageControls.IsEnabled = false;
         try
         {
             var session = AppState.Session;
-            BackgroundTranslationSwitch.IsToggled = session.GetReaderPreferences().BackgroundTranslation == true;
+            var backgroundEnabled = session.GetReaderPreferences().BackgroundTranslation == true;
+            BackgroundTranslationSwitch.IsToggled = backgroundEnabled;
+            if (syncWorker) AppState.TranslationWorker?.SetEnabled(backgroundEnabled);
             var usage = await session.StorageUsageAsync();
             var files = await Task.Run(() =>
             {
@@ -143,18 +145,13 @@ public partial class SettingsPage
                 return;
             }
             if (AppState.TranslationWorker is { } worker) await worker.PauseAsync();
-            if (scope == "cache") SetBackgroundTranslation(false);
             var session = AppState.Session;
+            if (scope != "downloads") AppState.InvalidateReaderCache();
             try
             {
                 await session.ClearStorageAsync(scope);
-                var reset = scope == "all";
-                if (scope != "downloads") AppState.InvalidateReaderCache();
-                if (reset)
-                {
-                    AppState.TranslationWorker?.SetEnabled(false);
+                if (scope == "all")
                     Preferences.Default.Clear();
-                }
                 await Task.Run(() => RemoveAuxiliaryFiles(scope));
                 StorageStatus.Text = "Готово.";
             }
@@ -180,8 +177,8 @@ public partial class SettingsPage
             if (importGateHeld)
             {
                 DesktopImport.Gate.Release();
+                await RefreshStorageAsync(syncWorker: scope != "downloads");
                 AppState.TranslationWorker?.Resume(clearProgress: true);
-                await RefreshStorageAsync();
             }
             changingStorage = false;
             StorageControls.IsEnabled = true;

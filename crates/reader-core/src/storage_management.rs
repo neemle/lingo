@@ -6,7 +6,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const CACHE_TABLES: [&str; 3] = ["translation_cache", "linguistic_annotations", "model_hints"];
+const CACHE_TABLES: [&str; 5] = [
+    "translation_cache",
+    "linguistic_annotations",
+    "model_hints",
+    "translation_windows",
+    "background_translation_progress",
+];
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,12 +62,20 @@ impl Store {
                         AND EXISTS(SELECT 1 FROM translation_cache))
                     OR (tbl_name='linguistic_annotations' AND EXISTS(SELECT 1 FROM linguistic_annotations))
                     OR (tbl_name='model_hints' AND EXISTS(SELECT 1 FROM model_hints))
+                    OR (tbl_name='translation_windows' AND EXISTS(SELECT 1 FROM translation_windows))
+                    OR (tbl_name='background_translation_progress' AND EXISTS(SELECT 1 FROM background_translation_progress))
             )",
             [], |row| row.get::<_, i64>(0),
         ).or_else(|_| self.connection.query_row(
             "SELECT (SELECT coalesce(sum(length(CAST(body AS BLOB)) + length(key)), 0) FROM translation_cache)
                   + (SELECT coalesce(sum(length(CAST(annotation_blob AS BLOB)) + length(cache_key)), 0) FROM linguistic_annotations)
-                  + (SELECT coalesce(sum(length(CAST(annotation_blob AS BLOB)) + length(cache_key)), 0) FROM model_hints)",
+                  + (SELECT coalesce(sum(length(CAST(annotation_blob AS BLOB)) + length(cache_key)), 0) FROM model_hints)
+                  + (SELECT coalesce(sum(length(document_id) + length(sentence_id) + length(revision_id)
+                              + length(source) + length(target) + coalesce(length(lease), 0)), 0)
+                        FROM translation_windows)
+                  + (SELECT coalesce(sum(length(document_id) + length(target) + length(revision_id)
+                              + coalesce(length(CAST(route_identity AS BLOB)), 0)), 0)
+                        FROM background_translation_progress)",
             [], |row| row.get::<_, i64>(0),
         )).map_err(storage_error)?;
         let mut usage = StorageUsage {
@@ -85,10 +99,7 @@ impl Store {
                     .connection
                     .transaction_with_behavior(TransactionBehavior::Immediate)
                     .map_err(storage_error)?;
-                tx.execute_batch(
-                    "DELETE FROM translation_windows; DELETE FROM background_translation_progress;",
-                )
-                .map_err(storage_error)?;
+                crate::reader_preferences::disable_background_translation(&tx)?;
                 for table in CACHE_TABLES {
                     tx.execute(&format!("DELETE FROM {table}"), [])
                         .map_err(storage_error)?;
@@ -218,14 +229,6 @@ mod tests {
         store
             .update_reader_preference(ReaderPreferenceChange::BackgroundTranslation { value: true })
             .unwrap();
-        store
-            .connection
-            .execute(
-                "INSERT INTO translation_cache VALUES ('test', '[\"cached\"]')",
-                [],
-            )
-            .unwrap();
-
         let revision = document.current_revision_id.as_deref().unwrap();
         store
             .advance_background_translation(&document.id, revision, "uk")
@@ -241,6 +244,14 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(progress_count(&store), 1);
+        assert!(store.storage_usage().unwrap().database_cache_bytes > 0);
+        store
+            .connection
+            .execute(
+                "INSERT INTO translation_cache VALUES ('test', '[\"cached\"]')",
+                [],
+            )
+            .unwrap();
 
         let model = store.optional_model_directory.join("voice");
         let audio = model.join(".speech-cache");
@@ -253,7 +264,19 @@ mod tests {
         assert_eq!(usage.audio_cache_bytes, 64);
         assert!(usage.database_cache_bytes > 0);
 
+        store.connection.execute_batch(
+            "CREATE TEMP TRIGGER reject_cache_delete BEFORE DELETE ON translation_cache
+             BEGIN SELECT RAISE(ABORT, 'test cache deletion failure'); END;",
+        ).unwrap();
+        assert!(store.clear_storage(StorageScope::Cache).is_err());
+        assert_eq!(store.reader_preferences().unwrap().background_translation, Some(true));
+        assert_eq!(progress_count(&store), 1);
+        store.connection.execute_batch("DROP TRIGGER reject_cache_delete;").unwrap();
+
         store.clear_storage(StorageScope::Cache).unwrap();
+        assert_eq!(progress_count(&store), 0);
+        assert_eq!(store.reader_preferences().unwrap().background_translation, Some(false));
+        store.advance_background_translation(&document.id, revision, "uk").unwrap();
         assert_eq!(progress_count(&store), 0);
         assert_eq!(store.snapshot().unwrap().documents.len(), 1);
         let usage = store.storage_usage().unwrap();

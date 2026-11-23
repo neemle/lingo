@@ -76,6 +76,16 @@ public partial class ReadingPage
             _ = cancellation.CancelAsync();
     }
 
+    private void InvalidateModelPassageCache()
+    {
+        CancelModelPassage();
+        cachedPassageRequest++;
+        requestedCachedPassage = null;
+        modelPassageResult = null;
+        modelPassageError = null;
+        inspectingModelSource = null;
+    }
+
     private void UpdateModelTranslation()
     {
         var address = CurrentModelPassage();
