@@ -4,7 +4,8 @@ public sealed record StorageUsage(long DatabaseBytes, long OriginalBytes, long D
     long DatabaseCacheBytes, long AudioCacheBytes);
 
 public sealed record BackgroundTranslationProgress(long? ResumeAt, int? TranslatedPage = null,
-    TranslationPair[]? MissingPackages = null, string[]? TranslatedSentenceIds = null, int? PendingPdfTextPage = null);
+    TranslationPair[]? MissingPackages = null, string[]? TranslatedSentenceIds = null,
+    int? PendingPdfTextPage = null, bool WaitingForPdfOcr = false);
 
 public sealed record BackgroundTranslatedPage(string DocumentId, string RevisionId, int Page, string Target);
 public sealed record BackgroundTranslatedText(string DocumentId, string RevisionId, string Target, string[] SentenceIds);

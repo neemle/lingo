@@ -301,7 +301,7 @@ pub struct TranslationWarmStep {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackgroundTranslationProgress {
-    // Zero means the next step is ready. No deadline means the document is complete.
+    // Zero means the next step is ready. No deadline means no work is scheduled.
     resume_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     translated_page: Option<u16>,
@@ -311,6 +311,8 @@ pub struct BackgroundTranslationProgress {
     missing_packages: Option<Vec<crate::translation::TranslationPair>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pending_pdf_text_page: Option<u16>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    waiting_for_pdf_ocr: bool,
 }
 
 impl Store {
@@ -327,6 +329,7 @@ impl Store {
             translated_sentence_ids: Vec::new(),
             missing_packages: None,
             pending_pdf_text_page: None,
+            waiting_for_pdf_ocr: false,
         };
         if self.reader_preferences()?.background_translation != Some(true) {
             return Ok(progress);
@@ -379,6 +382,8 @@ impl Store {
             return Ok(progress);
         };
         if resume_at.is_none() {
+            progress.waiting_for_pdf_ocr = document.format == "pdf"
+                && self.pdf_has_unprocessed_pages(&document)?;
             return Ok(progress);
         }
         if resume_at.is_some_and(|deadline| deadline > now) {
@@ -400,9 +405,9 @@ impl Store {
                         (cursor as usize, incomplete, Some(crate::now() + PDF_OCR_POLL_SECONDS))
                     } else if incomplete {
                         (0, false, Some(crate::now() + 300))
-                    } else if document.format == "pdf" && self.pdf_has_unprocessed_pages(&document)? {
-                        (cursor as usize, false, Some(crate::now() + PDF_OCR_POLL_SECONDS))
                     } else {
+                        progress.waiting_for_pdf_ocr = document.format == "pdf"
+                            && self.pdf_has_unprocessed_pages(&document)?;
                         (cursor as usize, false, None)
                     }
                 }
@@ -419,6 +424,7 @@ impl Store {
             progress.translated_page = None;
             progress.translated_sentence_ids.clear();
             progress.pending_pdf_text_page = None;
+            progress.waiting_for_pdf_ocr = false;
             return Ok(progress);
         }
         progress.resume_at = resume_at;

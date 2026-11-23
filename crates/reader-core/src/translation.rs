@@ -1645,6 +1645,51 @@ mod tests {
     }
 
     #[test]
+    fn background_pdf_waits_for_ocr_then_translates_the_recognized_page() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("library.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        let scan = root.path().join("scan.pdf");
+        std::fs::write(&scan, b"%PDF-1.4\n").unwrap();
+        let prepared = crate::file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "scan.pdf", &scan, "fr", vec![String::new(); 2], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let revision = document.current_revision_id.as_deref().unwrap();
+        store.update_reader_preference(
+            crate::reader_preferences::ReaderPreferenceChange::BackgroundTranslation { value: true },
+        ).unwrap();
+        let route = french_uk_route_with_invalid_assets(&store);
+        let progress = |store: &mut Store, revision: &str| {
+            serde_json::to_value(store.advance_background_translation(&document.id, revision, "uk").unwrap()).unwrap()
+        };
+        let waiting = progress(&mut store, revision);
+        assert_eq!(waiting["waitingForPdfOcr"], true);
+        assert!(waiting["resumeAt"].is_null());
+        assert!(waiting["pendingPdfTextPage"].is_null());
+        assert!(store.claim_pdf_ocr_page(&document.id).unwrap().is_none());
+        drop(store);
+
+        let mut store = Store::open(&path).unwrap();
+        assert_eq!(progress(&mut store, revision), waiting);
+        store.cache_pdf_ocr_page(&document.id, 0, vec![]).unwrap();
+        assert_eq!(progress(&mut store, revision), waiting);
+        let text = "Le bateau arrive.";
+        let updated = store.cache_pdf_ocr_page(&document.id, 1, vec![crate::ocr::OcrLine {
+            page: 1, text: text.into(), x: 0.1, y: 0.8, width: 0.8, height: 0.1,
+            confidence: Some(1.0), correction: None, words: vec![], source_span: None,
+        }]).unwrap();
+        let revision = updated.current_revision_id.as_deref().unwrap();
+        store.save_cached_segments([(
+            unit_cache_key(&route, text).unwrap(), &["Корабель прибуває.".into()][..],
+        )]).unwrap();
+        assert_eq!(progress(&mut store, revision)["translatedPage"], 1);
+        let complete = progress(&mut store, revision);
+        assert!(complete["waitingForPdfOcr"].is_null());
+        assert!(complete["resumeAt"].is_null());
+    }
+
+    #[test]
     fn background_text_progress_identifies_machine_translated_sentences() {
         let root = tempfile::tempdir().unwrap();
         let mut store = Store::open(&root.path().join("library.sqlite")).unwrap();

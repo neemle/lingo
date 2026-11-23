@@ -154,6 +154,7 @@ internal sealed class BackgroundTranslation
             var live = new HashSet<JobKey>();
             var ready = new List<(JobKey Key, Document Document)>();
             string? missing = null;
+            string? waitingForScan = null;
             var waiting = false;
             foreach (var document in session.Snapshot.Documents.OrderByDescending(doc => doc.Id == current))
             {
@@ -169,6 +170,8 @@ internal sealed class BackgroundTranslation
                     missing ??= packages.Length == 0
                         ? $"Офлайн-маршрут недоступний · {PairName(document.Language, target)}."
                         : $"Потрібні мовні пакети · {string.Join(", ", packages.Select(pair => PairName(pair.Source, pair.Target)))}.";
+                else if (job.WaitingForPdfOcr)
+                    waitingForScan ??= document.Title;
                 else if (job.ResumeAt is not null)
                     waiting = true;
             }
@@ -195,7 +198,8 @@ internal sealed class BackgroundTranslation
             }
             if (ready.Count == 0)
             {
-                SetStatus(missing ?? (waiting ? "Очікує на доступний текст PDF або повторну спробу."
+                SetStatus(missing ?? (waiting ? "Очікує на повторну спробу."
+                    : waitingForScan is not null ? $"Відкрийте сторінки «{waitingForScan}», щоб розпізнати текст для перекладу."
                     : "Чергу перекладу опрацьовано."));
                 return;
             }
