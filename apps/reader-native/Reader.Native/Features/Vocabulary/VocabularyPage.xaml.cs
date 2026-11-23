@@ -1,4 +1,5 @@
 using Reader.Contracts;
+using Reader.Native.Features.Practice;
 using Reader.Native.Services;
 using Reader.Presentation;
 using VocabularyCard = Reader.Contracts.Vocabulary;
@@ -234,7 +235,9 @@ public partial class VocabularyPage : ContentPage
 
     private async void PracticeClicked(object? sender, EventArgs args)
     {
-        try { await Shell.Current.GoToAsync(AppShell.PracticeRoute); }
+        var selected = ActiveCollection;
+        var scope = selected.DocumentId is { } id ? new PracticeCollection(id, selected.SourceHash) : null;
+        try { await Shell.Current.GoToAsync(AppShell.PracticeRoute, PracticePage.ForCollection(scope)); }
         catch (Exception error) { ShowArchiveStatus(error.Message); }
     }
 

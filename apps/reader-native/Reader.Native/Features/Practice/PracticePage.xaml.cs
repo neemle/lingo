@@ -5,9 +5,11 @@ using Reader.Native.Services;
 
 namespace Reader.Native.Features.Practice;
 
-public partial class PracticePage : ContentPage
+public partial class PracticePage : ContentPage, IQueryAttributable
 {
     private sealed record CollectionChoice(PracticeCollection? Scope, string Title);
+    private sealed record CollectionRequest(PracticeCollection? Scope);
+    private const string CollectionParameter = "practiceCollection";
 
     private static readonly CollectionChoice AllCards = new(null, "Усі картки");
     private const int MaxAnswerBytes = 2000;
@@ -22,8 +24,25 @@ public partial class PracticePage : ContentPage
     private bool renderingSettings;
     private bool grading;
     private bool visible;
+    private CollectionRequest? pendingCollection;
 
     public PracticePage() => InitializeComponent();
+
+    internal static ShellNavigationQueryParameters ForCollection(PracticeCollection? scope) =>
+        new() { [CollectionParameter] = new CollectionRequest(scope) };
+
+    public void ApplyQueryAttributes(IDictionary<string, object> query)
+    {
+        if (!query.TryGetValue(CollectionParameter, out var value) || value is not CollectionRequest request) return;
+        pendingCollection = request;
+        LoadRequestedCollection();
+    }
+
+    private void LoadRequestedCollection()
+    {
+        if (visible && !loading && !grading && pendingCollection is not null)
+            _ = LoadAsync(refreshLibrary: true);
+    }
 
     protected override async void OnAppearing()
     {
@@ -48,6 +67,7 @@ public partial class PracticePage : ContentPage
         PracticeSettings? settings = null)
     {
         var request = ++loadVersion;
+        var collectionAtStart = pendingCollection;
         StopPronunciation();
         var session = AppState.Session;
         loading = true;
@@ -66,7 +86,15 @@ public partial class PracticePage : ContentPage
 
             var state = await session.GetPracticeAsync();
             if (request != loadVersion) return;
-            if (selected is not null && !SameCollection(state.Collection, selected.Scope))
+            if (pendingCollection is { } requested)
+            {
+                pendingCollection = null;
+                var scope = collections.FirstOrDefault(choice => SameCollection(choice.Scope, requested.Scope))?.Scope
+                    ?? requested.Scope;
+                if (!SameCollection(state.Collection, scope))
+                    settings = new PracticeSettings(state.Direction, state.Mode, scope);
+            }
+            else if (selected is not null && !SameCollection(state.Collection, selected.Scope))
                 settings = new PracticeSettings(state.Direction, state.Mode, selected.Scope);
             var next = await session.NextPracticeQuestionAsync(state.Revision, settings);
             if (request == loadVersion) OpenQuestion(next);
@@ -74,6 +102,7 @@ public partial class PracticePage : ContentPage
         catch (Exception error)
         {
             if (request != loadVersion) return;
+            if (ReferenceEquals(pendingCollection, collectionAtStart)) pendingCollection = null;
             if (progress is { } saved) ShowSelectedCollection(saved.Collection);
             QueueStatus.Text = error.Message;
         }
@@ -83,6 +112,7 @@ public partial class PracticePage : ContentPage
             {
                 loading = false;
                 UpdateControls();
+                LoadRequestedCollection();
             }
         }
     }
@@ -288,6 +318,7 @@ public partial class PracticePage : ContentPage
             {
                 loading = false;
                 UpdateControls();
+                LoadRequestedCollection();
             }
         }
     }
@@ -314,6 +345,7 @@ public partial class PracticePage : ContentPage
         {
             grading = false;
             UpdateControls();
+            LoadRequestedCollection();
         }
     }
 
