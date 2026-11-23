@@ -835,7 +835,7 @@ impl CacheRoutes {
         let prefer_hy = computing && self.preferred.as_ref().is_some_and(Route::uses_automatic_hy);
         for route in self.candidates.iter().take(if prefer_hy { 1 } else { self.candidates.len() }) {
             let key = cache_key(route, input, context, settings)?;
-            if let Some(segments) = store.cached_segments(&key, input.len(), target)? {
+            if let Some(segments) = store.cached_segments(&key, input, target)? {
                 return Ok(Some((AlignedTranslation::from_route(route.clone(), segments), key)));
             }
         }
@@ -904,7 +904,7 @@ fn read_cached_plan(
     let active = |unit: &ParagraphUnit| unit.sentence_ids.iter().any(|id| id == active_id);
     let active_input = pending.iter().find(|(index, _)| active(&paragraph.units[*index]));
     let cached_unit = |route: &Route, text: &str| -> Result<Option<String>> {
-        Ok(store.cached_segments(&unit_cache_key(route, text)?, 1, target)?
+        Ok(store.cached_segments(&unit_cache_key(route, text)?, &[text], target)?
             .and_then(|mut segments| segments.pop()))
     };
     let mut sentence = None;
@@ -1727,8 +1727,8 @@ mod tests {
         let old = ["Попередній переклад.".to_owned()];
         store.save_cached_segments(keys.iter().cloned().map(|key| (key, old.as_slice()))).unwrap();
         let assert_cached = |store: &Store, expected: &str| {
-            for key in &keys {
-                assert_eq!(store.cached_segments(key, 1, "uk").unwrap().unwrap(), [expected]);
+            for (key, sentence) in keys.iter().zip(&document.sentences) {
+                assert_eq!(store.cached_segments(key, &[&sentence.text], "uk").unwrap().unwrap(), [expected]);
             }
         };
         let selection = 0..document.sentences.len();
@@ -1795,7 +1795,45 @@ mod tests {
         assert_eq!(preferred.candidates.len(), 1);
         assert!(preferred.cached_sentence(&store, text, "uk").unwrap().is_none());
         store.save_cached_segments([(key.clone(), &["Она будет женой капитана. Ви мене почули.".into()][..])]).unwrap();
-        assert!(store.cached_segments(&key, 1, "uk").unwrap().is_none());
+        assert!(store.cached_segments(&key, &[text], "uk").unwrap().is_none());
+    }
+
+    #[test]
+    fn unchanged_source_prose_is_neither_served_from_cache_nor_accepted_from_a_model() {
+        struct Provider(Vec<String>);
+        impl TranslationProvider for Provider {
+            fn installed_models(&self) -> Result<Vec<ModelEdge>> { Ok(vec![]) }
+
+            fn translate(&mut self, _: &ModelEdge, _: &[String], _: Option<&str>,
+                _: TranslationSettings) -> Result<Vec<String>> {
+                Ok(self.0.clone())
+            }
+
+            fn translate_independent(&mut self, _: &ModelEdge, _: &[String], _: TranslationSettings)
+                -> std::result::Result<Vec<Result<String>>, TranslationBatchError> {
+                Ok(self.0.iter().cloned().map(Ok).collect())
+            }
+        }
+
+        let source = "Le jeune homme quitta le port sans dire un seul mot à ses compagnons.";
+        let echo = "LE JEUNE HOMME QUITTA LE PORT, SANS DIRE UN SEUL MOT À SES COMPAGNONS !";
+        let translated = "Юнак покинув порт, не сказавши своїм товаришам ані слова.";
+        let edge = ModelEdge { source: "fr".into(), target: "uk".into(), revision: "test".into(), quality: None };
+        let route = Route::Direct(edge.clone());
+        let mut provider = Provider(vec![echo.into()]);
+        assert!(checked_inference(&mut provider, &edge, &[source.into()], None, TranslationSettings::default()).is_err());
+        provider.0.push(translated.into());
+        let results = infer_independent_units(&mut provider, &route, &[source.into(), source.into()]).unwrap();
+        assert!(results[0].is_err());
+        assert_eq!(results[1].as_deref(), Ok(translated));
+
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let key = unit_cache_key(&route, source).unwrap();
+        store.save_cached_segments([(key.clone(), &[echo.into()][..])]).unwrap();
+        assert!(store.cached_segments(&key, &[source], "uk").unwrap().is_none());
+        store.save_cached_segments([(key.clone(), &[translated.into()][..])]).unwrap();
+        assert_eq!(store.cached_segments(&key, &[source], "uk").unwrap().unwrap(), [translated]);
+        assert!(translation_language_error("Alexandre Dumas", "Alexandre Dumas", "uk").is_none());
     }
 
     #[test]
@@ -2846,7 +2884,7 @@ impl Store {
         let mut used = Vec::new();
         for (text, output) in input.iter().zip(segments).filter(|(_, output)| output.is_none()) {
             let key = unit_cache_key(route, text)?;
-            if let Some(mut value) = self.cached_segments(&key, 1, target)? {
+            if let Some(mut value) = self.cached_segments(&key, std::slice::from_ref(text), target)? {
                 *output = value.pop().map(|text| UnitTranslation::from_route(text, route));
                 used.push(key);
             }
@@ -2860,7 +2898,7 @@ impl Store {
     fn cached_segments(
         &self,
         key: &str,
-        count: usize,
+        input: &[impl AsRef<str>],
         target: &str,
     ) -> Result<Option<Vec<String>>> {
         let cached: Option<String> = self
@@ -2876,12 +2914,10 @@ impl Store {
             .as_deref()
             .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
             .filter(|segments| {
-                segments.len() == count
+                segments.len() == input.len()
                     && valid_segments(segments)
-                    && (target != "uk"
-                        || !segments
-                            .iter()
-                            .any(|text| russian_prose(text)))
+                    && segments.iter().zip(input).all(|(text, source)|
+                        translation_language_error(source.as_ref(), text, target).is_none())
             }))
     }
 
@@ -2961,12 +2997,13 @@ fn infer_independent_units(
                 "Мовний пакет повернув некоректне вирівнювання перекладу".into(),
             ));
         }
-        for outcome in &mut outcomes {
-            if outcome.as_ref().is_ok_and(|text| {
-                text.trim().is_empty() || text.len() > MAX_BATCH_BYTES
-                    || (edge.target == "uk" && russian_prose(text))
-            }) {
-                *outcome = Err("Мовний пакет повернув некоректний переклад речення".into());
+        for (source, outcome) in input.iter().zip(&mut outcomes) {
+            if let Ok(text) = outcome {
+                if text.trim().is_empty() || text.len() > MAX_BATCH_BYTES {
+                    *outcome = Err("Мовний пакет повернув некоректний переклад речення".into());
+                } else if let Some(error) = translation_language_error(source, text, &edge.target) {
+                    *outcome = Err(error.into());
+                }
             }
         }
         match deferred {
@@ -3069,12 +3106,29 @@ fn checked_inference(
     if result.len() != source.len() || !valid_segments(&result) {
         return Err("Мовний пакет повернув некоректне вирівнювання перекладу".into());
     }
-    if model.target == "uk" && result.iter().any(|text| russian_prose(text)) {
-        return Err("Мовний пакет повернув російський текст замість українського".into());
+    if let Some(error) = source.iter().zip(&result).find_map(|(input, output)|
+        translation_language_error(input, output, &model.target))
+    {
+        return Err(error.into());
     }
     Ok(result)
 }
 
-fn russian_prose(text: &str) -> bool {
-    crate::marian_target_uk::clearly_russian(&crate::protected_translation::without_identifiers(text))
+fn translation_language_error(source: &str, output: &str, target: &str) -> Option<&'static str> {
+    let output = crate::protected_translation::without_identifiers(output);
+    if target == "uk" && crate::marian_target_uk::clearly_russian(&output) {
+        return Some("Мовний пакет повернув російський текст замість українського");
+    }
+    let source = crate::protected_translation::without_identifiers(source);
+    if source.split_whitespace().take(4).count() >= 4 &&
+        prose_letters(&source).eq(prose_letters(&output)) &&
+        crate::language_detection::detect(&source).is_some_and(|language| language != target)
+    {
+        return Some("Мовний пакет повторив оригінал замість перекладу");
+    }
+    None
+}
+
+fn prose_letters(text: &str) -> impl Iterator<Item = char> + '_ {
+    text.nfkc().filter(|character| character.is_alphabetic()).flat_map(char::to_lowercase)
 }
