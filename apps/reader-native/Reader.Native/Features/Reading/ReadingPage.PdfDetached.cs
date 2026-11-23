@@ -433,11 +433,11 @@ public partial class ReadingPage
                 ShowDetachedMachineTranslation(active, current.Language, target);
                 UpdateDetachedControls();
             }
-            else if (allowAutoTranslate && CurrentDetachedTranslation() is null && autoTranslate &&
+            else if (allowAutoTranslate && CurrentDetachedTranslation() is null && autoTranslate && !PdfUsesPageTranslation &&
                 !speakingDetachedSentence && !AppState.Session.Busy)
             {
                 await Task.Delay(250);
-                if (run == detachedTranslationRun && readingPageActive && autoTranslate && !speakingDetachedSentence &&
+                if (run == detachedTranslationRun && readingPageActive && autoTranslate && !PdfUsesPageTranslation && !speakingDetachedSentence &&
                     !AppState.Session.Busy && CurrentDetachedTranslation() is null)
                     await TranslateDetachedAsync(background: true);
             }

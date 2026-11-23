@@ -186,8 +186,10 @@ public partial class ReadingPage
     {
         autoTranslate = !autoTranslate;
         lastAutoTranslation = null;
+        lastPdfAutoTranslation = null;
         SaveReaderPreference(ReaderPreferenceChange.AutoTranslate(autoTranslate));
         UpdateAutoTranslateButton();
+        RefreshPdfTranslationLayout();
         ScheduleAutoTranslation();
         if (autoTranslate) _ = RestoreDetachedTranslationAsync();
     }
@@ -286,7 +288,7 @@ public partial class ReadingPage
 
     private AutoTranslationRequest? NextTranslationRequest()
     {
-        if (restoringTranslationCache || PdfPageNotice.IsVisible) return null;
+        if (restoringTranslationCache || PdfPageNotice.IsVisible || PdfUsesPageTranslation) return null;
         if (PendingAutoTranslation() is { } foreground && foreground != lastAutoTranslation) return new(foreground);
         if (!readingPageActive || !autoTranslate || !TranslationVisible || translating || utteranceActive || prefetching ||
             readiness is not { Ready: true } route || ActiveTranslationKey() is not { } active || active == lastPrefetchOrigin ||

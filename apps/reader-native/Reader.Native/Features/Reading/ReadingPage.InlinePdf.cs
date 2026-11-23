@@ -26,6 +26,8 @@ public partial class ReadingPage
         if (!showOriginal)
         {
             ClearInlinePdf();
+            ScheduleAutoTranslation();
+            if (DetachedPdfReader.IsVisible) _ = RestoreDetachedTranslationAsync();
             return;
         }
 

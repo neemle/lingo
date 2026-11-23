@@ -278,6 +278,7 @@ public partial class ReadingPage : ContentPage
             readingLayout = Layouts[index].Mode;
             SaveReaderPreference(ReaderPreferenceChange.Layout(LayoutName(readingLayout)));
             ArrangeReadingColumns();
+            RefreshPdfTranslationLayout();
             ScheduleAutoTranslation();
         }
         finally { ReaderLayoutButton.IsEnabled = true; }

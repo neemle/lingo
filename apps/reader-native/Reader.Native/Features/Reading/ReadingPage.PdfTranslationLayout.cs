@@ -8,6 +8,7 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage
 {
     private sealed record PdfLayoutAddress(string Document, int Page, string? Revision, string Target, string? DetachedText);
+    private sealed record PdfAutoTranslation(PdfLayoutAddress Address, int RouteRequest);
     private bool pdfTranslationLayout = true;
     private bool syncingPdfTranslationScroll;
     private PdfLayoutAddress? pdfLayoutRequest;
@@ -19,6 +20,8 @@ public partial class ReadingPage
     private string? pdfLayoutStatus;
     private int pdfLayoutRequestId;
     private bool refreshingPdfLayout;
+    private PdfAutoTranslation? pendingPdfAutoTranslation;
+    private PdfAutoTranslation? lastPdfAutoTranslation;
     private (VerticalStackLayout Panel, PdfPageTranslationRow[] Rows, Sentence? Active)? overflowContent;
 
     private (ScrollView Viewport, GraphicsView Surface) ActivePdfTranslationLayout() =>
@@ -26,11 +29,15 @@ public partial class ReadingPage
             ? (DetachedPdfTranslationViewport, DetachedPdfTranslationSurface)
             : (PdfTranslationViewport, PdfTranslationSurface);
 
+    private bool PdfUsesPageTranslation => inlinePdf && pdfTranslationLayout && TranslationVisible;
+
     private void TogglePdfTranslationLayout(object? sender, EventArgs args)
     {
         pdfTranslationLayout = !pdfTranslationLayout;
         SaveReaderPreference(ReaderPreferenceChange.PdfTranslationLayout(pdfTranslationLayout));
         RefreshPdfTranslationLayout();
+        ScheduleAutoTranslation();
+        if (!pdfTranslationLayout && DetachedPdfReader.IsVisible) _ = RestoreDetachedTranslationAsync();
     }
 
     private async void TranslatePdfPageClicked(object? sender, EventArgs args)
@@ -51,6 +58,7 @@ public partial class ReadingPage
     {
         var address = CurrentPdfLayoutAddress();
         AppState.TranslationWorker?.SetVisiblePdf(readingPageActive && TranslationVisible &&
+            !(autoTranslate && PdfUsesPageTranslation) &&
             address is { Revision: { } revision }
                 ? new BackgroundTranslatedPage(address.Document, revision, address.Page, address.Target) : null,
             address?.DetachedText);
@@ -71,6 +79,7 @@ public partial class ReadingPage
         {
             pdfLayoutRequest = address;
             pdfLayoutRequestId++;
+            lastPdfAutoTranslation = null;
             pdfLayoutRows = [];
             pdfLayoutGeometry = [];
             pdfLayoutSentence = null;
@@ -89,6 +98,38 @@ public partial class ReadingPage
             ResizePdfTranslationLayout();
             DrawPdfTranslationLayout();
         }
+        SchedulePdfAutoTranslation();
+    }
+
+    private PdfAutoTranslation? NextPdfAutoTranslation()
+    {
+        var session = AppState.Session;
+        if (!readingPageActive || !autoTranslate || !PdfUsesPageTranslation || session.Busy ||
+            inlinePdfLoading is not null || translatingPdfLayout is not null ||
+            readiness is not { Ready: true } || session.Document is not { } document ||
+            pdfLayoutRequest is not { } address || CurrentPdfLayoutAddress() != address ||
+            readinessPair != (document.Language, address.Target) || !pdfLayoutRows.Any(row => row.Text is null))
+            return null;
+
+        var request = new PdfAutoTranslation(address, readinessRequest);
+        return request == lastPdfAutoTranslation ? null : request;
+    }
+
+    private void SchedulePdfAutoTranslation()
+    {
+        var request = NextPdfAutoTranslation();
+        if (pendingPdfAutoTranslation == request) return;
+        pendingPdfAutoTranslation = request;
+        if (request is not null) _ = TranslatePdfAfterNavigationAsync(request);
+    }
+
+    private async Task TranslatePdfAfterNavigationAsync(PdfAutoTranslation request)
+    {
+        await Task.Delay(350);
+        if (!ReferenceEquals(pendingPdfAutoTranslation, request)) return;
+        pendingPdfAutoTranslation = null;
+        if (NextPdfAutoTranslation() == request)
+            await LoadPdfPageLayoutAsync(request.Address, cachedOnly: false);
     }
 
     private async void ReadPdfTranslationTextClicked(object? sender, EventArgs args)
@@ -123,7 +164,11 @@ public partial class ReadingPage
     {
         var request = ++pdfLayoutRequestId;
         pdfLayoutStatus = cachedOnly ? "Завантажуємо переклад…" : "Перекладаємо сторінку…";
-        if (!cachedOnly) translatingPdfLayout = address;
+        if (!cachedOnly)
+        {
+            translatingPdfLayout = address;
+            lastPdfAutoTranslation = new(address, readinessRequest);
+        }
         RefreshPdfTranslationLayout();
         try
         {
