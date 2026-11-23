@@ -179,7 +179,7 @@ impl Store {
                 let (start_utf16, end_utf16) = offsets[local];
                 rows.insert(local, PdfPageTranslationRow {
                     start_utf16, end_utf16, source_sentence_id: sentence.id.clone(),
-                    text: None, source_text: None, pivot_language: None,
+                    text: None, source_text: Some(sentence.text.clone()), pivot_language: None,
                 });
             }
         }
@@ -500,6 +500,7 @@ mod tests {
         for row in &rows {
             let sentence = cached.sentences.iter().find(|sentence| sentence.id == row.source_sentence_id).unwrap();
             assert_eq!(row.start_utf16, sentence.start_utf16);
+            assert_eq!(row.source_text.as_deref(), Some(sentence.text.as_str()));
         }
         let row = &rows[0];
         assert!(store.select_detached_pdf_sentence_at(

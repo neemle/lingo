@@ -238,7 +238,7 @@
        </VerticalStackLayout>
       </ScrollView>
       <FlexLayout Grid.Row="3" Padding="10,2,10,8" Wrap="Wrap" JustifyContent="Start">
-       <Button x:Name="ReadPdfTranslationText" Text="Увесь текст" IsVisible="False" Margin="0,3,5,0"
+       <Button x:Name="ReadPdfTranslationText" Text="Фрагменти" IsVisible="False" Margin="0,3,5,0"
         Style="{StaticResource PlayerButton}" Clicked="ReadPdfTranslationTextClicked" />
        <Button x:Name="EditTranslation" Text="Додати свій переклад" Margin="0,3,5,0"
         Style="{StaticResource PlayerButton}" Clicked="EditTranslationClicked" />
@@ -346,7 +346,7 @@
        </Grid>
       </Grid>
       <FlexLayout Grid.Row="1" Padding="8,5" Wrap="Wrap" AlignItems="Center">
-       <Button x:Name="DetachedReadPdfTranslationText" Text="Увесь текст" IsVisible="False" Margin="0,0,5,0"
+       <Button x:Name="DetachedReadPdfTranslationText" Text="Фрагменти" IsVisible="False" Margin="0,0,5,0"
         Style="{StaticResource PlayerButton}" Clicked="ReadPdfTranslationTextClicked" />
        <Button x:Name="DetachedPrevious" Text="‹" Clicked="PreviousDetachedSentenceClicked" Style="{StaticResource PlayerButton}"
         SemanticProperties.Description="Попереднє речення сторінки" />

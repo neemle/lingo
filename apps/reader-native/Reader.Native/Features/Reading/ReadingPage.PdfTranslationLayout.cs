@@ -136,7 +136,7 @@ public partial class ReadingPage
             _ = LoadPdfPageLayoutAsync(address, cachedOnly: true);
         UpdatePdfTranslationStatus(shown ? address : null, detached, translatingPage);
         UpdateTranslationPackageActions();
-        var hasRows = pdfLayoutRows.Any(HasPdfTranslation);
+        var hasRows = pdfLayoutRows.Length > 0;
         ReadPdfTranslationText.IsVisible = shown && !detached && hasRows;
         DetachedReadPdfTranslationText.IsVisible = shown && detached && hasRows;
         if (detached)
@@ -232,7 +232,7 @@ public partial class ReadingPage
     private async void ReadPdfTranslationTextClicked(object? sender, EventArgs args)
     {
         var rows = pdfLayoutRows;
-        if (openingPdfTranslationText || !rows.Any(HasPdfTranslation) ||
+        if (openingPdfTranslationText || rows.Length == 0 ||
             pdfLayoutRequest is not { } address || CurrentPdfLayoutAddress() != address) return;
         openingPdfTranslationText = true;
         try
@@ -266,7 +266,12 @@ public partial class ReadingPage
             SemanticProperties.SetHint(action, "Показати відповідний фрагмент на сторінці PDF");
             action.Clicked += (_, _) => result.TrySetResult(row);
             var item = new Grid { ColumnDefinitions = { new(GridLength.Star), new(GridLength.Auto) }, ColumnSpacing = 12 };
-            item.Add(label);
+            if (!HasPdfTranslation(row) && !string.IsNullOrWhiteSpace(row.SourceText))
+            {
+                var original = new Label { Text = row.SourceText, FontFamily = "Georgia", FontSize = 18 };
+                item.Add(new VerticalStackLayout { Spacing = 4, Children = { original, label } });
+            }
+            else item.Add(label);
             item.Add(action, 1);
             if (pdfLayoutSentence is { } sentence &&
                 row.StartUtf16 < sentence.EndUtf16 && row.EndUtf16 > sentence.StartUtf16)
@@ -280,7 +285,7 @@ public partial class ReadingPage
         var layout = new Grid { RowDefinitions = { new(GridLength.Auto), new(GridLength.Star) } };
         layout.Add(done);
         layout.Add(viewport, 0, 1);
-        var page = new ContentPage { Title = $"Переклад сторінки {address.Page + 1}", Content = layout };
+        var page = new ContentPage { Title = $"Фрагменти сторінки {address.Page + 1}", Content = layout };
         page.Disappearing += (_, _) => result.TrySetResult(null);
         done.Clicked += (_, _) => result.TrySetResult(null);
         await Navigation.PushModalAsync(page);
@@ -715,13 +720,12 @@ public partial class ReadingPage
             else canvas.FillRectangle(page);
             var regions = new List<Region>();
             var overflow = new List<PdfPageTranslationRow>();
-            var hasTranslation = rows.Any(HasPdfTranslation);
             foreach (var row in rows)
             {
                 var bounds = Bounds(row, page);
                 if (bounds is not { } rect)
                 {
-                    if (hasTranslation) overflow.Add(row);
+                    overflow.Add(row);
                     continue;
                 }
                 var grouped = new List<PdfPageTranslationRow> { row };
@@ -737,7 +741,7 @@ public partial class ReadingPage
                 regions.Add(new(rect, grouped));
             }
 
-            if (hasTranslation && regions.Count == 0)
+            if (rows.Length > 0 && regions.Count == 0)
             {
                 canvas.FillRectangle(page);
                 OverflowChanged?.Invoke(DrawReflowedPage(canvas, page));
@@ -756,7 +760,7 @@ public partial class ReadingPage
                     text.Append(HasPdfTranslation(row) ? row.Text : "…");
                     fragments.Add(new Fragment(row, start, text.Length, isActive));
                 }
-                if (!DrawFitted(canvas, text.ToString(), region.Bounds, fragments, gloss) && hasTranslation)
+                if (!DrawFitted(canvas, text.ToString(), region.Bounds, fragments, gloss))
                     overflow.AddRange(fragments.Select(fragment => fragment.Source));
             }
 
