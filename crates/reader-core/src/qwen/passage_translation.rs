@@ -54,7 +54,7 @@ pub struct TranslatePassageJob {
     source_text: String,
     target: String,
     regenerate: bool,
-    use_hy: bool,
+    hy_model: Option<hy_translation::Model>,
     chunks: Vec<HintWork<TranslationChunk>>,
     separators: Vec<&'static str>,
 }
@@ -87,7 +87,11 @@ impl Store {
         if language == target {
             return Err("Виберіть іншу мову перекладу.".into());
         }
-        let use_hy = language == "fr" && target == "uk" && self.has_optional_model_files(hy_translation::MODEL_ID);
+        let hy_model = if language == "fr" && target == "uk" {
+            hy_translation::Model::installed(self)
+        } else {
+            None
+        };
         // Read all chunk entries from the same generation while a refresh may be publishing.
         let snapshot = self.connection.unchecked_transaction().map_err(|error| error.to_string())?;
         let pieces = passage_chunks(&text)?;
@@ -104,8 +108,8 @@ impl Store {
                 } else {
                     text
                 };
-                let (model, prompt, example, cache_kind) = if use_hy {
-                    (hy_translation::MODEL_ID, hy_translation::PROMPT, format!("FR → UK\n{prompt_text}"), "hy-mt2-passage-v2")
+                let (model, prompt, example, cache_kind) = if let Some(hy_model) = hy_model {
+                    (hy_model.id(), hy_translation::PROMPT, format!("FR → UK\n{prompt_text}"), "hy-mt2-passage-v2")
                 } else {
                     let example = format!("Translate from {source_name} into {target_name}.\n{prompt_text}");
                     let cache_kind = if complete_sentences(text) > 1 {
@@ -136,7 +140,7 @@ impl Store {
             source_text: text,
             target: target.to_owned(),
             regenerate: matches!(mode, HintCacheMode::Refresh),
-            use_hy,
+            hy_model,
             chunks,
             separators,
         })
@@ -179,7 +183,8 @@ impl TranslatePassageJob {
             check()?;
             self.cached()
         }, |directory, should_yield| {
-            let opening = Instant::now() + Duration::from_secs(if self.use_hy { 90 } else { 25 });
+            let use_hy = self.hy_model.is_some();
+            let opening = Instant::now() + Duration::from_secs(if use_hy { 90 } else { 25 });
             let opening_check = || prompt_checkpoint(should_yield, opening);
             let run = |model: &LlamaModel, context: &mut LlamaContext<'_>| {
                     let mut translated: Vec<TranslationChunk> = Vec::with_capacity(self.chunks.len());
@@ -200,12 +205,12 @@ impl TranslatePassageJob {
                                 } else {
                                     let (instruction, source_text) = example.split_once('\n')
                                         .ok_or("Модель не отримала текст уривка.")?;
-                                    let chunk_deadline = Instant::now() + if self.use_hy { Duration::from_secs(120) } else { CHUNK_TIMEOUT };
+                                    let chunk_deadline = Instant::now() + if use_hy { Duration::from_secs(120) } else { CHUNK_TIMEOUT };
                                     let render = |fragment: &str, regenerate| {
                                         let protected = ProtectedText::new(fragment, &self.target);
                                         context.clear_kv_cache();
-                                        if self.use_hy {
-                                            let text = hy_translation::translate(model, context, protected.input(), regenerate,
+                                        if let Some(variant) = self.hy_model {
+                                            let text = hy_translation::translate(variant, model, context, protected.input(), regenerate,
                                                 || prompt_checkpoint(should_yield, chunk_deadline))?;
                                             let text = protected.restore(text)?;
                                             return serde_json::to_vec(&TranslationChunk { text }).map_err(|error| error.to_string());
@@ -250,7 +255,7 @@ impl TranslatePassageJob {
                     HintCache::save_batch(updates.into_iter().map(|(cache, index)| (cache, &translated[index])))?;
                     Ok(self.combine(translated, false))
             };
-            if self.use_hy { hy_translation::with_context(directory, opening_check, run) }
+            if use_hy { hy_translation::with_context(directory, opening_check, run) }
             else { with_prompt_context(directory, opening_check, run) }
         });
         check()?;
@@ -263,7 +268,7 @@ impl TranslatePassageJob {
         if self.source == "fr" && self.target == "uk" {
             crate::translation_dates::preserve_french_dates(&self.source_text, &mut text);
         }
-        let model_name = if self.use_hy { hy_translation::MODEL_NAME } else { "Qwen 2B" };
+        let model_name = self.hy_model.map_or("Qwen 2B", hy_translation::Model::name);
         PassageTranslation { text, source_text: self.source_text.clone(), cached, model_name }
     }
 }

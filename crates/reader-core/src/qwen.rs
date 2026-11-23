@@ -29,7 +29,10 @@ use std::{
 mod passage_translation;
 mod hy_translation;
 mod ocr_word;
-pub(crate) use hy_translation::{smoke as smoke_hy_translation, MODEL_ID as HY_TRANSLATION_MODEL};
+pub(crate) use hy_translation::{
+    smoke as smoke_hy_translation, LARGE_MODEL_ID as HY_TRANSLATION_MODEL,
+    SMALL_MODEL_ID as HY_TRANSLATION_MODEL_SMALL,
+};
 pub use ocr_word::{OcrPageReview, OcrReview, ReviewOcrLineJob, ReviewOcrPageJob, ReviewOcrWordJob};
 pub use passage_translation::{PassageTranslation, TranslatePassageJob};
 

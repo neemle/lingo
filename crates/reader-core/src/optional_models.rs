@@ -92,6 +92,22 @@ const MODELS: &[Model] = &[
             sha256: "9f96256500f3fc1ab4d64336b58f52a949a95ad7516b0c229476eef782f9f77b",
         }],
     },
+    #[cfg(any(target_os = "macos", target_abi = "macabi"))]
+    Model {
+        id: crate::qwen::HY_TRANSLATION_MODEL_SMALL,
+        name: "Hy-MT2 1.8B · FR → UK",
+        license: "Apache-2.0",
+        repo: "tencent/Hy-MT2-1.8B-GGUF",
+        revision: "a0c709d9fac510f2c807aa3af52872340dc37a4a",
+        // CPU inference peaked at about 1.05 GiB of footprint with file-backed weights.
+        budget: ModelBudget { working_mib: 1536, minimum_total_mib: 6144 },
+        assets: &[Asset {
+            name: "model.gguf",
+            remote_path: "Hy-MT2-1.8B-Q4_K_M.gguf",
+            bytes: 1_133_080_448,
+            sha256: "dc5f44fcf1fa496ee7ad725982c0c8c553a4de00259b53af84c4b89fb0c06699",
+        }],
+    },
     Model {
         id: "multilingual-e5-small",
         name: "Multilingual E5 Small",
@@ -474,14 +490,18 @@ impl OptionalModelInstallJob {
 fn probe_optional_model(model: &Model, directory: &Path) -> Result<()> {
     let permit = RESOURCES.optional()?;
     check_memory(model)?;
-    let deadline = Instant::now() + Duration::from_secs(if model.id == crate::qwen::HY_TRANSLATION_MODEL { 90 } else { 20 });
+    let translation_model = matches!(model.id,
+        crate::qwen::HY_TRANSLATION_MODEL | crate::qwen::HY_TRANSLATION_MODEL_SMALL);
+    let deadline = Instant::now() + Duration::from_secs(if translation_model { 90 } else { 20 });
     let interrupted = || permit.should_yield() || Instant::now() >= deadline;
     if interrupted() {
         return Err("Контрольний запуск відкладено. Повторіть встановлення.".into());
     }
     match model.id {
         crate::qwen::HINT_GENERATION_MODEL => crate::qwen::smoke(directory, &interrupted)?,
-        crate::qwen::HY_TRANSLATION_MODEL => crate::qwen::smoke_hy_translation(directory, &interrupted)?,
+        crate::qwen::HY_TRANSLATION_MODEL | crate::qwen::HY_TRANSLATION_MODEL_SMALL =>
+            crate::qwen::smoke_hy_translation(
+                directory, model.id == crate::qwen::HY_TRANSLATION_MODEL_SMALL, &interrupted)?,
         "multilingual-e5-small" => crate::e5::smoke(directory, &interrupted)?,
         "piper-uk" => crate::tts::smoke(directory, &interrupted)?,
         "supertonic-3" => crate::supertonic::smoke(directory, &interrupted)?,
@@ -494,6 +514,10 @@ fn probe_optional_model(model: &Model, directory: &Path) -> Result<()> {
 }
 
 impl Store {
+    pub(crate) fn optional_model_memory_ready(&self, id: &str) -> bool {
+        model(id).is_ok_and(|model| model.budget.readiness().ready)
+    }
+
     pub(crate) fn has_optional_model_files(&self, id: &str) -> bool {
         let Ok(model) = model(id) else { return false; };
         let paths = ModelPaths::new(&self.optional_model_directory, id);
