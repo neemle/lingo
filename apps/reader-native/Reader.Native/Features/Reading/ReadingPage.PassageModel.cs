@@ -10,7 +10,6 @@ public partial class ReadingPage
     private ModelPassage? runningPassage;
     private (ModelPassage Address, ModelPassageTranslation Translation)? modelPassageResult;
     private ModelPassage? inspectingModelSource;
-    private ModelPassage? attemptedModelPassage;
     private ModelPassage? requestedCachedPassage;
     private int cachedPassageRequest;
     private (ModelPassage Address, string Text)? modelPassageError;
@@ -33,9 +32,8 @@ public partial class ReadingPage
     {
         if (runningPassage is not null || CurrentModelPassage() is not { } address) return;
         var session = AppState.Session;
-        var regenerate = CurrentModelTranslation(address) is not null || attemptedModelPassage == address;
+        var regenerate = CurrentModelTranslation(address) is not null;
         cachedPassageRequest++;
-        attemptedModelPassage = address;
         modelPassageError = null;
         runningPassage = address;
         UpdateModelTranslation();
@@ -64,8 +62,9 @@ public partial class ReadingPage
         TranslateWithModel.IsEnabled = enabled && !detached;
         DetachedTranslateWithModel.IsEnabled = enabled && detached;
         var translation = CurrentModelTranslation(address);
-        TranslateWithModel.Text = DetachedTranslateWithModel.Text = address is not null &&
-            (translation is not null || attemptedModelPassage == address) ? "Перегенерувати" : "Перекласти моделлю";
+        TranslateWithModel.Text = DetachedTranslateWithModel.Text = translation is not null
+            ? "Перегенерувати" : address is not null && modelPassageError?.Address == address
+                ? "Повторити переклад" : "Перекласти моделлю";
 
         var running = address is not null && runningPassage == address;
         var result = translation is null ? null :

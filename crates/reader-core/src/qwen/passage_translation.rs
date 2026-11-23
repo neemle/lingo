@@ -125,10 +125,15 @@ impl Store {
             .flatten()
             .map(|text| {
                 let example = format!("Translate from {source_name} into {target_name}.\n{text}");
+                let cache_kind = if complete_sentences(text) > 1 {
+                    "qwen-passage-translation-v7"
+                } else {
+                    "qwen-passage-translation-v6"
+                };
                 self.prepare_hint_work(
                     HINT_GENERATION_MODEL,
                     id,
-                    "qwen-passage-translation-v6",
+                    cache_kind,
                     SYSTEM,
                     example,
                     mode,
@@ -277,7 +282,11 @@ impl TranslatePassageJob {
                                         self.regenerate,
                                         render,
                                     )?;
-                                    updates.push((cache, translated.len()));
+                                    if self.regenerate {
+                                        updates.push((cache, translated.len()));
+                                    } else {
+                                        cache.save(&value)?;
+                                    }
                                     value
                                 }
                             }
@@ -346,6 +355,13 @@ fn split_for_retry(input: &str) -> Option<(&str, &str)> {
     Some((input[..offset].trim_end(), input[offset..].trim_start()))
 }
 
+fn complete_sentences(text: &str) -> usize {
+    Layout::ClosingQuotes.segment(text, "").iter().filter(|sentence| {
+        let text = sentence.text.trim_end_matches([' ', '\t', '»', '”', '"', '’', '\'', ')', ']']);
+        text.ends_with(['.', '!', '?', '…']) && text.chars().any(char::is_alphabetic)
+    }).count()
+}
+
 fn parse(bytes: &[u8], target: &str, source_text: &str) -> Result<TranslationChunk> {
     let error = "Qwen не повернув повного перекладу.";
     let result: TranslationChunk =
@@ -366,7 +382,10 @@ fn parse(bytes: &[u8], target: &str, source_text: &str) -> Result<TranslationChu
                 .split(|ch: char| !ch.is_ascii_digit())
                 .any(|candidate| candidate == number)
         });
-    if source_letters >= 60 && letters * 2 < source_letters || missing_numbers {
+    let source_sentences = complete_sentences(source_text);
+    if source_letters >= 60 && letters * 2 < source_letters || missing_numbers ||
+        (source_sentences > 1 && complete_sentences(text) < source_sentences)
+    {
         return Err(error.into());
     }
     if text.is_empty()
@@ -467,6 +486,23 @@ mod tests {
     }
 
     #[test]
+    fn translation_that_omits_a_short_second_sentence_is_retried() {
+        let first = "Le jeune marin traverse la ville et rencontre son frère devant la maison où leur famille habite depuis longtemps.";
+        let second = "Il repart seul.";
+        let input = format!("{first} {second}");
+        let first_output = "Молодий моряк проходить містом і зустрічає брата біля будинку, де вже давно живе їхня родина.";
+        let second_output = "Він знову вирушає сам.";
+        let mut requests = Vec::new();
+        let result = translate_chunk(&input, "uk", false, |fragment, _| {
+            requests.push(fragment.to_owned());
+            let text = if fragment == second { second_output } else { first_output };
+            Ok(serde_json::to_vec(&TranslationChunk { text: text.into() }).unwrap())
+        }).unwrap();
+        assert_eq!(requests, [input.as_str(), first, second]);
+        assert_eq!(result.text, format!("{first_output} {second_output}"));
+    }
+
+    #[test]
     fn interrupted_generation_does_not_issue_more_model_requests() {
         let mut calls = 0;
         let result = translate_chunk("La porte est ouverte. Le marin entre.", "uk", true, |_, _| {
@@ -520,5 +556,32 @@ mod tests {
         assert_eq!(cached.text, "15 лютого 1815 року двері відчинені. Моряк заходить.");
         assert_eq!(cached.source_text, document.text);
         assert!(reopened.cached_passage_translation(&document.id, None, second, "de").unwrap().is_none());
+    }
+
+    #[test]
+    fn retry_restores_completed_chunks_without_serving_an_incomplete_passage() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("reader.db");
+        let mut store = Store::open(&path).unwrap();
+        let source = concat!(
+            "Le jeune marin rentre chez lui et raconte son voyage à sa famille, qui l'attend depuis longtemps et lui pose toutes sortes de questions. ",
+            "Ses amis arrivent dans la soirée avec de quoi manger et restent autour de la table pour écouter le récit. ",
+            "Il explique ensuite comment il a repris le chemin du port malgré un vent très fort qui soufflait toute la nuit."
+        );
+        let document = store.import("Texte.txt", source.as_bytes(), "fr").unwrap();
+        let sentence = &document.sentences[0].id;
+        let initial = store.prepare_passage_translation(&document.id, None, sentence, "uk", false).unwrap();
+        assert_eq!(initial.chunks.len(), 2);
+        let HintWork::Generate { cache, .. } = &initial.chunks[0] else { panic!("expected an uncached chunk"); };
+        cache.save(&TranslationChunk {
+            text: "Моряк повернувся додому й розповів родині про подорож. Увечері прийшли друзі послухати його розповідь.".into(),
+        }).unwrap();
+        drop(store);
+
+        let store = Store::open(&path).unwrap();
+        assert!(store.cached_passage_translation(&document.id, None, sentence, "uk").unwrap().is_none());
+        let retry = store.prepare_passage_translation(&document.id, None, sentence, "uk", false).unwrap();
+        assert!(matches!(&retry.chunks[0], HintWork::Cached(Some(_))));
+        assert!(matches!(&retry.chunks[1], HintWork::Generate { .. }));
     }
 }
