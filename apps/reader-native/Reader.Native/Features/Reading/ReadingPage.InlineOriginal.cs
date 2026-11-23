@@ -242,10 +242,22 @@ public partial class ReadingPage
         if (inlinePdfPreview is not { Width: > 0, Height: > 0 } preview ||
             paper.Parent is not AbsoluteLayout frame || viewport.Width < 1 || viewport.Height < 1) return;
         var width = Math.Floor(viewport.Width);
-        var scale = width / preview.Width;
+        var fitWidth = width;
+        var fitHeight = viewport.Height;
+        if (PdfPapersSideBySide(DetachedPdfReader.IsVisible))
+        {
+            var (source, _) = ActiveInlinePdf();
+            var (target, _) = ActivePdfTranslationLayout();
+            if (source.Width >= 1 && target.Width >= 1 && source.Height >= 1 && target.Height >= 1)
+            {
+                fitWidth = Math.Floor(Math.Min(source.Width, target.Width));
+                fitHeight = Math.Min(source.Height, target.Height);
+            }
+        }
+        var scale = fitWidth / preview.Width;
         var center = 0.5;
         if (inlinePdfFit == PdfFit.WholePage)
-            scale = Math.Min(scale, viewport.Height / preview.Height);
+            scale = Math.Min(scale, fitHeight / preview.Height);
         else
         {
             var (left, right) = PdfReadingHorizontalBounds();

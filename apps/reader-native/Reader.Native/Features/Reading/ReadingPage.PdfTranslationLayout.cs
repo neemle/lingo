@@ -50,6 +50,33 @@ public partial class ReadingPage
     private bool PdfUsesPageTranslation => showInlineOriginal && pdfTranslationLayout && TranslationVisible &&
         AppState.Session.Document?.Format == "pdf";
 
+    private bool PdfPapersSideBySide(bool detached) => PdfUsesPageTranslation &&
+        (detached
+            ? DetachedPdfReader.IsVisible && DetachedSourcePane.IsVisible && DetachedTargetPane.IsVisible &&
+                Grid.GetColumn(DetachedTargetPane) == 1 &&
+                DetachedInlinePdfViewport.IsVisible && DetachedPdfTranslationViewport.IsVisible
+            : !PdfPageNotice.IsVisible && SourcePane.IsVisible && TranslationPane.IsVisible &&
+                Grid.GetColumn(TranslationPane) == 1 &&
+                InlinePdfViewport.IsVisible && PdfTranslationViewport.IsVisible);
+
+    private void AlignPdfViewports()
+    {
+        Align(false, SourcePaneHeader, TranslationPaneHeader, InlinePdfViewport, PdfTranslationViewport,
+            TranslationPane);
+        Align(true, DetachedSourcePaneHeader, DetachedTranslationPaneHeader, DetachedInlinePdfViewport,
+            DetachedPdfTranslationViewport, DetachedTargetPane);
+
+        void Align(bool detached, Grid sourceHeader, Grid targetHeader, ScrollView source,
+            ScrollView target, Grid targetPane)
+        {
+            var aligned = PdfPapersSideBySide(detached);
+            sourceHeader.MinimumHeightRequest = aligned ? Math.Max(0, targetHeader.Height) : -1;
+            var footer = aligned && target.Height > 0
+                ? Math.Max(0, targetPane.Height - target.Y - target.Height) : 0;
+            source.Margin = new Thickness(0, 0, 0, footer);
+        }
+    }
+
     private void TogglePdfTranslationLayout(object? sender, EventArgs args)
     {
         pdfTranslationLayout = !pdfTranslationLayout;
@@ -138,6 +165,7 @@ public partial class ReadingPage
         else if (shown && address is not null && pdfLayoutRows.Length == 0 && pdfLayoutStatus is null)
             _ = LoadPdfPageLayoutAsync(address, cachedOnly: true);
         UpdatePdfTranslationStatus(shown ? address : null, detached, translatingPage);
+        AlignPdfViewports();
         UpdateTranslationPackageActions();
         var hasRows = pdfLayoutRows.Length > 0;
         ReadPdfTranslationText.IsVisible = shown && !detached && hasRows;
@@ -426,8 +454,9 @@ public partial class ReadingPage
 
     private void PdfTranslationViewportChanged(object? sender, EventArgs args)
     {
-        if (!showInlineOriginal) return;
-        ResizePdfTranslationLayout();
+        if (TranslationPaneHeader is null || DetachedTranslationPaneHeader is null || !showInlineOriginal) return;
+        AlignPdfViewports();
+        ResizeInlinePdf();
         if (ActiveInlinePdf().Viewport.IsVisible) _ = FollowPdfTranslationScrollAsync(fromOriginal: true);
     }
 

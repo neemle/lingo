@@ -148,9 +148,10 @@
     <Grid Grid.Row="2" x:Name="ReadingColumns" ColumnDefinitions="*,*" RowDefinitions="*,0" ColumnSpacing="1"
      BackgroundColor="{StaticResource BorderTone}">
      <Grid x:Name="SourcePane" RowDefinitions="Auto,*" BackgroundColor="{StaticResource Panel}">
-      <Grid Padding="16,10" ColumnDefinitions="*,Auto" ColumnSpacing="8" BackgroundColor="#F8F9F3">
-       <Label Text="ОРИГІНАЛ" Style="{StaticResource ReaderColumnCaption}" />
-       <Label Grid.Column="1" x:Name="SourceLocation" Style="{StaticResource ReaderMeta}" IsVisible="False" />
+      <Grid x:Name="SourcePaneHeader" Padding="16,10" ColumnDefinitions="*,Auto" ColumnSpacing="8" BackgroundColor="#F8F9F3">
+       <Label Text="ОРИГІНАЛ" Style="{StaticResource ReaderColumnCaption}" VerticalOptions="Start" />
+       <Label Grid.Column="1" x:Name="SourceLocation" Style="{StaticResource ReaderMeta}" IsVisible="False"
+        VerticalOptions="Start" />
       </Grid>
       <controls:NativeReaderView Grid.Row="1" x:Name="SourceText" Text="{Binding Document.Text}" Blocks="{Binding Document.Blocks}"
        SourceLanguage="{Binding Document.Language}"
@@ -178,7 +179,8 @@
      </Grid>
 
      <Grid Grid.Column="1" x:Name="TranslationPane" RowDefinitions="Auto,*,Auto,Auto" BackgroundColor="{StaticResource Panel}">
-      <Grid Padding="16,10" ColumnDefinitions="*,Auto,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="6" BackgroundColor="#F8F9F3">
+      <Grid x:Name="TranslationPaneHeader" Padding="16,10" ColumnDefinitions="*,Auto,Auto,Auto" RowDefinitions="Auto,Auto"
+       ColumnSpacing="6" BackgroundColor="#F8F9F3" SizeChanged="PdfTranslationViewportChanged">
        <Label Text="ПЕРЕКЛАД" Style="{StaticResource ReaderColumnCaption}" VerticalOptions="Center" />
        <Button Grid.Column="1" x:Name="AutoTranslate" Text="Автопереклад"
         Style="{StaticResource PlayerButton}" Clicked="AutoTranslateClicked" />
@@ -273,7 +275,9 @@
      <Grid x:Name="DetachedPdfReader" IsVisible="False" RowDefinitions="*,Auto" RowSpacing="6">
       <Grid x:Name="DetachedReadingColumns" ColumnDefinitions="*,*" RowDefinitions="*,0" ColumnSpacing="1" BackgroundColor="#E1DFD4">
        <Grid x:Name="DetachedSourcePane" RowDefinitions="Auto,*" BackgroundColor="{StaticResource Panel}">
-        <Label Text="ОРИГІНАЛ" Style="{StaticResource ReaderColumnCaption}" Margin="14,9" />
+        <Grid x:Name="DetachedSourcePaneHeader" Padding="14,9">
+         <Label Text="ОРИГІНАЛ" Style="{StaticResource ReaderColumnCaption}" VerticalOptions="Start" />
+        </Grid>
         <controls:NativeReaderView Grid.Row="1" x:Name="DetachedPdfText" ReflowPdf="True"
          SourceLanguage="{Binding Document.Language}"
          BackgroundColor="{StaticResource Panel}" SourceSelected="DetachedPdfSelected"
@@ -292,7 +296,8 @@
         </ScrollView>
        </Grid>
        <Grid Grid.Column="1" x:Name="DetachedTargetPane" RowDefinitions="Auto,*,Auto" BackgroundColor="{StaticResource Panel}">
-        <Grid Padding="14,5" ColumnDefinitions="*,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="6">
+        <Grid x:Name="DetachedTranslationPaneHeader" Padding="14,5" ColumnDefinitions="*,Auto,Auto"
+         RowDefinitions="Auto,Auto" ColumnSpacing="6" SizeChanged="PdfTranslationViewportChanged">
          <Label Text="ПЕРЕКЛАД" Style="{StaticResource ReaderColumnCaption}" VerticalOptions="Center" />
          <Button Grid.Column="1" x:Name="DetachedPdfTranslationMode" Text="Верстка" IsVisible="False"
           Style="{StaticResource PlayerButton}" Clicked="TogglePdfTranslationLayout" />

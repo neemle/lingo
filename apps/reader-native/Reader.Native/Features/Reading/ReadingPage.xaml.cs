@@ -294,6 +294,7 @@ public partial class ReadingPage : ContentPage
         DetachedReadingColumns.RowSpacing = stacked ? 1 : 0;
         Grid.SetColumn(DetachedTargetPane, columns ? 1 : 0);
         Grid.SetRow(DetachedTargetPane, stacked ? 1 : 0);
+        AlignPdfViewports();
         var layout = Layouts.First(item => item.Mode == readingLayout);
         ReaderLayoutButton.Text = layout.Compact;
         SemanticProperties.SetDescription(ReaderLayoutButton, $"Розкладка читання · {layout.Label}. Змінити розкладку");
