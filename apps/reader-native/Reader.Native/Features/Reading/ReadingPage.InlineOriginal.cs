@@ -276,7 +276,7 @@ public partial class ReadingPage
         other.IsVisible = false;
         var view = detached ? DetachedPdfText : SourceText;
         var sentence = detached ? detachedSentence?.Sentence : AppState.Session.Sentence;
-        if (sentence is null || detached != (address.DetachedText is not null) ||
+        if (detached != (address.DetachedText is not null) ||
             (detached && detachedAddress?.Page != address.Page))
         {
             overlay.IsVisible = false;
@@ -290,7 +290,7 @@ public partial class ReadingPage
 
         if (wordOnly)
         {
-            if (overlay.IsVisible && overlay.Drawable is PdfReadingHighlight existing &&
+            if (sentence is not null && overlay.IsVisible && overlay.Drawable is PdfReadingHighlight existing &&
                 existing.Matches(sentence.StartUtf16, sentence.EndUtf16))
                 UpdatePdfWordFocus(existing);
             return;
@@ -312,10 +312,10 @@ public partial class ReadingPage
             }
         }
 
-        overlay.IsVisible = lines.Length > 0;
+        overlay.IsVisible = lines.Length > 0 && sentence is not null;
         pdfSourceLayout = new(address, lines, offset, sentence);
         DrawPdfTranslationLayout();
-        if (!overlay.IsVisible)
+        if (!overlay.IsVisible || sentence is null)
         {
             overlay.Drawable = null;
             return;

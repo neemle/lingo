@@ -10,7 +10,7 @@ public partial class ReadingPage
 {
     private sealed record PdfLayoutAddress(string Document, int Page, string? Revision, string Target, string? DetachedText);
     private sealed record PdfAutoTranslation(PdfLayoutAddress Address, int RouteRequest);
-    private sealed record PdfSourceLayout(InlinePdfAddress Page, OcrLine[] Lines, int Offset, Sentence Sentence)
+    private sealed record PdfSourceLayout(InlinePdfAddress Page, OcrLine[] Lines, int Offset, Sentence? Sentence)
     {
         public bool Matches(PdfLayoutAddress? address) => address is not null &&
             Page.Document == address.Document && Page.Page == address.Page &&
@@ -736,6 +736,13 @@ public partial class ReadingPage
                 regions.Add(new(rect, grouped));
             }
 
+            if (hasTranslation && regions.Count == 0)
+            {
+                canvas.FillRectangle(page);
+                OverflowChanged?.Invoke(DrawReflowedPage(canvas, page));
+                return;
+            }
+
             foreach (var region in regions)
             {
                 var text = new StringBuilder();
@@ -760,6 +767,31 @@ public partial class ReadingPage
             void Mask(double x, double y, double width, double height) =>
                 canvas.FillRectangle(page.X + (float)x * page.Width - 1, page.Y + (float)y * page.Height - 1,
                     (float)width * page.Width + 2, (float)height * page.Height + 2);
+        }
+
+        private PdfPageTranslationRow[] DrawReflowedPage(ICanvas canvas, RectF page)
+        {
+            var font = new Microsoft.Maui.Graphics.Font("Georgia");
+            var size = Math.Clamp(page.Width * 0.032f, 10, 19);
+            var margin = page.Width * 0.075f;
+            var width = page.Width - 2 * margin;
+            var top = page.Top + margin;
+            var bottom = page.Bottom - margin;
+            var ordered = rows.OrderBy(row => row.StartUtf16).ToArray();
+            for (var index = 0; index < ordered.Length; index++)
+            {
+                var row = ordered[index];
+                var text = HasPdfTranslation(row) ? row.Text! : "…";
+                var lines = Wrap(canvas, text, Regex.Matches(text, @"\S+"), font, size, width);
+                var height = lines.Count * size * 1.16f;
+                if (top + height > bottom) return ordered[index..];
+                var isActive = active is not null && row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16;
+                var bounds = new RectF(page.Left + margin, top, width, height);
+                if (!DrawFitted(canvas, text, bounds, [new(row, 0, text.Length, isActive)], gloss, size))
+                    return ordered[index..];
+                top += height + size * 0.45f;
+            }
+            return [];
         }
 
         private RectF? Bounds(PdfPageTranslationRow row, RectF page)
@@ -794,13 +826,14 @@ public partial class ReadingPage
             return new RectF(left, top, Math.Max(a.Right, b.Right) - left, Math.Max(a.Bottom, b.Bottom) - top);
         }
 
-        private bool DrawFitted(ICanvas canvas, string text, RectF area, IReadOnlyList<Fragment> fragments, string? gloss)
+        private bool DrawFitted(ICanvas canvas, string text, RectF area, IReadOnlyList<Fragment> fragments, string? gloss,
+            float? preferredSize = null)
         {
             if (area.Width < 2 || area.Height < 2) return false;
             var font = new Microsoft.Maui.Graphics.Font("Georgia");
             canvas.Font = font;
             canvas.FontColor = Color.FromArgb("#302D27");
-            var size = Math.Min(21, area.Height * 0.78f);
+            var size = preferredSize ?? Math.Min(21, area.Height * 0.78f);
             var words = Regex.Matches(text, @"\S+");
             if (words.Count == 0) return false;
             const int minimum = 7;
@@ -808,8 +841,8 @@ public partial class ReadingPage
             while (true)
             {
                 if (size < minimum) return false;
-                lines = Wrap(size);
-                if (lines.Count * size * 1.16f <= area.Height &&
+                lines = Wrap(canvas, text, words, font, size, area.Width);
+                if (lines.Count * size * 1.16f <= area.Height + 0.01f &&
                     lines.All(line => canvas.GetStringSize(text[line.Start..line.End], font, size).Width <= area.Width))
                     break;
                 if (size == minimum) return false;
@@ -857,27 +890,28 @@ public partial class ReadingPage
                     return new RectF(area.Left + left, y, width, size * 1.16f);
                 }
             }
-
-            List<WrappedLine> Wrap(float fontSize)
-            {
-                var result = new List<WrappedLine>();
-                var start = words[0].Index;
-                var end = start + words[0].Length;
-                for (var i = 1; i < words.Count; i++)
-                {
-                    var word = words[i];
-                    var next = word.Index + word.Length;
-                    if (canvas.GetStringSize(text[start..next], font, fontSize).Width > area.Width)
-                    {
-                        result.Add(new WrappedLine(start, end));
-                        start = word.Index;
-                    }
-                    end = next;
-                }
-                result.Add(new WrappedLine(start, end));
-                return result;
-            }
             return true;
+        }
+
+        private static List<WrappedLine> Wrap(ICanvas canvas, string text, MatchCollection words,
+            Microsoft.Maui.Graphics.Font font, float size, float width)
+        {
+            var result = new List<WrappedLine>();
+            var start = words[0].Index;
+            var end = start + words[0].Length;
+            for (var index = 1; index < words.Count; index++)
+            {
+                var word = words[index];
+                var next = word.Index + word.Length;
+                if (canvas.GetStringSize(text[start..next], font, size).Width > width)
+                {
+                    result.Add(new WrappedLine(start, end));
+                    start = word.Index;
+                }
+                end = next;
+            }
+            result.Add(new WrappedLine(start, end));
+            return result;
         }
     }
 }
