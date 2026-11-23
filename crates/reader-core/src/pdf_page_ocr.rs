@@ -591,6 +591,41 @@ impl Store {
         self.commit_pdf_page(id, page, lines, None, None, Some((revision, language)))
     }
 
+    pub fn supplement_pdf_ocr_page(
+        &mut self, id: &str, page: u16, revision: &str, language: &str,
+        detached: bool, lines: Vec<ocr::OcrLine>,
+    ) -> Result<bool> {
+        if lines.is_empty() { return Ok(false); }
+        if lines.iter().any(|line| line.page != page || line.correction.is_some()) {
+            return Err("Результат OCR містить рядки іншої сторінки або виправлення.".into());
+        }
+        ocr::recognized_lines(&lines, page.checked_add(1).ok_or("Некоректна сторінка PDF.")?)?;
+        if detached {
+            return self.supplement_detached_pdf_ocr(id, page, revision, language, lines);
+        }
+        let mut updated = false;
+        self.edit_document(id, |document, tx| {
+            if document.current_revision_id.as_deref() != Some(revision) || document.language != language {
+                return Err("Текст або мова PDF змінилися. Відкрийте сторінку знову.".into());
+            }
+            let pages = file_originals::native_pdf_page_text(tx, id)?.ok_or("Оригінал PDF недоступний.")?;
+            let (start, _) = crate::pdf_reading_position::page_bounds(document, page)
+                .ok_or("Розпізнаний текст сторінки недоступний.")?;
+            let existing = document.ocr_lines.as_mut().ok_or("Розпізнаний текст сторінки недоступний.")?;
+            let first = existing.partition_point(|line| line.page < page);
+            let end = existing.partition_point(|line| line.page <= page);
+            if first == end { return Err("Розпізнаний текст сторінки недоступний.".into()); }
+            let Some((merged, mut edits)) = crate::ocr_layout::supplement_page(&existing[first..end], lines)?
+                else { return Ok(false); };
+            for edit in &mut edits { edit.start_utf16 += start; }
+            existing.splice(first..end, merged);
+            reflow_pdf_document(tx, document, pages, &edits, page)?;
+            updated = true;
+            Ok(true)
+        })?;
+        Ok(updated)
+    }
+
     pub fn repair_stored_pdf_text_order(
         &mut self, id: &str, page: u16, revision: &str, reference: &str, changes: &[PdfTextOrderEdit],
     ) -> Result<bool> {

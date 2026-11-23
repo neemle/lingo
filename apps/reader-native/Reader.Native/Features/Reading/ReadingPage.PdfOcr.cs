@@ -508,7 +508,7 @@ public partial class ReadingPage
             ? current.Pages.FirstOrDefault(page => page.Page == current.Center)
             : null;
         RepairPdfText.IsVisible = pageState is { State: "textLayer" } or { HasOcr: true };
-        RepairPdfText.Text = pageState?.HasOcr == true ? "Звірити OCR" : "Розпізнати зі скану";
+        RepairPdfText.Text = pageState?.HasOcr == true ? "Дії OCR…" : "Розпізнати зі скану";
         RepairPdfText.IsEnabled = enabled && RepairPdfText.IsVisible;
     }
 
@@ -589,6 +589,13 @@ public partial class ReadingPage
         UpdatePdfPageDisplay();
         try
         {
+            const string supplement = "Знайти пропущені рядки";
+            const string reconcile = "Звірити текст OCR";
+            var action = page.HasOcr
+                ? await DisplayActionSheetAsync("Розпізнавання сторінки", "Скасувати", null, supplement, reconcile)
+                : null;
+            run.Token.ThrowIfCancellationRequested();
+            if (page.HasOcr && action != supplement && action != reconcile) return;
             if (await session.OriginalFileAsync(document.Id) is not { } original)
                 throw new InvalidDataException("Оригінал PDF для розпізнавання недоступний.");
             if (page.HasOcr)
@@ -600,13 +607,27 @@ public partial class ReadingPage
                         ?? throw new InvalidDataException("Розпізнаний текст сторінки недоступний.");
                     revision = ocr.Revision;
                 }
-                var reference = await PdfScan.ReadPageTextAsync(original.Path, window.Center, window.PageCount, run.Token);
-                run.Token.ThrowIfCancellationRequested();
-                var changed = await session.ReconcilePdfOcrPageAsync(
-                    document.Id, window.Center, revision, document.Language, reference, isDetached);
+                bool changed;
+                if (action == supplement)
+                {
+                    var lines = await PdfPageOcr.RecognizePageAsync(document, original.Path, window.Center,
+                        window.PageCount, run.Token);
+                    run.Token.ThrowIfCancellationRequested();
+                    changed = await session.SupplementPdfOcrPageAsync(
+                        document.Id, window.Center, revision, document.Language, isDetached, lines);
+                }
+                else
+                {
+                    var reference = await PdfScan.ReadPageTextAsync(original.Path, window.Center, window.PageCount, run.Token);
+                    run.Token.ThrowIfCancellationRequested();
+                    changed = await session.ReconcilePdfOcrPageAsync(
+                        document.Id, window.Center, revision, document.Language, reference, isDetached);
+                }
                 if (!changed && readingPageActive && !run.IsCancellationRequested && session.Document?.Id == document.Id)
                 {
-                    await DisplayAlertAsync("Звірка OCR", "Не знайдено розбіжностей, які можна впевнено виправити.", "Гаразд");
+                    var message = action == supplement ? "Нових рядків з достатньою впевненістю не знайдено."
+                        : "Не знайдено розбіжностей, які можна впевнено виправити.";
+                    await DisplayAlertAsync("Розпізнавання сторінки", message, "Гаразд");
                     return;
                 }
             }

@@ -165,6 +165,10 @@ pub fn recover_tesseract_lines(
     let Ok(sparse) = parse_lines(sparse_tsv, width, height, true) else {
         return primary;
     };
+    merge_missing_lines(primary, sparse)
+}
+
+pub(crate) fn merge_missing_lines(primary: Vec<OcrLine>, sparse: Vec<OcrLine>) -> Vec<OcrLine> {
     let horizontal_overlap = |a: &OcrLine, b: &OcrLine| {
         (a.x + a.width).min(b.x + b.width) - a.x.max(b.x)
     };

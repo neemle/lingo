@@ -336,6 +336,15 @@ pub enum Command {
         language: String,
         lines: Vec<reader_core::ocr::OcrLine>,
     },
+    SupplementPdfOcrPage {
+        id: String,
+        page: u16,
+        #[serde(rename = "revisionId")]
+        revision_id: String,
+        language: String,
+        detached: bool,
+        lines: Vec<reader_core::ocr::OcrLine>,
+    },
     ReconcilePdfOcrPage {
         id: String,
         page: u16,

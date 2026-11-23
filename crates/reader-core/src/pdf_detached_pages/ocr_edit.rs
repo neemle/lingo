@@ -171,6 +171,32 @@ impl Store {
         tx.commit().map_err(database_error)?;
         Ok(true)
     }
+
+    pub(crate) fn supplement_detached_pdf_ocr(
+        &mut self, id: &str, page: u16, revision: &str, language: &str, incoming: Vec<ocr::OcrLine>,
+    ) -> Result<bool> {
+        let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(database_error)?;
+        let (text, encoded) = read_ocr(&tx, id, page)?.ok_or("Розпізнаний текст сторінки недоступний.")?;
+        let previous = ocr_page(&text, &encoded)?;
+        let current_language: String = tx.query_row(
+            "SELECT json_extract(body, '$.language') FROM documents WHERE id=?1",
+            [id], |row| row.get(0),
+        ).map_err(database_error)?;
+        if previous.revision != revision || current_language != language {
+            return Err("Текст або мова PDF змінилися. Відкрийте сторінку знову.".into());
+        }
+        let Some((merged, edits)) = crate::ocr_layout::supplement_page(&previous.lines, incoming)?
+            else { return Ok(false); };
+        let edits: Vec<_> = edits.into_iter().map(|edit| Edit {
+            start: edit.start_utf16,
+            old_end: edit.start_utf16 + edit.old_len,
+            new_end: edit.start_utf16 + edit.new_len,
+        }).collect();
+        save_ocr_edits(&tx, id, page, &text, merged, &edits)?;
+        tx.commit().map_err(database_error)?;
+        Ok(true)
+    }
 }
 
 fn save_ocr_edits(
@@ -381,6 +407,53 @@ fn move_sentence_anchors(
 mod tests {
     use super::*;
     use crate::{file_originals, pdf_detached_pages::DetachedPdfAnnotationChange};
+
+    #[test]
+    fn supplemental_ocr_keeps_a_detached_note_and_the_saved_correction() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let original = root.path().join("scan.pdf");
+        std::fs::write(&original, "%PDF-1.4\n").unwrap();
+        let prepared = file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "scan.pdf", &original, "en", vec![String::new()], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let mut first = ocr::OcrLine {
+            page: 0, text: "An erly paragraph.".into(), confidence: Some(0.95),
+            x: 0.1, y: 0.1, width: 0.75, height: 0.04, correction: None,
+            block_start: false, words: vec![], source_span: None,
+        };
+        let mut last = first.clone();
+        last.text = "The final paragraph.".into();
+        last.block_start = true;
+        last.y = 0.5;
+        super::super::write_ocr(&store.connection, &document.id, 0, "en", &[first.clone(), last], 1).unwrap();
+        let frame = store.detached_pdf_ocr(&document.id, 0).unwrap().unwrap();
+        let frame = store.correct_detached_pdf_ocr(
+            &document.id, 0, &frame.revision, 0, Some("An early paragraph.".into()),
+        ).unwrap();
+        let last = store.select_detached_pdf_sentence(&document.id, 0, Some(1), None).unwrap().unwrap();
+        store.update_detached_pdf_annotation(
+            &document.id, 0, &last.sentence.id, DetachedPdfAnnotationChange::Note { text: "A note".into() },
+        ).unwrap();
+        first.text = "A recovered line.".into();
+        first.y = 0.3;
+        first.words = ["A", "recovered", "line."].into_iter().scan(0, |offset, text| {
+            let word = ocr::OcrWord { text: text.into(), raw_start_utf16: Some(*offset),
+                x: 0.1 + *offset as f64 / 40.0, y: first.y, width: 0.1, height: first.height, source_span: None };
+            *offset += text.len() + 1;
+            Some(word)
+        }).collect();
+        assert!(store.supplement_pdf_ocr_page(
+            &document.id, 0, &frame.revision, "en", true, vec![first],
+        ).unwrap());
+        let updated = store.detached_pdf_ocr(&document.id, 0).unwrap().unwrap();
+        assert_eq!(updated.lines.len(), 3);
+        assert_eq!(updated.lines[0].reading_text(), "An early paragraph.");
+        let saved = store.detached_pdf_sentence(&document.id, 0, None).unwrap().unwrap();
+        assert_eq!(saved.sentence.text, "The final paragraph.");
+        assert_eq!(saved.note.as_deref(), Some("A note"));
+    }
 
     #[test]
     fn several_word_repairs_keep_the_saved_sentence_and_its_note() {

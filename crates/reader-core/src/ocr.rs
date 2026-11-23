@@ -5,6 +5,7 @@ use crate::{Result, MAX_IMPORT};
 
 mod tesseract;
 pub use tesseract::{parse_tesseract_tsv, recover_tesseract_lines};
+pub(crate) use tesseract::merge_missing_lines;
 
 /// Coordinates use the upright image, with the origin in its upper left corner.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -667,7 +668,9 @@ pub(crate) fn update_transcript_with_edits(
     }
     let matching_index = |old: &crate::Sentence| {
         if !edits.is_empty() {
-            let start = map_transcript_offset(old.start_utf16, edits)?;
+            let start = map_transcript_offset(old.start_utf16, edits)?
+                + edits.iter().filter(|edit| edit.start_utf16 == old.start_utf16 && edit.old_len == 0)
+                    .map(|edit| edit.new_len).sum::<usize>();
             let end = map_transcript_offset(old.end_utf16, edits)?;
             let index = sentences.binary_search_by_key(&start, |sentence| sentence.start_utf16).ok()?;
             return (sentences[index].end_utf16 == end).then_some(index);

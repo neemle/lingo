@@ -12,6 +12,14 @@ internal static class PdfPageOcr
     internal static async Task ReplaceTextLayerAsync(ReaderSession session, Document document, string path,
         int page, string revision, int pageCount, CancellationToken cancellation)
     {
+        var lines = await RecognizePageAsync(document, path, page, pageCount, cancellation);
+        cancellation.ThrowIfCancellationRequested();
+        await session.ReplacePdfTextLayerAsync(document.Id, page, revision, document.Language, lines);
+    }
+
+    internal static async Task<OcrLine[]> RecognizePageAsync(Document document, string path, int page,
+        int pageCount, CancellationToken cancellation)
+    {
         await Worker.WaitAsync(cancellation);
         try
         {
@@ -19,7 +27,7 @@ internal static class PdfPageOcr
             await PdfScan.RecognizeAsync(path, document.Language, pageCount, [page],
                 (_, recognized) => lines = recognized, cancellation);
             cancellation.ThrowIfCancellationRequested();
-            await session.ReplacePdfTextLayerAsync(document.Id, page, revision, document.Language, lines);
+            return lines;
         }
         finally { Worker.Release(); }
     }

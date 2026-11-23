@@ -62,6 +62,52 @@ pub(crate) fn intersects_edits(start: usize, end: usize, edits: &[TranscriptEdit
     edits.iter().any(|edit| edit.start_utf16 < end && edit.start_utf16 + edit.old_len > start)
 }
 
+/// Fill holes in saved OCR without replacing existing lines or their corrections.
+pub(crate) fn supplement_page(
+    saved: &[OcrLine], incoming: Vec<OcrLine>,
+) -> crate::Result<Option<(Vec<OcrLine>, Vec<TranscriptEdit>)>> {
+    let mut merged = crate::ocr::merge_missing_lines(saved.to_vec(), incoming);
+    if merged.len() == saved.len() {
+        return Ok(None);
+    }
+    // Corrections inhibit the generic reorder pass. Their blocks and word
+    // coordinates stay attached to the original lines.
+    reconstruct_blocks(&mut merged);
+    let mut edits = Vec::new();
+    let mut old_end = 0;
+    let mut rows = merged.iter().enumerate();
+    for (index, original) in saved.iter().enumerate() {
+        let old_gap = separator_width(index, original);
+        let mut new_gap = 0;
+        loop {
+            let (new_index, row) = rows.next()
+                .ok_or("Нове OCR змінює порядок збережених рядків.")?;
+            new_gap += separator_width(new_index, row);
+            if row.text == original.text && row.correction == original.correction
+                && row.x == original.x && row.y == original.y
+            {
+                break;
+            }
+            new_gap += row.reading_text().encode_utf16().count();
+        }
+        if old_gap != new_gap {
+            edits.push(TranscriptEdit { start_utf16: old_end, old_len: old_gap, new_len: new_gap });
+        }
+        let length = original.reading_text().encode_utf16().count();
+        old_end += old_gap + length;
+    }
+    let length: usize = rows.map(|(index, row)|
+        separator_width(index, row) + row.reading_text().encode_utf16().count()).sum();
+    if length > 0 {
+        edits.push(TranscriptEdit { start_utf16: old_end, old_len: 0, new_len: length });
+    }
+    Ok(Some((merged, edits)))
+}
+
+fn separator_width(index: usize, line: &OcrLine) -> usize {
+    if index == 0 { 0 } else { 1 + usize::from(line.block_start) }
+}
+
 fn reconstruct_page(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
     if lines.iter().any(|line| line.correction.is_some()) {
         return None;
@@ -329,6 +375,40 @@ mod tests {
         assert_eq!(crate::ocr::recognized_lines(&page, 1).unwrap(), text);
         assert_eq!(page[2].words[0].raw_start_utf16, Some(0));
         assert!(upgrade_cached_page(&page, text).is_none());
+    }
+
+    #[test]
+    fn cached_ocr_supplement_keeps_a_bookmark_after_an_inserted_row() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = crate::Store::open(&root.path().join("reader.db")).unwrap();
+        let original = root.path().join("scan.pdf");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let mut first = caption_line();
+        first.text = "The first paragraph ends.".into();
+        first.words.clear();
+        first.y = 0.15;
+        let mut last = first.clone();
+        last.text = "The last paragraph ends.".into();
+        last.y = 0.55;
+        let prepared = crate::file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "scan.pdf", &original, "en",
+            vec![String::new()], vec![first, last],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        store.set_bookmark(&document.id, &document.sentences[1].id, true).unwrap();
+        let mut recovered = caption_line();
+        recovered.text = "Left caption.".into();
+        recovered.words.truncate(2);
+        recovered.words[1].text.push('.');
+        recovered.width = 0.09;
+        recovered.confidence = Some(0.98);
+        let revision = document.current_revision_id.as_deref().unwrap();
+        assert!(store.supplement_pdf_ocr_page(&document.id, 0, revision, "en", false, vec![recovered]).unwrap());
+        let refreshed = store.pdf_read_window(&document.id, 0).unwrap();
+        assert!(refreshed.pages[0].text.contains("Left caption."));
+        let saved = store.translation_document(&document.id).unwrap();
+        let last = saved.sentences.iter().find(|sentence| sentence.text == "The last paragraph ends.").unwrap();
+        assert_eq!(saved.bookmarks, [last.id.clone()]);
     }
 
     #[test]

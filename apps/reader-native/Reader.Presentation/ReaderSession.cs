@@ -321,6 +321,14 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         PdfOcrUpdated?.Invoke(id, page);
     }
 
+    public async Task<bool> SupplementPdfOcrPageAsync(string id, int page, string revisionId, string language,
+        bool detached, OcrLine[] lines)
+    {
+        var updated = await Task.Run(() => client.SupplementPdfOcrPage(id, page, revisionId, language, detached, lines));
+        if (updated) PdfOcrUpdated?.Invoke(id, page);
+        return updated;
+    }
+
     public async Task<bool> ReconcilePdfOcrPageAsync(string id, int page, string revisionId, string language,
         string reference, bool detached)
     {

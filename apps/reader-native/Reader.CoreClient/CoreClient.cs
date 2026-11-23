@@ -265,6 +265,9 @@ public sealed class CoreClient : IDisposable
     public void ReplacePdfTextLayer(string id, int page, string revisionId, string language, OcrLine[] lines) =>
         Call<JsonElement>(new { version = 1, operation = "replace_pdf_text_layer", id, page, revisionId, language, lines });
 
+    public bool SupplementPdfOcrPage(string id, int page, string revisionId, string language, bool detached, OcrLine[] lines) =>
+        Call<bool>(new { version = 1, operation = "supplement_pdf_ocr_page", id, page, revisionId, language, detached, lines });
+
     public bool ReconcilePdfOcrPage(string id, int page, string revisionId, string language, string reference, bool detached) =>
         Call<bool>(new { version = 1, operation = "reconcile_pdf_ocr_page", id, page, revisionId, language, reference, detached });
 
