@@ -296,6 +296,7 @@ fn validate(command: &Command) -> Result<()> {
         | Command::ClaimPdfOcrPage { id, .. }
         | Command::RetryPdfOcrPage { id, .. }
         | Command::CachePdfOcrPage { id, .. }
+        | Command::CacheBackgroundPdfTextLayer { id, .. }
             if id.is_empty() || id.len() > 256 || id.contains('\0') =>
         {
             Err(Error::new(

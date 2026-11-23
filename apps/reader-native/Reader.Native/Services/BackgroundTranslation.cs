@@ -152,7 +152,7 @@ internal sealed class BackgroundTranslation
             var preferences = session.GetReaderPreferences();
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var live = new HashSet<JobKey>();
-            var ready = new List<(JobKey Key, string Title)>();
+            var ready = new List<(JobKey Key, Document Document)>();
             string? missing = null;
             var waiting = false;
             foreach (var document in session.Snapshot.Documents.OrderByDescending(doc => doc.Id == current))
@@ -164,7 +164,7 @@ internal sealed class BackgroundTranslation
                 var key = new JobKey(document.Id, revision, target);
                 live.Add(key);
                 if (!jobs.TryGetValue(key, out var job) || job.ResumeAt is { } deadline && deadline <= now)
-                    ready.Add((key, document.Title));
+                    ready.Add((key, document));
                 else if (job.MissingPackages is { } packages)
                     missing ??= packages.Length == 0
                         ? $"Офлайн-маршрут недоступний · {PairName(document.Language, target)}."
@@ -202,18 +202,33 @@ internal sealed class BackgroundTranslation
 
             var previous = ready.FindIndex(candidate => candidate.Key == lastLibraryJob);
             var work = ready[(previous + 1) % ready.Count];
+            var title = work.Document.Title;
             lastLibraryJob = work.Key;
             libraryStepInvalidated = false;
-            SetStatus($"Опрацьовуємо «{work.Title}»…", running: true);
+            SetStatus($"Опрацьовуємо «{title}»…", running: true);
             var progress = await session.AdvanceBackgroundTranslationAsync(work.Key.Document, work.Key.Revision, work.Key.Target);
             if (!enabled || paused || libraryStepInvalidated) return;
             jobs[work.Key] = progress;
             UpdateRequiredPackages();
+#if MACCATALYST
+            if (progress.PendingPdfTextPage is int pendingPage &&
+                work.Document.PdfPageStarts?.Length is int pageCount &&
+                await session.OriginalFileAsync(work.Key.Document) is { } original)
+            {
+                if (!enabled || paused || libraryStepInvalidated) return;
+                SetStatus($"Читаємо текстовий шар сторінки {pendingPage + 1} · «{title}»…", running: true);
+                var text = await PdfScan.ReadPageTextAsync(original.Path, pendingPage, pageCount, CancellationToken.None);
+                if (!enabled || paused || libraryStepInvalidated) return;
+                await session.CacheBackgroundPdfTextLayerAsync(work.Key.Document, work.Key.Revision, pendingPage, text);
+                if (enabled && !paused) SetStatus("Черга перекладу продовжується.");
+                return;
+            }
+#endif
             SetStatus(progress.MissingPackages is not null
-                ? $"Для «{work.Title}» бракує офлайн-маршруту."
+                ? $"Для «{title}» бракує офлайн-маршруту."
                 : progress.TranslatedPage is int page
-                    ? $"Переклад сторінки {page + 1} · «{work.Title}»."
-                    : $"Перевірено кеш · «{work.Title}».");
+                    ? $"Переклад сторінки {page + 1} · «{title}»."
+                    : $"Перевірено кеш · «{title}».");
         }
         catch (Exception error)
         {

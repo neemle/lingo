@@ -239,6 +239,45 @@ fn remove_request(db: &Connection, id: &str, page: u16) -> Result<()> {
 }
 
 impl Store {
+    /// Resolve a deferred text-layer probe without rendering, running OCR or moving the reading position.
+    pub fn cache_background_pdf_text_layer(
+        &mut self, id: &str, revision: &str, page: u16, text: &str,
+    ) -> Result<bool> {
+        if text.len() > crate::MAX_IMPORT || text.contains('\0') {
+            return Err("Некоректний текстовий шар сторінки PDF.".into());
+        }
+        if self.reader_preferences()?.background_translation != Some(true) {
+            return Ok(false);
+        }
+        let Some(_lock) = file_originals::try_worker_lock(
+            &self.file_original_directory, ".pdf-ocr-window.lock",
+        )? else {
+            return Ok(false);
+        };
+        let text = text.trim();
+        let mut completed = false;
+        self.edit_document(id, |document, tx| {
+            if document.current_revision_id.as_deref() != Some(revision)
+                || !document.pdf_pending_text_pages.remove(&page)
+                || pdf_detached_pages::source_language(tx, id, page)?.is_some()
+            {
+                return Ok(false);
+            }
+            if !text.is_empty() && !pdf_layers::damaged_text_layer(text) {
+                pdf_detached_pages::write_text_layer(tx, id, page, text)?;
+                remove_request(tx, id, page)?;
+            }
+            // An unusable embedded layer leaves the page eligible for foreground OCR.
+            tx.execute(
+                "UPDATE background_translation_progress SET resume_at=0 WHERE document_id=?1",
+                [id],
+            ).map_err(database_error)?;
+            completed = true;
+            Ok(true)
+        })?;
+        Ok(completed)
+    }
+
     pub fn unread_pdf_text_pages(&self, id: &str) -> Result<Vec<u16>> {
         let mut query = self.connection.prepare(
             "SELECT j.value FROM documents d, json_each(d.body,'$.pdfPendingTextPages') j

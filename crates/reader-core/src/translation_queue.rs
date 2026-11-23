@@ -309,6 +309,8 @@ pub struct BackgroundTranslationProgress {
     translated_sentence_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     missing_packages: Option<Vec<crate::translation::TranslationPair>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pending_pdf_text_page: Option<u16>,
 }
 
 impl Store {
@@ -324,6 +326,7 @@ impl Store {
             translated_page: None,
             translated_sentence_ids: Vec::new(),
             missing_packages: None,
+            pending_pdf_text_page: None,
         };
         if self.reader_preferences()?.background_translation != Some(true) {
             return Ok(progress);
@@ -389,11 +392,20 @@ impl Store {
             progress.translated_sentence_ids = step.translated_sentence_ids;
             match step.next {
                 Some(next) => (next, incomplete || step.incomplete, Some(0)),
-                None if incomplete => (0, false, Some(crate::now() + 300)),
-                None if document.format == "pdf" && self.pdf_has_unprocessed_pages(&document)? => {
-                    (cursor as usize, false, Some(crate::now() + PDF_OCR_POLL_SECONDS))
+                None => {
+                    if document.format == "pdf" {
+                        progress.pending_pdf_text_page = self.next_background_pdf_text_page(id)?;
+                    }
+                    if progress.pending_pdf_text_page.is_some() {
+                        (cursor as usize, incomplete, Some(crate::now() + PDF_OCR_POLL_SECONDS))
+                    } else if incomplete {
+                        (0, false, Some(crate::now() + 300))
+                    } else if document.format == "pdf" && self.pdf_has_unprocessed_pages(&document)? {
+                        (cursor as usize, false, Some(crate::now() + PDF_OCR_POLL_SECONDS))
+                    } else {
+                        (cursor as usize, false, None)
+                    }
                 }
-                None => (cursor as usize, false, None),
             }
         };
         let saved = self.connection.execute(
@@ -406,11 +418,22 @@ impl Store {
             progress.resume_at = Some(0);
             progress.translated_page = None;
             progress.translated_sentence_ids.clear();
+            progress.pending_pdf_text_page = None;
             return Ok(progress);
         }
         progress.resume_at = resume_at;
         progress.missing_packages = missing_packages;
         Ok(progress)
+    }
+
+    fn next_background_pdf_text_page(&self, id: &str) -> Result<Option<u16>> {
+        self.connection.query_row(
+            "SELECT min(j.value) FROM documents d, json_each(d.body,'$.pdfPendingTextPages') j
+             WHERE d.id=?1 AND NOT EXISTS (
+                 SELECT 1 FROM pdf_detached_pages p WHERE p.document_id=d.id AND p.page=j.value
+             )",
+            [id], |row| row.get(0),
+        ).map_err(database_error)
     }
 
     fn pdf_has_unprocessed_pages(&self, document: &Document) -> Result<bool> {

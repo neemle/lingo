@@ -274,6 +274,12 @@ pub enum Command {
         id: String,
         center: Option<u16>,
     },
+    CacheBackgroundPdfTextLayer {
+        id: String,
+        revision: String,
+        page: u16,
+        text: String,
+    },
     RetryPdfOcrPage {
         id: String,
         page: u16,

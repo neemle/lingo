@@ -290,6 +290,12 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<PdfOcrRequest?> ClaimPdfOcrPageAsync(string id, int? center = null) =>
         Task.Run(() => client.ClaimPdfOcrPage(id, center));
 
+    public async Task CacheBackgroundPdfTextLayerAsync(string id, string revision, int page, string text)
+    {
+        if (await Task.Run(() => client.CacheBackgroundPdfTextLayer(id, revision, page, text)))
+            PdfOcrUpdated?.Invoke(id, page);
+    }
+
     public Task<PdfPageTranslationRow[]> PdfPageTranslationAsync(string id, int page, string target, bool cachedOnly) =>
         Task.Run(() => client.PdfPageTranslation(id, page, target, cachedOnly));
 
