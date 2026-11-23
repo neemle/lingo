@@ -28,6 +28,7 @@ public partial class ReadingPage
     private void TogglePdfTranslationLayout(object? sender, EventArgs args)
     {
         pdfTranslationLayout = !pdfTranslationLayout;
+        SaveReaderPreference(ReaderPreferenceChange.PdfTranslationLayout(pdfTranslationLayout));
         RefreshPdfTranslationLayout();
     }
 

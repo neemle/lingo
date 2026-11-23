@@ -5,6 +5,9 @@ namespace Reader.Contracts;
 public sealed record ReaderPreferences
 {
     public string? Layout { get; init; }
+    public bool? PdfShowOriginal { get; init; }
+    public bool? PdfFitWidth { get; init; }
+    public bool? PdfTranslationLayout { get; init; }
     public bool? AutoTranslate { get; init; }
     public bool? BackgroundTranslation { get; init; }
     public bool? ContinuousSpeech { get; init; }
@@ -31,6 +34,9 @@ public sealed record ReaderPreferenceChange(string Field)
     public string? VoiceId { get; private init; }
 
     public static ReaderPreferenceChange Layout(string value) => new("layout") { Value = value };
+    public static ReaderPreferenceChange PdfShowOriginal(bool value) => new("pdfShowOriginal") { Value = value };
+    public static ReaderPreferenceChange PdfFitWidth(bool value) => new("pdfFitWidth") { Value = value };
+    public static ReaderPreferenceChange PdfTranslationLayout(bool value) => new("pdfTranslationLayout") { Value = value };
     public static ReaderPreferenceChange AutoTranslate(bool value) => new("autoTranslate") { Value = value };
     public static ReaderPreferenceChange BackgroundTranslation(bool value) => new("backgroundTranslation") { Value = value };
     public static ReaderPreferenceChange SpeechPlayback(int ratePercent, bool continuous) =>

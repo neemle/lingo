@@ -81,6 +81,9 @@ public partial class ReadingPage : ContentPage
             detachedMachineTranslation = null;
         }
         LoadReaderPreferences();
+        inlinePdfFitWidth = readerPreferences.PdfFitWidth ?? true;
+        pdfTranslationLayout = readerPreferences.PdfTranslationLayout ?? true;
+        UpdateInlinePdfFitLabel();
         readingLayout = Enum.TryParse<ReaderLayout>(readerPreferences.Layout, ignoreCase: true, out var storedLayout)
             && Enum.IsDefined(storedLayout) ? storedLayout : ReaderLayout.Automatic;
         ArrangeReadingColumns();
@@ -93,6 +96,7 @@ public partial class ReadingPage : ContentPage
         AppState.Session.PropertyChanged += SessionChanged;
         AppState.Session.BackgroundPageTranslated += BackgroundPageTranslated;
         SyncReaderPdf();
+        SyncInlinePdfMode();
         SyncAnalysisPrefetch();
         BeginReadingHistory();
         UpdateHighlight();
@@ -117,6 +121,8 @@ public partial class ReadingPage : ContentPage
         RestoreCachedModelTranslation(null);
         dictionaryFocus = null;
         StopReaderPdf();
+        inlinePdfDocumentId = null;
+        ClearInlinePdf();
         StopAnalysisPrefetch();
         CancelScheduledTranslation();
         EndReadingHistory(keepVisit: false);
@@ -139,7 +145,7 @@ public partial class ReadingPage : ContentPage
         if (args.PropertyName == nameof(ReaderSession.Snapshot))
         {
             SyncReaderPdf();
-            if (inlinePdf) _ = ShowInlinePdfAsync();
+            SyncInlinePdfMode();
             SyncAnalysisPrefetch();
             SyncReadingHistory();
             UpdateHighlight();

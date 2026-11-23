@@ -35,7 +35,6 @@ internal sealed class OriginalPage : ContentPage
     private DetachedPdfOcrPage? detachedOcr;
     private readonly ReaderSession session;
     private readonly string documentId;
-    internal string? PdfDocumentId { get; }
     private readonly Button lineButton = new() { Text = "Розпізнані рядки" };
     private int selectedLineChoice = -1;
     private readonly Button edit = new() { Text = "Виправити" };
@@ -68,7 +67,6 @@ internal sealed class OriginalPage : ContentPage
         this.recognizeWindow = recognizeWindow;
         this.lines = lines;
         this.documentId = documentId;
-        PdfDocumentId = isPdf ? documentId : null;
         this.session = session;
         this.pageCount = pageCount;
         focus = selection is not null ? (selection.StartUtf16, selection.StartUtf16 + selection.LengthUtf16)

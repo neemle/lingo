@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using Reader.Native.Features.Library;
-using Reader.Native.Features.Reading;
 using Reader.Native.Services;
 using Reader.Presentation;
 
@@ -13,9 +12,7 @@ public partial class AppShell : Shell
     internal const string PracticeRoute = "//workspace/practiceSection/practice";
     internal const string SettingsRoute = "//workspace/settingsSection/settings";
     private static readonly string[] Sections = ["library", "reading", "vocabulary", "practice", "settings"];
-    private const string OriginalPdfPreference = "lastOriginalPdf";
     private readonly string previousRoute = RestoreRoute();
-    private readonly string previousOriginalPdf = Preferences.Get(OriginalPdfPreference, "");
     private ReaderSession? trackedSession;
     private string[] renderedRecent = [];
     private bool restored;
@@ -40,12 +37,7 @@ public partial class AppShell : Shell
             else await trackedSession.RefreshAsync();
             if (!stopped) AppState.StartTranslationWorker(Dispatcher);
             if (!stopped && !DesktopImport.HasIncoming && previousRoute != LibraryRoute)
-            {
                 await GoToAsync(previousRoute);
-                if (!stopped && previousOriginalPdf == id && trackedSession.Document is { Format: "pdf", Id: var opened }
-                    && opened == id && CurrentPage is ReadingPage reader)
-                    await reader.ShowOriginalAsync();
-            }
         }
         catch (Exception error)
         {
@@ -155,9 +147,5 @@ public partial class AppShell : Shell
     {
         base.OnNavigated(args);
         Preferences.Set("lastRoute", args.Current.Location.OriginalString);
-        if (CurrentPage is OriginalPage { PdfDocumentId: { } pdf })
-            Preferences.Set(OriginalPdfPreference, pdf);
-        else
-            Preferences.Remove(OriginalPdfPreference);
     }
 }

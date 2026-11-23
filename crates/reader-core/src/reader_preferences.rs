@@ -19,6 +19,12 @@ pub struct ReaderPreferences {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layout: Option<ReaderLayout>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdf_translation_layout: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdf_fit_width: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdf_show_original: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_translate: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_translation: Option<bool>,
@@ -36,6 +42,9 @@ pub struct ReaderPreferences {
 #[serde(tag = "field", rename_all = "camelCase", deny_unknown_fields)]
 pub enum ReaderPreferenceChange {
     Layout { value: ReaderLayout },
+    PdfTranslationLayout { value: bool },
+    PdfFitWidth { value: bool },
+    PdfShowOriginal { value: bool },
     AutoTranslate { value: bool },
     BackgroundTranslation { value: bool },
     ContinuousSpeech { value: bool },
@@ -56,6 +65,9 @@ pub enum ReaderPreferenceChange {
 impl ReaderPreferences {
     pub(crate) fn is_empty(&self) -> bool {
         self.layout.is_none()
+            && self.pdf_translation_layout.is_none()
+            && self.pdf_fit_width.is_none()
+            && self.pdf_show_original.is_none()
             && self.auto_translate.is_none()
             && self.background_translation.is_none()
             && self.continuous_speech.is_none()
@@ -91,6 +103,9 @@ impl ReaderPreferences {
     fn apply(&mut self, change: ReaderPreferenceChange) {
         match change {
             ReaderPreferenceChange::Layout { value } => self.layout = Some(value),
+            ReaderPreferenceChange::PdfTranslationLayout { value } => self.pdf_translation_layout = Some(value),
+            ReaderPreferenceChange::PdfFitWidth { value } => self.pdf_fit_width = Some(value),
+            ReaderPreferenceChange::PdfShowOriginal { value } => self.pdf_show_original = Some(value),
             ReaderPreferenceChange::AutoTranslate { value } => self.auto_translate = Some(value),
             ReaderPreferenceChange::BackgroundTranslation { value } => self.background_translation = Some(value),
             ReaderPreferenceChange::ContinuousSpeech { value } => self.continuous_speech = Some(value),
@@ -153,6 +168,9 @@ pub(crate) fn restore(db: &Connection, incoming: ReaderPreferences) -> Result<()
     incoming.validate()?;
     let mut local = read(db)?;
     local.layout = local.layout.or(incoming.layout);
+    local.pdf_translation_layout = local.pdf_translation_layout.or(incoming.pdf_translation_layout);
+    local.pdf_fit_width = local.pdf_fit_width.or(incoming.pdf_fit_width);
+    local.pdf_show_original = local.pdf_show_original.or(incoming.pdf_show_original);
     local.auto_translate = local.auto_translate.or(incoming.auto_translate);
     local.background_translation = local.background_translation.or(incoming.background_translation);
     local.continuous_speech = local.continuous_speech.or(incoming.continuous_speech);

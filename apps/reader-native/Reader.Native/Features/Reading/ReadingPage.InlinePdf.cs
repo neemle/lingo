@@ -8,6 +8,7 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage
 {
     private bool inlinePdf;
+    private string? inlinePdfDocumentId;
     private bool inlinePdfFitWidth = true;
     private (string Document, int Page, int Start, int End, double SurfaceHeight, double ViewportHeight)? lastInlinePdfFollow;
     private int inlinePdfRequest;
@@ -20,7 +21,9 @@ public partial class ReadingPage
 
     private async void ToggleInlinePdfClicked(object? sender, EventArgs args)
     {
-        if (inlinePdf)
+        var showOriginal = !inlinePdf;
+        SaveReaderPreference(ReaderPreferenceChange.PdfShowOriginal(showOriginal));
+        if (!showOriginal)
         {
             ClearInlinePdf();
             return;
@@ -29,6 +32,23 @@ public partial class ReadingPage
         inlinePdf = true;
         await ShowInlinePdfAsync();
     }
+
+    private void SyncInlinePdfMode()
+    {
+        var session = AppState.Session;
+        if (session.Busy) return;
+        var id = session.Document is { Format: "pdf" } document ? document.Id : null;
+        if (id != inlinePdfDocumentId)
+        {
+            ClearInlinePdf();
+            inlinePdfDocumentId = id;
+            inlinePdf = id is not null && (readerPreferences.PdfShowOriginal ?? true);
+        }
+        if (inlinePdf) _ = ShowInlinePdfAsync();
+    }
+
+    private void UpdateInlinePdfFitLabel() =>
+        InlinePdfFitToggle.Text = inlinePdfFitWidth ? "Ціла сторінка" : "За шириною";
 
     private void ClearInlinePdf()
     {
@@ -141,7 +161,8 @@ public partial class ReadingPage
     private void ToggleInlinePdfFitClicked(object? sender, EventArgs args)
     {
         inlinePdfFitWidth = !inlinePdfFitWidth;
-        InlinePdfFitToggle.Text = inlinePdfFitWidth ? "Ціла сторінка" : "За шириною";
+        SaveReaderPreference(ReaderPreferenceChange.PdfFitWidth(inlinePdfFitWidth));
+        UpdateInlinePdfFitLabel();
         lastInlinePdfFollow = null;
         ResizeInlinePdf();
         UpdateInlinePdfHighlight();
