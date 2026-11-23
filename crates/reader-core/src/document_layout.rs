@@ -700,7 +700,7 @@ pub(crate) fn skip_in_translation(document: &Document, sentence: &Sentence) -> b
                 .is_some_and(|text| text.trim().is_empty()))
 }
 
-fn pdf_list_label_ranges<'a>(document: &'a Document, text: &'a str, start: usize)
+pub(crate) fn pdf_list_label_ranges<'a>(document: &'a Document, text: &'a str, start: usize)
     -> impl Iterator<Item = Range<usize>> + 'a
 {
     let mut line_offset = 0;

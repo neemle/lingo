@@ -800,7 +800,7 @@ public partial class ReadingPage
                 }
                 var grouped = new List<PdfPageTranslationRow> { row };
                 var styleStart = row.StartUtf16;
-                while (regions.FindLastIndex(region => FitsRegion(region, rect, lineHeight, row.SourceBlockIndex))
+                while (regions.FindLastIndex(region => FitsRegion(region, rect, lineHeight, row.SourceBlockIndex, style))
                     is var index && index >= 0)
                 {
                     var previous = regions[index];
@@ -877,9 +877,14 @@ public partial class ReadingPage
             }
         }
 
-        private static bool FitsRegion(Region region, RectF bounds, float lineHeight, int? sourceBlockIndex)
+        private static bool FitsRegion(Region region, RectF bounds, float lineHeight, int? sourceBlockIndex,
+            PdfBoxAppearance? style)
         {
             if (region.SourceBlockIndex != sourceBlockIndex) return false;
+            if (region.Appearance is { } previous && style is { } current &&
+                (DifferentColor(previous.Background, current.Background) ||
+                 previous.Ink is { } priorInk && current.Ink is { } currentInk && DifferentColor(priorInk, currentInk)))
+                return false;
             var horizontalOverlap = Math.Min(region.Bounds.Right, bounds.Right) - Math.Max(region.Bounds.Left, bounds.Left);
             if (horizontalOverlap <= 0) return false;
             var verticalGap = Math.Max(region.Bounds.Top, bounds.Top) - Math.Min(region.Bounds.Bottom, bounds.Bottom);
@@ -889,6 +894,11 @@ public partial class ReadingPage
                 horizontalOverlap >= 0.4f * Math.Min(region.Bounds.Width, bounds.Width) &&
                 verticalGap <= 0.9f * Math.Min(region.LineHeight, lineHeight);
         }
+
+        private static bool DifferentColor(Color first, Color second) =>
+            Math.Abs(first.Red - second.Red) > 0.12f ||
+            Math.Abs(first.Green - second.Green) > 0.12f ||
+            Math.Abs(first.Blue - second.Blue) > 0.12f;
 
         private PdfPageTranslationRow[] DrawReflowedPage(ICanvas canvas, RectF page)
         {
@@ -994,6 +1004,8 @@ public partial class ReadingPage
             }
             beforePaint?.Invoke();
             canvas.FontSize = size;
+            canvas.SaveState();
+            canvas.ClipRectangle(area.X, area.Y, area.Width, area.Height);
             var y = area.Top;
             foreach (var range in lines)
             {
@@ -1036,7 +1048,9 @@ public partial class ReadingPage
                         }
                     }
                 }
-                canvas.DrawString(line, area.Left, y, area.Width, lineHeight,
+                // Core Text can reject a line whose frame is exactly its measured height.
+                // Give the platform room for font leading and clip to the source region.
+                canvas.DrawString(line, area.Left, y, area.Width + 2, lineHeight + Math.Max(2, size * 0.5f),
                     HorizontalAlignment.Left, VerticalAlignment.Top, TextFlow.OverflowBounds);
                 y += lineHeight;
 
@@ -1047,6 +1061,7 @@ public partial class ReadingPage
                     return new RectF(area.Left + left, y, width, lineHeight);
                 }
             }
+            canvas.RestoreState();
             return true;
         }
 

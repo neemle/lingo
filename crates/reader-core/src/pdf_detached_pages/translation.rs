@@ -128,13 +128,14 @@ impl Store {
             let first = local.next()?;
             Some((first, local.last().unwrap_or(first)))
         };
+        let block_starts = pdf_layout_block_starts(&document, &document.sentences[physical.clone()]);
         let row = |first: usize, last: usize, text, source_text, pivot_language| {
             let source = &document.sentences[physical.start + first];
             let end = &document.sentences[physical.start + last];
             PdfPageTranslationRow {
                 start_utf16: offsets[first].0, end_utf16: offsets[last].1,
                 source_sentence_id: source.id.clone(),
-                source_block_index: source_block_index(&document, source, end),
+                source_block_index: source_block_index(&document, &block_starts, source, end),
                 text, source_text, pivot_language,
             }
         };
@@ -359,11 +360,37 @@ impl Store {
     }
 }
 
-fn source_block_index(document: &Document, first: &Sentence, last: &Sentence) -> Option<usize> {
+fn pdf_layout_block_starts(document: &Document, page: &[Sentence]) -> Vec<usize> {
+    let Some((first, last)) = page.first().zip(page.last()) else { return Vec::new(); };
+    let line_start = document.text.get(..first.start_utf8).and_then(|before| before.rfind('\n'))
+        .map_or(0, |newline| newline + 1);
+    let mut starts: Vec<_> = document.blocks.iter().map(|block| block.start_utf8).collect();
+    if let Some(text) = document.text.get(line_start..last.end_utf8) {
+        starts.extend(document_layout::pdf_list_label_ranges(document, text, line_start)
+            .map(|range| line_start + range.start));
+    }
+    starts.sort_unstable();
+    starts.dedup();
+    starts
+}
+
+fn source_block_index(document: &Document, starts: &[usize], first: &Sentence, last: &Sentence) -> Option<usize> {
     let first_letter = first.start_utf8 + first.text.find(char::is_alphanumeric)?;
     let last_letter = last.start_utf8 + last.text.rfind(char::is_alphanumeric)?;
-    let index = document.blocks.partition_point(|block| block.start_utf8 <= first_letter).checked_sub(1)?;
-    (last_letter < document.blocks[index].end_utf8).then_some(index)
+    let block = document.blocks.partition_point(|block| block.start_utf8 <= first_letter).checked_sub(1)?;
+    let boundary = starts.partition_point(|start| *start <= first_letter).checked_sub(1)?;
+    let end = document.blocks[block].end_utf8.min(starts.get(boundary + 1).copied().unwrap_or(usize::MAX));
+    if last_letter >= end {
+        // Segmentation can attach the next printed item marker to the preceding sentence.
+        // Only the marker itself may run past the layout boundary.
+        let suffix = document.text.get(end..last.end_utf8)?;
+        let marker = document_layout::pdf_list_label_ranges(document, suffix, end).next()?;
+        if suffix[..marker.start].chars().any(char::is_alphanumeric) ||
+            suffix[marker.end..].chars().any(char::is_alphanumeric) {
+            return None;
+        }
+    }
+    Some(boundary)
 }
 
 fn project_ocr_lines(
