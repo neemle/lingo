@@ -1041,6 +1041,14 @@ public partial class ReadingPage
 
             var foreground = new List<Action>();
             foreach (var region in layout.Regions)
+                DrawRegion(region);
+            foreach (var index in layout.Pending)
+                DrawPendingFragment(canvas, page, rows[index], layout.Anchors[index]);
+            foreach (var paint in foreground) paint();
+
+            OverflowChanged?.Invoke(overflow.OrderBy(row => row.StartUtf16).ToArray());
+
+            void DrawRegion(PdfTranslationRegion region)
             {
                 var regionRows = Array.ConvertAll(region.Fragments, index => rows[index]);
                 var appearance = region.StyleFragment is { } style ? TranslateAppearance(layout.Anchors[style].Style) : null;
@@ -1068,6 +1076,13 @@ public partial class ReadingPage
                     appearance?.Italic == true ? FontStyleType.Italic : FontStyleType.Normal);
                 var fit = textArea.Width >= 2 && textArea.Height >= 2
                     ? FitText(canvas, translated, font, textArea.Width, textArea.Height, preferredSize, minimumSize) : null;
+                if (fit is null && region.FallbackRegions is { Length: > 0 } fallbackRegions)
+                {
+                    var fallbackIndices = fallbackRegions.SelectMany(fallback => fallback.Fragments).ToHashSet();
+                    overflow.AddRange(region.Fragments.Where(index => !fallbackIndices.Contains(index)).Select(index => rows[index]));
+                    foreach (var fallback in fallbackRegions) DrawRegion(fallback);
+                    return;
+                }
                 foreach (var mask in region.Masks)
                 {
                     canvas.FillColor = ColorFrom(mask.Background);
@@ -1084,17 +1099,12 @@ public partial class ReadingPage
                         if (DrawFragmentBadge(canvas, area, "Переклад нижче", "↓", color) is { } badge)
                             hitTargets.Add((badge, linked.Source));
                     });
-                    continue;
+                    return;
                 }
                 var ink = appearance?.Ink ?? Color.FromArgb("#302D27");
                 foreground.Add(() => DrawText(canvas, translated, textArea, fragments, font, ink, fit, region.Alignment,
                     region.Rotation));
             }
-            foreach (var index in layout.Pending)
-                DrawPendingFragment(canvas, page, rows[index], layout.Anchors[index]);
-            foreach (var paint in foreground) paint();
-
-            OverflowChanged?.Invoke(overflow.OrderBy(row => row.StartUtf16).ToArray());
         }
 
         private void DrawPendingFragment(ICanvas canvas, RectF page, PdfPageTranslationRow row, PdfTranslationAnchor anchor)

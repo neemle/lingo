@@ -75,6 +75,36 @@ pub struct Region {
     fragments: Vec<usize>,
     style_fragment: Option<usize>,
     masks: Vec<masks::BackgroundMask>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    fallback_regions: Vec<Region>,
+}
+
+impl Region {
+    fn from_fragment(index: usize, fragment: &SourceFragment, bounds: Bounds, rotation: u16) -> Self {
+        Self {
+            bounds,
+            alignment: Alignment::Left,
+            rotation,
+            line_height: fragment.line_height,
+            preferred_font_height: 0.0,
+            limit_font_by_width: false,
+            fragments: vec![index],
+            style_fragment: fragment.style.as_ref().map(|_| index),
+            masks: Vec::new(),
+            fallback_regions: Vec::new(),
+        }
+    }
+
+    fn set_font(&mut self, fragments: &[SourceFragment]) {
+        let font = self
+            .style_fragment
+            .and_then(|index| fragments[index].style.as_ref()?.font_height)
+            .filter(|height| *height > 0.0 && self.rotation % 180 == 0);
+        self.preferred_font_height = font.map_or(self.line_height * 0.82, |height| {
+            height.min(self.line_height * 0.90)
+        });
+        self.limit_font_by_width = font.is_none();
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -112,17 +142,7 @@ fn plan(fragments: &[SourceFragment]) -> Result<PageLayout> {
             page.overflow.push(index);
             continue;
         };
-        let mut region = Region {
-            bounds,
-            alignment: Alignment::Left,
-            rotation,
-            line_height: fragment.line_height,
-            preferred_font_height: 0.0,
-            limit_font_by_width: false,
-            fragments: vec![index],
-            style_fragment: fragment.style.as_ref().map(|_| index),
-            masks: Vec::new(),
-        };
+        let mut region = Region::from_fragment(index, fragment, bounds, rotation);
         while let Some(position) = page
             .regions
             .iter()
@@ -151,14 +171,7 @@ fn plan(fragments: &[SourceFragment]) -> Result<PageLayout> {
         region
             .fragments
             .sort_unstable_by_key(|&index| (fragments[index].start_utf16, index));
-        let font = region
-            .style_fragment
-            .and_then(|index| fragments[index].style.as_ref()?.font_height)
-            .filter(|height| *height > 0.0 && rotation % 180 == 0);
-        region.preferred_font_height = font.map_or(region.line_height * 0.82, |height| {
-            height.min(region.line_height * 0.90)
-        });
-        region.limit_font_by_width = font.is_none();
+        region.set_font(fragments);
         page.regions.push(region);
     }
     page.regions.retain_mut(|region| {

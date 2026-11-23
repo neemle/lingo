@@ -1,4 +1,4 @@
-use super::{plan, Bounds, PageLayout, SourceFragment};
+use super::{plan, Bounds, PageLayout, Region, SourceFragment};
 use crate::ocr::{OcrLine, OcrSpan};
 use crate::Result;
 use serde::{Deserialize, Serialize};
@@ -113,6 +113,34 @@ pub fn project(
             }
         });
         overflow.sort_unstable_by_key(|&index| (rows[index].start_utf16, index));
+    }
+    for region in &mut layout.regions {
+        if region.fragments.len() < 2 {
+            continue;
+        }
+        region.fallback_regions = region.fragments.iter().filter_map(|&index| {
+            let fragment = &fragments[index];
+            let bounds = fragment.bounds?;
+            // A multiline sentence can share its rectangle with a neighboring
+            // sentence. Neither can safely be drawn on its own in that rectangle.
+            if region.fragments.iter().any(|&other| {
+                other != index && fragments[other].bounds.is_some_and(|other_bounds| {
+                    let (width, height) = bounds.overlap(other_bounds);
+                    width > 0.0 && height > 0.0
+                })
+            }) {
+                return None;
+            }
+            let mut fallback = Region::from_fragment(index, fragment, bounds, region.rotation);
+            fallback.alignment = region.alignment;
+            fallback.set_font(&fragments);
+            if preserve_artwork {
+                fallback.masks = super::masks::plan(
+                    bounds, std::iter::once(rows[index].page_span(offset)), geometry, &styles,
+                )?;
+            }
+            Some(fallback)
+        }).collect();
     }
     let anchors = fragments
         .into_iter()
@@ -384,5 +412,56 @@ mod tests {
         rows[1].end_utf16 = 109;
         let ambiguous = project(&rows, &geometry, 100, &styles, true).unwrap();
         assert!(ambiguous.anchors[1].pending_masks.is_empty());
+    }
+
+    #[test]
+    fn offers_disjoint_sentence_boxes_with_their_own_masks_when_a_block_overflows() {
+        let rows = [0, 8, 16].map(|start| SourceRow {
+            start_utf16: start,
+            end_utf16: start + 7,
+            block_index: Some(0),
+            pending: false,
+        });
+        let mut geometry = std::array::from_fn::<_, 3, _>(|index| {
+            let row = &rows[index];
+            OcrLine {
+                rotation: None,
+                page: 0,
+                text: "Phrase.".into(),
+                x: 0.1,
+                y: [0.25, 0.28, 0.31][index],
+                width: 0.6,
+                height: 0.02,
+                confidence: None,
+                correction: None,
+                block_start: index == 0,
+                words: Vec::new(),
+                source_span: Some(OcrSpan {
+                    start_utf8: row.start_utf16,
+                    end_utf8: row.end_utf16,
+                    start_utf16: row.start_utf16,
+                    end_utf16: row.end_utf16,
+                }),
+            }
+        });
+        let draw = |geometry: &[OcrLine], preserve_artwork| {
+            let projection = project(&rows, geometry, 0, &[], preserve_artwork).unwrap();
+            assert_eq!(projection.layout.regions.len(), 1);
+            projection.layout.regions.into_iter().next().unwrap()
+        };
+        let region = draw(&geometry, true);
+        assert_eq!(region.fragments, [0, 1, 2]);
+        assert_eq!(region.fallback_regions.len(), 3);
+        for (index, fallback) in region.fallback_regions.iter().enumerate() {
+            assert_eq!(fallback.fragments, [index]);
+            assert_eq!(fallback.masks.len(), 1);
+            assert_eq!(fallback.bounds.y, geometry[index].y);
+        }
+        assert!(draw(&geometry, false).fallback_regions.iter().all(|region| region.masks.is_empty()));
+
+        geometry[2].y = 0.295;
+        let overlapping = draw(&geometry, true);
+        assert_eq!(overlapping.fallback_regions.len(), 1);
+        assert_eq!(overlapping.fallback_regions[0].fragments, [0]);
     }
 }
