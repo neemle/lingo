@@ -258,7 +258,7 @@ public partial class LibraryPage : ContentPage
             PauseExternalBatch.IsVisible = false;
             ImportStatus.Text = copying.IsCancellationRequested
                 ? staged.Count > 0 ? "Копіювання зупинено. Готові копії доступні у вхідних матеріалах." : "Копіювання зупинено."
-                : pauseExternalBatch ? "Імпорт призупинено. Решта добірки доступна у вхідних матеріалах." : "";
+                : pauseExternalBatch ? "Імпорт призупинено. Продовжити можна у вхідних матеріалах." : "";
             DesktopImport.Gate.Release();
             await RefreshShareInboxAsync();
         }
@@ -268,7 +268,8 @@ public partial class LibraryPage : ContentPage
     {
         var reporting = true;
         pickerCopyCancellation = copying;
-        CancelImportCopy.IsVisible = CancelImportCopy.IsEnabled = true;
+        StopImportStep.Text = "Зупинити копіювання";
+        StopImportStep.IsVisible = StopImportStep.IsEnabled = true;
         ImportStatus.Text = $"Копіюємо «{file.FileName}»…";
         try
         {
@@ -287,14 +288,24 @@ public partial class LibraryPage : ContentPage
         {
             reporting = false;
             pickerCopyCancellation = null;
-            CancelImportCopy.IsVisible = false;
+            StopImportStep.IsVisible = false;
         }
     }
 
-    private void CancelImportCopyClicked(object? sender, EventArgs args)
+    private void StopImportStepClicked(object? sender, EventArgs args)
     {
+#if MACCATALYST
+        if (pdfPreparation is { } preparation)
+        {
+            pauseExternalBatch = true;
+            PauseExternalBatch.IsEnabled = StopImportStep.IsEnabled = false;
+            ImportStatus.Text = "Призупиняємо підготовку PDF…";
+            preparation.Cancel();
+            return;
+        }
+#endif
         if (pickerCopyCancellation is not { } copying) return;
-        CancelImportCopy.IsEnabled = false;
+        StopImportStep.IsEnabled = false;
         ImportStatus.Text = "Зупиняємо копіювання…";
         copying.Cancel();
     }

@@ -114,8 +114,10 @@ internal static class PdfScan
             return TextLayer(page, out _).Corrections;
         });
 
-    internal static Task<string[]> ReadLanguageSamplesAsync(string path, bool optical, int skip = 0, int count = 5) => Task.Run(() =>
+    internal static Task<string[]> ReadLanguageSamplesAsync(
+        string path, bool optical, int skip = 0, int count = 5, CancellationToken cancellation = default) => Task.Run(() =>
     {
+        cancellation.ThrowIfCancellationRequested();
         using var pool = new NSAutoreleasePool();
         using var document = Open(path);
         var pageCount = checked((int)document.PageCount);
@@ -125,6 +127,7 @@ internal static class PdfScan
         var samples = new List<string>(probes.Length);
         foreach (var index in probes.Distinct().Skip(skip).Take(count))
         {
+            cancellation.ThrowIfCancellationRequested();
             using var pagePool = new NSAutoreleasePool();
             var text = "";
             try
@@ -141,12 +144,13 @@ internal static class PdfScan
             {
                 System.Diagnostics.Debug.WriteLine(error.Message);
             }
+            cancellation.ThrowIfCancellationRequested();
             var length = Math.Min(text.Length, 1600);
             if (length > 0 && char.IsHighSurrogate(text[length - 1])) length--;
             samples.Add(text[..length]);
         }
         return samples.ToArray();
-    });
+    }, cancellation);
 
     internal static Task<PhotoPreview> PreviewAsync(string path, int page) => Task.Run(() =>
     {

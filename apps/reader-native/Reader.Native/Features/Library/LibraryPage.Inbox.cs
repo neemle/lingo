@@ -115,7 +115,7 @@ public partial class LibraryPage
             PauseExternalBatch.IsVisible = false;
             importing = false;
             ImportStatus.Text = pauseExternalBatch
-                ? "Імпорт призупинено. Решта добірки доступна у вхідних матеріалах." : "";
+                ? "Імпорт призупинено. Продовжити можна у вхідних матеріалах." : "";
             await RefreshShareInboxAsync();
         }
     }

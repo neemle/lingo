@@ -5,6 +5,10 @@ namespace Reader.Native.Features.Library;
 
 public partial class LibraryPage
 {
+#if MACCATALYST
+    private CancellationTokenSource? pdfPreparation;
+#endif
+
     private async Task<string?> CompleteStagedIntakeAsync(IntakeItem item, ShareInboxItem? source = null,
         bool chooseLanguage = false)
     {
@@ -75,37 +79,8 @@ public partial class LibraryPage
             }
 #if MACCATALYST
             case "readPdfPages":
-            {
-                string? path = null;
-                if (await session.IntakePdfTextSampleAsync(item.Id) is null)
-                {
-                    path = (await session.IntakeFileAsync(item.Id)).Path;
-                    ImportStatus.Text = "Читаємо текстовий шар PDF…";
-                    var (pageTexts, deferredFrom) = await PdfScan.ReadTextForIntakeAsync(path);
-                    await session.SaveIntakePdfTextAsync(item.Id, pageTexts, deferredFrom);
-                }
-                var language = await ChooseAsync(async () =>
-                {
-                    ImportStatus.Text = "Визначаємо мову за кількома сторінками PDF…";
-                    path ??= (await session.IntakeFileAsync(item.Id)).Path;
-                    var samples = await PdfScan.ReadLanguageSamplesAsync(path, optical: false);
-                    var detected = await PdfRecognition.DetectSampleLanguageAsync(samples, session.DetectLanguageAsync);
-                    if (detected is not null) return detected;
-
-                    const int bodySamples = 3;
-                    var body = await PdfScan.ReadLanguageSamplesAsync(path, optical: true, count: bodySamples);
-                    detected = await PdfRecognition.DetectSampleLanguageAsync(body, session.DetectLanguageAsync);
-                    if (detected is not null || samples.Length <= bodySamples) return detected;
-
-                    var front = await PdfScan.ReadLanguageSamplesAsync(path, optical: true, skip: bodySamples);
-                    return await PdfRecognition.DetectSampleLanguageAsync([.. body, .. front], session.DetectLanguageAsync);
-                });
-                if (language is null) return null;
-                ImportStatus.Text = "Зберігаємо документ…";
-                await session.WaitUntilIdleAsync();
-                await session.CompleteStagedPdfIntakeAsync(item.Id, language);
+                if (!await PrepareStagedPdfAsync(item, ChooseAsync)) return null;
                 break;
-            }
 #endif
             default:
                 throw new InvalidDataException("Цей тип вхідного матеріалу не підтримується на пристрої.");
@@ -113,6 +88,69 @@ public partial class LibraryPage
         if (session.Error.Length > 0) throw new InvalidDataException(session.Error);
         return session.Document?.Id;
     }
+
+#if MACCATALYST
+    private async Task<bool> PrepareStagedPdfAsync(IntakeItem item, Func<Func<Task<string?>>, Task<string?>> choose)
+    {
+        using var preparation = new CancellationTokenSource();
+        var token = preparation.Token;
+        pdfPreparation = preparation;
+        StopImportStep.Text = "Призупинити підготовку PDF";
+        StopImportStep.IsVisible = StopImportStep.IsEnabled = true;
+        var session = AppState.Session;
+        try
+        {
+            string? path = null;
+            if (await session.IntakePdfTextSampleAsync(item.Id) is null)
+            {
+                path = (await session.IntakeFileAsync(item.Id)).Path;
+                token.ThrowIfCancellationRequested();
+                ImportStatus.Text = "Читаємо текстовий шар PDF…";
+                var (pageTexts, deferredFrom) = await PdfScan.ReadTextForIntakeAsync(path, token);
+                token.ThrowIfCancellationRequested();
+                await session.SaveIntakePdfTextAsync(item.Id, pageTexts, deferredFrom);
+            }
+            token.ThrowIfCancellationRequested();
+            var language = await choose(async () =>
+            {
+                token.ThrowIfCancellationRequested();
+                ImportStatus.Text = "Визначаємо мову за кількома сторінками PDF…";
+                path ??= (await session.IntakeFileAsync(item.Id)).Path;
+                var samples = await PdfScan.ReadLanguageSamplesAsync(path, optical: false, cancellation: token);
+                var detected = await PdfRecognition.DetectSampleLanguageAsync(samples, session.DetectLanguageAsync);
+                token.ThrowIfCancellationRequested();
+                if (detected is not null) return detected;
+
+                const int bodySamples = 3;
+                var body = await PdfScan.ReadLanguageSamplesAsync(path, optical: true, count: bodySamples, cancellation: token);
+                detected = await PdfRecognition.DetectSampleLanguageAsync(body, session.DetectLanguageAsync);
+                token.ThrowIfCancellationRequested();
+                if (detected is not null || samples.Length <= bodySamples) return detected;
+
+                var front = await PdfScan.ReadLanguageSamplesAsync(path, optical: true, skip: bodySamples, cancellation: token);
+                detected = await PdfRecognition.DetectSampleLanguageAsync([.. body, .. front], session.DetectLanguageAsync);
+                token.ThrowIfCancellationRequested();
+                return detected;
+            });
+            if (language is null) return false;
+            await session.WaitUntilIdleAsync();
+            token.ThrowIfCancellationRequested();
+            StopImportStep.IsVisible = false;
+            ImportStatus.Text = "Зберігаємо документ…";
+            await session.CompleteStagedPdfIntakeAsync(item.Id, language);
+            return true;
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            return false;
+        }
+        finally
+        {
+            pdfPreparation = null;
+            StopImportStep.IsVisible = false;
+        }
+    }
+#endif
 
     private async Task<string?> DetectOrChooseStagedLanguageAsync(string name, Func<Task<string?>> detect) =>
         SupportedLanguage(await detect()) ?? await ChooseLanguageAsync("Мова оригіналу", name);
