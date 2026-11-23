@@ -17,7 +17,8 @@ internal static class TesseractOcr
     };
     private static readonly SemaphoreSlim Probe = new(1);
     private static ReadOnlySpan<byte> PngSignature => [137, 80, 78, 71, 13, 10, 26, 10];
-    private static Dictionary<string, string> executableByLanguage = [];
+    private sealed record Installation(string Executable, string? ModelDirectory = null);
+    private static Dictionary<string, Installation> executableByLanguage = [];
     private static DateTimeOffset probeExpires;
 
     internal static async Task<string[]> InstalledLanguagesAsync() =>
@@ -98,14 +99,14 @@ internal static class TesseractOcr
         or Win32Exception or UnauthorizedAccessException or NotSupportedException or InvalidOperationException or TimeoutException
         or System.Security.SecurityException;
 
-    private static async Task<Dictionary<string, string>> InstallationsAsync(CancellationToken cancellation)
+    private static async Task<Dictionary<string, Installation>> InstallationsAsync(CancellationToken cancellation)
     {
         await Probe.WaitAsync(cancellation).ConfigureAwait(false);
         try
         {
             if (DateTimeOffset.UtcNow < probeExpires) return executableByLanguage;
-            var installed = new Dictionary<string, string>();
-            foreach (var executable in KnownExecutables().Where(File.Exists))
+            var installed = new Dictionary<string, Installation>();
+            foreach (var executable in KnownExecutables().Where(item => File.Exists(item.Executable)))
             {
                 try
                 {
@@ -125,34 +126,44 @@ internal static class TesseractOcr
         finally { Probe.Release(); }
     }
 
-    private static IEnumerable<string> KnownExecutables()
+    private static IEnumerable<Installation> KnownExecutables()
     {
+#if MACCATALYST
+        var contents = Path.Combine(Foundation.NSBundle.MainBundle.BundlePath, "Contents");
+        yield return new Installation(Path.Combine(contents, "Helpers", "tesseract"),
+            Path.Combine(contents, "Resources", "OCR", "tessdata"));
+#endif
         if (OperatingSystem.IsWindows())
         {
             foreach (var folder in new[] { Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86 })
             {
                 var directory = Environment.GetFolderPath(folder);
-                if (Path.IsPathFullyQualified(directory)) yield return Path.Combine(directory, "Tesseract-OCR", "tesseract.exe");
+                if (Path.IsPathFullyQualified(directory)) yield return new(Path.Combine(directory, "Tesseract-OCR", "tesseract.exe"));
             }
         }
         else if (OperatingSystem.IsMacCatalyst() || OperatingSystem.IsMacOS())
         {
-            yield return "/opt/homebrew/bin/tesseract";
-            yield return "/usr/local/bin/tesseract";
-            yield return "/opt/local/bin/tesseract";
+            yield return new("/opt/homebrew/bin/tesseract");
+            yield return new("/usr/local/bin/tesseract");
+            yield return new("/opt/local/bin/tesseract");
         }
     }
 
-    private static async Task<string> ExecuteAsync(string executable, string[] arguments, byte[]? image,
+    private static async Task<string> ExecuteAsync(Installation installation, string[] arguments, byte[]? image,
         int outputLimit, TimeSpan timeout, CancellationToken cancellation)
     {
         cancellation.ThrowIfCancellationRequested();
-        var start = new ProcessStartInfo(executable)
+        var start = new ProcessStartInfo(installation.Executable)
         {
             UseShellExecute = false, CreateNoWindow = true,
-            WorkingDirectory = Path.GetDirectoryName(executable)!,
+            WorkingDirectory = Path.GetDirectoryName(installation.Executable)!,
             RedirectStandardInput = image is not null, RedirectStandardOutput = true, RedirectStandardError = true,
         };
+        if (installation.ModelDirectory is { } modelDirectory)
+        {
+            start.ArgumentList.Add("--tessdata-dir");
+            start.ArgumentList.Add(modelDirectory);
+        }
         foreach (var argument in arguments) start.ArgumentList.Add(argument);
         start.Environment["OMP_THREAD_LIMIT"] = "2";
         using var process = Process.Start(start) ?? throw new InvalidOperationException("Не вдалося запустити Tesseract.");
