@@ -141,7 +141,7 @@ impl Store {
 
     pub fn prepare_ocr_page_review(
         &self, id: &str, physical_page: u16, detached: bool, revision: &str, cached_only: bool,
-        reviewed_indices: &[usize],
+        reviewed_indices: &[usize], search_cached_page: bool,
     ) -> Result<ReviewOcrPageJob> {
         const BATCH_SIZE: usize = 6;
         let reviewed: std::collections::HashSet<_> = reviewed_indices.iter().copied().collect();
@@ -152,10 +152,26 @@ impl Store {
                 && reviewable_line(line.reading_text())).collect();
         candidates.sort_by(|(_, left), (_, right)| left.confidence.partial_cmp(&right.confidence)
             .unwrap_or(std::cmp::Ordering::Equal));
-        let remaining_lines = candidates.len().saturating_sub(BATCH_SIZE);
-        let mut checked = candidates.into_iter().take(BATCH_SIZE).map(|(index, line)| {
-            self.prepare_ocr_line_hint(id, &language, line.reading_text(), cached_only).map(|job| (index, job))
-        }).collect::<Result<Vec<_>>>()?;
+        let total = candidates.len();
+        let search_cached_page = cached_only && search_cached_page;
+        let mut checked = Vec::new();
+        let mut misses = Vec::new();
+        for (index, line) in candidates {
+            let job = self.prepare_ocr_line_hint(id, &language, line.reading_text(), cached_only)?;
+            if search_cached_page && matches!(job.work, HintWork::Cached(None)) {
+                if misses.len() < BATCH_SIZE {
+                    misses.push((index, job));
+                }
+                continue;
+            }
+            checked.push((index, job));
+            if checked.len() == BATCH_SIZE {
+                break;
+            }
+        }
+        // Keep unresolved slots so merge distinguishes an empty cache from a fully reviewed page.
+        checked.extend(misses.into_iter().take(BATCH_SIZE - checked.len()));
+        let remaining_lines = total - checked.len();
         checked.sort_by_key(|(index, _)| *index);
         Ok(ReviewOcrPageJob { lines: checked, remaining_lines })
     }
@@ -426,12 +442,12 @@ mod tests {
         }).collect();
         let document = store.import_image("scan.png", b"\x89PNG\r\n\x1a\n", "en", lines).unwrap();
         let revision = document.current_revision_id.as_deref().unwrap();
-        let job = store.prepare_ocr_page_review(&document.id, 0, false, revision, true, &[]).unwrap();
+        let job = store.prepare_ocr_page_review(&document.id, 0, false, revision, true, &[], false).unwrap();
         let reviewed: Vec<_> = job.lines.iter().map(|(index, _)| *index).collect();
         assert_eq!(reviewed, [2, 3, 4, 5, 6, 7]);
         assert_eq!(job.remaining_lines, 2);
         assert!(job.run().unwrap().is_none());
-        let followup = store.prepare_ocr_page_review(&document.id, 0, false, revision, true, &reviewed).unwrap();
+        let followup = store.prepare_ocr_page_review(&document.id, 0, false, revision, true, &reviewed, false).unwrap();
         assert_eq!(followup.lines.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [0, 1]);
         assert_eq!(followup.remaining_lines, 0);
         store.apply_ocr_page_review(&document.id, 0, false, revision, vec![OcrLineEdit {
@@ -441,9 +457,9 @@ mod tests {
         }]).unwrap();
         let updated = store.token_document(&document.id).unwrap();
         let revision = updated.current_revision_id.as_deref().unwrap();
-        let followup = store.prepare_ocr_page_review(&document.id, 0, false, revision, true, &reviewed).unwrap();
+        let followup = store.prepare_ocr_page_review(&document.id, 0, false, revision, true, &reviewed, false).unwrap();
         assert_eq!(followup.lines.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [0, 1]);
-        let done = store.prepare_ocr_page_review(&document.id, 0, false, revision, true, &[0, 1, 2, 3, 4, 5, 6, 7])
+        let done = store.prepare_ocr_page_review(&document.id, 0, false, revision, true, &[0, 1, 2, 3, 4, 5, 6, 7], false)
             .unwrap().run().unwrap().unwrap();
         assert!(done.reviewed_indices.is_empty());
         assert_eq!(done.remaining_lines, 0);
@@ -481,13 +497,43 @@ mod tests {
             cache.save(&OcrSpelling { replacement }).unwrap();
         }
         for cached_only in [true, false] {
-            let review = store.prepare_ocr_page_review(&document.id, 0, false, revision, cached_only, &[])
+            let review = store.prepare_ocr_page_review(&document.id, 0, false, revision, cached_only, &[], false)
                 .unwrap().run().unwrap().unwrap();
             assert_eq!(review.reviewed_indices, [0, 1]);
             assert_eq!((review.checked_lines, review.pending_in_batch, review.remaining_lines), (2, 1, 1));
             assert_eq!(review.corrections[0].replacement, "A magic book.");
             assert_eq!(review.corrections.len(), 1);
         }
+    }
+
+    #[test]
+    fn cached_page_search_finds_reviews_beyond_the_first_batch() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let lines = (0..8).map(|index| OcrLine {
+            page: 0, text: format!("A rnagic line {index}."), x: 0.1, y: 0.05 + f64::from(index) * 0.08,
+            width: 0.8, height: 0.04, confidence: Some(0.4 + f64::from(index) * 0.03),
+            correction: None, words: vec![], source_span: None,
+        }).collect();
+        let document = store.import_image("scan.png", b"\x89PNG\r\n\x1a\n", "en", lines).unwrap();
+        let revision = document.current_revision_id.as_deref().unwrap();
+        for index in [6, 7] {
+            let job = store.prepare_ocr_line_review(&document.id, None, revision, index, false).unwrap();
+            let HintWork::Generate { cache, .. } = job.work else { panic!("unseeded cache"); };
+            cache.save(&OcrSpelling {
+                replacement: (index == 7).then(|| "A magic line 7.".to_owned()),
+            }).unwrap();
+        }
+        let read = |search, reviewed: &[usize]| store
+            .prepare_ocr_page_review(&document.id, 0, false, revision, true, reviewed, search)
+            .unwrap().run().unwrap();
+        assert!(read(false, &[]).is_none());
+        let review = read(true, &[]).unwrap();
+        assert_eq!(review.reviewed_indices, [6, 7]);
+        assert_eq!(review.remaining_lines, 6);
+        assert_eq!(review.corrections.len(), 1);
+        assert_eq!(review.corrections[0].index, 7);
+        assert!(read(true, &[6, 7]).is_none());
     }
 
     #[test]

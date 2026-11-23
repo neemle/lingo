@@ -366,12 +366,12 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
-        Command::ReviewOcrPage { id, page, detached, revision_id, cached_only, reviewed_indices, request_id } => {
+        Command::ReviewOcrPage { id, page, detached, revision_id, cached_only, reviewed_indices, search_cached_page, request_id } => {
             let canceled = request_cancellation(handle, *request_id, ModelRequestKind::OcrPageReview)?;
             let canceled_error = || Error::new("canceled", "Звірку OCR скасовано.");
             if canceled() { return Err(canceled_error()); }
             let job = registry::lock()?.store(handle)?
-                .prepare_ocr_page_review(id, *page, *detached, revision_id, *cached_only, reviewed_indices)
+                .prepare_ocr_page_review(id, *page, *detached, revision_id, *cached_only, reviewed_indices, *search_cached_page)
                 .map_err(gateway::domain)?;
             let result = job.run_until_canceled(&canceled);
             return if canceled() { Err(canceled_error()) } else { encode_job(result) };

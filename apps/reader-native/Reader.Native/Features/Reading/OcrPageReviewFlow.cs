@@ -82,8 +82,9 @@ internal sealed class OcrPageReviewFlow
         inferenceChanged?.Invoke(true);
         try
         {
-            Task<OcrPageReview?> Read(bool cachedOnly) => session.ReviewOcrPageAsync(source.DocumentId, source.Page,
-                source.Detached, source.Revision, cachedOnly, reviewed, cancellation.Token);
+            Task<OcrPageReview?> Read(bool cachedOnly, bool searchCachedPage = false) =>
+                session.ReviewOcrPageAsync(source.DocumentId, source.Page, source.Detached, source.Revision,
+                    cachedOnly, reviewed, cancellation.Token, searchCachedPage);
             status("Шукаємо збережену перевірку…");
             var review = await Read(true);
             if (review is { PendingInBatch: 0 } || !isCurrent()) return review;
@@ -92,6 +93,9 @@ internal sealed class OcrPageReviewFlow
             if (!isCurrent()) return null;
             if (model is not { FilesPresent: true })
             {
+                status("Шукаємо збережені перевірки на всій сторінці…");
+                review = await Read(true, searchCachedPage: true);
+                if (!isCurrent()) return null;
                 if (review is null) status("Установіть Qwen 2B у налаштуваннях.");
                 return review;
             }

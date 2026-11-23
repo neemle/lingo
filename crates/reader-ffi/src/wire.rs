@@ -510,6 +510,8 @@ pub enum Command {
         cached_only: bool,
         #[serde(default, rename = "reviewedIndices")]
         reviewed_indices: Vec<usize>,
+        #[serde(default, rename = "searchCachedPage")]
+        search_cached_page: bool,
         #[serde(rename = "requestId")]
         request_id: Option<u64>,
     },

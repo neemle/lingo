@@ -378,8 +378,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         Task.Run(() => client.ReviewOcrLine(id, page, revisionId, index, cachedOnly));
 
     public Task<OcrPageReview?> ReviewOcrPageAsync(string id, int page, bool detached, string revisionId, bool cachedOnly,
-        int[] reviewedIndices, CancellationToken cancellationToken) =>
-        Task.Run(() => client.ReviewOcrPage(id, page, detached, revisionId, cachedOnly, reviewedIndices, cancellationToken),
+        int[] reviewedIndices, CancellationToken cancellationToken, bool searchCachedPage = false) =>
+        Task.Run(() => client.ReviewOcrPage(id, page, detached, revisionId, cachedOnly, reviewedIndices, cancellationToken,
+                searchCachedPage),
             cancellationToken);
 
     public async Task ApplyOcrPageReviewAsync(string id, int page, bool detached, string revisionId, OcrLineEdit[] edits)

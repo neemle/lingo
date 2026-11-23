@@ -276,9 +276,13 @@ public sealed class CoreClient : IDisposable
         });
 
     public OcrPageReview? ReviewOcrPage(string id, int page, bool detached, string revisionId, bool cachedOnly,
-        int[] reviewedIndices, CancellationToken cancellationToken) =>
+        int[] reviewedIndices, CancellationToken cancellationToken, bool searchCachedPage = false) =>
         CallCancelable<OcrPageReview?>(ref nextOcrPageReviewRequest, cancellationToken,
-            requestId => new { version = 1, operation = "review_ocr_page", id, page, detached, revisionId, cachedOnly, reviewedIndices, requestId },
+            requestId => new
+            {
+                version = 1, operation = "review_ocr_page", id, page, detached, revisionId, cachedOnly,
+                reviewedIndices, searchCachedPage, requestId,
+            },
             requestId => new { version = 1, operation = "cancel_ocr_page_review", requestId });
 
     public void ApplyOcrPageReview(string id, int page, bool detached, string revisionId, OcrLineEdit[] edits) =>
