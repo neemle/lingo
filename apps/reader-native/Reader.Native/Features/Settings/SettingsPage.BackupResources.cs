@@ -44,6 +44,8 @@ public partial class SettingsPage
             if (resources is not null)
             {
                 AppState.TranslationWorker?.TranslationRoutesChanged();
+                await AppState.RefreshRecentReadingHistoryAsync();
+                (Shell.Current as AppShell)?.RefreshRecent();
                 await RefreshStorageAsync(syncWorker: true);
             }
             if (resources is { Length: > 0 }) await ReportBackupResourcesAsync(resources);

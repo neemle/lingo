@@ -48,8 +48,7 @@ public partial class LibraryPage : ContentPage
 
     private void ShowBooks(Snapshot snapshot)
     {
-        var last = Preferences.Get("lastDocument", "");
-        var recent = snapshot.Documents.FirstOrDefault(document => document.Id == last);
+        var recent = AppState.RecentReadingDocuments(snapshot).FirstOrDefault();
         ContinueReading.IsVisible = recent is not null;
         if (recent is not null)
             SemanticProperties.SetDescription(ContinueReading, $"Продовжити читати {recent.Title}");
@@ -426,7 +425,8 @@ public partial class LibraryPage : ContentPage
                 await DisplayAlertAsync("Видалення документа", session.Error, "Гаразд");
                 return;
             }
-            AppState.ForgetRecentDocument(document.Id);
+            await AppState.ForgetRecentDocumentAsync(document.Id);
+            if (ReferenceEquals(observedSession, session)) ShowBooks(session.Snapshot);
         }
         finally
         {
@@ -449,8 +449,7 @@ public partial class LibraryPage : ContentPage
 
     private async void ContinueReadingClicked(object? sender, EventArgs args)
     {
-        var last = Preferences.Get("lastDocument", "");
-        if (AppState.Session.Snapshot.Documents.FirstOrDefault(document => document.Id == last) is { } document)
+        if (AppState.RecentReadingDocuments(AppState.Session.Snapshot).FirstOrDefault() is { } document)
             await OpenCardAsync(new LibraryCard(document, 0));
     }
 

@@ -38,6 +38,13 @@ public partial class AppShell : Shell
             var id = Preferences.Get("lastDocument", "");
             if (id.Length > 0) await session.SelectAsync(id);
             else await session.RefreshAsync();
+            await AppState.RefreshRecentReadingHistoryAsync();
+            if (stopped) return;
+            await session.WaitUntilIdleAsync();
+            if (stopped) return;
+            if (session.Document is null && !DesktopImport.HasIncoming &&
+                AppState.RecentReadingDocuments(session.Snapshot).FirstOrDefault() is { } recent)
+                await session.SelectAsync(recent.Id);
             if (!stopped) AppState.StartTranslationWorker(Dispatcher);
             if (!stopped && !DesktopImport.HasIncoming && previousRoute != LibraryRoute &&
                 (!previousRoute.StartsWith(ReadingRoute, StringComparison.Ordinal) || session.Document is not null))
@@ -120,10 +127,7 @@ public partial class AppShell : Shell
     internal void RefreshRecent()
     {
         if (trackedSession is not { } session) return;
-        var byId = session.Snapshot.Documents.ToDictionary(document => document.Id);
-        var recent = Preferences.Get("recentDocuments", "").Split(';')
-            .Prepend(Preferences.Get("lastDocument", ""))
-            .Distinct().Where(byId.ContainsKey).Take(3).Select(id => byId[id]).ToArray();
+        var recent = AppState.RecentReadingDocuments(session.Snapshot).Take(3).ToArray();
         var key = recent.Select(document => $"{document.Id}:{document.Title}:{document.Language}").ToArray();
         if (renderedRecent.SequenceEqual(key)) return;
         renderedRecent = key;

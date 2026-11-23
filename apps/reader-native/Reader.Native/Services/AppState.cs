@@ -7,6 +7,7 @@ namespace Reader.Native.Services;
 public static class AppState
 {
     private static ReaderSession? session;
+    private static string[] readingHistoryDocumentIds = [];
     internal static BackgroundTranslation? TranslationWorker { get; private set; }
     internal static int StorageRevision { get; private set; }
     internal static void InvalidateReaderCache() => StorageRevision++;
@@ -23,12 +24,36 @@ public static class AppState
         TranslationWorker = null;
     }
 
-    internal static void ForgetRecentDocument(string id)
+    internal static async Task RefreshRecentReadingHistoryAsync()
+    {
+        try
+        {
+            var revision = StorageRevision;
+            var visits = await Session.RecentReadingSessionsAsync();
+            if (revision == StorageRevision)
+                readingHistoryDocumentIds = visits.Select(visit => visit.DocumentId).Distinct().ToArray();
+        }
+        catch (Exception error) { System.Diagnostics.Debug.WriteLine($"Reading history: {error.Message}"); }
+    }
+
+    internal static IEnumerable<Document> RecentReadingDocuments(Snapshot snapshot)
+    {
+        var documents = snapshot.Documents.ToDictionary(document => document.Id, StringComparer.Ordinal);
+        return Preferences.Get("recentDocuments", "").Split(';')
+            .Prepend(Preferences.Get("lastDocument", ""))
+            .Concat(readingHistoryDocumentIds)
+            .Distinct(StringComparer.Ordinal)
+            .Where(documents.ContainsKey)
+            .Select(id => documents[id]);
+    }
+
+    internal static async Task ForgetRecentDocumentAsync(string id)
     {
         if (Preferences.Get("lastDocument", "") == id) Preferences.Remove("lastDocument");
         var remaining = Preferences.Get("recentDocuments", "").Split(';', StringSplitOptions.RemoveEmptyEntries)
             .Where(value => value != id);
         Preferences.Set("recentDocuments", string.Join(';', remaining));
+        await RefreshRecentReadingHistoryAsync();
         (Shell.Current as AppShell)?.RefreshRecent();
     }
 
