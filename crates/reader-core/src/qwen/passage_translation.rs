@@ -247,6 +247,9 @@ fn recover_chunk(
     attempts: u8,
     render: &mut impl FnMut(&str, bool) -> Result<Vec<u8>>,
 ) -> Result<TranslationChunk> {
+    if !input.chars().any(char::is_alphabetic) {
+        return Ok(TranslationChunk { text: input.to_owned() });
+    }
     let error = match render(input, regenerate) {
         Ok(bytes) => match parse(&bytes, target, input) {
             Ok(translated) => return Ok(translated),
@@ -338,7 +341,7 @@ fn parse(bytes: &[u8], target: &str, source_text: &str) -> Result<TranslationChu
     {
         return Err(error.into());
     }
-    if text.is_empty()
+    if letters == 0
         || text.eq_ignore_ascii_case(source_text.trim())
         || wrong_script
         || (target == "uk" && mixed_cyrillic_word(text))
@@ -381,6 +384,15 @@ mod tests {
         }
         assert!(complete_output(response));
         assert!(!complete_output(br#"{"unexpected":"text"}"#));
+    }
+
+    #[test]
+    fn keeps_symbol_only_chunks_without_accepting_them_as_translated_prose() {
+        let source = "— …";
+        let unchanged = translate_chunk(source, "uk", true, |_, _| panic!("symbol-only chunk ran Qwen"))
+            .unwrap();
+        assert_eq!(unchanged.text, source);
+        assert!(parse(r#"{"text":"— …"}"#.as_bytes(), "uk", "— Oui, monsieur.").is_err());
     }
 
     #[test]

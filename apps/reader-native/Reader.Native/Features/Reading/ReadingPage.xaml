@@ -228,11 +228,12 @@
       <ScrollView Grid.Row="2" x:Name="ModelTranslationViewport"
        MaximumHeightRequest="180" IsVisible="False" BackgroundColor="#F8F9F3">
        <VerticalStackLayout Padding="14,8" Spacing="8">
-        <Grid x:Name="ModelTranslationResult" ColumnDefinitions="Auto,*" ColumnSpacing="9" IsVisible="False">
+        <Grid x:Name="ModelTranslationResult" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="9" IsVisible="False">
          <ActivityIndicator x:Name="ModelTranslationBusy" IsVisible="False" Color="{StaticResource Sage}"
           WidthRequest="20" HeightRequest="20" VerticalOptions="Start" />
-         <Label Grid.Column="1" x:Name="ModelTranslationText" FontFamily="Georgia" FontSize="19" />
-         <Label Grid.Column="1" x:Name="ModelTranslationTextHighlighted" IsVisible="False" FontFamily="Georgia" FontSize="19" />
+         <Label Grid.Column="1" x:Name="ModelTranslationStatus" Style="{StaticResource ReaderMeta}" IsVisible="False" />
+         <Label Grid.Row="1" Grid.ColumnSpan="2" x:Name="ModelTranslationText" FontFamily="Georgia" FontSize="19" />
+         <Label Grid.Row="1" Grid.ColumnSpan="2" x:Name="ModelTranslationTextHighlighted" IsVisible="False" FontFamily="Georgia" FontSize="19" />
         </Grid>
         <FlexLayout x:Name="ModelTranslationActions" IsVisible="False" Wrap="Wrap">
          <Button Text="Порівняти переклади" Clicked="CompareModelTranslationClicked"
@@ -342,11 +343,12 @@
         <ScrollView Grid.Row="2" x:Name="DetachedModelTranslationViewport"
          MaximumHeightRequest="180" IsVisible="False" BackgroundColor="#F8F9F3">
          <VerticalStackLayout Padding="14,8" Spacing="8">
-          <Grid x:Name="DetachedModelTranslationResult" ColumnDefinitions="Auto,*" ColumnSpacing="9" IsVisible="False">
+          <Grid x:Name="DetachedModelTranslationResult" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="9" IsVisible="False">
            <ActivityIndicator x:Name="DetachedModelTranslationBusy" IsVisible="False" Color="{StaticResource Sage}"
             WidthRequest="20" HeightRequest="20" VerticalOptions="Start" />
-           <Label Grid.Column="1" x:Name="DetachedModelTranslationText" FontFamily="Georgia" FontSize="18" />
-           <Label Grid.Column="1" x:Name="DetachedModelTranslationTextHighlighted" IsVisible="False"
+           <Label Grid.Column="1" x:Name="DetachedModelTranslationStatus" Style="{StaticResource ReaderMeta}" IsVisible="False" />
+           <Label Grid.Row="1" Grid.ColumnSpan="2" x:Name="DetachedModelTranslationText" FontFamily="Georgia" FontSize="18" />
+           <Label Grid.Row="1" Grid.ColumnSpan="2" x:Name="DetachedModelTranslationTextHighlighted" IsVisible="False"
             FontFamily="Georgia" FontSize="18" />
           </Grid>
           <FlexLayout x:Name="DetachedModelTranslationActions" IsVisible="False" Wrap="Wrap">

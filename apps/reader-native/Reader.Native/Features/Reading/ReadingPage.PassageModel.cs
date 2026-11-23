@@ -102,26 +102,32 @@ public partial class ReadingPage
             ? "Перегенерувати" : address is not null && modelPassageError?.Address == address
                 ? "Повторити переклад" : "Перекласти моделлю";
 
-        var result = translation is null ? null :
+        var result = translation is null ? "" :
             $"{(translation.Cached ? "Збережений переклад Qwen" : "Переклад Qwen 2B")}{Environment.NewLine}{translation.Text}";
         var failure = CurrentModelFailure(address);
-        if (failure is not null)
-            result = result is null ? failure : $"{result}{Environment.NewLine}{failure}";
+        var status = failure is not null && translation is not null
+            ? $"Попередній переклад збережено. {failure}" : failure;
+        if (running)
+            status = canceling ? "Скасовуємо переклад…" : translation is null
+                ? "Qwen перекладає абзац…" : "Qwen перегенеровує переклад…";
+        var hasOutput = result.Length > 0 || status is not null;
         ModelTranslationBusy.IsRunning = ModelTranslationBusy.IsVisible = running && !detached;
         DetachedModelTranslationBusy.IsRunning = DetachedModelTranslationBusy.IsVisible = running && detached;
-        ModelTranslationViewport.IsVisible = ModelTranslationResult.IsVisible = !detached && (running || result is not null);
-        DetachedModelTranslationViewport.IsVisible = DetachedModelTranslationResult.IsVisible = detached && (running || result is not null);
-        var text = running ? canceling ? "Скасовуємо переклад…" : "Qwen перекладає абзац…" : result ?? "";
+        ModelTranslationViewport.IsVisible = ModelTranslationResult.IsVisible = !detached && hasOutput;
+        DetachedModelTranslationViewport.IsVisible = DetachedModelTranslationResult.IsVisible = detached && hasOutput;
         var label = detached ? DetachedModelTranslationText : ModelTranslationText;
-        var textChanged = label.Text != text;
-        label.Text = text;
+        var statusLabel = detached ? DetachedModelTranslationStatus : ModelTranslationStatus;
+        var outputChanged = label.Text != result || statusLabel.Text != status;
+        label.Text = result;
+        statusLabel.Text = status;
+        statusLabel.IsVisible = status is not null;
 
         var canShare = !running && !string.IsNullOrWhiteSpace(translation?.SourceText);
         var canCompare = !running && (canShare || failure is not null);
         ModelTranslationActions.IsVisible = canCompare && !detached;
         DetachedModelTranslationActions.IsVisible = canCompare && detached;
         ShareModelTranslation.IsVisible = DetachedShareModelTranslation.IsVisible = canShare;
-        if (textChanged && (running || result is not null))
+        if (outputChanged && hasOutput)
         {
             var viewport = detached ? DetachedModelTranslationViewport : ModelTranslationViewport;
             if (viewport.ScrollY > 0)
