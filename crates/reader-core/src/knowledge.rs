@@ -414,7 +414,10 @@ impl Store {
         index: Option<(&Pack, &Connection, u32)>,
     ) -> Result<Option<WordLookup>> {
         let key = word_key(word);
-        let syntax_hint = context.and_then(|context| context.french_partitive_hint(language, &key));
+        let syntax_hint = context.and_then(|context| {
+            context.french_partitive_hint(language, &key)
+                .or_else(|| context.french_spatial_hint(language, &key))
+        });
         let Some((pack, db, index_version)) = index else {
             let Some(pack) = PACKS.iter().find(|pack| pack.language == language) else {
                 return Ok(None);
@@ -602,6 +605,46 @@ impl WordContext {
             ("l'une", _) => Some(
                 "«l’une des …» означає «одна з …». «l’une» замінює іменник жіночого роду, а «des» (de + les) вводить групу, з якої її виділяють."
             ),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn french_spatial_hint(&self, language: &str, selected: &str) -> Option<&'static str> {
+        if language != "fr" {
+            return None;
+        }
+        let parts: Vec<_> = self.parts().collect();
+        let focus = parts.iter().position(|(offset, _)| *offset == self.start_utf16)?;
+        let matches_source = selected.split_word_bounds().filter(|part| !part.trim().is_empty())
+            .enumerate().all(|(index, part)| {
+                parts.get(focus + index).is_some_and(|(_, token)| word_key(token) == word_key(part))
+            });
+        if selected.trim().is_empty() || !matches_source {
+            return None;
+        }
+        let token = |index: usize| parts.get(index).map(|&(_, token)| word_key(token));
+        let nominal = |index: usize| {
+            token(index).is_some_and(|token| {
+                (matches!(token.as_str(), "le" | "la" | "les" | "un" | "une" | "des" | "ce" | "cet"
+                    | "cette" | "ces" | "mon" | "ma" | "mes" | "son" | "sa" | "ses" | "leur" | "leurs")
+                    && parts.get(index + 1).is_some_and(|(_, word)| word.starts_with(char::is_alphabetic)))
+                    || token.strip_prefix("l'").is_some_and(|word| word.starts_with(char::is_alphabetic))
+            })
+        };
+        match token(focus)?.as_str() {
+            "devant" if nominal(focus + 1) && focus.checked_sub(1).and_then(token)
+                .is_some_and(|previous| matches!(previous.as_str(),
+                    "attend" | "attends" | "attendent" | "attendait" | "attendaient"
+                    | "reste" | "restent" | "restait" | "restaient"
+                    | "est" | "sont" | "était" | "étaient" | "stationne" | "stationnait")) =>
+                Some("«devant» вводить обставину місця й указує, перед чим відбувається дія."),
+            "derrière" if nominal(focus + 1) =>
+                Some("«derrière» вводить прийменникову групу й указує, за чим щось розташовано або відбувається."),
+            "près" if token(focus + 1).is_some_and(|next| {
+                (next == "de" && nominal(focus + 2))
+                    || (matches!(next.as_str(), "du" | "des" | "d'un" | "d'une") &&
+                        parts.get(focus + 2).is_some_and(|(_, word)| word.starts_with(char::is_alphabetic)))
+            }) => Some("«près de» вводить прийменникову групу й указує на близькість до місця або предмета."),
             _ => None,
         }
     }

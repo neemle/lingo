@@ -176,7 +176,7 @@ public partial class ReadingPage
         bool Current() => request == wordSyntaxRequest && readingPageActive && card.IsVisible && details.IsVisible &&
             CurrentAnalysisAnchor(session) == anchor && (detached ? detachedSelection : selection) == selected;
         button.IsEnabled = false;
-        result.Text = "Шукаємо підказку Qwen…";
+        result.Text = "Шукаємо пояснення…";
         try
         {
             var model = (await session.OptionalModelsAsync()).FirstOrDefault(model => model.CanGenerateLanguageHints);
@@ -186,13 +186,14 @@ public partial class ReadingPage
                 result.Text = "Qwen 2B недоступний.";
                 return;
             }
-            if (model.FilesPresent) result.Text = "Qwen пояснює синтаксис…";
+            if (model.FilesPresent) result.Text = "Готуємо пояснення синтаксису…";
             var explanation = await session.ReviewSentenceAsync(model.Id, anchor.DocumentId, anchor.Page,
                 anchor.SentenceId, new { kind = "selection", startUtf16 = selected.StartUtf16, text = selected.Text },
                 anchor.Revision, cachedOnly: !model.FilesPresent, explainSyntax: true);
             if (!Current()) return;
             result.Text = explanation switch
             {
+                { Syntax: { } syntax, LocalRule: true } => $"Мовне правило · {syntax}",
                 { Syntax: { } syntax } => $"Qwen · {syntax}",
                 null when !model.FilesPresent => "Для нових підказок установіть Qwen 2B у налаштуваннях.",
                 _ => "Qwen не зміг визначити роль виділення в цьому реченні.",

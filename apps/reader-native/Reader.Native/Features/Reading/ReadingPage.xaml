@@ -516,7 +516,7 @@
      </FlexLayout>
      <Label x:Name="WordSyntaxDetails" Style="{StaticResource ReaderMeta}" IsVisible="False" />
      <VerticalStackLayout x:Name="WordSyntaxModelPanel" IsVisible="False" Spacing="5">
-      <Button Text="Пояснити синтаксис з Qwen" Clicked="ExplainSyntaxClicked"
+      <Button Text="Пояснити роль у реченні" Clicked="ExplainSyntaxClicked"
        Style="{StaticResource PlayerButton}" HorizontalOptions="Start" />
       <Label x:Name="WordSyntaxModelText" Style="{StaticResource ReaderMeta}" LineBreakMode="WordWrap" />
      </VerticalStackLayout>
@@ -587,7 +587,7 @@
      </FlexLayout>
      <Label x:Name="DetachedSyntaxDetails" Style="{StaticResource ReaderMeta}" IsVisible="False" />
      <VerticalStackLayout x:Name="DetachedSyntaxModelPanel" IsVisible="False" Spacing="5">
-      <Button x:Name="DetachedExplainSyntax" Text="Пояснити синтаксис з Qwen" Clicked="ExplainSyntaxClicked"
+      <Button x:Name="DetachedExplainSyntax" Text="Пояснити роль у реченні" Clicked="ExplainSyntaxClicked"
        Style="{StaticResource PlayerButton}" HorizontalOptions="Start" />
       <Label x:Name="DetachedSyntaxModelText" Style="{StaticResource ReaderMeta}" LineBreakMode="WordWrap" />
      </VerticalStackLayout>

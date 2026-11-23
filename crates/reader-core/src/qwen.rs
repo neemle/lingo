@@ -246,11 +246,14 @@ pub struct SentenceReviewResult {
     #[serde(flatten)]
     review: SentenceReview,
     cached: bool,
+    #[serde(rename = "localRule", skip_serializing_if = "std::ops::Not::not")]
+    local_rule: bool,
 }
 
 pub struct ReviewSentenceJob {
     windows: Vec<HintWork<SentenceReview>>,
     explain_syntax: bool,
+    local_syntax: Option<&'static str>,
 }
 
 #[derive(Clone, Copy)]
@@ -433,6 +436,15 @@ impl Store {
             ),
             None => (exact_sentence()?, None),
         };
+        if explain_syntax {
+            if let Some(ReviewFocus::Selection { start_utf16, text }) = focus {
+                let local_syntax = start_utf16.checked_sub(sentence.start_utf16)
+                    .and_then(|offset| WordContext::at(&sentence.text, offset).french_spatial_hint(language, text));
+                if local_syntax.is_some() {
+                    return Ok(ReviewSentenceJob { windows: Vec::new(), explain_syntax, local_syntax });
+                }
+            }
+        }
         let (previous, next) = if let Some(page) = page {
             word_break::neighboring_fragments(
                 self,
@@ -462,7 +474,7 @@ impl Store {
         let windows = examples.into_iter().map(|example| self.prepare_hint_work(
             model, document, key, system, example, cached_only.into(),
         )).collect::<Result<Vec<_>>>()?;
-        Ok(ReviewSentenceJob { windows, explain_syntax })
+        Ok(ReviewSentenceJob { windows, explain_syntax, local_syntax: None })
     }
 
     fn prepare_hint_work<T: serde::de::DeserializeOwned>(
@@ -986,7 +998,14 @@ fn extract_focused_review<'a>(
 
 impl ReviewSentenceJob {
     pub fn run(self) -> Result<Option<SentenceReviewResult>> {
-        let Self { windows, explain_syntax } = self;
+        let Self { windows, explain_syntax, local_syntax } = self;
+        if let Some(syntax) = local_syntax {
+            return Ok(Some(SentenceReviewResult {
+                review: SentenceReview { spelling: None, syntax: Some(syntax.to_owned()) },
+                cached: false,
+                local_rule: true,
+            }));
+        }
         let (_, system) = sentence_review_prompt(explain_syntax);
         let read_cache = || -> Result<Option<Vec<SentenceReview>>> {
             let notes = windows.iter().map(|window| match window {
@@ -1059,6 +1078,7 @@ impl ReviewSentenceJob {
                 syntax: (!syntax.is_empty()).then(|| syntax.join("\n")),
             },
             cached,
+            local_rule: false,
         }
     }
 }
@@ -1374,6 +1394,36 @@ fn runtime_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn french_spatial_hint_bypasses_inference_for_an_anchored_phrase() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        for (source, selected) in [
+            ("Les élèves attendaient devant le grand bâtiment de la vieille gare.", "devant le grand bâtiment de la vieille gare"),
+            ("Zoé est derrière l’arbre.", "derrière l’arbre"),
+            ("Nina lit près d’une fenêtre.", "près d’une fenêtre"),
+        ] {
+            let doc = store.import("text.txt", source.as_bytes(), "fr").unwrap();
+            let offset = source[..source.find(selected).unwrap()].encode_utf16().count();
+            let focus = ReviewFocus::Selection { start_utf16: offset, text: selected.into() };
+            let result = store.prepare_sentence_review(
+                HINT_GENERATION_MODEL, &doc.id, None, Some(&doc.sentences[0].id), Some(&focus),
+                doc.current_revision_id.as_deref(), true, true,
+            ).unwrap().run().unwrap().unwrap();
+            assert!(result.local_rule);
+            assert!(result.review.syntax.is_some());
+            assert!(store.lookup_word("fr", selected, Some(&WordContext::at(source, offset))).unwrap().is_some());
+        }
+        for (source, selected) in [
+            ("Ce client, devant une somme élevée, a négocié un délai.", "devant une somme élevée"),
+            ("Il avait près de vingt ans.", "près de vingt ans"),
+            ("Nina lit près de la fenêtre.", "près de la porte"),
+        ] {
+            let start = source.find(selected).unwrap_or_else(|| source.find("près").unwrap());
+            assert!(WordContext::at(source, source[..start].encode_utf16().count())
+                .french_spatial_hint("fr", selected).is_none());
+        }
+    }
 
     #[test]
     fn contextual_syntax_explanation_is_scoped_and_cached_separately_from_corrections() {
