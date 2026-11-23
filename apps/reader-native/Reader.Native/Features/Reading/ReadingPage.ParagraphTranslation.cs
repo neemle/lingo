@@ -528,11 +528,16 @@ public partial class ReadingPage
 
     private async void TranslateOfflineClicked(object? sender, EventArgs args)
     {
+        ClearPdfFragmentFocus();
         lastAutoTranslation = ActiveTranslationKey();
         await TranslateOfflineAsync(true);
     }
 
-    private async void TranslateSentenceClicked(object? sender, EventArgs args) => await TranslateOfflineAsync(false);
+    private async void TranslateSentenceClicked(object? sender, EventArgs args)
+    {
+        ClearPdfFragmentFocus();
+        await TranslateOfflineAsync(false);
+    }
 
     private async Task TranslateOfflineAsync(bool useContext)
     {

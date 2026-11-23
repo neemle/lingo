@@ -368,6 +368,7 @@ public partial class ReadingPage : ContentPage
         var alignment = active && document is not null && TargetCode is { } machineTarget
             ? ActiveMachineAlignment(document, machineTarget) : null;
         var machine = alignment?.Translation;
+        var searchHit = FoundPdfTranslation(detached: false);
         var machineLabel = alignment?.Unit.Sources.Length > 1 ? "Машинний переклад групи речень"
             : machine?.JoinedLines == true ? "Машинний переклад об’єднаних рядків" : "Машинний переклад";
         if (alignment is { Window.Scope: var scope, Translation.PivotLanguage: { } pivot })
@@ -379,11 +380,12 @@ public partial class ReadingPage : ContentPage
 
         TranslationNotice.Text = footnote ? "Виноски залишаються в оригіналі."
             : !active ? "Відкрийте документ для читання."
+            : searchHit is not null ? "Збіг у збереженому перекладі PDF"
             : translating && currentStatus is not null ? currentStatus
             : text is not null ? "Ваш переклад активного речення"
             : machine is not null ? machineLabel
             : currentStatus ?? ReadinessMessage();
-        var newTranslation = footnote ? "" : text ?? machine?.Text ?? "";
+        var newTranslation = footnote ? "" : searchHit?.Target ?? text ?? machine?.Text ?? "";
         var hasNewActiveTranslation = newTranslation.Length > 0 && SegmentTranslation.Text != newTranslation;
         SegmentTranslation.Text = newTranslation;
         ActiveTranslationCard.IsVisible = SegmentTranslation.Text.Length > 0;
@@ -522,6 +524,7 @@ public partial class ReadingPage : ContentPage
         if (text is not null && session.Document?.Id == document.Id && session.Sentence?.Id == sentence.Id
             && TargetCode == target && !session.Busy)
         {
+            ClearPdfFragmentFocus();
             await session.SetReviewedTranslationAsync(document.Id, sentence.Id, target, text);
             if (session.Error.Length != 0) return;
             if (existing is not null && string.IsNullOrWhiteSpace(text))

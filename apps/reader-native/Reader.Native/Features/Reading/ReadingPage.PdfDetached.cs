@@ -19,6 +19,7 @@ public partial class ReadingPage
     private bool savingDetachedWord;
     private bool translatingDetachedSentence;
     private DetachedPdfTranslation? detachedMachineTranslation;
+    private string detachedTranslationLabel = "";
     private int? detachedCacheLookupRun;
     private bool speakingDetachedSentence;
     private bool detachedPaused;
@@ -366,6 +367,7 @@ public partial class ReadingPage
                 maxLength: 4000);
             if (text is null || !ReferenceEquals(detachedAddress, address) ||
                 detachedSentence?.Sentence.Id != current.Sentence.Id || TargetCode != target) return;
+            ClearPdfFragmentFocus();
             var updated = await AppState.Session.UpdateDetachedPdfAnnotationAsync(
                 address.Document, address.Page, current.Sentence.Id, new { kind = "translation", target, text });
             if (own is not null && string.IsNullOrWhiteSpace(text))
@@ -393,8 +395,11 @@ public partial class ReadingPage
         await ShareTranslationPairAsync(pair);
     }
 
-    private async void DetachedTranslateClicked(object? sender, EventArgs args) =>
+    private async void DetachedTranslateClicked(object? sender, EventArgs args)
+    {
+        ClearPdfFragmentFocus();
         await TranslateDetachedAsync(background: false);
+    }
 
     private async Task TranslateDetachedAsync(bool background)
     {
@@ -504,6 +509,15 @@ public partial class ReadingPage
 
     private void ShowDetachedTranslation(string value)
     {
+        detachedTranslationLabel = value;
+        RenderDetachedTranslation();
+    }
+
+    private void RenderDetachedTranslation()
+    {
+        var value = FoundPdfTranslation(detached: true) is { } hit
+            ? $"Збіг у збереженому перекладі PDF{Environment.NewLine}{hit.Target}"
+            : detachedTranslationLabel;
         var changed = DetachedTranslation.Text != value;
         DetachedTranslation.Text = value;
         DetachedTranslationPane.IsVisible = value.Length != 0;

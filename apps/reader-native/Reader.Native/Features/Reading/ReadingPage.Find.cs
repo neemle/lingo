@@ -9,10 +9,10 @@ public partial class ReadingPage
     private bool findingInDocument;
     private sealed record DocumentFindSelection(int Position, bool Translation,
         int? PhysicalPage = null, string? SentenceId = null, DetachedPdfTranslation? CachedMachine = null,
-        string? Query = null, TranslationFindFragment? PdfFragment = null);
+        string? Query = null, TranslationFindFragment? PdfFragment = null, string? FragmentTranslation = null);
     private sealed record DocumentFindFocus(string Document, string? Revision, int? Page,
         string Sentence, TextSelection? Span = null, string? Target = null, string? Query = null,
-        TranslationFindFragment? PdfFragment = null);
+        TranslationFindFragment? PdfFragment = null, string? FragmentTranslation = null);
     private DocumentFindFocus? documentFindFocus;
 #if MACCATALYST
     private sealed record UnreadPdfFind(string Document, int Page, string Query, int Occurrence);
@@ -35,8 +35,8 @@ public partial class ReadingPage
             if (!readingPageActive || session.Document is not { } current || current.Id != document.Id ||
                 current.Language != document.Language || (match.Translation && TargetCode != target))
                 return;
-            documentFindFocus = null;
             ClearPdfFragmentFocus();
+            documentFindFocus = null;
             if ((match.Translation && readingLayout == ReaderLayout.Source) ||
                 (!match.Translation && readingLayout == ReaderLayout.Translation))
             {
@@ -146,14 +146,56 @@ public partial class ReadingPage
 
     private TextSelection? FindSourceFocus(string document, string? revision, Sentence sentence, int? page) =>
         documentFindFocus is { } focus && focus.Document == document && focus.Revision == revision &&
-        focus.Sentence == sentence.Id && focus.Page == page ? focus.Span : null;
+        focus.Sentence == sentence.Id && focus.Page == page &&
+        (focus.Target is null || focus.Target == TargetCode) ? focus.Span : null;
 
     private void RevealTranslationFindMatch(DocumentFindSelection match, string document, string? revision,
         int? page, string sentence, string? target)
     {
         if (!match.Translation || match.Query is not { } query || target is null || TargetCode != target) return;
-        documentFindFocus = new(document, revision, page, sentence, Target: target, Query: query, PdfFragment: match.PdfFragment);
-        UpdateInlinePdfHighlight();
+        var source = page is null ? AppState.Session.Document?.Text : detachedAddress?.Text;
+        var span = match.PdfFragment is { } fragment && source is not null
+            ? SourceRanges.Selection(source, fragment.StartUtf16, fragment.EndUtf16 - fragment.StartUtf16) : null;
+        documentFindFocus = new(document, revision, page, sentence, Span: span, Target: target, Query: query,
+            PdfFragment: match.PdfFragment, FragmentTranslation: span is null ? null : match.FragmentTranslation);
+        if (page is null)
+        {
+            UpdateHighlight();
+            if (span is not null) SourceText.RevealOffset(span.StartUtf16);
+        }
+        else
+        {
+            if (span is not null)
+            {
+                DetachedPdfText.HighlightStart = span.StartUtf16;
+                DetachedPdfText.HighlightLength = span.LengthUtf16;
+                DetachedPdfText.RevealOffset(span.StartUtf16);
+            }
+            UpdateInlinePdfHighlight();
+        }
+        if (span is not null) RefreshFindTranslationDisplay();
+    }
+
+    private TranslationPair? FoundPdfTranslation(bool detached)
+    {
+        if (documentFindFocus is not { Span: { } source, FragmentTranslation: { } translation, Target: { } target } focus ||
+            TargetCode != target || AppState.Session.Document is not { } document || focus.Document != document.Id)
+            return null;
+        var current = detached
+            ? !loadingDetachedSentence && detachedAddress?.Page == focus.Page && detachedSentence is { } page &&
+                page.RevisionId == focus.Revision && page.Sentence.Id == focus.Sentence
+            : focus.Page is null && document.CurrentRevisionId == focus.Revision && AppState.Session.Sentence?.Id == focus.Sentence;
+        return current ? new TranslationPair(source.Text, document.Language, translation, target) : null;
+    }
+
+    private void RefreshFindTranslationDisplay()
+    {
+        if (DetachedPdfReader.IsVisible)
+        {
+            RenderDetachedTranslation();
+            UpdateDetachedControls();
+        }
+        else UpdateTranslation();
     }
 
     private string? PdfTranslationFindQuery() =>
@@ -427,7 +469,7 @@ public partial class ReadingPage
                     new DocumentFindSelection(hit.Position, Translation: language is not null,
                         PhysicalPage: hit.Page, SentenceId: hit.SentenceId,
                         CachedMachine: hit.Reviewed == false ? new DetachedPdfTranslation(hit.Text, hit.PivotLanguage, hit.SourceText, hit.Position) : null,
-                        PdfFragment: hit.PdfFragment))));
+                        PdfFragment: hit.PdfFragment, FragmentTranslation: hit.PdfFragment is null ? null : hit.Text))));
                 if (found.Next is not { } next || next == cursor) return new(matches.ToArray(), null);
                 space = DocumentFind.PageSize - matches.Count;
                 cursor = next;
@@ -451,7 +493,7 @@ public partial class ReadingPage
                     var found = await session.FindTranslationPageAsync(document.Id, language, query, position, token);
                     matches.AddRange(found.Matches.Where(hit => hit.Position >= 0 && hit.Position < document.Sentences.Length)
                         .Select(hit => new DocumentFindHit(hit.Text, new DocumentFindSelection(hit.Position, Translation: true,
-                            PdfFragment: hit.PdfFragment))));
+                            PdfFragment: hit.PdfFragment, FragmentTranslation: hit.PdfFragment is null ? null : hit.Text))));
                     if (found.NextStart is not int nextPosition ||
                         nextPosition <= position || nextPosition >= document.Sentences.Length)
                         break;

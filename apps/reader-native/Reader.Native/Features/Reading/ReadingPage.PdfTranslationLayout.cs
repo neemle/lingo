@@ -567,8 +567,20 @@ public partial class ReadingPage
         var foundFragment = documentFindFocus?.PdfFragment is not null;
         if (pdfFragmentFocus is null && !foundFragment) return;
         pdfFragmentFocus = null;
-        if (foundFragment) documentFindFocus = null;
-        UpdateInlinePdfHighlight();
+        if (!foundFragment)
+        {
+            UpdateInlinePdfHighlight();
+            return;
+        }
+        documentFindFocus = null;
+        if (DetachedPdfReader.IsVisible && detachedSentence is { } page)
+        {
+            DetachedPdfText.HighlightStart = page.Sentence.StartUtf16;
+            DetachedPdfText.HighlightLength = page.Sentence.EndUtf16 - page.Sentence.StartUtf16;
+            UpdateInlinePdfHighlight();
+        }
+        else UpdateHighlight();
+        RefreshFindTranslationDisplay();
     }
 
     private async Task SelectPdfSourceRangeAsync(InlinePdfAddress address, int start, int end, string? sentenceId = null,
