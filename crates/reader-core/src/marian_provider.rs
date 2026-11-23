@@ -885,7 +885,12 @@ impl Store {
         let routes = crate::translation::ranked_routes(&installed, source, target)?;
         if !routes.is_empty() {
             let routes: Vec<_> = routes.iter().map(crate::translation::Route::without_quality).collect();
-            let identity = serde_json::to_string(&routes).map_err(|error| error.to_string())?;
+            // A saved background cursor can be complete even though new source normalization changes cache keys.
+            let identity = if source == "fr" && target == "uk" {
+                serde_json::to_string(&(crate::french_cardinals::NORMALIZATION_REVISION, routes))
+            } else {
+                serde_json::to_string(&routes)
+            }.map_err(|error| error.to_string())?;
             return Ok((identity, None));
         }
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
