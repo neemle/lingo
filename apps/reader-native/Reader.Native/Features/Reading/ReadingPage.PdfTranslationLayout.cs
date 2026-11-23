@@ -41,7 +41,7 @@ public partial class ReadingPage
         inlinePdf && inlinePdfAddress is { } page && TargetCode is { } target &&
         AppState.Session.Document is { } document && page.Document == document.Id &&
         target != document.Language && (!PdfPageNotice.IsVisible || DetachedPdfReader.IsVisible) &&
-        (pdfWindow is null || pdfWindow.Center == page.Page)
+        (CurrentNativePdfWindow(document.Id) is not { } window || window.Center == page.Page)
             ? new(page.Document, page.Page, document.CurrentRevisionId, target, page.DetachedText)
             : null;
 

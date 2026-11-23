@@ -8,6 +8,15 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage
 {
+    private PdfReadWindow? CurrentNativePdfWindow(string documentId)
+    {
+#if MACCATALYST
+        return pdfSnapshot?.Id == documentId ? pdfWindow : null;
+#else
+        return null;
+#endif
+    }
+
     private async void PreviousPdfPageClicked(object? sender, EventArgs args) => await MovePdfPageAsync(-1);
     private async void NextPdfPageClicked(object? sender, EventArgs args) => await MovePdfPageAsync(1);
 

@@ -61,7 +61,7 @@ public partial class ReadingPage
         var request = inlinePdfRequest;
         try
         {
-            var page = pdfSnapshot?.Id == document.Id && pdfWindow is { } window ? window.Center :
+            var page = CurrentNativePdfWindow(document.Id) is { } window ? window.Center :
                 document.PdfPageStarts is not null
                     ? await session.PdfReadingPageAsync(document.Id) ?? session.OriginalPageIndex()
                     : session.OriginalPageIndex();
