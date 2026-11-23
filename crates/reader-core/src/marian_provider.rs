@@ -1406,6 +1406,12 @@ impl MarianProvider<'_> {
         let mut ukrainian_retry_budget = 2;
         'segments: for segment in segments {
             checkpoint()?;
+            if package.source == "fr" && package.target == "uk" {
+                if let Some(text) = crate::marian_target_uk::publication_term(segment) {
+                    results.push(Ok(text));
+                    continue;
+                }
+            }
             let source_pieces = input
                 .encode(normalized_translation_input(package, segment).as_ref())
                 .map_err(model_error)?;

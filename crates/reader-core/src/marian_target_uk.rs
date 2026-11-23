@@ -4,6 +4,31 @@ use whatlang::Lang;
 const FRENCH_MANNER_OF_WALKING: &str = " de son pas souple et fort";
 pub(crate) const INSTRUCTION_REVISION: &str = "fr-uk-instructions-v1";
 
+/// Established Ukrainian forms for complete publication labels and names.
+pub(crate) fn publication_term(source: &str) -> Option<String> {
+    let normalized = source.split_whitespace().collect::<Vec<_>>().join(" ")
+        .to_lowercase().replace('’', "'");
+    let (volume, title) = normalized.split_once(':').map_or((None, normalized.as_str()), |(prefix, title)| {
+        let volume = prefix.trim().strip_prefix("tome ").filter(|number| {
+            !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+        });
+        (volume, title.trim())
+    });
+    if normalized.contains(':') && volume.is_none() { return None; }
+    let translated = match title {
+        "le comte de monte-cristo" => "Граф Монте-Крісто",
+        "le prisonnier du château d'if" => "В’язень замку Іф",
+        "alexandre dumas" => "Александр Дюма",
+        "lire en français facile" => "Читання простою французькою",
+        "français langue étrangère" => "Французька як іноземна",
+        _ => return None,
+    };
+    Some(match volume {
+        Some(number) => format!("Том {number}. {translated}"),
+        None => translated.to_owned(),
+    })
+}
+
 /// Make the action and its object explicit before passing short exercise commands to Marian.
 pub(crate) fn clarify_french_instructions(text: &str) -> String {
     let mut clarified = String::with_capacity(text.len());

@@ -101,7 +101,7 @@ pub fn project(
                 .fragments
                 .iter()
                 .map(|&index| rows[index].page_span(offset));
-            if let Some(masks) = super::masks::plan(spans, geometry, &styles) {
+            if let Some(masks) = super::masks::plan(region.bounds, spans, geometry, &styles) {
                 region.masks = masks;
                 true
             } else {

@@ -14,6 +14,7 @@ pub(super) struct BackgroundMask {
 
 /// A region with incomplete source geometry stays in the translation list.
 pub(super) fn plan(
+    area: Bounds,
     spans: impl Iterator<Item = Range<usize>>,
     geometry: &[OcrLine],
     styles: &BTreeMap<usize, &SourceStyle>,
@@ -37,9 +38,24 @@ pub(super) fn plan(
             .any(|range| range.start <= span.start_utf16 && span.end_utf16 <= range.end)
     };
     let background = |span: OcrSpan| styles.get(&span.start_utf16).map(|style| style.background);
+    let in_area = |x, y, width, height| {
+        let (width, height) = area.overlap(Bounds { x, y, width, height });
+        width > 0.0001 && height > 0.0001
+    };
     let mut masks = Vec::new();
     for line in geometry {
+        // A rectangular translation area can span a gap containing unrelated text,
+        // such as a caption in a cutout. Check all source lines, not just the rows
+        // that have a translation.
         let Some(span) = line.source_span.filter(|&span| overlaps(span)) else {
+            let obstructed = if line.words.is_empty() {
+                in_area(line.x, line.y, line.width, line.height)
+            } else {
+                line.words.iter().any(|word| in_area(word.x, word.y, word.width, word.height))
+            };
+            if obstructed {
+                return None;
+            }
             continue;
         };
         let line_background = background(span).unwrap_or([1.0; 4]);
@@ -59,6 +75,9 @@ pub(super) fn plan(
         for word in &line.words {
             let word_span = word.source_span?;
             if !overlaps(word_span) {
+                if in_area(word.x, word.y, word.width, word.height) {
+                    return None;
+                }
                 continue;
             }
             if !contains(word_span) {
@@ -133,12 +152,14 @@ mod tests {
         }];
         let green = SourceStyle::test_style([0.5, 0.9, 0.5], 0.018);
         let styles = BTreeMap::from([(5, &green)]);
-        let all = plan(std::iter::once(0..8), &geometry, &styles).unwrap();
+        let area = Bounds { x: 0.1, y: 0.2, width: 0.7, height: 0.02 };
+        let all = plan(area, std::iter::once(0..8), &geometry, &styles).unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[1].background, [0.5, 0.9, 0.5, 1.0]);
-        let part = plan(std::iter::once(5..8), &geometry, &styles).unwrap();
+        let right = Bounds { x: 0.6, width: 0.2, ..area };
+        let part = plan(right, std::iter::once(5..8), &geometry, &styles).unwrap();
         assert_eq!(part.len(), 1);
         assert!((part[0].bounds.x - 0.6).abs() < 0.001);
-        assert!(plan(std::iter::once(5..7), &geometry, &styles).is_none());
+        assert!(plan(right, std::iter::once(5..7), &geometry, &styles).is_none());
     }
 }

@@ -108,20 +108,26 @@ impl Store {
         if canceled() {
             return Err(TranslationBatchError::deferred(CANCELED.into()));
         }
-        let (document, physical, offsets, boundaries) = if let Some(cached) = self.detached_pdf_sentences(id, page)? {
-            let spans = cached.sentences.iter().map(|s| (s.start_utf16, s.end_utf16)).collect::<Vec<_>>();
+        let (mut document, physical, bounds, projected_offset, boundaries) = if let Some(cached) = self.detached_pdf_sentences(id, page)? {
+            let local_start = cached.sentences.first().map_or(0, |sentence| sentence.start_utf16);
             let projection = self.project_pdf_translation_page(id, page, target, cached.text, cached.sentences, cached.language)?;
-            (projection.document, projection.physical, spans, PageBoundaries::Projected)
+            let offset = projection.physical_sentences().first().map_or(0, |sentence| sentence.start_utf16 - local_start);
+            (projection.document, projection.physical, None, offset, PageBoundaries::Projected)
         } else {
             let document = self.translation_document(id)?;
             let Some((start, end)) = crate::pdf_reading_position::page_bounds(&document, page) else { return Ok(Vec::new()); };
             let first = document.sentences.partition_point(|s| s.end_utf16 <= start);
             let last = document.sentences.partition_point(|s| s.start_utf16 < end);
-            let spans = document.sentences[first..last].iter()
-                .map(|s| (s.start_utf16.max(start), s.end_utf16.min(end))).collect();
-            (document, first..last, spans, PageBoundaries::Canonical)
+            (document, first..last, Some((start, end)), 0, PageBoundaries::Canonical)
         };
         if document.language == target { return Ok(Vec::new()); }
+        let original: Vec<_> = document.sentences[physical.clone()].iter()
+            .map(|sentence| (sentence.end_utf16, sentence.id.clone())).collect();
+        let physical = split_page_ocr_units(&mut document, physical, bounds.map(|_| page), target);
+        let offsets: Vec<_> = document.sentences[physical.clone()].iter().map(|sentence| {
+            bounds.map_or_else(|| (sentence.start_utf16 - projected_offset, sentence.end_utf16 - projected_offset),
+                |(start, end)| (sentence.start_utf16.max(start), sentence.end_utf16.min(end)))
+        }).collect();
         let indices: std::collections::HashMap<_, _> = document.sentences[physical.clone()].iter()
             .enumerate().map(|(i, sentence)| (sentence.id.as_str(), i)).collect();
         let page_range = |sentence_ids: &[String]| {
@@ -135,7 +141,7 @@ impl Store {
             let end = &document.sentences[physical.start + last];
             PdfPageTranslationRow {
                 start_utf16: offsets[first].0, end_utf16: offsets[last].1,
-                source_sentence_id: source.id.clone(),
+                source_sentence_id: original[original.partition_point(|&(end, _)| end <= source.start_utf16)].1.clone(),
                 source_block_index: source_block_index(&document, &block_starts, source, end),
                 text, source_text, pivot_language, legacy_group,
             }
@@ -362,6 +368,76 @@ impl Store {
     }
 }
 
+// A reading sentence can span several independent visual objects on a cover or
+// worksheet. Split only the translation projection, preserving reading and note IDs.
+fn split_page_ocr_units(
+    document: &mut Document, physical: Range<usize>, page: Option<u16>, target: &str,
+) -> Range<usize> {
+    let Some(lines) = document.ocr_lines.as_deref() else { return physical; };
+    let mut cuts = Vec::new();
+    for pair in lines.windows(2) {
+        let [left, right] = pair else { continue; };
+        if left.page != right.page || page.is_some_and(|page| left.page != page) { continue; }
+        let Some((left_span, right_span)) = left.source_span.zip(right.source_span) else { continue; };
+        if left_span.end_utf8 > right_span.start_utf8 || same_ocr_flow(left, right) { continue; }
+        if document.text.is_char_boundary(right_span.start_utf8) {
+            cuts.push(right_span.start_utf8);
+        }
+    }
+    if cuts.is_empty() { return physical; }
+    cuts.sort_unstable();
+    cuts.dedup();
+
+    let reviewed = document.reviewed_translations.get(target);
+    let mut units = Vec::with_capacity(physical.len());
+    for sentence in &document.sentences[physical.clone()] {
+        let first = cuts.partition_point(|&cut| cut <= sentence.start_utf8);
+        let last = cuts.partition_point(|&cut| cut < sentence.end_utf8);
+        if first == last || reviewed.is_some_and(|items| items.contains_key(&sentence.id)) {
+            units.push(sentence.clone());
+            continue;
+        }
+        let mut start = sentence.start_utf8;
+        let mut start_utf16 = sentence.start_utf16;
+        for end in cuts[first..last].iter().copied().chain(std::iter::once(sentence.end_utf8)) {
+            let part = &document.text[start..end];
+            let text = part.trim();
+            if !text.is_empty() {
+                let leading = part.len() - part.trim_start().len();
+                let part_start = start + leading;
+                let part_start_utf16 = start_utf16 + part[..leading].encode_utf16().count();
+                units.push(Sentence {
+                    id: format!("{}:layout:{part_start}", sentence.id),
+                    text: text.to_owned(),
+                    start_utf8: part_start,
+                    end_utf8: part_start + text.len(),
+                    start_utf16: part_start_utf16,
+                    end_utf16: part_start_utf16 + text.encode_utf16().count(),
+                });
+            }
+            start_utf16 += part.encode_utf16().count();
+            start = end;
+        }
+    }
+    let end = physical.start + units.len();
+    document.sentences.splice(physical.clone(), units);
+    physical.start..end
+}
+
+fn same_ocr_flow(left: &ocr::OcrLine, right: &ocr::OcrLine) -> bool {
+    if left.height > 2.0 * left.width || right.height > 2.0 * right.width {
+        return false;
+    }
+    let overlap = (left.x + left.width).min(right.x + right.width) - left.x.max(right.x);
+    let line_height = left.height.min(right.height);
+    let line_gap = right.y - left.y - left.height;
+    let wrapped = overlap >= 0.28 * left.width.min(right.width)
+        && right.y > left.y && line_gap <= line_height;
+    let inline = (right.y - left.y).abs() <= 0.45 * line_height && right.x >= left.x
+        && right.x - left.x - left.width <= 0.9 * line_height;
+    wrapped || inline
+}
+
 fn pdf_layout_block_starts(document: &Document, page: &[Sentence]) -> Vec<usize> {
     let Some((first, last)) = page.first().zip(page.last()) else { return Vec::new(); };
     let line_start = document.text.get(..first.start_utf8).and_then(|before| before.rfind('\n'))
@@ -483,6 +559,29 @@ mod tests {
     use crate::translation::sentence_source;
     use super::*;
     use crate::{file_originals, pdf_detached_pages};
+
+    #[test]
+    fn cover_translation_separates_labels_and_keeps_wrapped_titles_together() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let line = |text: &str, x, y, width, height| ocr::OcrLine {
+            page: 0, text: text.into(), x, y, width, height,
+            confidence: None, correction: None, block_start: false, words: Vec::new(), source_span: None,
+        };
+        let document = store.import_scanned_pdf("cover.pdf", b"%PDF-1.4\n", "fr", vec![
+            line("Lire en français", 0.17, 0.04, 0.25, 0.02),
+            line("Collection", 0.08, 0.06, 0.03, 0.09),
+            line("Le Secret de", 0.49, 0.15, 0.43, 0.04),
+            line("la maison", 0.46, 0.21, 0.46, 0.04),
+        ], 1).unwrap();
+        let rows = store.pdf_page_translation(&document.id, 0, "uk", true).unwrap();
+        assert_eq!(rows.iter().map(|row| row.source_text.as_deref()).collect::<Vec<_>>(),
+            [Some("Lire en français"), Some("Collection"), Some("Le Secret de\nla maison")]);
+        for row in rows {
+            assert!(document.sentences.iter().any(|sentence| sentence.id == row.source_sentence_id
+                && sentence.start_utf16 <= row.start_utf16 && row.end_utf16 <= sentence.end_utf16));
+        }
+    }
 
     #[test]
     fn scanned_translation_rows_keep_heading_body_and_caption_blocks() {
