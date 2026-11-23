@@ -77,6 +77,7 @@ public partial class ReadingPage : ContentPage
             pdfLayoutRequest = null;
             translatingPdfLayout = null;
             pdfLayoutRows = [];
+            recentPdfTranslations.Clear();
             lastCacheRestore = null;
             detachedMachineTranslation = null;
             InvalidateModelPassageCache();

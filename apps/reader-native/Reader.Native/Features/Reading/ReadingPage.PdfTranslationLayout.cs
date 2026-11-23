@@ -26,6 +26,8 @@ public partial class ReadingPage
     private PdfLayoutAddress? translatingPdfLayout;
     private bool refreshingPdfSentence;
     private CancellationTokenSource? pdfLayoutTranslationCancellation;
+    private const int RecentPdfTranslationLimit = 3;
+    private readonly List<(PdfLayoutAddress Address, PdfPageTranslationRow[] Rows)> recentPdfTranslations = [];
     private PdfPageTranslationRow[] pdfLayoutRows = [];
     private PhotoPreview? pdfTranslationBackgroundPreview;
     private (PdfPageTranslationRow[] Rows, PdfSourceLayout? Source, bool PreserveArtwork, PdfTranslationLayout Plan)? pdfDrawingPlan;
@@ -238,12 +240,24 @@ public partial class ReadingPage
         var translatingPage = translatingPdfLayout == address && address is not null;
         if (address != pdfLayoutRequest)
         {
+            if (pdfLayoutRequest is { } previous)
+            {
+                recentPdfTranslations.RemoveAll(entry => entry.Address == previous);
+                if (pdfLayoutRows.Any(HasPdfTranslation))
+                {
+                    recentPdfTranslations.Insert(0, (previous, pdfLayoutRows));
+                    if (recentPdfTranslations.Count > RecentPdfTranslationLimit)
+                        recentPdfTranslations.RemoveAt(RecentPdfTranslationLimit);
+                }
+            }
             pdfLayoutRequest = address;
             pdfFragmentFocus = null;
             pendingPdfCacheRefresh = null;
             pdfLayoutRequestId++;
             pdfAutoAttempts = null;
-            pdfLayoutRows = [];
+            pdfLayoutRows = address is not null
+                ? recentPdfTranslations.Find(entry => entry.Address == address).Rows ?? []
+                : [];
             pdfDrawingPlan = null;
             PdfTranslationSurface.Drawable = DetachedPdfTranslationSurface.Drawable = null;
             PdfTranslationBackground.Source = DetachedPdfTranslationBackground.Source = null;
