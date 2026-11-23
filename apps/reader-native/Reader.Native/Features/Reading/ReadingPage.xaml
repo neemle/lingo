@@ -74,17 +74,12 @@
      FontSize="40" LineBreakMode="TailTruncation" MaxLines="1" />
    </VerticalStackLayout>
    <HorizontalStackLayout Grid.Column="1" Spacing="8" VerticalOptions="Center">
-    <Button x:Name="InlinePdfToggle" Text="Сторінка PDF" Style="{StaticResource OutlineButton}" IsVisible="False"
-     Clicked="ToggleInlinePdfClicked" SemanticProperties.Description="Перемкнути PDF і розпізнаний текст">
-     <Button.Triggers>
-      <DataTrigger TargetType="Button" Binding="{Binding Document.Format}" Value="pdf">
-       <Setter Property="IsVisible" Value="True" />
-      </DataTrigger>
-     </Button.Triggers>
-    </Button>
+    <Button x:Name="InlinePdfToggle" Text="Сторінка PDF" Style="{StaticResource OutlineButton}"
+     IsVisible="{Binding CanViewOriginal}" Clicked="ToggleInlineOriginalClicked"
+     SemanticProperties.Description="Перемкнути оригінал і розпізнаний текст" />
     <Button x:Name="InlinePdfFitToggle" Text="Ціла сторінка" Style="{StaticResource OutlineButton}"
      IsVisible="False" Clicked="ToggleInlinePdfFitClicked" />
-    <Button Text="Оригінал" Style="{StaticResource OutlineButton}" IsVisible="{Binding CanViewOriginal}"
+    <Button Text="Відкрити окремо" Style="{StaticResource OutlineButton}" IsVisible="{Binding CanViewOriginal}"
      Clicked="ViewOriginalClicked" SemanticProperties.Description="Переглянути оригінал документа" />
    </HorizontalStackLayout>
    <Grid Grid.Row="1" Grid.ColumnSpan="2" x:Name="PdfPageControls" IsVisible="False" Margin="0,8,0,0"
@@ -161,7 +156,7 @@
       <ScrollView Grid.Row="1" x:Name="InlinePdfViewport" IsVisible="False" SizeChanged="InlinePdfViewportChanged" Scrolled="InlinePdfViewportScrolled">
        <Grid x:Name="InlinePdfSurface" HorizontalOptions="Center" VerticalOptions="Start" SizeChanged="InlinePdfSurfaceChanged">
         <Image x:Name="InlinePdfImage" Aspect="AspectFit"
-       SemanticProperties.Description="Оригінальна сторінка PDF">
+       SemanticProperties.Description="Оригінал документа">
        <Image.GestureRecognizers>
         <TapGestureRecognizer Tapped="InlinePdfTapped" />
        </Image.GestureRecognizers>

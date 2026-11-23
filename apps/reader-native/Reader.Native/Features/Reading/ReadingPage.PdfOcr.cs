@@ -400,7 +400,7 @@ public partial class ReadingPage
         if (page is { State: "detached" } && pdfSnapshot is { } document)
             ShowDetachedPdfPage(document, page);
         UpdatePdfPageButtons();
-        if (inlinePdf) _ = ShowInlinePdfAsync();
+        if (showInlineOriginal) _ = ShowInlineOriginalAsync();
     }
 
     private void ShowPdfPageNotice(string? message, string? detachedText = null)

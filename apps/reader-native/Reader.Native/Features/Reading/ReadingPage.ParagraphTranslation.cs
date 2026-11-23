@@ -40,7 +40,7 @@ public partial class ReadingPage
 
     private void InlinePdfViewportScrolled(object? sender, ScrolledEventArgs args)
     {
-        if (!inlinePdf) return;
+        if (!showInlineOriginal) return;
         if (ReferenceEquals(sender, ActiveInlinePdf().Viewport)) _ = FollowPdfTranslationScrollAsync(fromOriginal: true);
         ScheduleSourceViewportSync();
     }
@@ -58,7 +58,7 @@ public partial class ReadingPage
             if (!CanSyncSourceViewport()) return;
             var detached = DetachedPdfReader.IsVisible;
             var source = detached ? DetachedPdfText : SourceText;
-            var visible = inlinePdf ? VisibleInlinePdfOffsets() : source.VisibleOffsets?.Invoke();
+            var visible = showInlineOriginal ? VisibleInlinePdfOffsets() : source.VisibleOffsets?.Invoke();
             if (detached)
             {
                 if (detachedAddress is { } address && detachedSentence?.Sentence is { } current &&

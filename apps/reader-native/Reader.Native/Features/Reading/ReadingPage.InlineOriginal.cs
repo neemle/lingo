@@ -7,8 +7,8 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage
 {
-    private bool inlinePdf;
-    private string? inlinePdfDocumentId;
+    private bool showInlineOriginal;
+    private string? inlineOriginalDocumentId;
     private bool inlinePdfFitWidth = true;
     private (string Document, int Page, int Start, int End, double SurfaceHeight, double ViewportHeight)? lastInlinePdfFollow;
     private int inlinePdfRequest;
@@ -19,42 +19,45 @@ public partial class ReadingPage
     private OcrLine[] inlineNativeBoxes = [];
     private string inlineNativeText = "";
 
-    private async void ToggleInlinePdfClicked(object? sender, EventArgs args)
+    private async void ToggleInlineOriginalClicked(object? sender, EventArgs args)
     {
-        var showOriginal = !inlinePdf;
-        SaveReaderPreference(ReaderPreferenceChange.PdfShowOriginal(showOriginal));
+        var showOriginal = !showInlineOriginal;
+        if (AppState.Session.Document?.Format == "pdf")
+            SaveReaderPreference(ReaderPreferenceChange.PdfShowOriginal(showOriginal));
         if (!showOriginal)
         {
-            ClearInlinePdf();
+            ClearInlineOriginal();
             ScheduleAutoTranslation();
             if (DetachedPdfReader.IsVisible) _ = RestoreDetachedTranslationAsync();
             return;
         }
 
-        inlinePdf = true;
-        await ShowInlinePdfAsync();
+        showInlineOriginal = true;
+        await ShowInlineOriginalAsync();
     }
 
-    private void SyncInlinePdfMode()
+    private void SyncInlineOriginalMode()
     {
         var session = AppState.Session;
         if (session.Busy) return;
-        var id = session.Document is { Format: "pdf" } document ? document.Id : null;
-        if (id != inlinePdfDocumentId)
+        var document = session.Document;
+        var id = session.CanViewOriginal ? document?.Id : null;
+        if (id != inlineOriginalDocumentId)
         {
-            ClearInlinePdf();
-            inlinePdfDocumentId = id;
-            inlinePdf = id is not null && (readerPreferences.PdfShowOriginal ?? true);
+            ClearInlineOriginal();
+            inlineOriginalDocumentId = id;
+            showInlineOriginal = id is not null &&
+                (document?.Format != "pdf" || (readerPreferences.PdfShowOriginal ?? true));
         }
-        if (inlinePdf) _ = ShowInlinePdfAsync();
+        if (showInlineOriginal) _ = ShowInlineOriginalAsync();
     }
 
     private void UpdateInlinePdfFitLabel() =>
         InlinePdfFitToggle.Text = inlinePdfFitWidth ? "Ціла сторінка" : "За шириною";
 
-    private void ClearInlinePdf()
+    private void ClearInlineOriginal()
     {
-        inlinePdf = false;
+        showInlineOriginal = false;
         inlinePdfRequest++;
         inlinePdfAddress = inlinePdfLoading = null;
         inlinePdfPreview = null;
@@ -67,27 +70,32 @@ public partial class ReadingPage
         InlinePdfFitToggle.IsVisible = false;
         lastInlinePdfFollow = null;
         InlinePdfImage.Source = DetachedInlinePdfImage.Source = PendingInlinePdfImage.Source = null;
-        InlinePdfToggle.Text = "Сторінка PDF";
+        InlinePdfToggle.Text = AppState.Session.Document?.Format == "pdf" ? "Сторінка PDF" : "Фото";
         RefreshPdfTranslationLayout();
     }
 
-    private async Task ShowInlinePdfAsync()
+    private async Task ShowInlineOriginalAsync()
     {
         var session = AppState.Session;
-        if (!inlinePdf || session.Document is not { Format: "pdf" } document)
+        if (!showInlineOriginal || session.Document is not { } document)
         {
-            ClearInlinePdf();
+            ClearInlineOriginal();
             return;
         }
 
         var request = inlinePdfRequest;
+        var isPdf = document.Format == "pdf";
         try
         {
-            var page = CurrentNativePdfWindow(document.Id) is { } window ? window.Center :
-                document.PdfPageStarts is not null
-                    ? await session.PdfReadingPageAsync(document.Id) ?? session.OriginalPageIndex()
-                    : session.OriginalPageIndex();
-            if (request != inlinePdfRequest || !inlinePdf) return;
+            var page = 0;
+            if (isPdf)
+            {
+                page = CurrentNativePdfWindow(document.Id) is { } window ? window.Center :
+                    document.PdfPageStarts is not null
+                        ? await session.PdfReadingPageAsync(document.Id) ?? session.OriginalPageIndex()
+                        : session.OriginalPageIndex();
+            }
+            if (request != inlinePdfRequest || !showInlineOriginal) return;
             var detachedText = detachedAddress is { } detached && detached.Document == document.Id &&
                 detached.Page == page && DetachedPdfReader.IsVisible ? detached.Text : null;
             var address = (document.Id, page, detachedText);
@@ -109,12 +117,12 @@ public partial class ReadingPage
             inlinePdfLoading = address;
             InlinePdfHighlight.IsVisible = DetachedInlinePdfHighlight.IsVisible = false;
 
-            InlinePdfToggle.Text = "Завантажуємо PDF…";
+            InlinePdfToggle.Text = isPdf ? "Завантажуємо PDF…" : "Завантажуємо фото…";
             PhotoPreview preview;
             OcrLine[] detachedLines = [], nativeBoxes = [];
             string nativeText = "";
 #if MACCATALYST
-            if (await session.OriginalFileAsync(document.Id) is { } file)
+            if (isPdf && await session.OriginalFileAsync(document.Id) is { } file)
             {
                 if (detachedText is not null)
                     detachedLines = (await session.DetachedPdfOcrAsync(document.Id, page))?.Lines ?? [];
@@ -127,10 +135,10 @@ public partial class ReadingPage
 #endif
             {
                 var fileBytes = (await session.OriginalAsync(document.Id)).Bytes.Select(value => checked((byte)value)).ToArray();
-                preview = await PdfScan.PreviewAsync(fileBytes, page);
+                preview = isPdf ? await PdfScan.PreviewAsync(fileBytes, page) : await PhotoOcr.PreviewAsync(fileBytes);
             }
 
-            if (request != inlinePdfRequest || !inlinePdf || !readingPageActive ||
+            if (request != inlinePdfRequest || !showInlineOriginal || !readingPageActive ||
                 session.Document?.Id != document.Id) return;
             var source = ImageSource.FromStream(() => new MemoryStream(preview.Bytes, writable: false));
             InlinePdfImage.Source = DetachedInlinePdfImage.Source = PendingInlinePdfImage.Source = source;
@@ -155,8 +163,8 @@ public partial class ReadingPage
         catch (Exception error)
         {
             if (request != inlinePdfRequest) return;
-            ClearInlinePdf();
-            await DisplayAlertAsync("Сторінка PDF", error.Message, "Гаразд");
+            ClearInlineOriginal();
+            await DisplayAlertAsync(isPdf ? "Сторінка PDF" : "Фото", error.Message, "Гаразд");
         }
     }
 
@@ -181,7 +189,7 @@ public partial class ReadingPage
 
     private void ResizeInlinePdf()
     {
-        if (!inlinePdf || inlinePdfPreview is not { Width: > 0, Height: > 0 } preview) return;
+        if (!showInlineOriginal || inlinePdfPreview is not { Width: > 0, Height: > 0 } preview) return;
         var (viewport, surface) = ActiveInlinePdf();
         if (viewport.Width <= 0 || viewport.Height <= 0) return;
         var widthScale = viewport.Width / preview.Width;
@@ -206,7 +214,7 @@ public partial class ReadingPage
         var target = Math.Clamp(top - margin, 0, Math.Max(0, surface.Height - viewport.Height));
         Dispatcher.Dispatch(async () =>
         {
-            if (lastInlinePdfFollow == key && inlinePdf && inlinePdfFitWidth)
+            if (lastInlinePdfFollow == key && showInlineOriginal && inlinePdfFitWidth)
                 await viewport.ScrollToAsync(0, target, animated: false);
         });
     }
@@ -249,7 +257,7 @@ public partial class ReadingPage
     private void UpdateInlinePdfHighlight()
     {
         RefreshPdfTranslationLayout();
-        if (!inlinePdf || inlinePdfAddress is not { } address || inlinePdfPreview is not { } preview ||
+        if (!showInlineOriginal || inlinePdfAddress is not { } address || inlinePdfPreview is not { } preview ||
             AppState.Session.Document is not { } document || document.Id != address.Document) return;
 
         var detached = DetachedPdfReader.IsVisible;

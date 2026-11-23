@@ -29,7 +29,8 @@ public partial class ReadingPage
             ? (DetachedPdfTranslationViewport, DetachedPdfTranslationSurface)
             : (PdfTranslationViewport, PdfTranslationSurface);
 
-    private bool PdfUsesPageTranslation => inlinePdf && pdfTranslationLayout && TranslationVisible;
+    private bool PdfUsesPageTranslation => showInlineOriginal && pdfTranslationLayout && TranslationVisible &&
+        AppState.Session.Document?.Format == "pdf";
 
     private void TogglePdfTranslationLayout(object? sender, EventArgs args)
     {
@@ -71,8 +72,8 @@ public partial class ReadingPage
     }
 
     private PdfLayoutAddress? CurrentPdfLayoutAddress() =>
-        inlinePdf && inlinePdfAddress is { } page && TargetCode is { } target &&
-        AppState.Session.Document is { } document && page.Document == document.Id &&
+        showInlineOriginal && inlinePdfAddress is { } page && TargetCode is { } target &&
+        AppState.Session.Document is { Format: "pdf" } document && page.Document == document.Id &&
         target != document.Language && (!PdfPageNotice.IsVisible || DetachedPdfReader.IsVisible) &&
         (CurrentNativePdfWindow(document.Id) is not { } window || window.Center == page.Page)
             ? new(page.Document, page.Page, document.CurrentRevisionId, target, page.DetachedText)
@@ -251,7 +252,7 @@ public partial class ReadingPage
 
     private void PdfTranslationViewportChanged(object? sender, EventArgs args)
     {
-        if (!inlinePdf) return;
+        if (!showInlineOriginal) return;
         ResizePdfTranslationLayout();
         if (ActiveInlinePdf().Viewport.IsVisible) _ = FollowPdfTranslationScrollAsync(fromOriginal: true);
     }

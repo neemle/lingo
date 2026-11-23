@@ -101,7 +101,7 @@ public partial class ReadingPage : ContentPage
         AppState.Session.BackgroundPdfTextCached += BackgroundPdfTextCached;
 #endif
         SyncReaderPdf();
-        SyncInlinePdfMode();
+        SyncInlineOriginalMode();
         SyncAnalysisPrefetch();
         BeginReadingHistory();
         UpdateHighlight();
@@ -127,8 +127,8 @@ public partial class ReadingPage : ContentPage
         RestoreCachedModelTranslation(null);
         dictionaryFocus = null;
         StopReaderPdf();
-        inlinePdfDocumentId = null;
-        ClearInlinePdf();
+        inlineOriginalDocumentId = null;
+        ClearInlineOriginal();
         StopAnalysisPrefetch();
         CancelScheduledTranslation();
         EndReadingHistory(keepVisit: false);
@@ -155,7 +155,7 @@ public partial class ReadingPage : ContentPage
         if (args.PropertyName == nameof(ReaderSession.Snapshot))
         {
             SyncReaderPdf();
-            SyncInlinePdfMode();
+            SyncInlineOriginalMode();
             SyncAnalysisPrefetch();
             SyncReadingHistory();
             UpdateHighlight();
