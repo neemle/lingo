@@ -138,30 +138,60 @@ impl ModelBudget {
 }
 
 #[cfg(target_vendor = "apple")]
-fn system_memory() -> std::io::Result<(u64, u64)> {
-    use std::{io::Error, mem, ptr, sync::OnceLock};
+fn apple_total_memory() -> std::io::Result<u64> {
+    use std::{io::Error, mem, ptr};
 
-    static HOST: OnceLock<libc::mach_port_t> = OnceLock::new();
-    unsafe extern "C" {
-        fn mach_host_self() -> libc::mach_port_t;
-    }
     let mut total = 0u64;
     let mut len = mem::size_of_val(&total);
-    let mut stats = mem::MaybeUninit::<libc::vm_statistics64>::zeroed();
-    let mut count = libc::HOST_VM_INFO64_COUNT;
-    // The host port is reused for the lifetime of the process. All output buffers
-    // are writable and sized for the corresponding OS structure.
-    unsafe {
-        if libc::sysctlbyname(
+    // Both output pointers refer to writable storage sized for hw.memsize.
+    if unsafe {
+        libc::sysctlbyname(
             c"hw.memsize".as_ptr(),
             (&mut total as *mut u64).cast(),
             &mut len,
             ptr::null_mut(),
             0,
-        ) != 0
-        {
-            return Err(Error::last_os_error());
-        }
+        )
+    } != 0
+    {
+        return Err(Error::last_os_error());
+    }
+    if len != mem::size_of_val(&total) || total == 0 {
+        return Err(Error::other("Apple hardware memory size unavailable"));
+    }
+    Ok(total)
+}
+
+#[cfg(all(target_os = "ios", not(target_abi = "macabi")))]
+fn system_memory() -> std::io::Result<(u64, u64)> {
+    unsafe extern "C" {
+        fn os_proc_available_memory() -> libc::size_t;
+    }
+
+    let total = apple_total_memory()?;
+    // iOS enforces an app-specific limit that changes with memory pressure.
+    // The SDK function takes no arguments and reports current headroom in bytes.
+    let available = unsafe { os_proc_available_memory() } as u64;
+    Ok((total, available))
+}
+
+#[cfg(all(
+    target_vendor = "apple",
+    any(not(target_os = "ios"), target_abi = "macabi")
+))]
+fn system_memory() -> std::io::Result<(u64, u64)> {
+    use std::{io::Error, mem, sync::OnceLock};
+
+    static HOST: OnceLock<libc::mach_port_t> = OnceLock::new();
+    unsafe extern "C" {
+        fn mach_host_self() -> libc::mach_port_t;
+    }
+    let total = apple_total_memory()?;
+    let mut stats = mem::MaybeUninit::<libc::vm_statistics64>::zeroed();
+    let mut count = libc::HOST_VM_INFO64_COUNT;
+    // The host port is reused for the lifetime of the process. The statistics
+    // buffer is writable and sized for the corresponding OS structure.
+    unsafe {
         let host = *HOST.get_or_init(|| mach_host_self());
         let result = libc::host_statistics64(
             host,
@@ -170,12 +200,7 @@ fn system_memory() -> std::io::Result<(u64, u64)> {
             &mut count,
         );
         let page_size = libc::sysconf(libc::_SC_PAGESIZE);
-        if result != libc::KERN_SUCCESS
-            || count != libc::HOST_VM_INFO64_COUNT
-            || len != mem::size_of::<u64>()
-            || total == 0
-            || page_size <= 0
-        {
+        if result != libc::KERN_SUCCESS || count != libc::HOST_VM_INFO64_COUNT || page_size <= 0 {
             return Err(Error::other("macOS memory counters unavailable"));
         }
         let stats = stats.assume_init();
