@@ -30,7 +30,9 @@ const LATENT_HOP: usize = 512 * 6;
 const MAX_BYTES: usize = 4096;
 const TEXT_WINDOW: usize = 110;
 const MAX_SAMPLES: usize = SAMPLE_RATE as usize * crate::tts::MAX_SECONDS;
-const STEPS: usize = 5;
+// Match the reference denoising budget and pause between split phrases.
+const STEPS: usize = 8;
+const CHUNK_PAUSE_SAMPLES: usize = SAMPLE_RATE as usize * 3 / 10;
 
 pub struct MultilingualSpeechJob {
     model: OptionalModelJob,
@@ -92,7 +94,7 @@ impl MultilingualSpeechJob {
         };
         let synthesis_rate = crate::tts::model_synthesis_rate(self.rate);
         let cache = SpeechCacheKey::new(
-            "supertonic-3-normalization-v2",
+            "supertonic-3-narration-v3",
             self.model.revision(),
             &self.language,
             self.voice,
@@ -112,7 +114,7 @@ impl MultilingualSpeechJob {
                     let pause = if waveform.is_empty() {
                         0
                     } else {
-                        SAMPLE_RATE as usize / 10
+                        CHUNK_PAUSE_SAMPLES
                     };
                     let remaining = MAX_SAMPLES - waveform.len();
                     if pause >= remaining {
