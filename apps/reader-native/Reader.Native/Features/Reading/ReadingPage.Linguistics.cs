@@ -91,6 +91,11 @@ public partial class ReadingPage
 
     private async void OpenSentenceAnalysisClicked(object? sender, EventArgs args)
     {
+        if (DetachedPdfReader.IsVisible)
+        {
+            await AnalyzeDetachedSentenceAsync();
+            return;
+        }
         var session = AppState.Session;
         if (PdfPageNotice.IsVisible || session.Busy || session.Document is not { CurrentRevisionId: { } revision } document
             || session.Sentence is not { } sentence) return;

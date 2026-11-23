@@ -94,6 +94,7 @@ public partial class ReadingPage
         CancelReaderPdfOcr();
         repairingPdfText?.Cancel();
         PdfPageControls.IsVisible = false;
+        UpdatePdfPageButtons();
         ShowPdfPageNotice(null);
 #endif
     }
@@ -399,6 +400,7 @@ public partial class ReadingPage
         PdfPageNotice.IsVisible = show;
         ReadingColumns.IsVisible = ReaderControls.IsVisible = SentenceToolbar.IsVisible = !show;
         SourceHint.IsVisible = !show && SourcePane.IsVisible;
+        UpdateSentenceMenu();
         if (stateChanged) SyncAnalysisPrefetch();
     }
 
@@ -406,7 +408,7 @@ public partial class ReadingPage
     {
         var enabled = !movingPdfPage && !pdfWindowLoading && !pdfPagePromptOpen &&
             repairingPdfText is null && !AppState.Session.Busy;
-        JumpPdfPage.IsEnabled = enabled && pdfWindow is { PageCount: > 1 };
+        JumpPdfPageMenu.IsEnabled = JumpPdfPage.IsEnabled = enabled && pdfWindow is { PageCount: > 1 };
         PreviousPdfPage.IsEnabled = enabled && pdfWindow is { Center: > 0 };
         NextPdfPage.IsEnabled = enabled && pdfWindow is { } window && window.Center + 1 < window.PageCount;
         RetryPdfOcr.IsVisible = enabled && readerPdfOcr is null

@@ -151,7 +151,9 @@ public partial class ReadingPage
         if (selected is null) DetachedWordCard.IsVisible = false;
     }
 
-    private async void DetachedAnalyzeClicked(object? sender, EventArgs args)
+    private async void DetachedAnalyzeClicked(object? sender, EventArgs args) => await AnalyzeDetachedSentenceAsync();
+
+    private async Task AnalyzeDetachedSentenceAsync()
     {
         if (!DetachedAnalyze.IsEnabled || detachedAddress is not { } address || detachedSentence is not { } current) return;
         var session = AppState.Session;
@@ -803,6 +805,7 @@ public partial class ReadingPage
 
     private void UpdateDetachedControls()
     {
+        UpdateSentenceMenu();
         var available = !loadingDetachedSentence && detachedSentence is not null;
         DetachedPrevious.IsEnabled = available && detachedSentence is { Position: > 0 };
         DetachedNext.IsEnabled = available && detachedSentence is { } current && current.Position + 1 < current.Total;

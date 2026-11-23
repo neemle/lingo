@@ -52,8 +52,13 @@ public partial class ReadingPage
 
     private async void EditSpeechTextClicked(object? sender, EventArgs args)
     {
+        if (DetachedPdfReader.IsVisible)
+        {
+            await EditDetachedSpeechTextAsync();
+            return;
+        }
         var session = AppState.Session;
-        if (editingSpeechText || session.Busy || session.Document is not { } document ||
+        if (editingSpeechText || PdfPageNotice.IsVisible || session.Busy || session.Document is not { } document ||
             session.Sentence is not { } sentence) return;
 
         editingSpeechText = true;
@@ -72,7 +77,9 @@ public partial class ReadingPage
         finally { editingSpeechText = false; }
     }
 
-    private async void EditDetachedSpeechTextClicked(object? sender, EventArgs args)
+    private async void EditDetachedSpeechTextClicked(object? sender, EventArgs args) => await EditDetachedSpeechTextAsync();
+
+    private async Task EditDetachedSpeechTextAsync()
     {
         var session = AppState.Session;
         if (editingSpeechText || session.Busy || loadingDetachedSentence ||

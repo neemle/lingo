@@ -364,6 +364,7 @@ public partial class ReadingPage : ContentPage
         TranslateSentence.IsEnabled = active && !session.Busy && !translating && readiness?.Ready == true && text is null;
         OpenTranslationPackages.IsVisible = active && readiness is { Missing.Length: > 0 };
         if (DetachedPdfReader.IsVisible) UpdateDetachedControls();
+        else UpdateSentenceMenu();
         TargetLanguage.IsEnabled = (active || DetachedPdfReader.IsVisible) && !session.Busy;
         UpdateModelTranslation();
         UpdateSourceLocation(document, session.Sentence);
@@ -722,17 +723,29 @@ public partial class ReadingPage : ContentPage
         finally { openingOriginal = false; }
     }
 
-    private async void PreviousClicked(object? sender, EventArgs args)
+    private async void PreviousClicked(object? sender, EventArgs args) => await MoveActiveSentenceAsync(-1);
+    private async void NextClicked(object? sender, EventArgs args) => await MoveActiveSentenceAsync(1);
+
+    private async Task MoveActiveSentenceAsync(int direction)
     {
+        if (DetachedPdfReader.IsVisible)
+        {
+            await MoveDetachedSentenceAsync(direction);
+            return;
+        }
         if (PdfPageNotice.IsVisible) return;
         CancelDetachedSpeechTravel();
-        StopSpeech(); await AppState.Session.MoveAsync(-1);
+        StopSpeech();
+        await AppState.Session.MoveAsync(direction);
     }
-    private async void NextClicked(object? sender, EventArgs args)
+
+    private void UpdateSentenceMenu()
     {
-        if (PdfPageNotice.IsVisible) return;
-        CancelDetachedSpeechTravel();
-        StopSpeech(); await AppState.Session.MoveAsync(1);
+        var session = AppState.Session;
+        var enabled = !session.Busy && (DetachedPdfReader.IsVisible
+            ? !loadingDetachedSentence && detachedSentence is not null
+            : !PdfPageNotice.IsVisible && session.Sentence is not null);
+        EditSpeechTextMenu.IsEnabled = SentenceAnalysisMenu.IsEnabled = enabled;
     }
     private async void JumpSentenceClicked(object? sender, EventArgs args)
     {
@@ -829,11 +842,25 @@ public partial class ReadingPage : ContentPage
         catch (Exception error) { SpeechStatus.Text = $"Не вдалося зберегти позицію озвучення. {error.Message}"; }
     }
 
-    private async void SpeakClicked(object? sender, EventArgs args) => await SpeakAsync();
+    private async void SpeakClicked(object? sender, EventArgs args)
+    {
+        if (DetachedPdfReader.IsVisible)
+        {
+            if (speakingDetachedSentence) ClearDetachedSpeech();
+            await SpeakDetachedAsync(resumePlayback: false);
+            return;
+        }
+        await SpeakAsync();
+    }
 
     private async void ToggleSpeechClicked(object? sender, EventArgs args)
     {
         if (!AppState.Session.CanInteract) return;
+        if (DetachedPdfReader.IsVisible)
+        {
+            await SpeakDetachedAsync(resumePlayback: true);
+            return;
+        }
         if (utteranceActive)
         {
             if (PauseSpeech.IsEnabled) ToggleSpeechPause();
