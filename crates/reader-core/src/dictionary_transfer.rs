@@ -437,6 +437,14 @@ impl Store {
     }
 }
 
+pub(crate) fn observed_card_forms(db: &Connection, card_id: &str) -> Result<Vec<String>> {
+    let mut query = db.prepare(
+        "SELECT DISTINCT surface FROM dictionary_card_contexts WHERE card_id=?1 ORDER BY surface",
+    ).map_err(error)?;
+    let rows = query.query_map([card_id], |row| row.get(0)).map_err(error)?;
+    rows.collect::<rusqlite::Result<_>>().map_err(error)
+}
+
 pub(crate) fn apply_collection_contexts(db: &Connection, id: &str, cards: &mut [Vocabulary]) -> Result<()> {
     if cards.is_empty() {
         return Ok(());
