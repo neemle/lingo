@@ -29,6 +29,7 @@ pub struct StorageUsage {
     original_bytes: u64,
     download_bytes: u64,
     database_cache_bytes: u64,
+    translation_cache_bytes: u64,
     audio_cache_bytes: u64,
 }
 
@@ -55,20 +56,23 @@ impl Store {
                         + measure(Path::new(&format!("{path}-shm")), false)?.0,
                 )
             })?;
-        let cache = self.connection.query_row(
-            "SELECT coalesce(sum(pgsize), 0) FROM dbstat WHERE name IN (
-                SELECT name FROM sqlite_schema WHERE
-                    (tbl_name IN ('translation_cache', 'translation_cache_owners')
+        let (translations, other_cache) = self.connection.query_row(
+            "SELECT coalesce(sum(CASE WHEN tbl_name IN ('translation_cache', 'translation_cache_owners')
+                                     THEN pgsize ELSE 0 END), 0),
+                    coalesce(sum(CASE WHEN tbl_name NOT IN ('translation_cache', 'translation_cache_owners')
+                                     THEN pgsize ELSE 0 END), 0)
+             FROM sqlite_schema CROSS JOIN dbstat
+             WHERE dbstat.name = sqlite_schema.name AND (
+                   (tbl_name IN ('translation_cache', 'translation_cache_owners')
                         AND EXISTS(SELECT 1 FROM translation_cache))
-                    OR (tbl_name='linguistic_annotations' AND EXISTS(SELECT 1 FROM linguistic_annotations))
-                    OR (tbl_name='model_hints' AND EXISTS(SELECT 1 FROM model_hints))
-                    OR (tbl_name='translation_windows' AND EXISTS(SELECT 1 FROM translation_windows))
-                    OR (tbl_name='background_translation_progress' AND EXISTS(SELECT 1 FROM background_translation_progress))
-            )",
-            [], |row| row.get::<_, i64>(0),
+                OR (tbl_name='linguistic_annotations' AND EXISTS(SELECT 1 FROM linguistic_annotations))
+                OR (tbl_name='model_hints' AND EXISTS(SELECT 1 FROM model_hints))
+                OR (tbl_name='translation_windows' AND EXISTS(SELECT 1 FROM translation_windows))
+                OR (tbl_name='background_translation_progress' AND EXISTS(SELECT 1 FROM background_translation_progress)))",
+            [], |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
         ).or_else(|_| self.connection.query_row(
-            "SELECT (SELECT coalesce(sum(length(CAST(body AS BLOB)) + length(key)), 0) FROM translation_cache)
-                  + (SELECT coalesce(sum(length(CAST(annotation_blob AS BLOB)) + length(cache_key)), 0) FROM linguistic_annotations)
+            "SELECT (SELECT coalesce(sum(length(CAST(body AS BLOB)) + length(key)), 0) FROM translation_cache),
+                    (SELECT coalesce(sum(length(CAST(annotation_blob AS BLOB)) + length(cache_key)), 0) FROM linguistic_annotations)
                   + (SELECT coalesce(sum(length(CAST(annotation_blob AS BLOB)) + length(cache_key)), 0) FROM model_hints)
                   + (SELECT coalesce(sum(length(document_id) + length(sentence_id) + length(revision_id)
                               + length(source) + length(target) + coalesce(length(lease), 0)), 0)
@@ -76,12 +80,13 @@ impl Store {
                   + (SELECT coalesce(sum(length(document_id) + length(target) + length(revision_id)
                               + coalesce(length(CAST(route_identity AS BLOB)), 0)), 0)
                         FROM background_translation_progress)",
-            [], |row| row.get::<_, i64>(0),
+            [], |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
         )).map_err(storage_error)?;
         let mut usage = StorageUsage {
             database_bytes,
             original_bytes: measure(&self.file_original_directory, false)?.0,
-            database_cache_bytes: (cache as u64).min(database_bytes),
+            database_cache_bytes: (translations + other_cache).min(database_bytes),
+            translation_cache_bytes: translations.min(database_bytes),
             ..StorageUsage::default()
         };
         for path in self.download_roots() {
@@ -263,6 +268,8 @@ mod tests {
         assert_eq!(usage.download_bytes, 128);
         assert_eq!(usage.audio_cache_bytes, 64);
         assert!(usage.database_cache_bytes > 0);
+        assert!(usage.translation_cache_bytes > 0);
+        assert!(usage.translation_cache_bytes <= usage.database_cache_bytes);
 
         store.connection.execute_batch(
             "CREATE TEMP TRIGGER reject_cache_delete BEFORE DELETE ON translation_cache
@@ -281,6 +288,7 @@ mod tests {
         assert_eq!(store.snapshot().unwrap().documents.len(), 1);
         let usage = store.storage_usage().unwrap();
         assert_eq!(usage.database_cache_bytes, 0);
+        assert_eq!(usage.translation_cache_bytes, 0);
         assert_eq!(usage.audio_cache_bytes, 0);
         assert_eq!(usage.download_bytes, 128);
 

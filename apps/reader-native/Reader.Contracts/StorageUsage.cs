@@ -1,7 +1,7 @@
 namespace Reader.Contracts;
 
 public sealed record StorageUsage(long DatabaseBytes, long OriginalBytes, long DownloadBytes,
-    long DatabaseCacheBytes, long AudioCacheBytes);
+    long DatabaseCacheBytes, long AudioCacheBytes, long TranslationCacheBytes);
 
 public sealed record BackgroundTranslationProgress(long? ResumeAt, int? TranslatedPage = null,
     TranslationPair[]? MissingPackages = null, string[]? TranslatedSentenceIds = null,

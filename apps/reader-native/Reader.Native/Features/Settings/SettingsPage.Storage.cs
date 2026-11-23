@@ -113,6 +113,7 @@ public partial class SettingsPage
             StorageTotal.Text = $"Зайнято {DisplaySize(library + cache + downloads)}";
             LibraryStorage.Text = DisplaySize(library);
             CacheStorage.Text = DisplaySize(cache);
+            TranslationCacheStorage.Text = DisplaySize(usage.TranslationCacheBytes);
             DownloadStorage.Text = DisplaySize(downloads);
         }
         catch (Exception error)
