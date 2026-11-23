@@ -1083,7 +1083,7 @@ mod tests {
         ).as_bytes()).unwrap();
         assert!(store.reconcile_photo_ocr(&photo.id, revision).unwrap());
         let revised = store.translation_document(&photo.id).unwrap();
-        assert_eq!(revised.text, "A magic book.\nRead it again.");
+        assert_eq!(revised.text, "A magic book.\n\nRead it again.");
         assert_eq!(revised.sentences[1].start_utf16 + 1, photo.sentences[1].start_utf16);
         assert_eq!(revised.bookmarks, [revised.sentences[0].id.clone()]);
         assert_eq!(revised.notes[&revised.sentences[1].id], "A note");
