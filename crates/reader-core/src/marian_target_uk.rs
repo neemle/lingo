@@ -2,6 +2,61 @@ use unicode_segmentation::UnicodeSegmentation;
 use whatlang::Lang;
 
 const FRENCH_MANNER_OF_WALKING: &str = " de son pas souple et fort";
+pub(crate) const INSTRUCTION_REVISION: &str = "fr-uk-instructions-v1";
+
+/// Make the action and its object explicit before passing short exercise commands to Marian.
+pub(crate) fn clarify_french_instructions(text: &str) -> String {
+    let mut clarified = String::with_capacity(text.len());
+    for sentence in text.split_sentence_bounds() {
+        if let Some(rewritten) = clarify_instruction(sentence) {
+            clarified.push_str(&rewritten);
+        } else {
+            clarified.push_str(sentence);
+        }
+    }
+    clarified
+}
+
+fn clarify_instruction(sentence: &str) -> Option<String> {
+    let opening = sentence.trim_start_matches(|ch: char| {
+        ch.is_whitespace() || matches!(ch, '–' | '—' | '-' | '«' | '“' | '"')
+    });
+    let lead = &sentence[..sentence.len() - opening.len()];
+    let first_word_end = opening.find(|ch: char| !ch.is_alphabetic()).unwrap_or(opening.len());
+    let (verb, tail) = opening.split_at(first_word_end);
+    let object = tail.trim_start();
+    let after = |phrase: &str| {
+        object.strip_prefix(phrase).filter(|rest| {
+            !rest.starts_with(|ch: char| ch.is_alphanumeric() || matches!(ch, '-' | '\'' | '’'))
+        })
+    };
+    if verb.eq_ignore_ascii_case("justifiez") && tail.starts_with(char::is_whitespace) {
+        let subjects = [
+            ("votre choix", "vous avez fait ce choix"),
+            ("vos choix", "vous avez fait ces choix"),
+            ("votre réponse", "vous avez choisi cette réponse"),
+            ("vos réponses", "vous avez choisi ces réponses"),
+        ];
+        for (source, reason) in subjects {
+            if let Some(suffix) = after(source) {
+                return Some(format!("{lead}Expliquez pourquoi {reason}{suffix}"));
+            }
+        }
+    }
+    if verb.eq_ignore_ascii_case("cochez") {
+        let end = |suffix: &str| suffix.chars().all(|ch| {
+            ch.is_whitespace() || matches!(ch, '.' | '!' | '?' | '…' | '»' | '”' | '"')
+        });
+        if let Some(suffix) = end(object).then_some(tail).or_else(|| after("la case").filter(|suffix| end(suffix))) {
+            return Some(format!("{lead}Sélectionnez la case à cocher{suffix}"));
+        }
+        if tail.starts_with(char::is_whitespace) &&
+            ["la bonne réponse", "la réponse", "l'option", "l’option"].iter().any(|phrase| after(phrase).is_some()) {
+            return Some(format!("{lead}Cochez la case correspondant à {object}"));
+        }
+    }
+    None
+}
 
 pub(super) fn french_manner_of_walking(text: &str) -> Option<usize> {
     text.match_indices(FRENCH_MANNER_OF_WALKING)
@@ -114,6 +169,22 @@ fn outside_quotes(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn makes_imperative_objects_explicit_in_french_exercises() {
+        assert_eq!(
+            clarify_french_instructions("Justifiez votre choix. Cochez. Cochez la bonne réponse."),
+            "Expliquez pourquoi vous avez fait ce choix. Sélectionnez la case à cocher. Cochez la case correspondant à la bonne réponse."
+        );
+        assert_eq!(
+            clarify_french_instructions("« Justifiez votre réponse en une phrase. »"),
+            "« Expliquez pourquoi vous avez choisi cette réponse en une phrase. »"
+        );
+        for unchanged in ["Vérifiez votre choix.", "Vous justifiez votre choix.", "Justifiez la dépense.",
+            "Cochez la case vide.", "Cochez-les."] {
+            assert_eq!(clarify_french_instructions(unchanged), unchanged);
+        }
+    }
 
     #[test]
     fn clarifies_french_walking_manner_without_changing_the_action() {

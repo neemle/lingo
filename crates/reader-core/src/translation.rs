@@ -685,7 +685,7 @@ impl CacheRoutes {
         let active = &document.sentences[position].id;
         let plan = paragraph_plan(store, document, position, target, boundaries, grouping)?;
         let (source, ids) = sentence_source(store, document, position, target, boundaries)?;
-        let input = (normalize_cardinals(&document.language, target, source.clone()), ids);
+        let input = (prepare_translation_input(&document.language, target, source.clone()), ids);
         let cached = read_cached_plan(store, self, active, target, CacheScope::Active, plan, &input)?;
         let unit = cached.paragraph.units.into_iter()
             .find(|unit| unit.translation.is_some() && unit.sentence_ids.contains(active));
@@ -1090,7 +1090,7 @@ fn paragraph_plan(
                 PageBoundaries::Projected => input,
             };
             let pdf_source = (document.format == "pdf").then(|| input.clone());
-            let input = normalize_cardinals(&document.language, target, input);
+            let input = prepare_translation_input(&document.language, target, input);
             pending.push((units.len(), input));
             pdf_source
         } else {
@@ -1182,7 +1182,7 @@ pub(crate) fn sentence_input(
     store: &Store, document: &Document, selected: usize, target: &str, boundaries: PageBoundaries,
 ) -> Result<(String, Vec<String>)> {
     let (input, ids) = sentence_source(store, document, selected, target, boundaries)?;
-    Ok((normalize_cardinals(&document.language, target, input), ids))
+    Ok((prepare_translation_input(&document.language, target, input), ids))
 }
 
 pub(crate) fn sentence_source(
@@ -1197,9 +1197,10 @@ pub(crate) fn sentence_source(
     Ok((input, ids))
 }
 
-pub(crate) fn normalize_cardinals(source: &str, target: &str, text: String) -> String {
+pub(crate) fn prepare_translation_input(source: &str, target: &str, text: String) -> String {
     if source == "fr" && target == "uk" {
-        crate::french_cardinals::digits_in_text(&text)
+        let digits = crate::french_cardinals::digits_in_text(&text);
+        crate::marian_target_uk::clarify_french_instructions(&digits)
     } else {
         text
     }

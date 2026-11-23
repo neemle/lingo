@@ -912,7 +912,11 @@ impl Store {
             let routes: Vec<_> = routes.iter().map(crate::translation::Route::without_quality).collect();
             // A saved background cursor can be complete even though new source normalization changes cache keys.
             let identity = if source == "fr" && target == "uk" {
-                serde_json::to_string(&(crate::french_cardinals::NORMALIZATION_REVISION, routes))
+                serde_json::to_string(&(
+                    crate::french_cardinals::NORMALIZATION_REVISION,
+                    crate::marian_target_uk::INSTRUCTION_REVISION,
+                    routes,
+                ))
             } else {
                 serde_json::to_string(&routes)
             }.map_err(|error| error.to_string())?;
@@ -1037,7 +1041,7 @@ impl Store {
             }
         }
         let context = (context != source && context.len() <= 768).then_some(context.as_ref());
-        let input = [crate::translation::normalize_cardinals(&language, target, source.clone())];
+        let input = [crate::translation::prepare_translation_input(&language, target, source.clone())];
         let directory = self.model_directory.clone();
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
         let result = self.translate_aligned_with_catalog(
@@ -1122,7 +1126,7 @@ impl Store {
         }
         let (segments, separators): (Vec<_>, Vec<_>) = crate::translation_passage::passage_chunks(&source_text)?
             .into_iter()
-            .map(|chunk| (crate::translation::normalize_cardinals(&source, target, chunk.text.to_owned()), chunk.separator))
+            .map(|chunk| (crate::translation::prepare_translation_input(&source, target, chunk.text.to_owned()), chunk.separator))
             .unzip();
         let directory = self.model_directory.clone();
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();

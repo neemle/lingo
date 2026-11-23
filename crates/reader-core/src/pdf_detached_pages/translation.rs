@@ -622,6 +622,7 @@ pub(super) fn cached_page_translation(
     let standalone = crate::translation::normalize_pdf_translation_input(
         document, &original.text, original.start_utf8, original.start_utf16,
     );
+    let standalone = crate::translation::prepare_translation_input(&document.language, target, standalone);
     Ok(routes
         .cached_standalone(store, &standalone, target)?
         .map(|(text, pivot_language)| DetachedPdfTranslation {
