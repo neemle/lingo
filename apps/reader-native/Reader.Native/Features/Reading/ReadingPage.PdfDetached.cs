@@ -115,7 +115,7 @@ public partial class ReadingPage
         await ShowDetachedSelectionAsync(selected);
 
     private async Task ShowDetachedSelectionAsync(TextSelection selected,
-        (VisualElement View, Point Point)? pdfAnchor = null)
+        PdfWordAnchor? pdfAnchor = null)
     {
         if (detachedAddress is not { } address || loadingDetachedSentence ||
             SourceRanges.TrimFootnoteReference(selected, DetachedPdfText.Blocks) is not { } lexical) return;
@@ -128,7 +128,7 @@ public partial class ReadingPage
             await ShowDetachedWordAsync(selected, pdfAnchor);
     }
 
-    private async Task ShowDetachedWordAsync(TextSelection selected, (VisualElement View, Point Point)? pdfAnchor)
+    private async Task ShowDetachedWordAsync(TextSelection selected, PdfWordAnchor? pdfAnchor)
     {
         if (detachedAddress is not { } address || detachedSentence is not { } sentence || loadingDetachedSentence) return;
         dictionaryFocus = null;

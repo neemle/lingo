@@ -8,6 +8,7 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage
 {
     private sealed record InlinePdfAddress(string Document, int Page, string? Revision, string? DetachedText);
+    private sealed record PdfWordAnchor(VisualElement View, InlinePdfAddress Address, Rect Bounds);
     private bool showInlineOriginal;
     private string? inlineOriginalDocumentId;
     private bool inlinePdfFitWidth = true;
@@ -192,7 +193,11 @@ public partial class ReadingPage
 
     private void InlinePdfViewportChanged(object? sender, EventArgs args) => ResizeInlinePdf();
 
-    private void InlinePdfSurfaceChanged(object? sender, EventArgs args) => UpdateInlinePdfHighlight();
+    private void InlinePdfSurfaceChanged(object? sender, EventArgs args)
+    {
+        UpdateInlinePdfHighlight();
+        PositionWordPopup();
+    }
 
     private void ResizeInlinePdf()
     {
@@ -232,17 +237,19 @@ public partial class ReadingPage
         var view = detached ? DetachedInlinePdfImage : InlinePdfImage;
         var overlay = detached ? DetachedInlinePdfHighlight : InlinePdfHighlight;
         var source = detached ? detachedAddress?.Text : AppState.Session.Document?.Text;
-        if (source is null || !overlay.IsVisible || overlay.Drawable is not PdfReadingHighlight drawing ||
+        if (source is null || inlinePdfAddress is not { } address ||
+            !overlay.IsVisible || overlay.Drawable is not PdfReadingHighlight drawing ||
             args.GetPosition(view) is not { } point ||
-            drawing.SelectionAt(source, point, (float)view.Width, (float)view.Height) is not { } selected) return;
+            drawing.SelectionAt(source, point, (float)view.Width, (float)view.Height) is not { } hit) return;
 
+        var anchor = new PdfWordAnchor(view, address, hit.Bounds);
         if (detached)
         {
-            await ShowDetachedSelectionAsync(selected, (view, point));
+            await ShowDetachedSelectionAsync(hit.Selection, anchor);
         }
         else
         {
-            await ShowWordAsync(selected, (view, point));
+            await ShowWordAsync(hit.Selection, anchor);
         }
     }
 
@@ -428,7 +435,7 @@ public partial class ReadingPage
             return top < bottom ? (top, bottom) : null;
         }
 
-        internal TextSelection? SelectionAt(string source, Point point, float viewWidth, float viewHeight)
+        internal (TextSelection Selection, Rect Bounds)? SelectionAt(string source, Point point, float viewWidth, float viewHeight)
         {
             var fit = OriginalPage.AspectFit(new RectF(0, 0, viewWidth, viewHeight), width, height);
             if (fit.Width <= 0 || fit.Height <= 0) return null;
@@ -438,19 +445,20 @@ public partial class ReadingPage
             {
                 if (nativeWords && x >= line.X && x <= line.X + line.Width &&
                     y >= line.Y && y <= line.Y + line.Height && line.SourceSpan is { } nativeSpan)
-                    return ToSelection(nativeSpan);
+                    return ToSelection(nativeSpan, new Rect(line.X, line.Y, line.Width, line.Height));
 
                 foreach (var word in line.Words ?? [])
                 {
                     if (x >= word.X && x <= word.X + word.Width && y >= word.Y && y <= word.Y + word.Height &&
                         word.SourceSpan is { } span)
-                        return ToSelection(span);
+                        return ToSelection(span, new Rect(word.X, word.Y, word.Width, word.Height));
                 }
             }
             return null;
 
-            TextSelection? ToSelection(OcrSpan span) =>
-                SourceRanges.Selection(source, span.StartUtf16 + offset, span.EndUtf16 - span.StartUtf16);
+            (TextSelection Selection, Rect Bounds)? ToSelection(OcrSpan span, Rect bounds) =>
+                SourceRanges.Selection(source, span.StartUtf16 + offset, span.EndUtf16 - span.StartUtf16) is { } selection
+                    ? (selection, bounds) : null;
         }
 
         private bool Overlaps(OcrSpan? span, int rangeStart, int rangeEnd) =>

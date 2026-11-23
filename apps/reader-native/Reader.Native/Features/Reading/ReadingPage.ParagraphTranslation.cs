@@ -41,7 +41,11 @@ public partial class ReadingPage
     private void InlinePdfViewportScrolled(object? sender, ScrolledEventArgs args)
     {
         if (!showInlineOriginal) return;
-        if (ReferenceEquals(sender, ActiveInlinePdf().Viewport)) _ = FollowPdfTranslationScrollAsync(fromOriginal: true);
+        if (ReferenceEquals(sender, ActiveInlinePdf().Viewport))
+        {
+            PositionWordPopup();
+            _ = FollowPdfTranslationScrollAsync(fromOriginal: true);
+        }
         ScheduleSourceViewportSync();
     }
 

@@ -506,7 +506,7 @@ public partial class ReadingPage : ContentPage
 
     private async void SourceSelected(object? sender, TextSelection selected) => await ShowWordAsync(selected);
 
-    private async Task ShowWordAsync(TextSelection selected, (VisualElement View, Point Point)? pdfAnchor = null)
+    private async Task ShowWordAsync(TextSelection selected, PdfWordAnchor? pdfAnchor = null)
     {
         var session = AppState.Session;
         if (session.Document is not { } doc ||

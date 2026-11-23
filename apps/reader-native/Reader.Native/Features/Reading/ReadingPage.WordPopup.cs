@@ -10,15 +10,15 @@ public partial class ReadingPage
 {
     private readonly LocalSpeech wordPopupSpeech = new();
     private CancellationTokenSource? wordDetailRun;
-    private (VisualElement View, TextSelection Selection, Border Card, Point? PdfPoint)? wordPopup;
+    private (VisualElement View, TextSelection Selection, Border Card, PdfWordAnchor? PdfAnchor)? wordPopup;
 
     private void ShowWordPopup(NativeReaderView view, TextSelection selected, Border card,
-        (VisualElement View, Point Point)? pdfAnchor = null)
+        PdfWordAnchor? pdfAnchor = null)
     {
         StopWordDetail();
         WordDetails.IsVisible = DetachedWordDetails.IsVisible = false;
         WordDetailsToggle.Text = DetachedWordDetailsToggle.Text = "Більше";
-        wordPopup = (pdfAnchor?.View ?? view, selected, card, pdfAnchor?.Point);
+        wordPopup = (pdfAnchor?.View ?? view, selected, card, pdfAnchor);
         WordCard.IsVisible = card == WordCard;
         DetachedWordCard.IsVisible = card == DetachedWordCard;
         PositionWordPopup();
@@ -49,42 +49,75 @@ public partial class ReadingPage
         if (wordPopup is not { } popup || !popup.Card.IsVisible || ReaderRoot.Width <= 0 || ReaderRoot.Height <= 0)
             return;
 
+        var word = popup.PdfAnchor is { } anchor ? PdfWordBounds(anchor) :
+            (popup.View as NativeReaderView)?.SelectionAnchor?.Invoke(popup.Selection.StartUtf16, popup.Selection.LengthUtf16);
         var origin = new Point();
         for (Element? element = popup.View; element is not null && element != ReaderRoot; element = element.Parent)
             if (element is VisualElement visual)
             {
+                if (visual is ScrollView scroll)
+                {
+                    origin = new Point(origin.X - scroll.ScrollX, origin.Y - scroll.ScrollY);
+                    if (word is { } bounds && !IntersectsViewport(bounds, origin, scroll.Width, scroll.Height))
+                        word = null;
+                }
                 origin = new Point(origin.X + visual.X, origin.Y + visual.Y);
-                if (visual is ScrollView scroll) origin = new Point(origin.X - scroll.ScrollX, origin.Y - scroll.ScrollY);
             }
 
-        var word = popup.PdfPoint is { } tap ? new Rect(tap.X, tap.Y - 16, 1, 32) :
-            (popup.View as NativeReaderView)?.SelectionAnchor?.Invoke(popup.Selection.StartUtf16, popup.Selection.LengthUtf16);
-        const double margin = 12;
-        const double arrow = 8;
-        const double clearance = 10;
-        var width = Math.Max(1, Math.Min(432, ReaderRoot.Width - margin * 2));
-        var anchorX = word is { } wordBounds ? origin.X + wordBounds.Center.X : ReaderRoot.Width / 2;
-        var wordTop = word is { } from ? origin.Y + from.Top : ReaderRoot.Height / 4;
-        var wordBottom = word is { } to ? origin.Y + to.Bottom : wordTop;
-        var aboveEdge = Math.Clamp(wordTop - clearance, margin, Math.Max(margin, ReaderRoot.Height - margin));
-        var belowEdge = Math.Clamp(wordBottom + clearance, margin, Math.Max(margin, ReaderRoot.Height - margin));
-        var roomAbove = aboveEdge - margin - arrow;
-        var roomBelow = ReaderRoot.Height - margin - (belowEdge + arrow);
+        var anchorInRoot = word is { } rect && IntersectsViewport(rect, origin, ReaderRoot.Width, ReaderRoot.Height)
+            ? new Rect(rect.X + origin.X, rect.Y + origin.Y, rect.Width, rect.Height) : (Rect?)null;
         var expanded = popup.Card == DetachedWordCard
             ? DetachedWordDetails.IsVisible || DetachedMeanings.IsVisible
             : WordDetails.IsVisible || WordMeanings.IsVisible;
-        var preferredHeight = expanded ? 430 : 278;
-        var above = roomBelow < preferredHeight && roomAbove > roomBelow;
-        var height = Math.Max(1, Math.Min(preferredHeight, above ? roomAbove : roomBelow));
-        var left = Math.Clamp(anchorX - width / 2, margin, Math.Max(margin, ReaderRoot.Width - width - margin));
-        var top = above ? aboveEdge - arrow - height : belowEdge + arrow;
+        var placement = FitWordPopup(anchorInRoot, ReaderRoot.Width, ReaderRoot.Height, expanded ? 430 : 278);
+        AbsoluteLayout.SetLayoutBounds(popup.Card, placement.Card);
+        WordPointer.IsVisible = placement.Pointer is not null;
+        if (placement.Pointer is not { } pointer) return;
+        WordPointer.Rotation = placement.Above ? 180 : 0;
+        AbsoluteLayout.SetLayoutBounds(WordPointer, pointer);
+    }
 
-        AbsoluteLayout.SetLayoutBounds(popup.Card, new Rect(left, top, width, height));
-        WordPointer.IsVisible = word is not null && width >= 32;
-        if (!WordPointer.IsVisible) return;
+    private Rect? PdfWordBounds(PdfWordAnchor anchor)
+    {
+        if (inlinePdfAddress != anchor.Address || !showInlineOriginal ||
+            inlinePdfPreview is not { Width: > 0, Height: > 0 } preview) return null;
+        var fit = OriginalPage.AspectFit(new RectF(0, 0, (float)anchor.View.Width, (float)anchor.View.Height),
+            preview.Width, preview.Height);
+        if (fit.Width <= 0 || fit.Height <= 0) return null;
+        var bounds = anchor.Bounds;
+        return new Rect(fit.X + bounds.X * fit.Width, fit.Y + bounds.Y * fit.Height,
+            bounds.Width * fit.Width, bounds.Height * fit.Height);
+    }
+
+    private static bool IntersectsViewport(Rect word, Point origin, double width, double height) =>
+        word.Right + origin.X > 0 && word.Left + origin.X < width &&
+        word.Bottom + origin.Y > 0 && word.Top + origin.Y < height;
+
+    private static (Rect Card, Rect? Pointer, bool Above) FitWordPopup(
+        Rect? word, double viewportWidth, double viewportHeight, double preferredHeight)
+    {
+        const double arrow = 8;
+        const double clearance = 10;
+        var margin = Math.Min(12, Math.Min(viewportWidth, viewportHeight) / 4);
+        var width = Math.Min(432, viewportWidth - margin * 2);
+        var anchorX = word?.Center.X ?? viewportWidth / 2;
+        var wordTop = word?.Top ?? viewportHeight / 4;
+        var wordBottom = word?.Bottom ?? wordTop;
+        var aboveEdge = Math.Clamp(wordTop - clearance, margin, viewportHeight - margin);
+        var belowEdge = Math.Clamp(wordBottom + clearance, margin, viewportHeight - margin);
+        var roomAbove = aboveEdge - margin - arrow;
+        var roomBelow = viewportHeight - margin - (belowEdge + arrow);
+        var above = roomBelow < preferredHeight && roomAbove > roomBelow;
+        var available = above ? roomAbove : roomBelow;
+        var left = Math.Clamp(anchorX - width / 2, margin, Math.Max(margin, viewportWidth - width - margin));
+        if (available <= 0)
+            return (new Rect(left, margin, width, Math.Min(preferredHeight, viewportHeight - 2 * margin)), null, false);
+        var height = Math.Min(preferredHeight, available);
+        var top = above ? aboveEdge - arrow - height : belowEdge + arrow;
+        var card = new Rect(left, top, width, height);
+        if (word is null || width < 32) return (card, null, above);
         var pointer = Math.Clamp(anchorX - arrow, left + arrow, left + width - arrow * 3);
-        WordPointer.Rotation = above ? 180 : 0;
-        AbsoluteLayout.SetLayoutBounds(WordPointer, new Rect(pointer, above ? top + height : top - arrow, arrow * 2, arrow));
+        return (card, new Rect(pointer, above ? top + height : top - arrow, arrow * 2, arrow), above);
     }
 
     private void ToggleWordDetailsClicked(object? sender, EventArgs args)
