@@ -668,6 +668,8 @@ pub enum Command {
         engine: Option<String>,
         speaker: u32,
         rate: f32,
+        #[serde(default, rename = "compactAudio")]
+        compact_audio: bool,
         #[serde(rename = "requestId")]
         request_id: Option<u64>,
     },
@@ -677,6 +679,8 @@ pub enum Command {
         engine: String,
         speaker: u32,
         rate: f32,
+        #[serde(default, rename = "compactAudio")]
+        compact_audio: bool,
         #[serde(rename = "requestId")]
         request_id: Option<u64>,
     },

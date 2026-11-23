@@ -56,14 +56,16 @@ public sealed class LocalSpeech : IDisposable
             firstSample = 0;
             startAtMs = 0;
         }
-        var payloadBytes = (audio.Samples - firstSample) * 2;
-        var wav = new byte[44 + payloadBytes];
-        for (var index = 0; index < 44; index++)
-            wav[index] = checked((byte)audio.WavBytes[index]);
-        for (var index = 0; index < payloadBytes; index++)
-            wav[44 + index] = checked((byte)audio.WavBytes[44 + firstSample * 2 + index]);
-        BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(4, 4), wav.Length - 8);
-        BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(40, 4), payloadBytes);
+        var wav = audio.WavBytes;
+        if (firstSample > 0)
+        {
+            var payloadBytes = (audio.Samples - firstSample) * 2;
+            wav = new byte[44 + payloadBytes];
+            audio.WavBytes.AsSpan(0, 44).CopyTo(wav);
+            audio.WavBytes.AsSpan(44 + firstSample * 2).CopyTo(wav.AsSpan(44));
+            BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(4, 4), wav.Length - 8);
+            BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(40, 4), payloadBytes);
+        }
         await wave.PlayAsync(wav, audio.PlaybackRate, () => started(startAtMs), token);
         return CompletedStatus;
     });

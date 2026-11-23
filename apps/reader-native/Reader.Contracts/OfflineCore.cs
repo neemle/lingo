@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Reader.Contracts;
@@ -46,7 +47,34 @@ public sealed record DictionarySourceLocation(string DocumentId, string Title, s
     string RevisionId, int? Page, int Position, DictionarySourceSelection? Selection = null);
 public sealed record DictionaryImport(int AddedCards, int ExistingCards, int AddedReviews, bool RestoredPractice = false);
 
-public sealed record SpeechAudio(int SampleRate, int Samples, int[] WavBytes)
+public sealed record SpeechAudio(int SampleRate, int Samples,
+    [property: JsonConverter(typeof(SpeechWavConverter))] byte[] WavBytes)
 {
     public float PlaybackRate { get; init; } = 1;
+}
+
+internal sealed class SpeechWavConverter : JsonConverter<byte[]>
+{
+    public SpeechWavConverter() { }
+
+    public override byte[] Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String)
+            return reader.GetBytesFromBase64();
+        if (reader.TokenType != JsonTokenType.StartArray)
+            throw new JsonException("Invalid WAV byte sequence.");
+        var bytes = new List<byte>();
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+        {
+            if (reader.TokenType != JsonTokenType.Number || !reader.TryGetByte(out var value))
+                throw new JsonException("Invalid WAV byte.");
+            bytes.Add(value);
+        }
+        if (reader.TokenType != JsonTokenType.EndArray)
+            throw new JsonException("Incomplete WAV byte sequence.");
+        return bytes.ToArray();
+    }
+
+    public override void Write(Utf8JsonWriter writer, byte[] value, JsonSerializerOptions options) =>
+        writer.WriteBase64StringValue(value);
 }

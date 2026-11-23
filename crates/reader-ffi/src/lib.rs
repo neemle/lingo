@@ -476,7 +476,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
-        Command::SynthesizeSpeechText { text, language, engine, speaker, rate, request_id } => {
+        Command::SynthesizeSpeechText { text, language, engine, speaker, rate, request_id, compact_audio } => {
             let canceled = speech_cancellation(handle, *request_id, false)?;
             if canceled() { return Err(speech_canceled()); }
             let engine = reader_core::speech::ModelSpeechEngine::from_id(engine)
@@ -486,7 +486,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .prepare_speech_text(text, language, engine, *speaker, *rate)
                 .map_err(gateway::domain)?;
             let checkpoint = request_id.map(|_| &canceled as &dyn Fn() -> bool);
-            return encode_speech_job(&canceled, job.run_cancellable(checkpoint));
+            return encode_playback_audio(&canceled, job.run_cancellable(checkpoint), *compact_audio);
         }
         Command::SynthesizeSpeech {
             id,
@@ -496,6 +496,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             speaker,
             rate,
             request_id,
+            ..
         }
         | Command::PrefetchSpeech {
             id,
@@ -511,6 +512,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             )
             .ok_or_else(|| Error::new("invalid_argument", "Невідомий рушій озвучення."))?;
             let background = matches!(&command, Command::PrefetchSpeech { .. });
+            let compact = matches!(&command, Command::SynthesizeSpeech { compact_audio: true, .. });
             let canceled = speech_cancellation(handle, *request_id, background)?;
             if canceled() { return Err(speech_canceled()); }
             let checkpoint = request_id.map(|_| &canceled as &dyn Fn() -> bool);
@@ -521,8 +523,8 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 return if background {
                     encode_speech_job(&canceled, job.map(|job| job.prefetch_cancellable(checkpoint)).transpose())
                 } else {
-                    encode_speech_job(&canceled, job.ok_or_else(|| "Речення PDF для озвучення не знайдено.".to_owned())
-                        .and_then(|job| job.run_cancellable(checkpoint)))
+                    encode_playback_audio(&canceled, job.ok_or_else(|| "Речення PDF для озвучення не знайдено.".to_owned())
+                        .and_then(|job| job.run_cancellable(checkpoint)), compact)
                 };
             }
             if background {
@@ -536,7 +538,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .store(handle)?
                 .prepare_model_speech(id, sentence_id, engine, *speaker, *rate)
                 .map_err(gateway::domain)?;
-            return encode_speech_job(&canceled, job.run_cancellable(checkpoint));
+            return encode_playback_audio(&canceled, job.run_cancellable(checkpoint), compact);
         }
         _ => {}
     }
@@ -574,6 +576,22 @@ fn encode_speech_job<T: serde::Serialize>(
     canceled: &dyn Fn() -> bool, result: reader_core::Result<T>,
 ) -> Result<serde_json::Value> {
     if canceled() { Err(speech_canceled()) } else { encode_job(result) }
+}
+
+fn encode_playback_audio(
+    canceled: &dyn Fn() -> bool, result: reader_core::Result<reader_core::tts::SpeechAudio>, compact: bool,
+) -> Result<serde_json::Value> {
+    if !compact {
+        return encode_speech_job(canceled, result);
+    }
+    if canceled() { return Err(speech_canceled()); }
+    let audio = result.map_err(gateway::domain)?;
+    Ok(serde_json::json!({
+        "sampleRate": audio.sample_rate,
+        "samples": audio.samples,
+        "playbackRate": audio.playback_rate,
+        "wavBytes": base64::encode(&audio.wav_bytes),
+    }))
 }
 
 fn encode_job<T: serde::Serialize>(result: reader_core::Result<T>) -> Result<serde_json::Value> {

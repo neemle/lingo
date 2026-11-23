@@ -512,12 +512,12 @@ public sealed class CoreClient : IDisposable
     public SpeechAudio SynthesizeSpeech(string id, string sentenceId, uint speaker, float rate,
         string engine = "piper-uk", int? page = null, CancellationToken cancellationToken = default) =>
         CallCancelable<SpeechAudio>(ref nextSpeechRequest, cancellationToken,
-            requestId => new { version = 1, operation = "synthesize_speech", id, page, sentenceId, engine, speaker, rate, requestId },
+            requestId => new { version = 1, operation = "synthesize_speech", id, page, sentenceId, engine, speaker, rate, requestId, compactAudio = true },
             CancelSpeechRequest);
     public SpeechAudio SynthesizeSpeechText(string text, string language, uint speaker, float rate, string engine,
         CancellationToken cancellationToken = default) =>
         CallCancelable<SpeechAudio>(ref nextSpeechRequest, cancellationToken,
-            requestId => new { version = 1, operation = "synthesize_speech_text", text, language, engine, speaker, rate, requestId },
+            requestId => new { version = 1, operation = "synthesize_speech_text", text, language, engine, speaker, rate, requestId, compactAudio = true },
             CancelSpeechRequest);
 
     public void PrefetchSpeech(string id, string sentenceId, uint speaker, float rate, string engine,
