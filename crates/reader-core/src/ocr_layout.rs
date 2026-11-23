@@ -63,7 +63,41 @@ pub(crate) fn intersects_edits(start: usize, end: usize, edits: &[TranscriptEdit
 }
 
 fn reconstruct_page(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
-    if lines.iter().any(|line| line.block_start || line.correction.is_some()) ||
+    if lines.iter().any(|line| line.correction.is_some()) {
+        return None;
+    }
+    let mut ordered = reconstruct_columns(lines);
+    let starts = ordered.as_deref().unwrap_or(lines).windows(2).enumerate()
+        .filter_map(|(index, pair)| (vertical_block_break(&pair[0], &pair[1])).then_some(index + 1))
+        .collect::<Vec<_>>();
+    if !starts.is_empty() {
+        let ordered = ordered.get_or_insert_with(|| lines.to_vec());
+        for index in starts {
+            ordered[index].block_start = true;
+        }
+    }
+    ordered
+}
+
+fn vertical_block_break(upper: &OcrLine, lower: &OcrLine) -> bool {
+    if lower.block_start || ![upper.height, lower.height].into_iter().all(|height| height > 0.0 && height <= 1.0) {
+        return false;
+    }
+    let gap = lower.y - (upper.y + upper.height);
+    let larger = upper.height.max(lower.height);
+    let smaller = upper.height.min(lower.height);
+    if gap >= 1.4 * larger {
+        return true;
+    }
+    // A short display line can sit closer to the body than two regular blocks.
+    let overlap = (upper.x + upper.width).min(lower.x + lower.width) - upper.x.max(lower.x);
+    let display_line = if upper.height >= lower.height { upper } else { lower };
+    gap >= 0.45 * smaller && larger >= 1.5 * smaller && overlap > 0.0 &&
+        display_line.reading_text().split_whitespace().take(13).count() <= 12
+}
+
+fn reconstruct_columns(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
+    if lines.iter().any(|line| line.block_start) ||
         !lines.iter().any(|line| line.words.len() >= 4) && lines.len() < 2 {
         return None;
     }
@@ -206,6 +240,37 @@ mod tests {
                     raw_start_utf16: Some(offset), source_span: None,
                 }).collect(),
         }
+    }
+
+    #[test]
+    fn scanned_headings_and_captions_bound_soft_wrapped_paragraphs() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = crate::Store::open(&root.path().join("reader.db")).unwrap();
+        let line = |text: &str, y: f64, height: f64| OcrLine {
+            page: 0, text: text.into(), x: 0.15, y, width: 0.68, height,
+            confidence: None, correction: None, block_start: false, source_span: None, words: Vec::new(),
+        };
+        let lines = vec![
+            line("Un capitaine de vingt ans", 0.1, 0.045),
+            line("Le bateau entre dans", 0.158, 0.024),
+            line("le port de Marseille.", 0.187, 0.024),
+            line("Une illustration du port", 0.55, 0.021),
+        ];
+        let doc = store.import_scanned_pdf("scan.pdf", b"%PDF-1.4\n", "fr", lines.clone(), 1).unwrap();
+        assert_eq!(doc.text, "Un capitaine de vingt ans\n\nLe bateau entre dans\nle port de Marseille.\n\nUne illustration du port");
+        assert_eq!(doc.sentences.len(), 3);
+        let saved = doc.ocr_lines.unwrap();
+        assert_eq!(saved.iter().map(|line| line.block_start).collect::<Vec<_>>(), [false, true, false, true]);
+        let source = saved[3].source_span.unwrap();
+        assert_eq!(&doc.text[source.start_utf8..source.end_utf8], "Une illustration du port");
+
+        // A prior column split is already stored. The newer vertical pass can still upgrade it.
+        let mut cached = lines;
+        cached[3].block_start = true;
+        let old = crate::ocr::recognized_lines(&cached, 1).unwrap();
+        let (_, revised, edits) = upgrade_cached_page(&cached, &old).unwrap();
+        assert_eq!(revised, doc.text);
+        assert_eq!(edits.len(), 1);
     }
 
     #[test]
