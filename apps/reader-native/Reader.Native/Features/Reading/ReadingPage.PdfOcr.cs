@@ -114,6 +114,31 @@ public partial class ReadingPage
     private bool pdfPagePromptOpen;
     private CancellationTokenSource? repairingPdfText;
 
+    private async void BackgroundPdfTextCached(string id, int page)
+    {
+        var session = AppState.Session;
+        if (pdfSnapshot is not { } document || document.Id != id || !IsCurrentPdfSnapshot(session, document))
+            return;
+
+        await session.WaitUntilIdleAsync();
+        await pdfWindowRead;
+        if (!IsCurrentPdfSnapshot(session, document) ||
+            pdfWindow is not { } window || Math.Abs(window.Center - page) > 1)
+            return;
+
+        pdfWindowLoading = true;
+        UpdatePdfPageButtons();
+        pdfWindowRead = ReadPdfWindowAsync(session, document, entering: false);
+        await pdfWindowRead;
+        if (!IsCurrentPdfSnapshot(session, document) || pdfWindow?.Center != window.Center)
+            return;
+
+        StartReaderPdfOcr(session, document);
+        pdfAutoAttempts = null;
+        if (pdfTranslationLayout) RefreshCachedPdfPageLayout();
+        else if (DetachedPdfReader.IsVisible) await RestoreDetachedTranslationAsync();
+    }
+
     private async Task ReadPdfWindowAsync(ReaderSession session, Document document, bool entering)
     {
         var fallback = session.OriginalPageIndex();

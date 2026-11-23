@@ -14,6 +14,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public event PropertyChangedEventHandler? PropertyChanged;
     public event Action<BackgroundTranslatedPage>? BackgroundPageTranslated;
     public event Action<BackgroundTranslatedText>? BackgroundTextTranslated;
+    public event Action<string, int>? BackgroundPdfTextCached;
     public event Action<string, int>? PdfOcrUpdated;
     public Snapshot Snapshot => snapshot;
     public Document? Document => snapshot.Documents.FirstOrDefault(item => item.Id == selectedId);
@@ -292,8 +293,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
 
     public async Task CacheBackgroundPdfTextLayerAsync(string id, string revision, int page, string text)
     {
-        if (await Task.Run(() => client.CacheBackgroundPdfTextLayer(id, revision, page, text)))
-            PdfOcrUpdated?.Invoke(id, page);
+        if (!await Task.Run(() => client.CacheBackgroundPdfTextLayer(id, revision, page, text))) return;
+        PdfOcrUpdated?.Invoke(id, page);
+        BackgroundPdfTextCached?.Invoke(id, page);
     }
 
     public Task<PdfPageTranslationRow[]> PdfPageTranslationAsync(string id, int page, string target, bool cachedOnly) =>

@@ -96,6 +96,9 @@ public partial class ReadingPage : ContentPage
         AppState.Session.PropertyChanged += SessionChanged;
         AppState.Session.BackgroundPageTranslated += BackgroundPageTranslated;
         AppState.Session.BackgroundTextTranslated += BackgroundTextTranslated;
+#if MACCATALYST
+        AppState.Session.BackgroundPdfTextCached += BackgroundPdfTextCached;
+#endif
         SyncReaderPdf();
         SyncInlinePdfMode();
         SyncAnalysisPrefetch();
@@ -138,6 +141,9 @@ public partial class ReadingPage : ContentPage
         Translation.Text = "";
         AppState.Session.BackgroundPageTranslated -= BackgroundPageTranslated;
         AppState.Session.BackgroundTextTranslated -= BackgroundTextTranslated;
+#if MACCATALYST
+        AppState.Session.BackgroundPdfTextCached -= BackgroundPdfTextCached;
+#endif
         AppState.Session.PropertyChanged -= SessionChanged;
         base.OnDisappearing();
     }
