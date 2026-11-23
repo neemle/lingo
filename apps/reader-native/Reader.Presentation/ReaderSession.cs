@@ -13,6 +13,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     private string error = "";
     public event PropertyChangedEventHandler? PropertyChanged;
     public event Action<BackgroundTranslatedPage>? BackgroundPageTranslated;
+    public event Action<string, int>? PdfOcrUpdated;
     public Snapshot Snapshot => snapshot;
     public Document? Document => snapshot.Documents.FirstOrDefault(item => item.Id == selectedId);
     public Sentence? Sentence => Document?.Sentences.ElementAtOrDefault(Document.Position);
@@ -258,9 +259,13 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
             return Read();
         });
 
-    public Task<DetachedPdfOcrPage> CorrectDetachedPdfOcrAsync(
-        string id, int page, string revision, int index, string? correction) =>
-        Task.Run(() => client.CorrectDetachedPdfOcr(id, page, revision, index, correction));
+    public async Task<DetachedPdfOcrPage> CorrectDetachedPdfOcrAsync(
+        string id, int page, string revision, int index, string? correction)
+    {
+        var updated = await Task.Run(() => client.CorrectDetachedPdfOcr(id, page, revision, index, correction));
+        PdfOcrUpdated?.Invoke(id, page);
+        return updated;
+    }
 
     public Task<DetachedPdfAnnotationItem[]> DetachedPdfAnnotationsAsync(string id, int page) =>
         Task.Run(() => client.DetachedPdfAnnotations(id, page));
@@ -293,15 +298,25 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         return rows.Length > 0 && rows.All(row => row.Text is not null);
     }
 
-    public Task ReplacePdfTextLayerAsync(string id, int page, string revisionId, string language, OcrLine[] lines) =>
-        Task.Run(() => client.ReplacePdfTextLayer(id, page, revisionId, language, lines));
+    public async Task ReplacePdfTextLayerAsync(string id, int page, string revisionId, string language, OcrLine[] lines)
+    {
+        await Task.Run(() => client.ReplacePdfTextLayer(id, page, revisionId, language, lines));
+        PdfOcrUpdated?.Invoke(id, page);
+    }
 
-    public Task<bool> ReconcilePdfOcrPageAsync(string id, int page, string revisionId, string language,
-        string reference, bool detached) =>
-        Task.Run(() => client.ReconcilePdfOcrPage(id, page, revisionId, language, reference, detached));
+    public async Task<bool> ReconcilePdfOcrPageAsync(string id, int page, string revisionId, string language,
+        string reference, bool detached)
+    {
+        var changed = await Task.Run(() => client.ReconcilePdfOcrPage(id, page, revisionId, language, reference, detached));
+        if (changed) PdfOcrUpdated?.Invoke(id, page);
+        return changed;
+    }
 
-    public Task CachePdfOcrPageAsync(string id, PdfOcrRequest claim, OcrLine[] lines, string? textLayer = null) =>
-        Task.Run(() => client.CachePdfOcrPage(id, claim, lines, textLayer));
+    public async Task CachePdfOcrPageAsync(string id, PdfOcrRequest claim, OcrLine[] lines, string? textLayer = null)
+    {
+        await Task.Run(() => client.CachePdfOcrPage(id, claim, lines, textLayer));
+        PdfOcrUpdated?.Invoke(id, claim.Page);
+    }
 
     public Task ReleasePdfOcrPageAsync(string id, PdfOcrRequest claim, bool canceled) =>
         Task.Run(() => client.ReleasePdfOcrPage(id, claim, canceled));

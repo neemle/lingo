@@ -75,6 +75,14 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
              UPDATE background_translation_progress
              SET cursor=min(cursor,max(0,NEW.page-1)), resume_at=0, ocr_generation=ocr_generation+1
              WHERE document_id=NEW.document_id;
+         END;
+         CREATE TRIGGER IF NOT EXISTS background_translation_changed_pdf_layout
+         AFTER UPDATE OF lines,ocr_language ON pdf_detached_pages
+         WHEN OLD.text = NEW.text AND (OLD.lines IS NOT NEW.lines OR OLD.ocr_language IS NOT NEW.ocr_language)
+         BEGIN
+             UPDATE background_translation_progress
+             SET cursor=min(cursor,max(0,NEW.page-1)), resume_at=0, ocr_generation=ocr_generation+1
+             WHERE document_id=NEW.document_id;
          END;",
     )
     .map_err(database_error)?;
@@ -336,10 +344,10 @@ impl Store {
                     step.translated_page,
                 ),
                 None if incomplete => (0, false, Some(crate::now() + 300), None),
-                None if document.format == "pdf" => {
+                None if document.format == "pdf" && self.pdf_has_unprocessed_pages(&document)? => {
                     (cursor as usize, false, Some(crate::now() + PDF_OCR_POLL_SECONDS), None)
                 }
-                None => (0, false, None, None),
+                None => (cursor as usize, false, None, None),
             }
         };
         let saved = self.connection.execute(
@@ -356,6 +364,28 @@ impl Store {
             translated_page,
             missing_packages,
         })
+    }
+
+    fn pdf_has_unprocessed_pages(&self, document: &Document) -> Result<bool> {
+        let page_count = document.pdf_page_starts.as_ref().map(Vec::len)
+            .or(document.ocr_pdf_pages.map(usize::from)).unwrap_or(0);
+        let mut recognized = vec![false; page_count];
+        let mut query = self.connection.prepare_cached(
+            "SELECT page FROM pdf_ocr_completed_pages WHERE document_id=?1
+             UNION ALL SELECT page FROM pdf_detached_pages WHERE document_id=?1",
+        ).map_err(database_error)?;
+        let pages = query.query_map([&document.id], |row| row.get::<_, u16>(0))
+            .map_err(database_error)?;
+        for page in pages {
+            if let Some(done) = recognized.get_mut(usize::from(page.map_err(database_error)?)) {
+                *done = true;
+            }
+        }
+        Ok(recognized.into_iter().enumerate().any(|(page, done)| {
+            !done && u16::try_from(page).ok().is_none_or(|page| {
+                crate::pdf_reading_position::page_bounds(document, page).is_none()
+            })
+        }))
     }
 
     pub fn warm_translation_step(

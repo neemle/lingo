@@ -6,6 +6,7 @@ namespace Reader.Native.Services;
 internal sealed class BackgroundTranslation
 {
     private readonly ReaderSession session;
+    private readonly IDispatcher dispatcher;
     private readonly IDispatcherTimer timer;
     private readonly Dictionary<JobKey, BackgroundTranslationProgress> jobs = [];
     private Task pending = Task.CompletedTask;
@@ -13,6 +14,7 @@ internal sealed class BackgroundTranslation
     private bool enabled;
     private bool paused;
     private JobKey? lastLibraryJob;
+    private bool libraryStepInvalidated;
     private (BackgroundTranslatedPage Address, string? DetachedText)? visiblePdf;
     private ((BackgroundTranslatedPage Address, string? DetachedText) Page, long RetryAt)? visibleAttempt;
     internal string Status { get; private set; } = "";
@@ -25,9 +27,11 @@ internal sealed class BackgroundTranslation
     internal BackgroundTranslation(ReaderSession session, IDispatcher dispatcher)
     {
         this.session = session;
+        this.dispatcher = dispatcher;
         timer = dispatcher.CreateTimer();
         timer.Interval = TimeSpan.FromSeconds(2);
         timer.Tick += Tick;
+        session.PdfOcrUpdated += OnPdfOcrUpdated;
         SetEnabled(session.GetReaderPreferences().BackgroundTranslation == true);
     }
 
@@ -75,6 +79,24 @@ internal sealed class BackgroundTranslation
     {
         SetEnabled(false);
         timer.Tick -= Tick;
+        session.PdfOcrUpdated -= OnPdfOcrUpdated;
+    }
+
+    private void OnPdfOcrUpdated(string documentId, int page)
+    {
+        if (dispatcher.IsDispatchRequired)
+        {
+            dispatcher.Dispatch(() => OnPdfOcrUpdated(documentId, page));
+            return;
+        }
+        if (!enabled) return;
+        foreach (var key in jobs.Keys.Where(key => key.Document == documentId).ToArray()) jobs.Remove(key);
+        if (lastLibraryJob?.Document == documentId) libraryStepInvalidated = true;
+        // A neighbouring page can supply the rest of a sentence crossing the page break.
+        if (visibleAttempt is { Page.Address: var address } && address.DocumentId == documentId &&
+            Math.Abs(address.Page - page) <= 1)
+            visibleAttempt = null;
+        UpdateRequiredPackages();
     }
 
     private void UpdateTimer()
@@ -159,7 +181,7 @@ internal sealed class BackgroundTranslation
                     SetStatus($"Опрацьовуємо відкриту сторінку {address.Page + 1}…", running: true);
                     visibleAttempt = (visible, now + 30);
                     var complete = await session.PrefetchVisiblePdfTranslationAsync(address);
-                    if (enabled && !paused && visiblePdf == visible)
+                    if (enabled && !paused && visiblePdf == visible && visibleAttempt == (visible, now + 30))
                     {
                         visibleAttempt = (visible, complete ? long.MaxValue : DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 30);
                         SetStatus(complete ? $"Переклад сторінки {address.Page + 1} у кеші."
@@ -178,9 +200,10 @@ internal sealed class BackgroundTranslation
             var previous = ready.FindIndex(candidate => candidate.Key == lastLibraryJob);
             var work = ready[(previous + 1) % ready.Count];
             lastLibraryJob = work.Key;
+            libraryStepInvalidated = false;
             SetStatus($"Опрацьовуємо «{work.Title}»…", running: true);
             var progress = await session.AdvanceBackgroundTranslationAsync(work.Key.Document, work.Key.Revision, work.Key.Target);
-            if (!enabled || paused) return;
+            if (!enabled || paused || libraryStepInvalidated) return;
             jobs[work.Key] = progress;
             UpdateRequiredPackages();
             SetStatus(progress.MissingPackages is not null
