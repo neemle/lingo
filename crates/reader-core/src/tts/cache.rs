@@ -109,6 +109,17 @@ impl SpeechCacheKey {
         {
             return None;
         }
+        let (minimum, maximum) = wav_bytes[WAV_HEADER_BYTES..]
+            .chunks_exact(2)
+            .map(|sample| i16::from_le_bytes([sample[0], sample[1]]))
+            .fold((i16::MAX, i16::MIN), |(minimum, maximum), sample| {
+                (minimum.min(sample), maximum.max(sample))
+            });
+        // The writer's minimum normalization peak is 0.01; a 1e-5
+        // signal span then occupies at most 33 levels in cached PCM.
+        if i32::from(maximum) - i32::from(minimum) <= 33 {
+            return None;
+        }
         let _ = file.set_modified(SystemTime::now());
         Some(SpeechAudio {
             sample_rate: self.sample_rate,
@@ -170,4 +181,29 @@ fn make_room(directory: &Path, incoming: u64) -> Option<()> {
         count -= 1;
     }
     (bytes <= MAX_BYTES).then_some(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_speech_rejects_silent_waveform_and_a_silent_cached_clip() {
+        let rate = 22_050;
+        assert!(super::super::to_wav(&[0.0; 32], rate).is_err());
+        assert!(super::super::to_wav(&[0.2; 32], rate).is_err());
+        let mut audio = super::super::to_wav(&[0.0, 0.4, -0.4, 0.0], rate).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let key = SpeechCacheKey::new("test", "1", "fr", "voice", 1.0, "bonjour", rate);
+        assert!(key.write(root.path(), &audio));
+        assert!(key.read(root.path()).is_some());
+
+        audio.wav_bytes[WAV_HEADER_BYTES..].fill(0);
+        fs::write(
+            root.path().join(".speech-cache").join(&key.name),
+            audio.wav_bytes,
+        )
+        .unwrap();
+        assert!(key.read(root.path()).is_none());
+    }
 }

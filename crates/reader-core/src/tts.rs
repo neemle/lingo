@@ -522,9 +522,12 @@ pub(crate) fn to_wav(samples: &[f32], sample_rate: u32) -> Result<SpeechAudio> {
     {
         return Err("Некоректні зразки голосового пакета".into());
     }
-    let peak = samples
-        .iter()
-        .fold(0.01_f32, |peak, sample| peak.max(sample.abs()));
+    let (minimum, maximum) = samples.iter().fold((f32::INFINITY, f32::NEG_INFINITY),
+        |(minimum, maximum), &sample| (minimum.min(sample), maximum.max(sample)));
+    if maximum - minimum <= 0.00001 {
+        return Err("Локальний голос повернув аудіо без мовлення.".into());
+    }
+    let peak = 0.01_f32.max(minimum.abs()).max(maximum.abs());
     let scale = f32::from(i16::MAX) / peak;
     let sample_bytes = (samples.len() * 2) as u32;
     let mut wav = Vec::with_capacity(44 + sample_bytes as usize);

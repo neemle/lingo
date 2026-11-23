@@ -666,41 +666,55 @@ public partial class ReadingPage
             await loadingVoices.WaitAsync(token);
             if (run != detachedAudioRun) return false;
             var voice = SelectedVoice();
-            string? status;
+            string? status = null;
             if (voice?.Engine is { } engine)
             {
-                var source = new SpeechSource(address.Document, sentence.Id, current.Language, sentence.Text, speechText);
-                var key = new ClipKey(source, engine, voice.Speaker, rate);
-                var startAtMs = saved is not null && SpeechProgress.Matches(sentence, saved, speechText)
-                    ? ModelResumePosition(saved, voice, current.Language, ratePercent) ?? 0 : 0;
-                DetachedSentenceStatus.Text = "Готуємо локальне озвучення…";
-                var audio = await PrepareAudio(session, key, token, address.Page).WaitAsync(token);
-                if (run != detachedAudioRun) return false;
-                DetachedSentenceStatus.Text = $"Речення {current.Position + 1} із {current.Total}";
-                status = await detachedSpeech.PlayWaveAsync(audio, startAtMs, actualStartMs =>
+                try
                 {
-                    if (run != detachedAudioRun || token.IsCancellationRequested) return;
-                    var lastPosition = actualStartMs;
-                    checkpointDetachedSpeech = () =>
+                    var source = new SpeechSource(address.Document, sentence.Id, current.Language, sentence.Text, speechText);
+                    var key = new ClipKey(source, engine, voice.Speaker, rate);
+                    var startAtMs = saved is not null && SpeechProgress.Matches(sentence, saved, speechText)
+                        ? ModelResumePosition(saved, voice, current.Language, ratePercent) ?? 0 : 0;
+                    DetachedSentenceStatus.Text = "Готуємо локальне озвучення…";
+                    var audio = await PrepareAudio(session, key, token, address.Page).WaitAsync(token);
+                    if (run != detachedAudioRun) return false;
+                    DetachedSentenceStatus.Text = $"Речення {current.Position + 1} із {current.Total}";
+                    status = await detachedSpeech.PlayWaveAsync(audio, startAtMs, actualStartMs =>
                     {
-                        if (detachedSpeech.WavePosition is not { } elapsed) return;
-                        var position = actualStartMs + (int)elapsed.TotalMilliseconds;
-                        if (position <= lastPosition || position >= LocalSpeech.MaxModelAudioSeconds * 1000 ||
-                            (long)position * audio.SampleRate >= (long)audio.Samples * 1000) return;
-                        var model = new ModelSpeechResume(voice.Id, ModelTimelineRevision(voice), current.Language, ratePercent, position);
-                        if (Save(new SpeechResume(sentence.Id, hash, 0, model))) lastPosition = position;
-                    };
-                    timer = Dispatcher.CreateTimer();
-                    timer.Interval = TimeSpan.FromSeconds(2);
-                    timer.Tick += (_, _) => { if (run == detachedAudioRun) checkpointDetachedSpeech?.Invoke(); };
-                    timer.Start();
-                    if (ContinueSpeech.IsChecked)
-                        _ = PrefetchNextAudioAsync(session, key, token, address.Page);
-                });
+                        if (run != detachedAudioRun || token.IsCancellationRequested) return;
+                        var lastPosition = actualStartMs;
+                        checkpointDetachedSpeech = () =>
+                        {
+                            if (detachedSpeech.WavePosition is not { } elapsed) return;
+                            var position = actualStartMs + (int)elapsed.TotalMilliseconds;
+                            if (position <= lastPosition || position >= LocalSpeech.MaxModelAudioSeconds * 1000 ||
+                                (long)position * audio.SampleRate >= (long)audio.Samples * 1000) return;
+                            var model = new ModelSpeechResume(voice.Id, ModelTimelineRevision(voice), current.Language, ratePercent, position);
+                            if (Save(new SpeechResume(sentence.Id, hash, 0, model))) lastPosition = position;
+                        };
+                        timer = Dispatcher.CreateTimer();
+                        timer.Interval = TimeSpan.FromSeconds(2);
+                        timer.Tick += (_, _) => { if (run == detachedAudioRun) checkpointDetachedSpeech?.Invoke(); };
+                        timer.Start();
+                        if (ContinueSpeech.IsChecked)
+                            _ = PrefetchNextAudioAsync(session, key, token, address.Page);
+                    });
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { return false; }
+                catch (Exception error) { status = $"Локальний голос недоступний. {error.Message}"; }
             }
-            else
+            if (run != detachedAudioRun || token.IsCancellationRequested) return false;
+            var fallback = voice?.Engine is not null && status is not null && status != LocalSpeech.CompletedStatus;
+            if (voice?.Engine is null || fallback)
             {
-                detachedSpeech.PreferredVoice = voice?.Id == SystemDefaultVoice ? null : voice?.Id;
+                var modelError = fallback ? status : null;
+                if (fallback)
+                {
+                    timer?.Stop();
+                    checkpointDetachedSpeech = null;
+                    DetachedSentenceStatus.Text = "Локальний голос недоступний. Використовуємо системний голос.";
+                }
+                detachedSpeech.PreferredVoice = fallback || voice?.Id == SystemDefaultVoice ? null : voice?.Id;
                 var pronunciation = current.SpeechText ?? current.PronunciationText ?? speechText;
                 var pronounced = await PrepareSystemSpeechAsync(session, current.Language, pronunciation);
                 if (run != detachedAudioRun) return false;
@@ -708,6 +722,8 @@ public partial class ReadingPage
                     status = await detachedSpeech.SpeakAsync(pronounced, current.Language);
                 else
                     status = await PlayDefaultDetachedPronunciationAsync(pronounced);
+                if (modelError is not null && status is not null && status != LocalSpeech.CompletedStatus)
+                    status = $"{modelError} {status}";
             }
             if (run != detachedAudioRun) return false;
             if (status == LocalSpeech.CompletedStatus)
