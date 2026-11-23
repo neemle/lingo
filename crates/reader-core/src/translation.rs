@@ -1,10 +1,10 @@
 //! Routes translations through models already installed on the device.
 
 use crate::{pdf_detached_pages::word_break, valid_language, Document, Result, Store};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{cmp::Ordering, collections::{HashMap, HashSet}, ops::{Range, RangeInclusive}};
+use std::{cmp::Ordering, collections::{BTreeMap, HashMap, HashSet}, ops::{Range, RangeInclusive}};
 use unicode_normalization::UnicodeNormalization;
 
 const MAX_BATCH_BYTES: usize = 64 * 1024;
@@ -28,52 +28,112 @@ impl TranslationCacheEntry {
     }
 }
 
-pub(crate) fn initialize_cache_ownership(db: &Connection) -> Result<()> {
-    db.execute_batch(
+pub type TranslationCacheLinks = BTreeMap<String, Vec<String>>;
+
+pub(crate) fn initialize_cache_ownership(db: &mut Connection) -> Result<()> {
+    fn owner_key(db: &Connection) -> Result<Option<i64>> {
+        db.query_row(
+            "SELECT pk FROM pragma_table_info('translation_cache_owners') WHERE name='document_id'",
+            [], |row| row.get(0),
+        ).optional().map_err(|error| error.to_string())
+    }
+
+    if owner_key(db)? == Some(2) {
+        return Ok(());
+    }
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let migrating = owner_key(&tx)? == Some(0);
+    if migrating {
+        tx.execute_batch("ALTER TABLE translation_cache_owners RENAME TO translation_cache_owners_legacy")
+            .map_err(|error| error.to_string())?;
+    }
+    tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS translation_cache_owners (
-            cache_key TEXT PRIMARY KEY REFERENCES translation_cache(key) ON DELETE CASCADE,
-            document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE
-        )",
-    ).map_err(|error| error.to_string())
+            cache_key TEXT NOT NULL REFERENCES translation_cache(key) ON DELETE CASCADE,
+            document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            PRIMARY KEY(cache_key, document_id)
+        );
+        CREATE INDEX IF NOT EXISTS translation_cache_owners_document
+            ON translation_cache_owners(document_id);",
+    ).map_err(|error| error.to_string())?;
+    if migrating {
+        tx.execute_batch(
+            "INSERT INTO translation_cache_owners(cache_key, document_id)
+             SELECT cache_key, document_id FROM translation_cache_owners_legacy;
+             DROP TABLE translation_cache_owners_legacy;",
+        ).map_err(|error| error.to_string())?;
+    }
+    tx.commit().map_err(|error| error.to_string())
 }
 
-pub(crate) fn export_cache(db: &Connection) -> Result<Vec<TranslationCacheEntry>> {
+pub(crate) fn export_cache(db: &Connection) -> Result<(Vec<TranslationCacheEntry>, TranslationCacheLinks)> {
     let mut query = db.prepare(
-        "SELECT cache.key, docs.source_hash, cache.body FROM translation_cache cache
-         JOIN translation_cache_owners owner ON owner.cache_key=cache.key
-         JOIN documents docs ON docs.id=owner.document_id
+        "SELECT cache.key, cache.body FROM translation_cache cache
+         WHERE EXISTS(SELECT 1 FROM translation_cache_owners WHERE cache_key=cache.key)
          ORDER BY cache.rowid DESC LIMIT ?1",
     ).map_err(|error| error.to_string())?;
     let rows = query.query_map([CACHE_ROWS], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     }).map_err(|error| error.to_string())?;
+    let mut owners = db.prepare(
+        "SELECT docs.source_hash FROM translation_cache_owners owner
+         JOIN documents docs ON docs.id=owner.document_id
+         WHERE owner.cache_key=?1 ORDER BY docs.source_hash",
+    ).map_err(|error| error.to_string())?;
     let mut entries = Vec::new();
+    let mut links = TranslationCacheLinks::new();
     for row in rows {
-        let (key, source_hash, body) = row.map_err(|error| error.to_string())?;
-        if let Ok(segments) = serde_json::from_str(&body) {
-            let entry = TranslationCacheEntry { key, source_hash, segments };
-            if entry.valid() {
-                entries.push(entry);
+        let (key, body) = row.map_err(|error| error.to_string())?;
+        let Ok(segments) = serde_json::from_str(&body) else { continue };
+        let mut hashes = owners.query_map([&key], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?;
+        let Some(source_hash) = hashes.next().transpose().map_err(|error| error.to_string())? else { continue };
+        let entry = TranslationCacheEntry { key, source_hash, segments };
+        if entry.valid() {
+            let additional = hashes.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|error| error.to_string())?;
+            if !additional.is_empty() {
+                links.insert(entry.key.clone(), additional);
+            }
+            entries.push(entry);
+        }
+    }
+    Ok((entries, links))
+}
+
+pub(crate) fn validate_cache(
+    entries: &[TranslationCacheEntry], links: &TranslationCacheLinks, documents: &[Document],
+) -> Result<()> {
+    let invalid = || "Некоректний кеш перекладу в резервній копії.".to_owned();
+    if entries.len() > CACHE_ROWS as usize || links.len() > entries.len() {
+        return Err(invalid());
+    }
+    let source_hashes: HashSet<_> = documents.iter().map(|doc| doc.source_hash.as_str()).collect();
+    let mut seen = HashSet::with_capacity(entries.len());
+    for entry in entries {
+        if !entry.valid() || !seen.insert(entry.key.as_str()) || !source_hashes.contains(entry.source_hash.as_str()) {
+            return Err(invalid());
+        }
+        if let Some(additional) = links.get(&entry.key) {
+            if additional.len() >= source_hashes.len() {
+                return Err(invalid());
+            }
+            let mut owners = HashSet::from([entry.source_hash.as_str()]);
+            if additional.iter().any(|hash| !source_hashes.contains(hash.as_str()) || !owners.insert(hash.as_str())) {
+                return Err(invalid());
             }
         }
     }
-    Ok(entries)
-}
-
-pub(crate) fn validate_cache(entries: &[TranslationCacheEntry], documents: &[crate::Document]) -> Result<()> {
-    let mut seen = HashSet::with_capacity(entries.len().min(CACHE_ROWS as usize));
-    if entries.len() > CACHE_ROWS as usize
-        || entries.iter().any(|entry| {
-            !entry.valid() || !seen.insert(entry.key.as_str())
-                || !documents.iter().any(|doc| doc.source_hash == entry.source_hash)
-        })
-    {
-        return Err("Некоректний кеш перекладу в резервній копії.".into());
+    if links.keys().any(|key| !seen.contains(key.as_str())) {
+        return Err(invalid());
     }
     Ok(())
 }
 
-pub(crate) fn restore_cache(db: &Connection, entries: Vec<TranslationCacheEntry>) -> Result<()> {
+pub(crate) fn restore_cache(
+    db: &Connection, entries: Vec<TranslationCacheEntry>, links: &TranslationCacheLinks,
+) -> Result<()> {
     if entries.is_empty() {
         return Ok(());
     }
@@ -100,7 +160,9 @@ pub(crate) fn restore_cache(db: &Connection, entries: Vec<TranslationCacheEntry>
          WHERE cache.key=?1 AND docs.source_hash=?2",
     ).map_err(|error| error.to_string())?;
     for entry in entries {
-        owner.execute(params![entry.key, entry.source_hash]).map_err(|error| error.to_string())?;
+        for hash in std::iter::once(&entry.source_hash).chain(links.get(&entry.key).into_iter().flatten()) {
+            owner.execute(params![entry.key, hash]).map_err(|error| error.to_string())?;
+        }
     }
     Ok(())
 }
@@ -1293,6 +1355,62 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    #[test]
+    fn shared_translation_cache_survives_legacy_migration_backup_and_document_deletion() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("library.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        let first = store.import("first.txt", b"Le bateau arrive.", "fr").unwrap();
+        let second = store.import("second.txt", b"Le bateau arrive. Le marin part.", "fr").unwrap();
+        let route = Route::Direct(ModelEdge {
+            source: "fr".into(), target: "uk".into(), revision: "test".into(), quality: None,
+        });
+        let input = ["Le bateau arrive.".to_owned()];
+        let key = unit_cache_key(&route, &input[0]).unwrap();
+        let translated = ["Корабель прибуває.".to_owned()];
+        store.save_cached_segments([(key.clone(), translated.as_slice())]).unwrap();
+
+        store.connection.execute_batch(
+            "DROP TABLE translation_cache_owners;
+             CREATE TABLE translation_cache_owners (
+                 cache_key TEXT PRIMARY KEY REFERENCES translation_cache(key) ON DELETE CASCADE,
+                 document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE
+             );",
+        ).unwrap();
+        store.connection.execute(
+            "INSERT INTO translation_cache_owners VALUES (?1, ?2)", params![key, first.id],
+        ).unwrap();
+        drop(store);
+
+        let mut store = Store::open(&path).unwrap();
+        store.record_translation_cache_use(&second.id, &route, &input).unwrap();
+        store.save_cached_segments([(key.clone(), translated.as_slice())]).unwrap();
+        let (entries, links) = export_cache(&store.connection).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(links[&key].len(), 1);
+        let mut bad_links = links;
+        bad_links.insert(key.clone(), vec![entries[0].source_hash.clone()]);
+        assert!(validate_cache(&entries, &bad_links, &[first.clone(), second.clone()]).is_err());
+
+        let archive = root.path().join("library.zip");
+        store.export_backup_file(&archive).unwrap();
+        let restored_root = tempfile::tempdir().unwrap();
+        let restored_path = restored_root.path().join("library.sqlite");
+        let mut restored = Store::open(&restored_path).unwrap();
+        restored.restore_backup_file(&archive).unwrap();
+        assert_eq!(export_cache(&restored.connection).unwrap().1[&key].len(), 1);
+
+        let original_owner = entries[0].source_hash.clone();
+        let restored_document = restored.snapshot().unwrap().documents.into_iter()
+            .find(|doc| doc.source_hash == original_owner).unwrap();
+        assert!(restored.delete_document(&restored_document.id).unwrap());
+        let (entries, links) = export_cache(&restored.connection).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_ne!(entries[0].source_hash, original_owner);
+        assert_eq!(entries[0].segments, translated);
+        assert!(links.is_empty());
+    }
+
     fn french_uk_route_with_invalid_assets(store: &Store) -> Route {
         let package = store.translation_packages().into_iter()
             .find(|package| (package.source, package.target) == ("fr", "uk")).unwrap();
@@ -1881,10 +1999,9 @@ impl Store {
         let tx = self.connection.unchecked_transaction().map_err(|error| error.to_string())?;
         {
             let mut link = tx.prepare_cached(
-                "INSERT INTO translation_cache_owners(cache_key,document_id)
+                "INSERT OR IGNORE INTO translation_cache_owners(cache_key,document_id)
                  SELECT cache.key, docs.id FROM translation_cache cache, documents docs
-                 WHERE cache.key=?1 AND docs.id=?2
-                 ON CONFLICT(cache_key) DO UPDATE SET document_id=excluded.document_id",
+                 WHERE cache.key=?1 AND docs.id=?2",
             ).map_err(|error| error.to_string())?;
             for key in keys {
                 link.execute(params![key, document]).map_err(|error| error.to_string())?;
@@ -2052,9 +2169,11 @@ impl Store {
             .transaction()
             .map_err(|error| error.to_string())?;
         {
+            // Refresh eviction order without cascading a delete to document links.
             let mut statement = tx
                 .prepare_cached(
-                    "INSERT OR REPLACE INTO translation_cache(key, body) VALUES (?1, ?2)",
+                    "INSERT INTO translation_cache(key, body) VALUES (?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET body=excluded.body, rowid=excluded.rowid",
                 )
                 .map_err(|error| error.to_string())?;
             for (key, segments) in rows {

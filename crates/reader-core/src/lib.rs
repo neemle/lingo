@@ -387,6 +387,8 @@ pub struct Backup<Originals = Vec<Original>> {
     pub pending_intake: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub translation_cache: Vec<translation::TranslationCacheEntry>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub translation_cache_links: translation::TranslationCacheLinks,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -537,7 +539,7 @@ impl Store {
         pdf_reading_position::initialize(&connection)?;
         reader_preferences::initialize(&connection)?;
         translation_queue::initialize(&connection)?;
-        translation::initialize_cache_ownership(&connection)?;
+        translation::initialize_cache_ownership(&mut connection)?;
         knowledge::annotation_cache::initialize(&connection)?;
         pdf_sentences::upgrade_documents(&mut connection)?;
         let file_original_directory = file_originals::directory(path);
