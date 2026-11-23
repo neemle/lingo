@@ -1156,9 +1156,10 @@ impl<'a> MarianProvider<'a> {
             };
             let [sample, ..] = probe_evidence::samples(package.source)
                 .ok_or("Для цього пакета немає контрольного речення.")?;
+            let mut units = Vec::new();
             let result = Self::translate_package(
-                stage, package, &[sample.to_owned()], TranslationSettings { beam_size: 1 }, checkpoint,
-            ).and_then(|units| units.into_iter().collect::<Result<Vec<_>>>())
+                stage, package, &[sample.to_owned()], TranslationSettings { beam_size: 1 }, checkpoint, &mut units,
+            ).and_then(|()| units.into_iter().collect::<Result<Vec<_>>>())
                 .map_err(|error| format!("Новий пакет не пройшов пробний переклад. {error}"))?;
             if !matches!(result.as_slice(), [output] if output.chars().any(char::is_alphanumeric)) {
                 return Err("Новий пакет не повернув текст пробного перекладу.".into());
@@ -1265,7 +1266,7 @@ impl TranslationProvider for MarianProvider<'_> {
         // A background job can wait for package management without owning the compute permit.
         let _lock = self.lock(package, false)?;
         let optional = self.background.then(|| RESOURCES.optional()).transpose()
-            .map_err(TranslationBatchError::Deferred)?;
+            .map_err(TranslationBatchError::deferred)?;
         let yielded = Cell::new(false);
         let checkpoint = || {
             if yielded.get() || optional.as_ref().is_some_and(|job| job.should_yield()) {
@@ -1274,14 +1275,12 @@ impl TranslationProvider for MarianProvider<'_> {
             }
             Ok(())
         };
-        Self::translate_package(&self.read_path(package), package, segments, settings, checkpoint)
-            .map_err(|error| {
-                if yielded.get() {
-                    TranslationBatchError::Deferred(error)
-                } else {
-                    TranslationBatchError::Failed(error)
-                }
-            })
+        let mut completed = Vec::with_capacity(segments.len());
+        match Self::translate_package(&self.read_path(package), package, segments, settings, checkpoint, &mut completed) {
+            Ok(()) => Ok(completed),
+            Err(message) if yielded.get() => Err(TranslationBatchError::Deferred { message, completed }),
+            Err(message) => Err(TranslationBatchError::Failed(message)),
+        }
     }
 }
 
@@ -1292,7 +1291,8 @@ impl MarianProvider<'_> {
         segments: &[String],
         settings: TranslationSettings,
         checkpoint: impl Fn() -> Result<()>,
-    ) -> Result<Vec<Result<String>>> {
+        results: &mut Vec<Result<String>>,
+    ) -> Result<()> {
         verify_files(directory, package, &ASSETS[..4], &checkpoint)?;
         let mut configuration: serde_json::Value =
             serde_json::from_slice(&fs::read(directory.join("config.json")).map_err(model_error)?)
@@ -1364,7 +1364,6 @@ impl MarianProvider<'_> {
             .filter(|limit| *limit > 0)
             .ok_or("Некоректна довжина входу мовної моделі")?;
 
-        let mut results = Vec::with_capacity(segments.len());
         let mut clock_retry_budget = 2;
         let mut ukrainian_retry_budget = 2;
         'segments: for segment in segments {
@@ -1615,7 +1614,7 @@ impl MarianProvider<'_> {
             results.push(Ok(translated));
         }
         checkpoint()?;
-        Ok(results)
+        Ok(())
     }
 }
 

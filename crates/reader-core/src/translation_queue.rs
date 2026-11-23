@@ -267,7 +267,7 @@ impl Store {
             )
             .map_err(database_error)?;
         } else {
-            let delay = if matches!(&result, Err(TranslationBatchError::Deferred(_))) {
+            let delay = if matches!(&result, Err(TranslationBatchError::Deferred { .. })) {
                 INTERACTIVE_RETRY_SECONDS
             } else {
                 RETRY_SECONDS
@@ -399,7 +399,7 @@ impl Store {
             (0, false, Some(now + 30))
         } else {
             match self.warm_document_translation_step(&document, target, cursor as usize) {
-                Err(TranslationBatchError::Deferred(_)) =>
+                Err(TranslationBatchError::Deferred { .. }) =>
                     (cursor as usize, incomplete, Some(crate::now() + INTERACTIVE_RETRY_SECONDS)),
                 Err(error) => return Err(error.into()),
                 Ok(step) => {
@@ -541,7 +541,7 @@ impl Store {
                 false,
                 true,
             ) {
-                Err(error @ TranslationBatchError::Deferred(_)) => return Err(error),
+                Err(error @ TranslationBatchError::Deferred { .. }) => return Err(error),
                 result => result,
             };
             let translated_page = rows
@@ -567,7 +567,7 @@ impl Store {
             crate::translation::PageBoundaries::Canonical,
         ) {
             Ok(translated) => translated,
-            Err(error @ TranslationBatchError::Deferred(_)) => return Err(error),
+            Err(error @ TranslationBatchError::Deferred { .. }) => return Err(error),
             Err(TranslationBatchError::Failed(_)) => return Ok(TranslationWarmStep {
                 next: Some(start + 1),
                 incomplete: true,

@@ -361,8 +361,14 @@ pub(crate) fn route_readiness(
 
 #[derive(Debug)]
 pub enum TranslationBatchError {
-    Deferred(String),
+    Deferred { message: String, completed: Vec<Result<String>> },
     Failed(String),
+}
+
+impl TranslationBatchError {
+    pub(crate) fn deferred(message: String) -> Self {
+        Self::Deferred { message, completed: Vec::new() }
+    }
 }
 
 impl From<String> for TranslationBatchError {
@@ -374,7 +380,7 @@ impl From<String> for TranslationBatchError {
 impl From<TranslationBatchError> for String {
     fn from(error: TranslationBatchError) -> Self {
         match error {
-            TranslationBatchError::Deferred(message) | TranslationBatchError::Failed(message) => message,
+            TranslationBatchError::Deferred { message, .. } | TranslationBatchError::Failed(message) => message,
         }
     }
 }
@@ -399,6 +405,7 @@ pub trait TranslationProvider {
     ) -> Result<Vec<String>>;
 
     /// Independent inputs may fail separately. A deferral stops work across all routes.
+    /// Its completed results form a prefix, including any individual failures.
     fn translate_independent(
         &mut self,
         model: &ModelEdge,
@@ -1494,7 +1501,7 @@ mod tests {
                 _: TranslationSettings) -> std::result::Result<Vec<Result<String>>, TranslationBatchError> {
                 self.calls.push((format!("{}-{}", edge.source, edge.target), input.to_vec()));
                 if self.deferred {
-                    return Err(TranslationBatchError::Deferred("foreground is waiting".into()));
+                    return Err(TranslationBatchError::deferred("foreground is waiting".into()));
                 }
                 Ok(input.iter().map(|text| match (edge.source.as_str(), edge.target.as_str(), text.as_str()) {
                     ("fr", "uk", "Le bateau arrive.") => Ok("Корабель прибуває.".into()),
@@ -1520,7 +1527,7 @@ mod tests {
         provider.pivot_installed = true;
         provider.deferred = true;
         let deferred = translate_paragraph(&mut store, &mut provider, &document, 1, "uk", PageBoundaries::Canonical);
-        assert!(matches!(deferred, Err(TranslationBatchError::Deferred(message)) if message == "foreground is waiting"));
+        assert!(matches!(deferred, Err(TranslationBatchError::Deferred { message, .. }) if message == "foreground is waiting"));
         assert_eq!(provider.calls, [("fr-uk".into(), vec!["Le marin part.".into()])]);
         provider.calls.clear();
         provider.deferred = false;
@@ -1550,6 +1557,57 @@ mod tests {
         let fresh_request = translate_paragraph(&mut reopened, &mut provider, &document, 1, "uk", PageBoundaries::Canonical).unwrap();
         assert_eq!(serde_json::to_value(fresh_request).unwrap(), full);
         assert!(provider.calls.is_empty());
+    }
+
+    #[test]
+    fn completed_target_sentences_survive_a_direct_or_pivot_deferral() {
+        struct Provider {
+            models: Vec<ModelEdge>,
+            suspend: bool,
+            target_calls: Vec<Vec<String>>,
+        }
+        impl TranslationProvider for Provider {
+            fn installed_models(&self) -> Result<Vec<ModelEdge>> { Ok(self.models.clone()) }
+
+            fn translate(&mut self, _: &ModelEdge, _: &[String], _: Option<&str>,
+                _: TranslationSettings) -> Result<Vec<String>> { unreachable!() }
+
+            fn translate_independent(&mut self, edge: &ModelEdge, input: &[String],
+                _: TranslationSettings) -> std::result::Result<Vec<Result<String>>, TranslationBatchError> {
+                if edge.target == "en" {
+                    return Ok(input.iter().map(|segment|
+                        if segment == "B" && self.suspend { Err("missing pivot".into()) }
+                        else { Ok(segment.clone()) }).collect());
+                }
+                self.target_calls.push(input.to_vec());
+                let mut translated = input.iter().map(|segment| Ok(format!("Переклад {segment}")));
+                if self.suspend {
+                    self.suspend = false;
+                    let completed = translated.by_ref().take(2).collect();
+                    return Err(TranslationBatchError::Deferred { message: "foreground".into(), completed });
+                }
+                Ok(translated.collect())
+            }
+        }
+
+        for pivot in [false, true] {
+            let edge = |source: &str, target: &str| ModelEdge {
+                source: source.into(), target: target.into(), revision: "test".into(), quality: None,
+            };
+            let models = if pivot { vec![edge("fr", "en"), edge("en", "uk")] }
+                else { vec![edge("fr", "uk")] };
+            let mut provider = Provider { models, suspend: true, target_calls: Vec::new() };
+            let mut store = Store::open(Path::new(":memory:")).unwrap();
+            let document = store.import("page.txt", b"Bonjour le monde.", "fr").unwrap();
+            let input = ["A", "B", "C", "D"].map(str::to_owned);
+            assert!(matches!(store.translate_units(&mut provider, &document.id, "fr", "uk", &input),
+                Err(TranslationBatchError::Deferred { .. })));
+            let resumed = store.translate_units(&mut provider, &document.id, "fr", "uk", &input).unwrap();
+            assert_eq!(provider.target_calls[1], if pivot { ["B", "D"] } else { ["C", "D"] }.map(str::to_owned));
+            for (segment, translated) in input.iter().zip(resumed.segments) {
+                assert_eq!(translated.unwrap().text, format!("Переклад {segment}"));
+            }
+        }
     }
 
     #[test]
@@ -2225,9 +2283,9 @@ impl Store {
                 break;
             }
             let batch: Vec<_> = pending.iter().map(|&index| input[index].clone()).collect();
-            let outcomes = match infer_independent_units(provider, route, &batch) {
-                Ok(outcomes) => outcomes,
-                Err(error @ TranslationBatchError::Deferred(_)) => return Err(error),
+            let (outcomes, deferred) = match infer_independent_units(provider, route, &batch) {
+                Ok(outcomes) => (outcomes, None),
+                Err(TranslationBatchError::Deferred { message, completed }) => (completed, Some(message)),
                 Err(TranslationBatchError::Failed(error)) => {
                     first_failure.get_or_insert(error);
                     continue;
@@ -2249,6 +2307,9 @@ impl Store {
                     (key.clone(), std::slice::from_ref(&output.text))
                 }))?;
                 self.link_translation_cache_keys(document, rows.iter().map(|(key, _)| key.as_str()))?;
+            }
+            if let Some(message) = deferred {
+                return Err(TranslationBatchError::deferred(message));
             }
         }
         if segments.iter().all(Option::is_none) {
@@ -2353,8 +2414,12 @@ fn infer_independent_units(
     input: &[String],
 ) -> std::result::Result<Vec<Result<String>>, TranslationBatchError> {
     let mut infer = |edge: &ModelEdge, input: &[String]| {
-        let mut outcomes = provider.translate_independent(edge, input, TranslationSettings::default())?;
-        if outcomes.len() != input.len() {
+        let (mut outcomes, deferred) = match provider.translate_independent(edge, input, TranslationSettings::default()) {
+            Ok(outcomes) => (outcomes, None),
+            Err(TranslationBatchError::Deferred { message, completed }) => (completed, Some(message)),
+            Err(error) => return Err(error),
+        };
+        if outcomes.len() > input.len() || deferred.is_none() && outcomes.len() != input.len() {
             return Err(TranslationBatchError::Failed(
                 "Мовний пакет повернув некоректне вирівнювання перекладу".into(),
             ));
@@ -2367,17 +2432,34 @@ fn infer_independent_units(
                 *outcome = Err("Мовний пакет повернув некоректний переклад речення".into());
             }
         }
-        Ok(outcomes)
+        match deferred {
+            Some(message) => Err(TranslationBatchError::Deferred { message, completed: outcomes }),
+            None => Ok(outcomes),
+        }
     };
     match route {
         Route::Direct(edge) => infer(edge, input),
         Route::Pivot { first, second } => {
-            let mut outcomes = infer(first, input)?;
+            let mut outcomes = match infer(first, input) {
+                // These are intermediate-language results, so they cannot be stored under the full route.
+                Err(TranslationBatchError::Deferred { message, .. }) => return Err(TranslationBatchError::deferred(message)),
+                result => result?,
+            };
             let pivot_input: Vec<_> = outcomes.iter().filter_map(|outcome| outcome.as_ref().ok()).cloned().collect();
             if !pivot_input.is_empty() {
-                let translated = infer(second, &pivot_input)?;
-                for (outcome, text) in outcomes.iter_mut().filter(|outcome| outcome.is_ok()).zip(translated) {
-                    *outcome = text;
+                let (translated, deferred) = match infer(second, &pivot_input) {
+                    Ok(translated) => (translated, None),
+                    Err(TranslationBatchError::Deferred { message, completed }) => (completed, Some(message)),
+                    Err(error) => return Err(error),
+                };
+                let mut translated = translated.into_iter();
+                let done = outcomes.iter_mut().map_while(|outcome| {
+                    if outcome.is_ok() { *outcome = translated.next()?; }
+                    Some(())
+                }).count();
+                if let Some(message) = deferred {
+                    outcomes.truncate(done);
+                    return Err(TranslationBatchError::Deferred { message, completed: outcomes });
                 }
             }
             Ok(outcomes)
