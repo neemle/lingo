@@ -592,6 +592,7 @@ impl Store {
                     }
                 }
                 reconcile_ocr_with_layer(old_layer, &mut lines);
+                repair_ocr_drop_caps(old_layer, &mut lines);
                 pages[usize::from(page)].clear();
                 let page_text = serde_json::to_string(&pages).map_err(database_error)?;
                 tx.execute("UPDATE file_originals SET pdf_page_text=?2 WHERE document_id=?1",
@@ -707,6 +708,98 @@ impl Store {
     }
 }
 
+// OCR sometimes reads a two-line initial as part of both text lines.
+fn repair_ocr_drop_caps(reference: &str, lines: &mut [ocr::OcrLine]) {
+    use crate::document_tokens::word_parts;
+    use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
+
+    const ANCHORS: usize = 4;
+    let fold = |word: &str| {
+        word.nfd()
+            .filter(|&ch| !is_combining_mark(ch))
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    let reference: Vec<_> = word_parts(reference)
+        .map(|(_, _, word)| (word, fold(word)))
+        .take(4097)
+        .collect();
+    if !(ANCHORS + 1..=4096).contains(&reference.len()) {
+        return;
+    }
+
+    let replacement = |words: &[(usize, usize, &str)]| {
+        let anchors: Vec<_> = words
+            .iter()
+            .take(ANCHORS)
+            .map(|&(_, _, word)| fold(word))
+            .collect();
+        if anchors.len() != ANCHORS {
+            return None;
+        }
+        let mut matches = reference
+            .windows(ANCHORS + 1)
+            .filter(|window| window[1..].iter().map(|(_, key)| key).eq(&anchors))
+            .map(|window| window[0].0);
+        let candidate = matches.next()?;
+        matches.all(|word| word == candidate).then_some(candidate)
+    };
+
+    for index in 0..lines.len().saturating_sub(1) {
+        let (first, rest) = lines.split_at_mut(index + 1);
+        let (initial, continuation) = (&mut first[index], &mut rest[0]);
+        if initial.page != continuation.page
+            || initial.height < continuation.height * 1.6
+            || initial.height > continuation.height * 4.0
+            || continuation.x < initial.x + continuation.height * 0.5
+            || continuation.y < initial.y + continuation.height * 0.4
+            || continuation.y > initial.y + initial.height
+        {
+            continue;
+        }
+        let opening = initial.reading_text();
+        let words: Vec<_> = word_parts(opening).take(ANCHORS + 1).collect();
+        if let Some(&(start, _, word)) = words.first() {
+            let prefix = opening[..start].trim();
+            let corrected = if matches!(prefix, "©" | "®" | "@" | "§") {
+                replacement(&words)
+                    .filter(|candidate| {
+                        candidate.chars().count() <= 3
+                            && candidate.starts_with(char::is_uppercase)
+                            && candidate.chars().all(char::is_alphabetic)
+                    })
+                    .map(|candidate| format!("{candidate} {}", &opening[start..]))
+            } else if prefix.is_empty()
+                && word.chars().count() <= 2
+                && word.chars().all(char::is_lowercase)
+            {
+                replacement(&words[1..])
+                    .filter(|candidate| {
+                        candidate.starts_with(char::is_uppercase)
+                            && candidate.chars().skip(1).eq(word.chars())
+                    })
+                    .map(|candidate| format!("{candidate}{}", &opening[start + word.len()..]))
+            } else {
+                None
+            };
+            if let Some(corrected) = corrected {
+                initial.correction = Some(corrected);
+            }
+        }
+
+        let text = continuation.reading_text();
+        let words: Vec<_> = word_parts(text).take(ANCHORS + 1).collect();
+        if let Some(&(0, _, word)) = words.first() {
+            if let Some(candidate) = replacement(&words[1..]).filter(|candidate| {
+                candidate.chars().count() >= 3
+                    && candidate.chars().all(char::is_lowercase)
+                    && word.chars().skip(1).eq(candidate.chars())
+            }) {
+                continuation.correction = Some(format!("{candidate}{}", &text[word.len()..]));
+            }
+        }
+    }
+}
 pub(crate) fn reconcile_ocr_with_layer(reference: &str, lines: &mut [ocr::OcrLine]) -> bool {
     use crate::document_tokens::word_parts;
     const CONTEXT: usize = 4;
@@ -1042,4 +1135,32 @@ fn has_ocr_lines(document: &Document, page: u16) -> bool {
 
 fn database_error(error: impl std::fmt::Display) -> String {
     format!("Помилка кешу OCR PDF. {error}")
+}
+
+#[cfg(test)]
+mod drop_cap_tests {
+    use super::*;
+
+    #[test]
+    fn repairs_drop_cap_with_geometry_and_unique_text_layer_context() {
+        let reference = "Le 15 février 1815, à Marseille.\nentre dans le port. Il revient.";
+        let make_line = |text: &str, x, y, height| ocr::OcrLine {
+            page: 0, text: text.to_owned(), x, y, width: 0.7, height,
+            confidence: None, correction: None, words: vec![], source_span: None,
+        };
+        let mut lines = [
+            make_line("© 15 fevrier 1815, à Marseille.", 0.117, 0.264, 0.050),
+            make_line("Jentre dans le port. Il revient.", 0.148, 0.303, 0.022),
+        ];
+        repair_ocr_drop_caps(reference, &mut lines);
+        assert_eq!(lines[0].reading_text(), "Le 15 fevrier 1815, à Marseille.");
+        assert_eq!(lines[1].reading_text(), "entre dans le port. Il revient.");
+        assert!(lines[0].text.starts_with('©'));
+
+        lines[0].correction = None;
+        lines[0].height = 0.024;
+        lines[1].correction = None;
+        repair_ocr_drop_caps(reference, &mut lines);
+        assert!(lines.iter().all(|line| line.correction.is_none()));
+    }
 }
