@@ -133,13 +133,9 @@
    <Border.Shadow><Shadow Brush="#434B30" Opacity="0.08" Radius="7" Offset="0,3" /></Border.Shadow>
    <Grid RowDefinitions="Auto,Auto,*,Auto">
     <Grid Padding="17,7" ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
-     <HorizontalStackLayout Spacing="7" VerticalOptions="Center">
-      <Border x:Name="SourceLanguageBadge" Padding="6,3" Stroke="#DCE1D3" BackgroundColor="#E9ECE2"
-       StrokeShape="RoundRectangle 4" VerticalOptions="Center">
-       <Label x:Name="SourceLanguageCode" TextColor="{StaticResource Sage}" FontSize="10" FontAttributes="Bold" />
-      </Border>
-      <Label x:Name="SourceLanguageName" Style="{StaticResource ReaderMeta}" />
-     </HorizontalStackLayout>
+     <Button x:Name="SourceLanguage" Text="Мова оригіналу" Style="{StaticResource PlayerButton}"
+      Clicked="ChooseSourceLanguageClicked" IsEnabled="{Binding CanInteract}" IsVisible="False"
+      ToolTipProperties.Text="Вибрати мову оригіналу" SemanticProperties.Description="Вибрати мову оригіналу" />
      <Label Grid.Column="1" Text="→" FontSize="19" VerticalOptions="Center" TextColor="{StaticResource Sage}" />
      <Button Grid.Column="2" x:Name="TargetLanguage" Text="Мова перекладу" HorizontalOptions="Start"
       Style="{StaticResource PlayerButton}" Clicked="ChooseTargetClicked"

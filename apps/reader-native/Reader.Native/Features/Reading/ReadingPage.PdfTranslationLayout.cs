@@ -7,7 +7,8 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage
 {
-    private sealed record PdfLayoutAddress(string Document, int Page, string? Revision, string Target, string? DetachedText)
+    private sealed record PdfLayoutAddress(string Document, int Page, string? Revision, string SourceLanguage,
+        string Target, string? DetachedText)
     {
         public InlinePdfAddress Source => new(Document, Page, Revision, DetachedText);
     }
@@ -204,7 +205,7 @@ public partial class ReadingPage
         page.Revision == document.CurrentRevisionId &&
         target != document.Language && (!PdfPageNotice.IsVisible || DetachedPdfReader.IsVisible) &&
         (CurrentNativePdfWindow(document.Id) is not { } window || window.Center == page.Page)
-            ? new(page.Document, page.Page, document.CurrentRevisionId, target, page.DetachedText)
+            ? new(page.Document, page.Page, document.CurrentRevisionId, document.Language, target, page.DetachedText)
             : null;
 
     private void RefreshPdfTranslationLayout()
@@ -223,7 +224,7 @@ public partial class ReadingPage
         var waitingForPreview = PdfUsesPageTranslation && inlinePdfAddress is null && inlinePdfLoading is not null;
         if (translatingPdfLayout is not null && (!shown || !TranslationVisible || !readingPageActive ||
             translatingPdfLayout != address))
-            pdfLayoutTranslationCancellation?.Cancel();
+            ReleasePdfLayoutTranslation()?.Cancel();
         PdfTranslationMode.IsVisible = available && !detached;
         DetachedPdfTranslationMode.IsVisible = available && detached;
         var modeGlyph = shown ? "\uf03a" : "\uf0db";
@@ -487,6 +488,11 @@ public partial class ReadingPage
 
     private async Task LoadPdfPageLayoutAsync(PdfLayoutAddress address, bool cachedOnly, int? refreshAtUtf16 = null)
     {
+        if (cachedOnly && translatingPdfLayout == address)
+        {
+            pendingPdfCacheRefresh = address;
+            return;
+        }
         var request = ++pdfLayoutRequestId;
         using var cancellation = cachedOnly ? null : new CancellationTokenSource();
         pdfLayoutStatus = cachedOnly ? "Завантажуємо переклад…" : "Перекладаємо сторінку…";
@@ -495,8 +501,11 @@ public partial class ReadingPage
             translatingPdfLayout = address;
             refreshingPdfSentence = refreshAtUtf16.HasValue;
             pdfLayoutTranslationCancellation = cancellation;
-            var attempt = new PdfAutoTranslation(address, readinessRequest);
-            pdfAutoAttempts = (attempt, PdfAttemptCount(attempt) + 1);
+            if (!refreshingPdfSentence)
+            {
+                var attempt = new PdfAutoTranslation(address, readinessRequest);
+                pdfAutoAttempts = (attempt, PdfAttemptCount(attempt) + 1);
+            }
         }
         RefreshPdfTranslationLayout();
         try
@@ -505,7 +514,8 @@ public partial class ReadingPage
                 address.Target, cachedOnly, cancellation?.Token ?? default, refreshAtUtf16);
             if (!cachedOnly && refreshAtUtf16 is null) _ = FollowPdfTranslationBatchesAsync(address, request, translation);
             var rows = await translation;
-            if (request != pdfLayoutRequestId || CurrentPdfLayoutAddress() != address) return;
+            if (request != pdfLayoutRequestId || CurrentPdfLayoutAddress() != address ||
+                cancellation?.IsCancellationRequested == true) return;
             if (cachedOnly)
             {
                 var failures = pdfLayoutRows.Where(row => row.Failure is not null).ToDictionary(
@@ -529,17 +539,23 @@ public partial class ReadingPage
         }
         finally
         {
-            if (!cachedOnly && translatingPdfLayout == address)
-            {
-                translatingPdfLayout = null;
-                refreshingPdfSentence = false;
-                pdfLayoutTranslationCancellation = null;
-            }
-            RefreshPdfTranslationLayout();
+            if (!cachedOnly && ReferenceEquals(pdfLayoutTranslationCancellation, cancellation))
+                ReleasePdfLayoutTranslation();
+            if (request == pdfLayoutRequestId || CurrentPdfLayoutAddress() == address)
+                RefreshPdfTranslationLayout();
             if (!cachedOnly && CurrentPdfLayoutAddress() == address &&
                 (pendingPdfCacheRefresh == address || request != pdfLayoutRequestId))
                 RefreshCachedPdfPageLayout();
         }
+    }
+
+    private CancellationTokenSource? ReleasePdfLayoutTranslation()
+    {
+        var cancellation = pdfLayoutTranslationCancellation;
+        translatingPdfLayout = null;
+        refreshingPdfSentence = false;
+        pdfLayoutTranslationCancellation = null;
+        return cancellation;
     }
 
     private async Task FollowPdfTranslationBatchesAsync(PdfLayoutAddress address, int request, Task translation)

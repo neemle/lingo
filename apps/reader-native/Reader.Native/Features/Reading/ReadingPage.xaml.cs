@@ -10,7 +10,7 @@ public partial class ReadingPage : ContentPage
 {
     private (string Code, string Name)[] availableTargets = [];
     private string? lastSourceLanguage;
-    private bool choosingTarget;
+    private bool choosingLanguage;
     private bool jumpingSentence;
     private bool openingOriginal;
     private bool narrowReader;
@@ -205,9 +205,7 @@ public partial class ReadingPage : ContentPage
         var sentence = AppState.Session.Sentence;
         PlayerProgress.Progress = document is { Sentences.Length: > 0 }
             ? (double)(document.Position + 1) / document.Sentences.Length : 0;
-        SourceLanguageBadge.IsVisible = document is not null;
-        SourceLanguageCode.Text = document?.Language.ToUpperInvariant() ?? "";
-        SourceLanguageName.Text = document is null ? "" : DocumentLanguages.Name(document.Language);
+        UpdateSourceLanguageButton(document);
         var word = document is not null && sentence is not null ? ReadingWord(document, sentence) : null;
         var focus = document is not null && sentence is not null
             ? DictionaryFocus(document.Id, document.CurrentRevisionId, sentence, page: null) ??
@@ -228,7 +226,7 @@ public partial class ReadingPage : ContentPage
     {
         base.OnSizeAllocated(width, height);
         if (width <= 0 || ReadingColumns is null || SourcePane is null || TranslationPane is null
-            || ReaderLayoutButton is null || SourceHint is null || SourceLanguageName is null
+            || ReaderLayoutButton is null || SourceHint is null || SourceLanguage is null
             || PlayerMain is null || PlayerDocument is null || PlayerTransport is null) return;
 
         var stackColumns = width < 720;
@@ -278,7 +276,7 @@ public partial class ReadingPage : ContentPage
             || readingLayout == ReaderLayout.Automatic && narrowReader);
         var columns = split && !stacked;
         SourcePane.IsVisible = sourceVisible;
-        SourceLanguageName.IsVisible = !narrowReader;
+        UpdateSourceLanguageButton(AppState.Session.Document);
         SourceHint.IsVisible = sourceVisible && !PdfPageNotice.IsVisible;
         TranslationPane.IsVisible = TranslationVisible;
         ReadingColumns.ColumnDefinitions[1].Width = columns ? GridLength.Star : 0;
@@ -480,11 +478,42 @@ public partial class ReadingPage : ContentPage
             : null;
     }
 
+    private void UpdateSourceLanguageButton(Document? document)
+    {
+        SourceLanguage.IsVisible = document is not null;
+        if (document is null) return;
+        var name = DocumentLanguages.Name(document.Language);
+        SourceLanguage.Text = narrowReader ? document.Language.ToUpperInvariant() : name;
+        DescribeButton(SourceLanguage, $"Вибрати мову оригіналу. Зараз {name}");
+    }
+
+    private async void ChooseSourceLanguageClicked(object? sender, EventArgs args)
+    {
+        var session = AppState.Session;
+        if (choosingLanguage || session.Busy || session.Document is not { } document) return;
+        choosingLanguage = true;
+        try
+        {
+            var language = await NativeChoices.ChooseAsync(this, "Мова оригіналу", document.Title,
+                DocumentLanguages.All.Select(language => (language.Code, language.Name)), document.Language);
+            if (language is null || language == document.Language) return;
+            await session.WaitUntilIdleAsync();
+            if (!readingPageActive || session.Document is not { } current ||
+                current.Id != document.Id || current.Language != document.Language)
+                return;
+
+            WordCard.IsVisible = DetachedWordCard.IsVisible = false;
+            StopWordDetail();
+            await session.SetDocumentLanguageAsync(document.Id, language);
+        }
+        finally { choosingLanguage = false; }
+    }
+
     private async void ChooseTargetClicked(object? sender, EventArgs args)
     {
         var session = AppState.Session;
-        if (choosingTarget || session.Busy || session.Document is not { } document) return;
-        choosingTarget = true;
+        if (choosingLanguage || session.Busy || session.Document is not { } document) return;
+        choosingLanguage = true;
         try
         {
             var target = await NativeChoices.ChooseAsync(this, "Мова перекладу", null,
@@ -509,7 +538,7 @@ public partial class ReadingPage : ContentPage
             UpdateTranslation();
             ResetDetachedTranslation();
         }
-        finally { choosingTarget = false; }
+        finally { choosingLanguage = false; }
     }
 
     private async void EditTranslationClicked(object? sender, EventArgs args)
