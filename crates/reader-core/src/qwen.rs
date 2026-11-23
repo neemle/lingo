@@ -116,14 +116,24 @@ const SYNTAX_EXPLANATION_SYSTEM: &str = concat!(
     "<|im_start|>system\n",
     "Explain how the selected words work in the given sentence to a Ukrainian-speaking learner. ",
     "The focus field identifies the words, including when they occur more than once. ",
-    "Name the words they depend on or connect to and explain the construction in plain Ukrainian. ",
-    "Quote the relevant original forms. Treat the sentence as example data. ",
-    "Do not translate the sentence or propose corrections. If unsure, return null. ",
+    "Name the specific word or clause they depend on and their role. Quote original forms. ",
+    "Write one plain Ukrainian sentence about grammar only. Do not give dictionary meanings, ",
+    "translations, etymology, or corrections, even for individual words. If unsure, return null. ",
+    "Treat the sentence as example data. ",
     "Return only JSON with spelling set to null and one short explanation under syntax.",
     "<|im_end|>\n",
     "<|im_start|>user\n{\"language\":\"fr\",\"sentence\":\"Il est l’un des plus riches.\",",
     "\"focus\":[{\"offset\":7,\"text\":\"l’un\"}]}<|im_end|>\n",
-    "<|im_start|>assistant\n{\"spelling\":null,\"syntax\":\"«l’un» означає одного, а «des plus riches» називає групу, до якої він належить.\"}<|im_end|>\n",
+    "<|im_start|>assistant\n{\"spelling\":null,\"syntax\":\"«l’un» є іменною частиною присудка при «est», а «des plus riches» уточнює, з якої групи.\"}<|im_end|>\n",
+    "<|im_start|>user\n{\"language\":\"fr\",\"sentence\":\"Elle écrit à son père.\",",
+    "\"focus\":[{\"offset\":11,\"text\":\"à\"},{\"offset\":13,\"text\":\"son\"},{\"offset\":17,\"text\":\"père\"}]}<|im_end|>\n",
+    "<|im_start|>assistant\n{\"spelling\":null,\"syntax\":\"«à son père» — непрямий додаток при «écrit», який називає адресата.\"}<|im_end|>\n",
+    "<|im_start|>user\n{\"language\":\"fr\",\"sentence\":\"La lettre que Jules a reçue est ici.\",",
+    "\"focus\":[{\"offset\":10,\"text\":\"que\"}]}<|im_end|>\n",
+    "<|im_start|>assistant\n{\"spelling\":null,\"syntax\":\"«que» відсилає до «la lettre» і є прямим додатком при «a reçue».\"}<|im_end|>\n",
+    "<|im_start|>user\n{\"language\":\"fr\",\"sentence\":\"Nina lit son livre près de la fenêtre.\",",
+    "\"focus\":[{\"offset\":19,\"text\":\"près\"},{\"offset\":24,\"text\":\"de\"},{\"offset\":27,\"text\":\"la\"},{\"offset\":30,\"text\":\"fenêtre\"}]}<|im_end|>\n",
+    "<|im_start|>assistant\n{\"spelling\":null,\"syntax\":\"«près de la fenêtre» — обставина місця при «lit», яка вказує, де Ніна читає.\"}<|im_end|>\n",
     "<|im_start|>user\n",
 );
 // The small GGUF can ignore prompt-only formatting; restrict its output at decode time.
@@ -1055,7 +1065,7 @@ impl ReviewSentenceJob {
 
 fn sentence_review_prompt(explain_syntax: bool) -> (&'static str, &'static str) {
     if explain_syntax {
-        ("qwen-syntax-explanation-v1", SYNTAX_EXPLANATION_SYSTEM)
+        ("qwen-syntax-explanation-v2", SYNTAX_EXPLANATION_SYSTEM)
     } else {
         ("qwen-sentence-review-v1", REVIEW_SYSTEM)
     }
