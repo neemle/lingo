@@ -3,7 +3,7 @@
  xmlns:state="clr-namespace:Reader.Presentation;assembly=Reader.Presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
  x:DataType="state:ReaderSession"
- x:Class="Reader.Native.Features.Settings.SettingsPage" Title="Мови та ресурси">
+ x:Class="Reader.Native.Features.Settings.SettingsPage" Title="Налаштування">
  <ContentPage.Resources>
   <Style x:Key="ResourceCard" TargetType="Border">
    <Setter Property="Padding" Value="26" />
@@ -33,9 +33,7 @@
  <ScrollView x:Name="SettingsScroll" SizeChanged="TranslationLayoutChanged">
   <VerticalStackLayout Padding="40,34,40,42" Spacing="20" MaximumWidthRequest="1000" HorizontalOptions="Fill">
    <VerticalStackLayout Spacing="8" Margin="0,0,0,8">
-    <Label Text="Мови та ресурси" Style="{StaticResource SerifTitle}" SemanticProperties.HeadingLevel="Level1" />
-    <Label Text="Мовні пакети, голоси й резервні копії на цьому пристрої."
-     Style="{StaticResource ResourceDetail}" />
+    <Label Text="Налаштування" Style="{StaticResource SerifTitle}" SemanticProperties.HeadingLevel="Level1" />
    </VerticalStackLayout>
 
    <Border Style="{StaticResource ResourceCard}">

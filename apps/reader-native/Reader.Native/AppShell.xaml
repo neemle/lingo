@@ -68,8 +68,8 @@
   <Tab Title="Практика" Route="practiceSection" Icon="nav_spark.png">
    <ShellContent Title="Практика" Route="practice" ContentTemplate="{DataTemplate practice:PracticePage}" />
   </Tab>
-  <Tab Title="Мови та ресурси" Route="settingsSection" Icon="nav_settings.png">
-   <ShellContent Title="Мови та ресурси" Route="settings" ContentTemplate="{DataTemplate settings:SettingsPage}" />
+  <Tab Title="Налаштування" Route="settingsSection" Icon="nav_settings.png">
+   <ShellContent Title="Налаштування" Route="settings" ContentTemplate="{DataTemplate settings:SettingsPage}" />
   </Tab>
  </FlyoutItem>
 </Shell>
