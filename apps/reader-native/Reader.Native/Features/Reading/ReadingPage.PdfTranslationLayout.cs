@@ -613,6 +613,9 @@ public partial class ReadingPage
             args.GetPosition(surface) is not { } point || surface.Drawable is not TranslatedPdfDrawing drawing ||
             drawing.HitTest(point) is not { } fragment) return;
         await SelectTranslatedPdfRowAsync(fragment);
+        if (overflowContent is not { } overflow) return;
+        var index = Array.IndexOf(overflow.Rows, fragment);
+        if (index >= 0) FollowOverflowSelection(overflow.Panel, pdfLayoutSentence, overflow.Labels[index]);
     }
 
     private async Task SelectTranslatedPdfRowAsync(PdfPageTranslationRow fragment)
@@ -1010,15 +1013,23 @@ public partial class ReadingPage
                     appearance?.Italic == true ? FontStyleType.Italic : FontStyleType.Normal);
                 var fit = textArea.Width >= 2 && textArea.Height >= 2
                     ? FitText(canvas, translated, font, textArea.Width, textArea.Height, preferredSize, minimumSize) : null;
-                if (fit is null)
-                {
-                    overflow.AddRange(fragments.Select(fragment => fragment.Source));
-                    continue;
-                }
                 foreach (var mask in region.Masks)
                 {
                     canvas.FillColor = ColorFrom(mask.Background);
                     canvas.FillRectangle(Scale(mask.Bounds, page));
+                }
+                if (fit is null)
+                {
+                    overflow.AddRange(fragments.Select(fragment => fragment.Source));
+                    var selected = fragments.Find(fragment => fragment.Active);
+                    var linked = selected.Active ? selected : fragments[0];
+                    foreground.Add(() =>
+                    {
+                        var color = Color.FromArgb(linked.Active ? "#88432C" : "#58584E");
+                        if (DrawFragmentBadge(canvas, area, "Переклад нижче", "↓", color) is { } badge)
+                            hitTargets.Add((badge, linked.Source));
+                    });
+                    continue;
                 }
                 var ink = appearance?.Ink ?? Color.FromArgb("#302D27");
                 foreground.Add(() => DrawText(canvas, translated, textArea, fragments, font, ink, fit, region.Alignment,
@@ -1050,24 +1061,31 @@ public partial class ReadingPage
             }
 
             var spot = anchor.PendingMasks?.FirstOrDefault()?.Bounds is { } firstLine ? Scale(firstLine, page) : bounds;
+            DrawFragmentBadge(canvas, spot, PdfFragmentState(row), row.Failure is null ? "…" : "!",
+                Color.FromArgb(row.Failure is null ? "#58584E" : "#88432C"));
+        }
+
+        private static RectF? DrawFragmentBadge(ICanvas canvas, RectF spot, string label, string compact, Color color)
+        {
             var height = Math.Min(21, spot.Height);
-            if (height <= 0 || spot.Width <= 0) return;
-            var label = PdfFragmentState(row);
+            if (height <= 0 || spot.Width <= 0) return null;
             var font = Microsoft.Maui.Graphics.Font.Default;
             var size = height * 0.65f;
             var width = canvas.GetStringSize(label, font, size).Width + height;
             if (width > spot.Width)
             {
-                label = row.Failure is null ? "…" : "!";
+                label = compact;
                 width = Math.Min(spot.Width, height);
+                size = Math.Min(size, width * 0.65f);
             }
-            canvas.FillColor = Color.FromArgb(row.Failure is null ? "#58584E" : "#88432C");
+            canvas.FillColor = color;
             canvas.FillRoundedRectangle(spot.Left, spot.Top, width, height, Math.Min(width, height) * 0.25f);
             canvas.Font = font;
             canvas.FontSize = size;
             canvas.FontColor = Colors.White;
             canvas.DrawString(label, spot.Left, spot.Top, width, height,
                 HorizontalAlignment.Center, VerticalAlignment.Center, TextFlow.ClipBounds);
+            return new RectF(spot.Left, spot.Top, width, height);
         }
 
         private static RectF Scale(PdfSampleBox bounds, RectF page) =>
