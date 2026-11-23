@@ -1120,10 +1120,10 @@ impl Store {
         if source == target {
             return Err("Виберіть іншу мову перекладу.".into());
         }
-        let segments: Vec<_> = crate::translation_passage::passage_chunks(&source_text)?
+        let (segments, separators): (Vec<_>, Vec<_>) = crate::translation_passage::passage_chunks(&source_text)?
             .into_iter()
-            .map(|text| crate::translation::normalize_cardinals(&source, target, text.to_owned()))
-            .collect();
+            .map(|chunk| (crate::translation::normalize_cardinals(&source, target, chunk.text.to_owned()), chunk.separator))
+            .unzip();
         let directory = self.model_directory.clone();
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
         let translated = self.translate_aligned_with_catalog(
@@ -1139,7 +1139,7 @@ impl Store {
             Some(id),
         )?;
         Ok(translated.map(|result| {
-            let mut text = result.segments.join(" ");
+            let mut text = crate::translation_passage::join_translated_chunks(result.segments, separators);
             if source == "fr" && target == "uk" {
                 crate::translation_dates::preserve_french_dates(&source_text, &mut text);
             }

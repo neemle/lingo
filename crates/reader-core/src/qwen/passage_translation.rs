@@ -2,7 +2,7 @@ use super::{
     generate_in_mode, json_output, prompt_checkpoint, with_prompt_context, GenerationMode,
     HintCache, HintCacheMode, HintWork, GENERATION_TIMEOUT, HINT_GENERATION_MODEL,
 };
-use crate::{pdf_sentences::Layout, translation_passage::passage_chunks, Result, Store};
+use crate::{pdf_sentences::Layout, translation_passage::{join_translated_chunks, passage_chunks}, Result, Store};
 use serde::{Deserialize, Serialize};
 use std::{
     time::{Duration, Instant},
@@ -48,6 +48,7 @@ pub struct TranslatePassageJob {
     target: String,
     regenerate: bool,
     chunks: Vec<HintWork<TranslationChunk>>,
+    separators: Vec<&'static str>,
 }
 
 impl Store {
@@ -80,9 +81,11 @@ impl Store {
         }
         // Read all chunk entries from the same generation while a refresh may be publishing.
         let snapshot = self.connection.unchecked_transaction().map_err(|error| error.to_string())?;
-        let chunks = passage_chunks(&text)?
-            .into_iter()
-            .map(|text| {
+        let pieces = passage_chunks(&text)?;
+        let separators = pieces.iter().map(|chunk| chunk.separator).collect();
+        let chunks = pieces.into_iter()
+            .map(|chunk| {
+                let text = chunk.text;
                 let example = format!("Translate from {source_name} into {target_name}.\n{text}");
                 let cache_kind = if complete_sentences(text) > 1 {
                     "qwen-passage-translation-v7"
@@ -106,6 +109,7 @@ impl Store {
             target: target.to_owned(),
             regenerate: matches!(mode, HintCacheMode::Refresh),
             chunks,
+            separators,
         })
     }
 }
@@ -214,7 +218,8 @@ impl TranslatePassageJob {
     }
 
     fn combine(&self, chunks: Vec<TranslationChunk>, cached: bool) -> PassageTranslation {
-        let mut text = chunks.into_iter().map(|chunk| chunk.text).collect::<Vec<_>>().join(" ");
+        let mut text = join_translated_chunks(chunks.into_iter().map(|chunk| chunk.text),
+            self.separators.iter().copied());
         if self.source == "fr" && self.target == "uk" {
             crate::translation_dates::preserve_french_dates(&self.source_text, &mut text);
         }
@@ -508,6 +513,24 @@ mod tests {
         assert_eq!(cached.text, "15 лютого 1815 року двері відчинені. Моряк заходить.");
         assert_eq!(cached.source_text, document.text);
         assert!(reopened.cached_passage_translation(&document.id, None, second, "de").unwrap().is_none());
+    }
+
+    #[test]
+    fn cached_passage_displays_dialogue_on_separate_lines() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let source = "— Bonjour, monsieur.\n— Vous partez demain ?";
+        let document = store.import("Dialogue.txt", source.as_bytes(), "fr").unwrap();
+        let sentence = &document.sentences[0].id;
+        let pending = store.prepare_passage_translation(&document.id, None, sentence, "uk", true).unwrap();
+        let [HintWork::Generate { cache: first, .. }, HintWork::Generate { cache: second, .. }] =
+            pending.chunks.as_slice() else { panic!("expected two dialogue turns"); };
+        let first_translation = TranslationChunk { text: "— Добрий день, пане.".into() };
+        let second_translation = TranslationChunk { text: "— Ви їдете завтра?".into() };
+        HintCache::save_batch([(first, &first_translation), (second, &second_translation)]).unwrap();
+        let replay = store.cached_passage_translation(&document.id, None, sentence, "uk").unwrap().unwrap();
+        assert_eq!(replay.source_text, source);
+        assert_eq!(replay.text, "— Добрий день, пане.\n— Ви їдете завтра?");
     }
 
     #[test]
