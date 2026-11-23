@@ -37,9 +37,12 @@ public partial class LibraryPage
                 var language = await ChooseAsync(async () =>
                 {
                     if (cachedLanguage is not null) return cachedLanguage;
-#if MACCATALYST
                     bytes = await session.ReadIntakeBytesAsync(item.Id);
                     ImportStatus.Text = "Визначаємо мову зображення…";
+                    var sample = await TesseractOcr.ReadLanguageSampleAsync(() => PhotoOcr.PreviewAsync(bytes));
+                    if (sample.Length > 0 && await session.DetectLanguageAsync(sample) is { } detected)
+                        return detected;
+#if MACCATALYST
                     return await session.DetectLanguageAsync(await PhotoOcr.ReadLanguageSampleAsync(bytes));
 #else
                     return null;
@@ -116,21 +119,25 @@ public partial class LibraryPage
                 token.ThrowIfCancellationRequested();
                 ImportStatus.Text = "Визначаємо мову за кількома сторінками PDF…";
                 path ??= (await session.IntakeFileAsync(item.Id)).Path;
-                var samples = await PdfScan.ReadLanguageSamplesAsync(path, optical: false, cancellation: token);
+                var samples = await PdfScan.ReadLanguageSamplesAsync(path, PdfScan.LanguageSample.TextLayer, cancellation: token);
                 var detected = await PdfRecognition.DetectSampleLanguageAsync(samples, session.DetectLanguageAsync);
                 token.ThrowIfCancellationRequested();
                 if (detected is not null) return detected;
 
                 const int bodySamples = 3;
-                var body = await PdfScan.ReadLanguageSamplesAsync(path, optical: true, count: bodySamples, cancellation: token);
-                detected = await PdfRecognition.DetectSampleLanguageAsync(body, session.DetectLanguageAsync);
-                token.ThrowIfCancellationRequested();
-                if (detected is not null || samples.Length <= bodySamples) return detected;
-
-                var front = await PdfScan.ReadLanguageSamplesAsync(path, optical: true, skip: bodySamples, cancellation: token);
-                detected = await PdfRecognition.DetectSampleLanguageAsync([.. body, .. front], session.DetectLanguageAsync);
-                token.ThrowIfCancellationRequested();
-                return detected;
+                foreach (var source in new[] { PdfScan.LanguageSample.PortableOcr, PdfScan.LanguageSample.NativeOcr })
+                {
+                    var body = await PdfScan.ReadLanguageSamplesAsync(path, source, count: bodySamples, cancellation: token);
+                    detected = await PdfRecognition.DetectSampleLanguageAsync(body, session.DetectLanguageAsync);
+                    token.ThrowIfCancellationRequested();
+                    if (detected is not null) return detected;
+                    if (samples.Length <= bodySamples) continue;
+                    var front = await PdfScan.ReadLanguageSamplesAsync(path, source, skip: bodySamples, cancellation: token);
+                    detected = await PdfRecognition.DetectSampleLanguageAsync([.. body, .. front], session.DetectLanguageAsync);
+                    token.ThrowIfCancellationRequested();
+                    if (detected is not null) return detected;
+                }
+                return null;
             });
             if (language is null) return false;
             await session.WaitUntilIdleAsync();

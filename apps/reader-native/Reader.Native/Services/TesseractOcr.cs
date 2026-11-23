@@ -12,7 +12,7 @@ internal static class TesseractOcr
 {
     private static readonly IReadOnlyDictionary<string, string> Languages = new Dictionary<string, string>
     {
-        ["uk"] = "ukr", ["en"] = "eng", ["fr"] = "fra", ["de"] = "deu", ["es"] = "spa", ["it"] = "ita",
+        ["en"] = "eng", ["fr"] = "fra", ["de"] = "deu", ["es"] = "spa", ["it"] = "ita", ["uk"] = "ukr",
         ["pt"] = "por", ["pl"] = "pol", ["nl"] = "nld", ["cs"] = "ces", ["ro"] = "ron", ["sv"] = "swe",
     };
     private static readonly SemaphoreSlim Probe = new(1);
@@ -22,6 +22,28 @@ internal static class TesseractOcr
 
     internal static async Task<string[]> InstalledLanguagesAsync() =>
         (await InstallationsAsync(default).ConfigureAwait(false)).Keys.ToArray();
+
+    internal static async Task<string> ReadLanguageSampleAsync(Func<Task<PhotoPreview>> prepareImage,
+        CancellationToken cancellation = default)
+    {
+        try
+        {
+            var installations = await InstallationsAsync(cancellation).ConfigureAwait(false);
+            var group = installations.GroupBy(item => item.Value).OrderByDescending(items => items.Count()).FirstOrDefault();
+            if (group is null) return "";
+            var models = string.Join("+", group.Select(item => Languages[item.Key]));
+            var image = await prepareImage().ConfigureAwait(false);
+            ReadPngSize(image.Bytes);
+            return await ExecuteAsync(group.Key,
+                ["stdin", "stdout", "-l", models, "--oem", "1", "--psm", "3"], image.Bytes,
+                64 * 1024, TimeSpan.FromSeconds(12), cancellation).ConfigureAwait(false);
+        }
+        catch (Exception error) when (CanFallback(error))
+        {
+            cancellation.ThrowIfCancellationRequested();
+            return "";
+        }
+    }
 
     internal static async Task<OcrLine[]> RecognizeAsync(Func<Task<OcrLine[]>> native,
         Func<Task<PhotoPreview>> prepareImage, string language, CancellationToken cancellation)
@@ -34,14 +56,7 @@ internal static class TesseractOcr
             if (installations.TryGetValue(language, out var executable))
             {
                 var image = await prepareImage().ConfigureAwait(false);
-                if (image.Bytes.Length is < 24 or > 64 * 1024 * 1024
-                    || !image.Bytes.AsSpan(0, 8).SequenceEqual(PngSignature)
-                    || !image.Bytes.AsSpan(12, 4).SequenceEqual("IHDR"u8))
-                    throw new InvalidDataException("Tesseract потребує коректного PNG-зображення.");
-                var width = BinaryPrimitives.ReadInt32BigEndian(image.Bytes.AsSpan(16, 4));
-                var height = BinaryPrimitives.ReadInt32BigEndian(image.Bytes.AsSpan(20, 4));
-                if (width is < 1 or > 4096 || height is < 1 or > 4096)
-                    throw new InvalidDataException("Розмір зображення для Tesseract перевищує допустимі межі.");
+                var (width, height) = ReadPngSize(image.Bytes);
                 var output = await ExecuteAsync(executable,
                     ["stdin", "stdout", "-l", Languages[language], "--oem", "1", "--psm", "3", "tsv"], image.Bytes,
                     16 * 1024 * 1024, TimeSpan.FromSeconds(60), cancellation).ConfigureAwait(false);
@@ -64,6 +79,19 @@ internal static class TesseractOcr
         {
             throw new InvalidOperationException($"{error.Message} Tesseract: {portableFailure.Message}", error);
         }
+    }
+
+    private static (int Width, int Height) ReadPngSize(byte[] bytes)
+    {
+        if (bytes.Length is < 24 or > 64 * 1024 * 1024
+            || !bytes.AsSpan(0, 8).SequenceEqual(PngSignature)
+            || !bytes.AsSpan(12, 4).SequenceEqual("IHDR"u8))
+            throw new InvalidDataException("Tesseract потребує коректного PNG-зображення.");
+        var width = BinaryPrimitives.ReadInt32BigEndian(bytes.AsSpan(16, 4));
+        var height = BinaryPrimitives.ReadInt32BigEndian(bytes.AsSpan(20, 4));
+        if (width is < 1 or > 4096 || height is < 1 or > 4096)
+            throw new InvalidDataException("Розмір зображення для Tesseract перевищує допустимі межі.");
+        return (width, height);
     }
 
     private static bool CanFallback(Exception error) => error is IOException or InvalidDataException or CoreException

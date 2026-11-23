@@ -122,8 +122,10 @@ internal static partial class PdfScan
             return blocks.Text == storedText ? [] : blocks.Corrections;
         });
 
+    internal enum LanguageSample { TextLayer, PortableOcr, NativeOcr }
+
     internal static Task<string[]> ReadLanguageSamplesAsync(
-        string path, bool optical, int skip = 0, int count = 5, CancellationToken cancellation = default) => Task.Run(() =>
+        string path, LanguageSample source, int skip = 0, int count = 5, CancellationToken cancellation = default) => Task.Run(() =>
     {
         cancellation.ThrowIfCancellationRequested();
         using var pool = new NSAutoreleasePool();
@@ -141,12 +143,21 @@ internal static partial class PdfScan
             try
             {
                 using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
-                if (optical)
+                if (source == LanguageSample.TextLayer)
+                    text = page.Text?.Trim() ?? "";
+                else
                 {
                     using var image = Thumbnail(page, 1800);
-                    if (image.CGImage is { } bitmap) text = PhotoOcr.ReadLanguageSample(bitmap);
+                    if (source == LanguageSample.PortableOcr)
+                        text = TesseractOcr.ReadLanguageSampleAsync(
+                            () =>
+                            {
+                                using var encodingPool = new NSAutoreleasePool();
+                                return Task.FromResult(EncodePreview(image));
+                            }, cancellation).GetAwaiter().GetResult();
+                    else if (image.CGImage is { } bitmap)
+                        text = PhotoOcr.ReadLanguageSample(bitmap);
                 }
-                else text = page.Text?.Trim() ?? "";
             }
             catch (Exception error) when (error is InvalidDataException or InvalidOperationException)
             {
