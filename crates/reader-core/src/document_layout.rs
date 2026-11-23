@@ -180,6 +180,7 @@ fn transcript_ranges(text: &str, range: Range<usize>, pdf: bool) -> Vec<(Range<u
     let mut previous = "";
     for line in page.split_inclusive('\n') {
         let content = line.trim();
+        let mut tail = content;
         let heading = standalone_heading(content);
         let footnote = footnote_start(content) && (offset == start || ends_sentence(previous));
         let new_prose = content.starts_with(char::is_uppercase)
@@ -193,11 +194,13 @@ fn transcript_ranges(text: &str, range: Range<usize>, pdf: bool) -> Vec<(Range<u
         }
         if !heading {
             let leading = line.len() - line.trim_start().len();
-            for split in inline_pdf_breaks(content).map(|index| offset + leading + index) {
+            for index in inline_pdf_breaks(content) {
+                let split = offset + leading + index;
                 if let Some(part) = trimmed_range(text, start..split) {
                     result.push((part, None));
                 }
                 start = split;
+                tail = &content[index..];
             }
         }
         offset += line.len();
@@ -207,7 +210,7 @@ fn transcript_ranges(text: &str, range: Range<usize>, pdf: bool) -> Vec<(Range<u
         } else if content.is_empty() {
             start = offset;
         }
-        previous = content;
+        previous = tail;
     }
     if let Some(part) = trimmed_range(text, start..range.end) {
         result.push((part, None));
@@ -217,15 +220,27 @@ fn transcript_ranges(text: &str, range: Range<usize>, pdf: bool) -> Vec<(Range<u
 
 fn inline_pdf_breaks(line: &str) -> impl Iterator<Item = usize> + '_ {
     line.char_indices().filter_map(move |(index, ch)| {
-        if index == 0 || !(matches!(ch, '–' | '—') || ch.is_ascii_digit()) {
+        let possible_marker = matches!(ch, '–' | '—' | '-' | '«' | '“' | '„' | '"')
+            || ch.is_ascii_digit();
+        if index == 0 || (!possible_marker && !ch.is_uppercase()) {
             return None;
         }
         let preceding = &line[..index];
-        if !preceding.ends_with(char::is_whitespace) || !ends_sentence(preceding.trim_end()) {
+        if !preceding.ends_with(char::is_whitespace) {
             return None;
         }
+        let preceding = preceding.trim_end();
+        if !ends_sentence(preceding) {
+            return None;
+        }
+        // A text layer can collapse both the opening speech and the following
+        // narration into the physical line holding the quotation.
+        if ch.is_uppercase() && preceding.ends_with(['»', '”', '›', '」', '』']) {
+            return Some(index);
+        }
         let following = &line[index..];
-        (starts_dialogue(following, preceding.trim_end()) || footnote_start(following)).then_some(index)
+        (possible_marker && (starts_dialogue(following, preceding) || footnote_start(following)))
+            .then_some(index)
     })
 }
 
@@ -259,7 +274,7 @@ pub(crate) fn sentence_in_footnote(blocks: &[DocumentBlock], sentence: &crate::S
 }
 
 fn ends_sentence(text: &str) -> bool {
-    text.trim_end_matches(['»', '”', '"', ')']).trim_end()
+    text.trim_end_matches(['»', '”', '›', '」', '』', '"', ')']).trim_end()
         .ends_with(['.', '!', '?', ':', '…'])
 }
 
@@ -793,5 +808,26 @@ mod tests {
             assert_eq!(block.start_utf16, raw[..block.start_utf8].encode_utf16().count());
             assert_eq!(block.end_utf16, raw[..block.end_utf8].encode_utf16().count());
         }
+    }
+
+    #[test]
+    fn flattened_pdf_separates_quotes_and_ascii_dash_turns_without_changing_source() {
+        let raw = "📖 Elle demande : « Vous venez ? » Le marin hésite. - Oui, M. Morrel. - Au port, alors !\nLe tarif de l’aller-retour est 12 - 3 euros.";
+        let mut document = detached_pdf_document(raw.into(), "fr", None);
+        assert_eq!(document.text, raw);
+        reflow_ocr_paragraphs(&mut document);
+        let blocks: Vec<_> = document.blocks.iter().map(|block| {
+            assert_eq!(block.start_utf16, raw[..block.start_utf8].encode_utf16().count());
+            assert_eq!(block.end_utf16, raw[..block.end_utf8].encode_utf16().count());
+            &raw[block.start_utf8..block.end_utf8]
+        }).collect();
+        assert_eq!(blocks, [
+            "📖 Elle demande :",
+            "« Vous venez ? »",
+            "Le marin hésite.",
+            "- Oui, M. Morrel.",
+            "- Au port, alors !",
+            "Le tarif de l’aller-retour est 12 - 3 euros.",
+        ]);
     }
 }
