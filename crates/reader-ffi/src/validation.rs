@@ -133,7 +133,7 @@ fn validate(command: &Command) -> Result<()> {
             ))
         }
         Command::Import { bytes, name, .. }
-        | Command::DetectDocumentLanguage { bytes, name }
+        | Command::DetectDocumentLanguage { bytes, name, .. }
         | Command::ImportImage { bytes, name, .. }
         | Command::ImportScannedPdf { bytes, name, .. }
         | Command::ImportMixedPdf { bytes, name, .. }
@@ -152,7 +152,7 @@ fn validate(command: &Command) -> Result<()> {
             "invalid_argument",
             "Speech input exceeds 64 KiB",
         )),
-        Command::DetectLanguage { text } if text.len() > 32_000 => Err(Error::new(
+        Command::DetectLanguage { text, .. } if text.len() > 32_000 => Err(Error::new(
             "invalid_argument",
             "Language sample is too long",
         )),

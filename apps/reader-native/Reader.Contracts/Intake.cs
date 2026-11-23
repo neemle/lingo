@@ -1,5 +1,7 @@
 namespace Reader.Contracts;
 
+public sealed record ImportLanguageSample(string? Language, string Sample);
+
 public sealed record IntakeArticleDraft(string Title, string Text, string SourceUrl);
 
 public sealed record IntakeItem(string Id, string Name, string Kind, long Bytes,

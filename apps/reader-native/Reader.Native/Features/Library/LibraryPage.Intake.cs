@@ -24,7 +24,7 @@ public partial class LibraryPage
             case "importDocument":
             {
                 var language = await ChooseAsync(async () =>
-                    await session.DetectDocumentLanguageAsync(item.Name, await session.ReadIntakeBytesAsync(item.Id)));
+                    await ImportLanguageDetection.DetectDocumentAsync(session, item.Name, await session.ReadIntakeBytesAsync(item.Id)));
                 if (language is null) return null;
                 await session.WaitUntilIdleAsync();
                 await session.CompleteDocumentIntakeAsync(item.Id, language);
@@ -40,10 +40,10 @@ public partial class LibraryPage
                     bytes = await session.ReadIntakeBytesAsync(item.Id);
                     ImportStatus.Text = "Визначаємо мову зображення…";
                     var sample = await TesseractOcr.ReadLanguageSampleAsync(() => PhotoOcr.PreviewAsync(bytes));
-                    if (sample.Length > 0 && await session.DetectLanguageAsync(sample) is { } detected)
+                    if (sample.Length > 0 && await ImportLanguageDetection.DetectAsync(session, sample) is { } detected)
                         return detected;
 #if MACCATALYST
-                    return await session.DetectLanguageAsync(await PhotoOcr.ReadLanguageSampleAsync(bytes));
+                    return await ImportLanguageDetection.DetectAsync(session, await PhotoOcr.ReadLanguageSampleAsync(bytes));
 #else
                     return null;
 #endif
@@ -74,7 +74,7 @@ public partial class LibraryPage
                         new IntakeArticleDraft(downloaded.Title, downloaded.Text, downloaded.Address.AbsoluteUri));
                 }
                 ImportStatus.Text = "";
-                var language = await ChooseAsync(() => session.DetectLanguageAsync(article.Text));
+                var language = await ChooseAsync(() => ImportLanguageDetection.DetectAsync(session, article.Text));
                 if (language is null) return null;
                 await session.WaitUntilIdleAsync();
                 await session.CompleteStagedArticleIntakeAsync(item.Id, language);
@@ -120,7 +120,8 @@ public partial class LibraryPage
                 ImportStatus.Text = "Визначаємо мову за кількома сторінками PDF…";
                 path ??= (await session.IntakeFileAsync(item.Id)).Path;
                 var samples = await PdfScan.ReadLanguageSamplesAsync(path, PdfScan.LanguageSample.TextLayer, cancellation: token);
-                var detected = await PdfRecognition.DetectSampleLanguageAsync(samples, session.DetectLanguageAsync);
+                Task<string?> DetectAsync(string sample) => ImportLanguageDetection.DetectAsync(session, sample);
+                var detected = await PdfRecognition.DetectSampleLanguageAsync(samples, DetectAsync);
                 token.ThrowIfCancellationRequested();
                 if (detected is not null) return detected;
 
@@ -128,12 +129,12 @@ public partial class LibraryPage
                 foreach (var source in new[] { PdfScan.LanguageSample.PortableOcr, PdfScan.LanguageSample.NativeOcr })
                 {
                     var body = await PdfScan.ReadLanguageSamplesAsync(path, source, count: bodySamples, cancellation: token);
-                    detected = await PdfRecognition.DetectSampleLanguageAsync(body, session.DetectLanguageAsync);
+                    detected = await PdfRecognition.DetectSampleLanguageAsync(body, DetectAsync);
                     token.ThrowIfCancellationRequested();
                     if (detected is not null) return detected;
                     if (samples.Length <= bodySamples) continue;
                     var front = await PdfScan.ReadLanguageSamplesAsync(path, source, skip: bodySamples, cancellation: token);
-                    detected = await PdfRecognition.DetectSampleLanguageAsync([.. body, .. front], session.DetectLanguageAsync);
+                    detected = await PdfRecognition.DetectSampleLanguageAsync([.. body, .. front], DetectAsync);
                     token.ThrowIfCancellationRequested();
                     if (detected is not null) return detected;
                 }

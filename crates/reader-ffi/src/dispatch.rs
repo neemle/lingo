@@ -101,10 +101,16 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::PrepareUkrainianSpeech { text } => {
             value(Ok(reader_core::tts::ukrainian_stress(&text)))
         }
-        Command::DetectLanguage { text } => {
+        Command::DetectLanguage { text, include_sample: true } => {
+            value(Ok(reader_core::language_detection::import_sample(&text)))
+        }
+        Command::DetectLanguage { text, include_sample: false } => {
             value(Ok(reader_core::language_detection::detect(&text)))
         }
-        Command::DetectDocumentLanguage { name, bytes } => value(Ok(
+        Command::DetectDocumentLanguage { name, bytes, include_sample: true } => value(Ok(
+            reader_core::language_detection::document_import_sample(&name, &bytes),
+        )),
+        Command::DetectDocumentLanguage { name, bytes, include_sample: false } => value(Ok(
             reader_core::language_detection::detect_document(&name, &bytes),
         )),
         Command::Import {

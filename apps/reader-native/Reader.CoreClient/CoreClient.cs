@@ -75,15 +75,23 @@ public sealed class CoreClient : IDisposable
         Call<ReadingSession[]>(new { version = 1, operation = "recent_reading_sessions" });
     public void CheckpointReading(ReadingSession session) =>
         Call<JsonElement>(new { version = 1, operation = "checkpoint_reading", session });
-    public string? DetectLanguage(string text)
-    {
-        var length = Math.Min(text.Length, 8000);
-        if (length > 0 && char.IsHighSurrogate(text[length - 1])) length--;
-        return Call<string?>(new { version = 1, operation = "detect_language", text = text[..length] });
-    }
+    public string? DetectLanguage(string text) =>
+        Call<string?>(new { version = 1, operation = "detect_language", text = LimitLanguageText(text) });
     public string? DetectDocumentLanguage(string name, byte[] bytes) =>
         Call<string?>(new { version = 1, operation = "detect_document_language", name,
             bytes = bytes.Select(value => (int)value).ToArray() });
+    public ImportLanguageSample DetectImportLanguage(string text) =>
+        Call<ImportLanguageSample>(new { version = 1, operation = "detect_language",
+            text = LimitLanguageText(text), includeSample = true });
+    public ImportLanguageSample DetectDocumentImportLanguage(string name, byte[] bytes) =>
+        Call<ImportLanguageSample>(new { version = 1, operation = "detect_document_language", name,
+            bytes = bytes.Select(value => (int)value).ToArray(), includeSample = true });
+    private static string LimitLanguageText(string text)
+    {
+        var length = Math.Min(text.Length, 8000);
+        if (length > 0 && char.IsHighSurrogate(text[length - 1])) length--;
+        return text[..length];
+    }
     public static uint[] SamplePdfBackgrounds(int width, int height, byte[] rgba, PdfSampleBox[] boxes) =>
         Invoke<uint[]>(0, new { version = 1, operation = "sample_pdf_backgrounds", width, height, rgba, boxes });
     public static PdfSampleColors[] SamplePdfColors(int width, int height, byte[] rgba, PdfSampleBox[] boxes) =>

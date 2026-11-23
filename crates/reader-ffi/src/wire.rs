@@ -135,10 +135,14 @@ pub enum Command {
     },
     DetectLanguage {
         text: String,
+        #[serde(default, rename = "includeSample")]
+        include_sample: bool,
     },
     DetectDocumentLanguage {
         name: String,
         bytes: Vec<u8>,
+        #[serde(default, rename = "includeSample")]
+        include_sample: bool,
     },
     Import {
         name: String,

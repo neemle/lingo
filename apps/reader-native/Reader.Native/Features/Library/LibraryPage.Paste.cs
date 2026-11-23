@@ -128,7 +128,7 @@ public partial class LibraryPage
             {
                 if (debounce) await Task.Delay(300);
                 if (!Current()) return;
-                var code = await AppState.Session.DetectLanguageAsync(sample);
+                var code = await ImportLanguageDetection.DetectAsync(AppState.Session, sample);
                 if (!Current()) return;
                 var suggestions = DocumentLanguages.All.Select((item, index) => (item, index));
                 var index = suggestions.Where(entry => entry.item.Code == code)

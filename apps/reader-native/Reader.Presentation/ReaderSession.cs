@@ -82,6 +82,10 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<string?> DetectLanguageAsync(string text) => Task.Run(() => client.DetectLanguage(text));
     public Task<string?> DetectDocumentLanguageAsync(string name, byte[] bytes) =>
         Task.Run(() => client.DetectDocumentLanguage(name, bytes));
+    public Task<ImportLanguageSample> DetectImportLanguageAsync(string text) =>
+        Task.Run(() => client.DetectImportLanguage(text));
+    public Task<ImportLanguageSample> DetectDocumentImportLanguageAsync(string name, byte[] bytes) =>
+        Task.Run(() => client.DetectDocumentImportLanguage(name, bytes));
 
     public async Task SelectAsync(string id)
     {
