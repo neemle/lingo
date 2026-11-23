@@ -15,6 +15,10 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
 }
 
 impl Store {
+    pub fn pdf_reading_positions(&self) -> Result<BTreeMap<String, u16>> {
+        export(&self.connection)
+    }
+
     pub fn pdf_reading_page(&self, id: &str) -> Result<Option<u16>> {
         self.connection
             .query_row(

@@ -97,9 +97,11 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
 
     public bool CanViewOriginal => !busy && (Document?.Format == "pdf" || Document?.OcrLines is { Length: > 0 });
 
-    public int OriginalPageIndex()
+    public int OriginalPageIndex() => Document is { } document ? OriginalPageIndex(document) : 0;
+
+    public static int OriginalPageIndex(Document document)
     {
-        if (Document is not { } document || Sentence is not { } sentence) return 0;
+        if (document.Sentences.ElementAtOrDefault(document.Position) is not { } sentence) return 0;
         var cursorOffset = sentence.StartUtf16 + (document.ReadingTokenUtf16 ?? 0);
         if (document.PdfPageStarts is { } starts)
         {

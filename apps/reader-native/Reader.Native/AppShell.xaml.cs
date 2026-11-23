@@ -31,12 +31,15 @@ public partial class AppShell : Shell
         restored = true;
         try
         {
-            trackedSession = AppState.Session;
+            var session = trackedSession = AppState.Session;
+            await session.WaitUntilIdleAsync();
+            if (stopped) return;
             var id = Preferences.Get("lastDocument", "");
-            if (id.Length > 0) await trackedSession.SelectAsync(id);
-            else await trackedSession.RefreshAsync();
+            if (id.Length > 0) await session.SelectAsync(id);
+            else await session.RefreshAsync();
             if (!stopped) AppState.StartTranslationWorker(Dispatcher);
-            if (!stopped && !DesktopImport.HasIncoming && previousRoute != LibraryRoute)
+            if (!stopped && !DesktopImport.HasIncoming && previousRoute != LibraryRoute &&
+                (!previousRoute.StartsWith(ReadingRoute, StringComparison.Ordinal) || session.Document is not null))
                 await GoToAsync(previousRoute);
         }
         catch (Exception error)

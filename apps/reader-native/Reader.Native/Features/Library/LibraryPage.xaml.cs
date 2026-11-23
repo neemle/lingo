@@ -48,6 +48,12 @@ public partial class LibraryPage : ContentPage
 
     private void ShowBooks(Snapshot snapshot)
     {
+        var last = Preferences.Get("lastDocument", "");
+        var recent = snapshot.Documents.FirstOrDefault(document => document.Id == last);
+        ContinueReading.IsVisible = recent is not null;
+        if (recent is not null)
+            SemanticProperties.SetDescription(ContinueReading, $"Продовжити читати {recent.Title}");
+
         var filter = LibraryFilter.Text?.Trim() ?? "";
         if (ReferenceEquals(displayedSnapshot, snapshot) && displayedFilter == filter) return;
 
@@ -55,7 +61,8 @@ public partial class LibraryPage : ContentPage
         displayedFilter = filter;
         var cards = snapshot.Documents.Select((document, index) => (document, index))
             .Where(item => filter.Length == 0 || MatchesLibraryFilter(item.document, filter))
-            .Select(item => new LibraryCard(item.document, item.index));
+            .Select(item => new LibraryCard(item.document, item.index,
+                snapshot.PdfReadingPositions.TryGetValue(item.document.Id, out var page) ? page : null));
         var visible = (filter.Length == 0 ? cards.Append(new LibraryCard(null, 0)) : cards).ToArray();
         Books.ItemsSource = visible;
         NoMatchingBooks.IsVisible = filter.Length != 0 && visible.Length == 0;
@@ -99,11 +106,11 @@ public partial class LibraryPage : ContentPage
                 session.PropertyChanged += SessionChanged;
             }
             ShowBooks(session.Snapshot);
+            await session.WaitUntilIdleAsync();
+            if (!ReferenceEquals(observedSession, session)) return;
             await session.RefreshAsync();
             await RefreshPendingPdfAsync();
             await RefreshShareInboxAsync();
-            var last = Preferences.Get("lastDocument", "");
-            if (!string.IsNullOrEmpty(last)) await AppState.Session.SelectAsync(last);
         }
         catch (Exception error)
         {
@@ -429,6 +436,13 @@ public partial class LibraryPage : ContentPage
         if (sender is Button { CommandParameter: LibraryCard card }) await OpenCardAsync(card);
     }
 
+    private async void ContinueReadingClicked(object? sender, EventArgs args)
+    {
+        var last = Preferences.Get("lastDocument", "");
+        if (AppState.Session.Snapshot.Documents.FirstOrDefault(document => document.Id == last) is { } document)
+            await OpenCardAsync(new LibraryCard(document, 0));
+    }
+
     private async Task OpenCardAsync(LibraryCard card)
     {
         if (openingCard || importing || changingLanguage || editingDocument || AppState.Session.Busy) return;
@@ -451,11 +465,23 @@ public sealed class LibraryCard
         (Color.FromArgb("#CFDADB"), Color.FromArgb("#B1C6C7"), Color.FromArgb("#496669")),
     ];
 
-    public LibraryCard(Document? document, int index)
+    public LibraryCard(Document? document, int index, int? savedPdfPage = null)
     {
         Document = document;
         (Cover, Spine, CoverInk) = Palette[index % Palette.Length];
-        if (document is { Sentences.Length: > 0 })
+        if (document is { Format: "pdf" } pdf &&
+            (pdf.PdfPageStarts?.Length ?? pdf.OcrPdfPages) is > 0 and int pages)
+        {
+            PdfPageCount = pages;
+            if (savedPdfPage is null && (pdf.Position > 0 || pdf.ReadingTokenUtf16 is not null))
+                savedPdfPage = ReaderSession.OriginalPageIndex(pdf);
+            if (savedPdfPage is int page && page >= 0 && page < pages)
+            {
+                PdfPageNumber = page + 1;
+                Progress = (page + 1d) / pages;
+            }
+        }
+        else if (document is { Sentences.Length: > 0 })
             Progress = Math.Clamp((document.Position + 1d) / document.Sentences.Length, 0d, 1d);
     }
 
@@ -466,9 +492,13 @@ public sealed class LibraryCard
     public string Title => Document?.Title ?? "";
     public string LanguageCode => Document?.Language.ToUpperInvariant() ?? "";
     public string Details => Document is { } doc
-        ? $"{DocumentLanguages.Name(doc.Language)} · {doc.Sentences.Length} речень" : "";
+        ? $"{DocumentLanguages.Name(doc.Language)} · {(PdfPageCount is int pages
+            ? $"Сторінок: {pages}" : $"Речень: {doc.Sentences.Length}")}" : "";
+    private int? PdfPageCount { get; }
+    private int? PdfPageNumber { get; }
     public double Progress { get; }
-    public string ProgressLabel => $"Позиція читання · {Progress:P0}";
+    public string ProgressLabel => PdfPageCount is not int pages ? $"Позиція читання · {Progress:P0}"
+        : PdfPageNumber is int page ? $"Сторінка {page} із {pages}" : "Ще не відкривали";
     public Color Cover { get; }
     public Color Spine { get; }
     public Color CoverInk { get; }

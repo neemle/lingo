@@ -405,7 +405,7 @@ fn hex_png_fixture() -> Vec<u8> {
 
 #[test]
 fn scanned_pdf_pages_survive_restore_and_invalid_page_geometry_is_rejected() {
-    let store = StoreFixture::new();
+    let mut store = StoreFixture::new();
     // Only the PDF signature is inspected by this boundary. Page rendering and OCR run in the platform adapter.
     let source = b"%PDF-1.7\n%%EOF\n";
     let recognized = json!([
@@ -435,6 +435,16 @@ fn scanned_pdf_pages_survive_restore_and_invalid_page_geometry_is_rejected() {
         "First scanned page.\n\nLast scanned page."
     );
     assert_eq!(document["ocrLines"][1]["page"], 40);
+    let id = document["id"].as_str().unwrap();
+    let position = call(store.handle, json!({
+        "version":1,"operation":"set_pdf_reading_page","id":id,"page":38,
+    }));
+    assert_eq!(position["ok"], true, "{position}");
+    store.reopen();
+    let reopened = call(store.handle, json!({"version":1,"operation":"snapshot"}));
+    assert_eq!(reopened["data"]["pdfReadingPositions"][id], 38);
+    assert_eq!(reopened["data"]["documents"][0], *document);
+
     let backup = call(store.handle, json!({"version":1,"operation":"export"}));
     let target = StoreFixture::new();
     let restored = call(
@@ -446,6 +456,7 @@ fn scanned_pdf_pages_survive_restore_and_invalid_page_geometry_is_rejected() {
     assert_eq!(restored["ok"], true, "{restored}");
     let snapshot = call(target.handle, json!({"version":1,"operation":"snapshot"}));
     assert_eq!(snapshot["data"]["documents"][0], *document);
+    assert_eq!(snapshot["data"]["pdfReadingPositions"][id], 38);
     let original = call(
         target.handle,
         json!({

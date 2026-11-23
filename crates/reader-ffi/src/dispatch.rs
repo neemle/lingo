@@ -10,6 +10,14 @@ fn value<T: Serialize>(result: std::result::Result<T, String>) -> Result<Value> 
         .map_err(|_| Error::new("serialization_error", "Cannot encode core response"))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibrarySnapshot {
+    #[serde(flatten)]
+    snapshot: reader_core::Snapshot,
+    pdf_reading_positions: std::collections::BTreeMap<String, u16>,
+}
+
 fn sentence_translation_body(result: reader_core::translation::AlignedTranslation) -> Value {
     serde_json::json!({
         "text": result.segments[0],
@@ -54,7 +62,11 @@ pub fn cached_translation(
 pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
     match command {
         Command::Open { .. } => Err(Error::new("invalid_handle", "Open requires handle zero")),
-        Command::Snapshot => value(store.snapshot()),
+        Command::Snapshot => {
+            let snapshot = store.snapshot().map_err(gateway::domain)?;
+            let pdf_reading_positions = store.pdf_reading_positions().map_err(gateway::domain)?;
+            value(Ok(LibrarySnapshot { snapshot, pdf_reading_positions }))
+        }
         Command::StorageUsage => value(store.storage_usage()),
         Command::ClearStorage { scope } => value(store.clear_storage(scope)),
         Command::AdvanceBackgroundTranslation { id, revision, target } =>

@@ -34,6 +34,8 @@
    </Border>
    <FlexLayout Wrap="Wrap" AlignItems="Center">
     <ActivityIndicator IsRunning="{Binding Busy}" IsVisible="{Binding Busy}" Color="{StaticResource Sage}" />
+    <Button x:Name="ContinueReading" Text="Продовжити читання" Margin="0,0,8,6"
+     Style="{StaticResource OutlineButton}" Clicked="ContinueReadingClicked" IsVisible="False" IsEnabled="{Binding CanInteract}" />
     <Button Text="Історія" Margin="0,0,8,6" Style="{StaticResource OutlineButton}" Clicked="ReadingHistoryClicked"
      IsEnabled="{Binding CanInteract}" SemanticProperties.Description="Історія читання" />
     <Button x:Name="OpenShareInbox" Text="Вхідні матеріали" Margin="0,0,8,6" Style="{StaticResource OutlineButton}"
