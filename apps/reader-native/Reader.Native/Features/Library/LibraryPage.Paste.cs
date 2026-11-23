@@ -66,6 +66,9 @@ public partial class LibraryPage
     {
         var completion = new TaskCompletionSource<PastedDocument?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var closing = false;
+        var languageChosenManually = false;
+        var applyingLanguageSuggestion = false;
+        var detectionRevision = 0;
         var title = new Entry { Placeholder = "Назва документа", MaxLength = 180 };
         var language = new Picker
         {
@@ -75,15 +78,20 @@ public partial class LibraryPage
         };
         var text = new Editor { Text = initial, Placeholder = "Вставте текст, який хочете прочитати", MinimumHeightRequest = 240 };
         var status = new Label { TextColor = (Color)Application.Current!.Resources["Accent"] };
-        var detect = new Button { Text = "Визначити мову", Style = (Style)Application.Current.Resources["OutlineButton"] };
-        var import = new Button { Text = "Почати читати", Style = (Style)Application.Current.Resources["AccentButton"] };
+        var import = new Button { Text = "Почати читати", IsEnabled = false,
+            Style = (Style)Application.Current.Resources["AccentButton"] };
         var cancel = new Button { Text = "Скасувати" };
         var form = new VerticalStackLayout { Spacing = 12, Padding = 24, MaximumWidthRequest = 680 };
         form.Children.Add(new Label { Text = "Додати текст", Style = (Style)Application.Current.Resources["SerifTitle"] });
-        foreach (var field in new View[] { language, title, text, detect, status, import, cancel })
+        foreach (var field in new View[] { language, status, title, text, import, cancel })
             form.Children.Add(field);
         var page = new ContentPage { Title = "Додати текст", Content = new ScrollView { Content = form } };
-        page.Disappearing += (_, _) => { if (!closing) completion.TrySetResult(null); };
+        page.Disappearing += (_, _) =>
+        {
+            if (closing) return;
+            closing = true;
+            completion.TrySetResult(null);
+        };
         async Task CloseAsync(PastedDocument? value)
         {
             if (closing) return;
@@ -96,26 +104,54 @@ public partial class LibraryPage
             catch (Exception error) { completion.TrySetException(error); }
         }
         cancel.Clicked += async (_, _) => await CloseAsync(null);
-        detect.Clicked += async (_, _) =>
+        void UpdateImport() =>
+            import.IsEnabled = language.SelectedIndex >= 0 && !string.IsNullOrWhiteSpace(text.Text);
+
+        void SetSuggestedLanguage(int index)
         {
-            if (closing || string.IsNullOrWhiteSpace(text.Text)) return;
-            detect.IsEnabled = false;
+            applyingLanguageSuggestion = true;
+            try { language.SelectedIndex = index; }
+            finally { applyingLanguageSuggestion = false; }
+        }
+
+        async Task DetectSourceLanguageAsync(bool debounce)
+        {
+            if (closing || languageChosenManually) return;
+            var request = ++detectionRevision;
             var sample = text.Text;
+            SetSuggestedLanguage(-1);
+            status.Text = "";
+            if (string.IsNullOrWhiteSpace(sample)) return;
+            status.Text = "Визначаємо мову…";
+            bool Current() => !closing && !languageChosenManually && request == detectionRevision;
             try
             {
+                if (debounce) await Task.Delay(300);
+                if (!Current()) return;
                 var code = await AppState.Session.DetectLanguageAsync(sample);
-                if (closing || sample != text.Text) return;
+                if (!Current()) return;
                 var suggestions = DocumentLanguages.All.Select((item, index) => (item, index));
-                var suggestion = suggestions.FirstOrDefault(entry => entry.item.Code == code);
-                if (code is not null && suggestion.item.Code == code)
-                {
-                    language.SelectedIndex = suggestion.index;
-                    status.Text = $"Визначена мова · {suggestion.item.Name}";
-                }
-                else status.Text = "Виберіть мову вручну.";
+                var index = suggestions.Where(entry => entry.item.Code == code)
+                    .Select(entry => entry.index).FirstOrDefault(-1);
+                SetSuggestedLanguage(index);
+                status.Text = index < 0 ? "Виберіть мову оригіналу." : "";
             }
-            catch (Exception error) { status.Text = error.Message; }
-            finally { detect.IsEnabled = true; }
+            catch (Exception error) { if (Current()) status.Text = error.Message; }
+        }
+
+        language.SelectedIndexChanged += (_, _) =>
+        {
+            if (!applyingLanguageSuggestion && language.SelectedIndex >= 0)
+            {
+                languageChosenManually = true;
+                status.Text = "";
+            }
+            UpdateImport();
+        };
+        text.TextChanged += (_, _) =>
+        {
+            UpdateImport();
+            _ = DetectSourceLanguageAsync(debounce: true);
         };
         import.Clicked += async (_, _) =>
         {
@@ -140,6 +176,7 @@ public partial class LibraryPage
             await CloseAsync(new PastedDocument(name, text.Text, DocumentLanguages.All[language.SelectedIndex].Code));
         };
         await Navigation.PushModalAsync(page);
+        _ = DetectSourceLanguageAsync(debounce: false);
         return await completion.Task;
     }
 }
