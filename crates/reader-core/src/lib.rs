@@ -679,21 +679,13 @@ impl Store {
         ocr: Option<(Vec<ocr::OcrLine>, Option<u16>, bool)>,
         source_url: Option<&str>,
     ) -> Result<Document> {
-        let (ocr_lines, ocr_pdf_pages, mixed) = ocr
+        let (mut ocr_lines, ocr_pdf_pages, mixed) = ocr
             .map_or((None, None, false), |(lines, pages, mixed)| {
                 (Some(lines), pages, mixed)
             });
         valid_language(language)?;
-        let parsed = match (ocr_lines.as_deref(), ocr_pdf_pages, mixed) {
-            (Some(lines), Some(pages), true) => {
-                let (text, offsets) = pdf_layers::merge(name, bytes, pages, lines)?;
-                Some(document_layout::from_transcript(text, Some(offsets)))
-            }
-            (Some(lines), pages, false) => Some(document_layout::from_ocr(
-                ocr::recognized_text(name, bytes, lines, pages)?,
-                lines,
-                pages,
-            )),
+        let parsed = match (ocr_lines.as_deref_mut(), ocr_pdf_pages, mixed) {
+            (Some(lines), pages, mixed) => Some(self.read_ocr_import(name, bytes, language, lines, pages, mixed)?),
             (None, None, false) => None,
             _ => return Err("Некоректні параметри імпорту PDF".into()),
         };

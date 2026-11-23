@@ -377,11 +377,11 @@ impl Store {
         Ok(index.filter(|_| usable).map(|(_, db)| db))
     }
 
-    pub(crate) fn repair_pdf_ocr_with_corpus(
-        db: &Connection, language: &str, lines: &mut [crate::ocr::OcrLine],
+    pub(crate) fn repair_pdf_ocr_with_corpus<'a>(
+        db: &Connection, language: &str, lines: impl IntoIterator<Item = &'a mut crate::ocr::OcrLine>,
     ) -> Result<bool> {
         let mut changed = false;
-        for line in lines.iter_mut().filter(|line| line.confidence.is_some_and(|value| value < 0.92)) {
+        for line in lines.into_iter().filter(|line| line.needs_proofreading()) {
             if let Some(revised) = ocr_suggestions::revise_line(db, language, line)? {
                 if revised.len() <= 8192 {
                     line.correction = Some(revised);
@@ -862,6 +862,61 @@ mod tests {
         assert_eq!(first["lengthUtf16"], 6);
         assert_eq!(changes[1]["replacement"], "Book");
         assert!(store.suggest_ocr("fr", text).unwrap().is_none());
+    }
+
+    #[test]
+    fn imported_photo_and_scan_use_corpus_corrections_without_losing_original_spans() {
+        use crate::ocr::{OcrLine, OcrWord};
+
+        let temp = tempfile::tempdir().unwrap();
+        let database = temp.path().join("reader.db");
+        let mut store = Store::open(&database).unwrap();
+        let path = PACKS[0].path(&store.knowledge_directory);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        build_pack(&path, concat!(
+            "1\tA\ta\tDET\t_\t_\n",
+            "2\tmagic\tmagic\tADJ\t_\t_\n",
+            "3\tbook\tbook\tNOUN\t_\t_\n",
+        ).as_bytes()).unwrap();
+        let raw = "A maglc book.";
+        let uncertain = OcrLine {
+            page: 0, text: raw.into(), x: 0.1, y: 0.1, width: 0.8, height: 0.1,
+            confidence: Some(0.8), correction: None, source_span: None,
+            words: vec![OcrWord {
+                text: "maglc".into(), x: 0.2, y: 0.1, width: 0.15, height: 0.1,
+                raw_start_utf16: Some(2), source_span: None,
+            }],
+        };
+        let lines = vec![
+            uncertain.clone(),
+            OcrLine { y: 0.3, confidence: Some(0.98), words: vec![], ..uncertain.clone() },
+            OcrLine { y: 0.5, correction: Some("A maglc book!".into()), words: vec![], ..uncertain },
+        ];
+        let image = b"\x89PNG\r\n\x1a\n";
+        let pdf = b"%PDF-1.4\n";
+        let photo = store.import_image("photo.png", image, "en", lines.clone()).unwrap();
+        let scan = store.import_scanned_pdf("scan.pdf", pdf, "en", lines, 1).unwrap();
+        drop(store);
+        let store = Store::open(&database).unwrap();
+        for (imported, original) in [(&photo, image.as_slice()), (&scan, pdf.as_slice())] {
+            let document = store.translation_document(&imported.id).unwrap();
+            assert_eq!(store.original(&document.id).unwrap().bytes, original);
+            let lines = document.ocr_lines.as_ref().unwrap();
+            assert_eq!(lines[0].text, raw);
+            assert_eq!(lines[0].reading_text(), "A magic book.");
+            assert_eq!(lines[1].reading_text(), raw);
+            assert_eq!(lines[2].reading_text(), "A maglc book!");
+            let word = &lines[0].words[0];
+            let span = word.source_span.unwrap();
+            assert_eq!(word.text, "maglc");
+            assert_eq!(&document.text[span.start_utf8..span.end_utf8], "magic");
+            assert_eq!(crate::translation::sentence_input(
+                &store, &document, 0, "uk", crate::translation::PageBoundaries::Canonical,
+            ).unwrap().0, "A magic book.");
+            let (_, speech) = store.speech_source(&document.id, &document.sentences[0].id, false)
+                .unwrap().unwrap();
+            assert_eq!(speech.text, "A magic book.");
+        }
     }
 
     #[test]

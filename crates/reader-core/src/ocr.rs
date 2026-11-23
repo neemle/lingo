@@ -47,6 +47,10 @@ pub struct OcrSpan {
 }
 
 impl OcrLine {
+    pub(crate) fn needs_proofreading(&self) -> bool {
+        self.confidence.is_some_and(|value| value < 0.92)
+    }
+
     pub fn reading_text(&self) -> &str {
         self.correction.as_deref().unwrap_or(&self.text).trim()
     }
@@ -68,6 +72,44 @@ impl OcrLine {
         Some(raw.into_iter().zip(reading)
             .filter_map(|(raw, (start, _, current))| (raw == current).then_some(start))
             .collect())
+    }
+}
+
+impl crate::Store {
+    pub(crate) fn read_ocr_import(
+        &self, name: &str, bytes: &[u8], language: &str, lines: &mut [OcrLine],
+        pages: Option<u16>, mixed: bool,
+    ) -> Result<crate::document_layout::Extracted> {
+        use crate::document_layout;
+
+        let parse = |lines: &[OcrLine]| -> Result<document_layout::Extracted> {
+            match (pages, mixed) {
+                (Some(pages), true) => {
+                    let (text, offsets) = crate::pdf_layers::merge(name, bytes, pages, lines)?;
+                    Ok(document_layout::from_transcript(text, Some(offsets)))
+                }
+                (_, false) => Ok(document_layout::from_ocr(
+                    recognized_text(name, bytes, lines, pages)?, lines, pages,
+                )),
+                (None, true) => Err("Некоректні параметри імпорту PDF".into()),
+            }
+        };
+        let original = parse(lines)?;
+        if !lines.iter().any(|line| line.correction.is_none() && line.needs_proofreading()) {
+            return Ok(original);
+        }
+        let Ok(Some(corpus)) = self.pdf_ocr_corpus(language) else { return Ok(original); };
+        let mut revised = lines.to_vec();
+        let uncorrected = revised.iter_mut().filter(|line| line.correction.is_none());
+        if let Ok(true) = Self::repair_pdf_ocr_with_corpus(&corpus, language, uncorrected) {
+            if let Ok(reading) = parse(&revised) {
+                for (line, revised) in lines.iter_mut().zip(revised) {
+                    line.correction = revised.correction;
+                }
+                return Ok(reading);
+            }
+        }
+        Ok(original)
     }
 }
 
