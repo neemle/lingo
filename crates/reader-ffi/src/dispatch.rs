@@ -57,6 +57,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::Snapshot => value(store.snapshot()),
         Command::StorageUsage => value(store.storage_usage()),
         Command::ClearStorage { scope } => value(store.clear_storage(scope)),
+        Command::AdvanceBackgroundTranslation { id, revision, target } =>
+            value(store.advance_background_translation(&id, &revision, &target)),
         Command::WarmTranslationStep { id, revision, target, start } =>
             value(store.warm_translation_step(&id, &revision, &target, start)),
         Command::StageIntake { .. } => Err(Error::new("invalid_state", "Intake needs staging")),

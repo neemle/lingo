@@ -28,6 +28,9 @@ public sealed class CoreClient : IDisposable
     public void ClearStorage(string scope) =>
         CallIndependent<JsonElement>(new { version = 1, operation = "clear_storage", scope });
 
+    public BackgroundTranslationProgress AdvanceBackgroundTranslation(string id, string revision, string target) =>
+        CallIndependent<BackgroundTranslationProgress>(new { version = 1, operation = "advance_background_translation", id, revision, target });
+
     public TranslationWarmStep WarmTranslationStep(string id, string revision, string target, int start) =>
         CallIndependent<TranslationWarmStep>(new { version = 1, operation = "warm_translation_step", id, revision, target, start });
 

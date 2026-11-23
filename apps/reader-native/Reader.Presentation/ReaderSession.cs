@@ -32,6 +32,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task RefreshAsync() => RunAsync(Read);
     public Task<StorageUsage> StorageUsageAsync() => Task.Run(client.StorageUsage);
     public Task ClearStorageAsync(string scope) => Task.Run(() => client.ClearStorage(scope));
+    public Task<BackgroundTranslationProgress> AdvanceBackgroundTranslationAsync(string id, string revision, string target) =>
+        Task.Run(() => client.AdvanceBackgroundTranslation(id, revision, target));
     public Task<TranslationWarmStep> WarmTranslationStepAsync(string id, string revision, string target, int start) =>
         Task.Run(() => client.WarmTranslationStep(id, revision, target, start));
 

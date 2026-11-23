@@ -85,8 +85,10 @@ impl Store {
                     .connection
                     .transaction_with_behavior(TransactionBehavior::Immediate)
                     .map_err(storage_error)?;
-                tx.execute("DELETE FROM translation_windows", [])
-                    .map_err(storage_error)?;
+                tx.execute_batch(
+                    "DELETE FROM translation_windows; DELETE FROM background_translation_progress;",
+                )
+                .map_err(storage_error)?;
                 for table in CACHE_TABLES {
                     tx.execute(&format!("DELETE FROM {table}"), [])
                         .map_err(storage_error)?;
@@ -210,7 +212,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("reader.db");
         let mut store = Store::open(&path).unwrap();
-        store
+        let document = store
             .import("reader.txt", b"Bonjour le monde.", "fr")
             .unwrap();
         store
@@ -224,6 +226,22 @@ mod tests {
             )
             .unwrap();
 
+        let revision = document.current_revision_id.as_deref().unwrap();
+        store
+            .advance_background_translation(&document.id, revision, "uk")
+            .unwrap();
+        let progress_count = |store: &Store| {
+            store
+                .connection
+                .query_row(
+                    "SELECT count(*) FROM background_translation_progress",
+                    [],
+                    |row| row.get::<_, u32>(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(progress_count(&store), 1);
+
         let model = store.optional_model_directory.join("voice");
         let audio = model.join(".speech-cache");
         fs::create_dir_all(&audio).unwrap();
@@ -236,6 +254,7 @@ mod tests {
         assert!(usage.database_cache_bytes > 0);
 
         store.clear_storage(StorageScope::Cache).unwrap();
+        assert_eq!(progress_count(&store), 0);
         assert_eq!(store.snapshot().unwrap().documents.len(), 1);
         let usage = store.storage_usage().unwrap();
         assert_eq!(usage.database_cache_bytes, 0);

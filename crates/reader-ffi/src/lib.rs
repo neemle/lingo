@@ -58,6 +58,12 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
     let exclusive = matches!(&command, Command::ClearStorage { .. });
     let _write = exclusive.then(|| STORAGE_GATE.write().unwrap_or_else(|error| error.into_inner()));
     let _read = (!exclusive).then(|| STORAGE_GATE.read().unwrap_or_else(|error| error.into_inner()));
+    if let Command::AdvanceBackgroundTranslation { id, revision, target } = &command {
+        let worker = registry::lock()?.store(handle)?.prepare_translation_worker();
+        if let Some(worker) = worker {
+            return encode_job(worker.advance_background_translation(id, revision, target));
+        }
+    }
     if let Command::WarmTranslationStep { id, revision, target, start } = &command {
         let worker = registry::lock()?.store(handle)?.prepare_translation_worker();
         if let Some(worker) = worker {

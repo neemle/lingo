@@ -22,6 +22,11 @@ pub enum Command {
     ClearStorage {
         scope: reader_core::storage_management::StorageScope,
     },
+    AdvanceBackgroundTranslation {
+        id: String,
+        revision: String,
+        target: String,
+    },
     WarmTranslationStep {
         id: String,
         revision: String,

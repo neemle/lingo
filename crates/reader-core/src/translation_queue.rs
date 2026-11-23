@@ -32,6 +32,15 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
             target TEXT NOT NULL,
             lease TEXT,
             available_at INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS background_translation_progress (
+            document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            target TEXT NOT NULL,
+            revision_id TEXT NOT NULL,
+            cursor INTEGER NOT NULL,
+            incomplete INTEGER NOT NULL,
+            resume_at INTEGER,
+            PRIMARY KEY(document_id, target)
         );",
     )
     .map_err(database_error)
@@ -195,35 +204,152 @@ pub struct TranslationWarmStep {
     incomplete: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundTranslationProgress {
+    // Zero means the next step is ready. No deadline means the document is complete.
+    resume_at: Option<i64>,
+}
+
 impl Store {
+    pub fn advance_background_translation(
+        &mut self,
+        id: &str,
+        revision: &str,
+        target: &str,
+    ) -> Result<BackgroundTranslationProgress> {
+        valid_language(target)?;
+        let done = BackgroundTranslationProgress { resume_at: None };
+        if self.reader_preferences()?.background_translation != Some(true) {
+            return Ok(done);
+        }
+        let Some(_lock) = crate::file_originals::try_worker_lock(
+            &self.file_original_directory,
+            ".background-translation.lock",
+        )?
+        else {
+            return Ok(BackgroundTranslationProgress {
+                resume_at: Some(crate::now() + 2),
+            });
+        };
+        let document = self.translation_document(id)?;
+        if document.current_revision_id.as_deref() != Some(revision) || document.language == target
+        {
+            return Ok(done);
+        }
+        let (cursor, incomplete, resume_at) = self
+            .connection
+            .query_row(
+                "SELECT cursor,incomplete,resume_at FROM background_translation_progress
+             WHERE document_id=?1 AND revision_id=?2 AND target=?3",
+                params![id, revision, target],
+                |row| {
+                    Ok((
+                        row.get::<_, u32>(0)?,
+                        row.get::<_, bool>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(database_error)?
+            .unwrap_or((0, false, Some(0)));
+        let now = crate::now();
+        if resume_at.is_none_or(|deadline| deadline > now) {
+            return Ok(BackgroundTranslationProgress { resume_at });
+        }
+        let (cursor, incomplete, resume_at) = if cursor == 0
+            && !self
+                .translation_readiness(&document.language, target)?
+                .ready
+        {
+            (0, false, Some(now + 30))
+        } else {
+            let step = self.warm_document_translation_step(&document, target, cursor as usize)?;
+            match step.next {
+                Some(next) => (next, incomplete || step.incomplete, Some(0)),
+                None if incomplete || document.format == "pdf" => {
+                    (0, false, Some(crate::now() + 300))
+                }
+                None => (0, false, None),
+            }
+        };
+        self.connection.execute(
+            "INSERT INTO background_translation_progress(document_id,target,revision_id,cursor,incomplete,resume_at)
+             SELECT id,?2,?3,?4,?5,?6 FROM documents
+             WHERE id=?1 AND json_extract(body,'$.currentRevisionId')=?3
+             ON CONFLICT(document_id,target) DO UPDATE SET revision_id=excluded.revision_id,
+               cursor=excluded.cursor,incomplete=excluded.incomplete,resume_at=excluded.resume_at",
+            params![id, target, revision, i64::try_from(cursor).map_err(database_error)?, incomplete, resume_at],
+        ).map_err(database_error)?;
+        Ok(BackgroundTranslationProgress { resume_at })
+    }
+
     pub fn warm_translation_step(
-        &mut self, id: &str, revision: &str, target: &str, start: usize,
+        &mut self,
+        id: &str,
+        revision: &str,
+        target: &str,
+        start: usize,
     ) -> Result<TranslationWarmStep> {
-        let done = TranslationWarmStep { next: None, incomplete: false };
+        let done = TranslationWarmStep {
+            next: None,
+            incomplete: false,
+        };
         if self.reader_preferences()?.background_translation != Some(true) {
             return Ok(done);
         }
         let document = self.translation_document(id)?;
-        if document.current_revision_id.as_deref() != Some(revision) || document.language == target {
+        if document.current_revision_id.as_deref() != Some(revision) || document.language == target
+        {
             return Ok(done);
         }
-        let page_count = document.pdf_page_starts.as_ref().map(Vec::len)
-            .or(document.ocr_pdf_pages.map(usize::from)).unwrap_or(0);
+        self.warm_document_translation_step(&document, target, start)
+    }
+
+    fn warm_document_translation_step(
+        &mut self,
+        document: &Document,
+        target: &str,
+        start: usize,
+    ) -> Result<TranslationWarmStep> {
+        let done = TranslationWarmStep {
+            next: None,
+            incomplete: false,
+        };
+        let page_count = document
+            .pdf_page_starts
+            .as_ref()
+            .map(Vec::len)
+            .or(document.ocr_pdf_pages.map(usize::from))
+            .unwrap_or(0);
         if document.format == "pdf" && page_count > 0 {
             let canonical = (start..page_count).find(|&page| {
                 u16::try_from(page).ok().is_some_and(|page| {
-                    crate::pdf_reading_position::page_bounds(&document, page).is_some()
+                    crate::pdf_reading_position::page_bounds(document, page).is_some()
                 })
             });
-            let detached: Option<u16> = self.connection.query_row(
-                "SELECT min(page) FROM pdf_detached_pages WHERE document_id=?1 AND page>=?2",
-                params![id, i64::try_from(start).unwrap_or(i64::MAX)],
-                |row| row.get(0),
-            ).map_err(database_error)?;
-            let Some(page) = canonical.into_iter().chain(detached.map(usize::from)).min() else { return Ok(done); };
+            let detached: Option<u16> = self
+                .connection
+                .query_row(
+                    "SELECT min(page) FROM pdf_detached_pages WHERE document_id=?1 AND page>=?2",
+                    params![document.id, i64::try_from(start).unwrap_or(i64::MAX)],
+                    |row| row.get(0),
+                )
+                .map_err(database_error)?;
+            let Some(page) = canonical.into_iter().chain(detached.map(usize::from)).min() else {
+                return Ok(done);
+            };
             return Ok(TranslationWarmStep {
                 next: Some(page + 1),
-                incomplete: self.pdf_page_translation_with_priority(id, page as u16, target, false, true)
+                incomplete: self
+                    .pdf_page_translation_with_priority(
+                        &document.id,
+                        page as u16,
+                        target,
+                        false,
+                        true,
+                    )
                     .map_or(true, |rows| rows.iter().any(|row| row.text.is_none())),
             });
         }
@@ -231,17 +357,36 @@ impl Store {
             return Ok(done);
         }
         let translated = self.translate_document_paragraph(
-            &document, start, target, true, crate::translation::PageBoundaries::Canonical,
+            document,
+            start,
+            target,
+            true,
+            crate::translation::PageBoundaries::Canonical,
         );
         let Ok(translated) = translated else {
-            return Ok(TranslationWarmStep { next: Some(start + 1), incomplete: true });
+            return Ok(TranslationWarmStep {
+                next: Some(start + 1),
+                incomplete: true,
+            });
         };
-        let next = document.sentences[start..].iter().take(16).take_while(|sentence| {
-            translated.units.iter().any(|unit| unit.sentence_ids.contains(&sentence.id))
-        }).count().max(1) + start;
+        let next = document.sentences[start..]
+            .iter()
+            .take(16)
+            .take_while(|sentence| {
+                translated
+                    .units
+                    .iter()
+                    .any(|unit| unit.sentence_ids.contains(&sentence.id))
+            })
+            .count()
+            .max(1)
+            + start;
         Ok(TranslationWarmStep {
             next: Some(next),
-            incomplete: translated.units.iter().any(|unit| unit.translation.is_none()),
+            incomplete: translated
+                .units
+                .iter()
+                .any(|unit| unit.translation.is_none()),
         })
     }
 }

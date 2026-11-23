@@ -489,6 +489,12 @@ impl StoreWorker {
         self.open(flags)?.detached_pdf_passage(id, page, sentence_id, target, cached_only, background)
     }
 
+    pub fn advance_background_translation(
+        self, id: &str, revision: &str, target: &str,
+    ) -> Result<crate::translation_queue::BackgroundTranslationProgress> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?.advance_background_translation(id, revision, target)
+    }
+
     pub fn warm_translation_step(
         self, id: &str, revision: &str, target: &str, start: usize,
     ) -> Result<crate::translation_queue::TranslationWarmStep> {
