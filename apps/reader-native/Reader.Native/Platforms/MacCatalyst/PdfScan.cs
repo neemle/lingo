@@ -4,6 +4,7 @@ using PdfKit;
 using Reader.Contracts;
 using Reader.Presentation;
 using System.Text;
+using UIKit;
 using Client = Reader.CoreClient.CoreClient;
 
 namespace Reader.Native.Services;
@@ -103,7 +104,7 @@ internal static class PdfScan
             return page.Text?.Trim() ?? "";
         }, cancellation);
 
-    internal static Task<string[]> ReadLanguageSamplesAsync(string path, bool optical) => Task.Run(() =>
+    internal static Task<string[]> ReadLanguageSamplesAsync(string path, bool optical, int skip = 0, int count = 5) => Task.Run(() =>
     {
         using var pool = new NSAutoreleasePool();
         using var document = Open(path);
@@ -112,18 +113,19 @@ internal static class PdfScan
         var lastPage = pageCount - 1;
         int[] probes = [Math.Min(4, lastPage), pageCount / 3, 2 * pageCount / 3, Math.Min(1, lastPage), 0];
         var samples = new List<string>(probes.Length);
-        foreach (var index in probes.Distinct())
+        foreach (var index in probes.Distinct().Skip(skip).Take(count))
         {
             using var pagePool = new NSAutoreleasePool();
             var text = "";
             try
             {
-                if (optical) text = PhotoOcr.ReadLanguageSample(Render(document, index, 1800).Bytes);
-                else
+                using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
+                if (optical)
                 {
-                    using var page = document.GetPage(index);
-                    text = page?.Text?.Trim() ?? "";
+                    using var image = Thumbnail(page, 1800);
+                    if (image.CGImage is { } bitmap) text = PhotoOcr.ReadLanguageSample(bitmap);
                 }
+                else text = page.Text?.Trim() ?? "";
             }
             catch (Exception error) when (error is InvalidDataException or InvalidOperationException)
             {
@@ -242,16 +244,21 @@ internal static class PdfScan
     private static PhotoPreview Render(PdfDocument document, int index, int limit)
     {
         using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
+        using var image = Thumbnail(page, limit);
+        using var png = image.AsPNG() ?? throw new InvalidDataException("Не вдалося відобразити сторінку PDF.");
+        var bitmap = image.CGImage;
+        return new PhotoPreview(png.ToArray(), bitmap is null ? (int)image.Size.Width : (int)bitmap.Width,
+            bitmap is null ? (int)image.Size.Height : (int)bitmap.Height);
+    }
+
+    private static UIImage Thumbnail(PdfPage page, int limit)
+    {
         var bounds = page.GetBoundsForBox(PdfDisplayBox.Crop);
         var maxSide = Math.Max((double)bounds.Width, (double)bounds.Height);
         if (!double.IsFinite(maxSide) || maxSide <= 0)
             throw new InvalidDataException("Сторінка PDF має некоректний розмір.");
         var scale = limit / maxSide;
-        using var image = page.GetThumbnail(new CGSize(Math.Max(1, Math.Round((double)bounds.Width * scale)),
+        return page.GetThumbnail(new CGSize(Math.Max(1, Math.Round((double)bounds.Width * scale)),
             Math.Max(1, Math.Round((double)bounds.Height * scale))), PdfDisplayBox.Crop);
-        using var png = image.AsPNG() ?? throw new InvalidDataException("Не вдалося відобразити сторінку PDF.");
-        var bitmap = image.CGImage;
-        return new PhotoPreview(png.ToArray(), bitmap is null ? (int)image.Size.Width : (int)bitmap.Width,
-            bitmap is null ? (int)image.Size.Height : (int)bitmap.Height);
     }
 }

@@ -92,8 +92,13 @@ public partial class LibraryPage
                     var detected = await PdfRecognition.DetectSampleLanguageAsync(samples, session.DetectLanguageAsync);
                     if (detected is not null) return detected;
 
-                    samples = await PdfScan.ReadLanguageSamplesAsync(path, optical: true);
-                    return await PdfRecognition.DetectSampleLanguageAsync(samples, session.DetectLanguageAsync);
+                    const int bodySamples = 3;
+                    var body = await PdfScan.ReadLanguageSamplesAsync(path, optical: true, count: bodySamples);
+                    detected = await PdfRecognition.DetectSampleLanguageAsync(body, session.DetectLanguageAsync);
+                    if (detected is not null || samples.Length <= bodySamples) return detected;
+
+                    var front = await PdfScan.ReadLanguageSamplesAsync(path, optical: true, skip: bodySamples);
+                    return await PdfRecognition.DetectSampleLanguageAsync([.. body, .. front], session.DetectLanguageAsync);
                 });
                 if (language is null) return null;
                 ImportStatus.Text = "Зберігаємо документ…";

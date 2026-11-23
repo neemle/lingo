@@ -31,10 +31,15 @@ internal static class PhotoOcr
     internal static Task<string> ReadLanguageSampleAsync(byte[] bytes) =>
         Task.Run(() => ReadLanguageSample(bytes));
 
-    internal static string ReadLanguageSample(byte[] bytes)
+    private static string ReadLanguageSample(byte[] bytes)
     {
         using var pool = new NSAutoreleasePool();
         using var image = Decode(bytes, 1800);
+        return ReadLanguageSample(image);
+    }
+
+    internal static string ReadLanguageSample(CGImage image)
+    {
         using var request = CreateRecognitionRequest();
         request.AutomaticallyDetectsLanguage = true;
         using var handler = new VNImageRequestHandler(image, new VNImageOptions());
