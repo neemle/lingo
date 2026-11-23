@@ -25,6 +25,10 @@ pub enum Command {
         #[serde(default, rename = "sparseTsv")]
         sparse_tsv: Option<String>,
     },
+    MergeRotatedOcr {
+        primary: Vec<reader_core::ocr::OcrLine>,
+        native: Vec<reader_core::ocr::OcrLine>,
+    },
     SamplePdfBackgrounds {
         rgba: String,
         width: usize,

@@ -61,6 +61,9 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             None => lines,
         }));
     }
+    if let Command::MergeRotatedOcr { primary, native } = command {
+        return encode_job(reader_core::ocr::merge_rotated_lines(primary, native));
+    }
     if let Command::SeparatePdfBlocks { text, words, page_width } = command {
         return encode_job(reader_core::pdf_text_blocks::separate_blocks(&text, &words, page_width));
     }

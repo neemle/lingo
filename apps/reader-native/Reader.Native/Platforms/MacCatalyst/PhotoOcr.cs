@@ -13,11 +13,13 @@ internal static class PhotoOcr
 {
     internal static Task<OcrLine[]> RecognizeAsync(byte[] bytes, string language) =>
         TesseractOcr.RecognizeAsync(() => Task.Run(() => RecognizeNative(bytes, language)),
-            () => PreviewAsync(bytes), language, default);
+            () => PreviewAsync(bytes), language, default,
+            () => Task.Run(() => RecognizeNative(bytes, language, rotatedOnly: true)));
 
     internal static OcrLine[] RecognizePdfPage(PhotoPreview rendered, string language, CancellationToken cancellation) =>
         TesseractOcr.RecognizeAsync(() => Task.FromResult(RecognizeNative(rendered.Bytes, language)),
-            () => Task.FromResult(rendered), language, cancellation).GetAwaiter().GetResult();
+            () => Task.FromResult(rendered), language, cancellation,
+            () => Task.FromResult(RecognizeNative(rendered.Bytes, language, rotatedOnly: true))).GetAwaiter().GetResult();
 
     internal static async Task<PhotoPreview> PreviewAsync(byte[] bytes) =>
         (await ReadingPreviewAsync(bytes, []).ConfigureAwait(false)).Preview;
@@ -87,7 +89,7 @@ internal static class PhotoOcr
         return languages?.Select(tag => tag.ToString()).ToArray() ?? [];
     }
 
-    private static OcrLine[] RecognizeNative(byte[] bytes, string language)
+    private static OcrLine[] RecognizeNative(byte[] bytes, string language, bool rotatedOnly = false)
     {
         using var pool = new NSAutoreleasePool();
         using var image = Decode(bytes, 4096);
@@ -105,6 +107,7 @@ internal static class PhotoOcr
         using var tokenizer = new NLTokenizer(NLTokenUnit.Word);
         foreach (var observation in request.Results ?? [])
         {
+            if (rotatedOnly && !IsRotatedText(observation, image)) continue;
             var candidate = observation.TopCandidates(1).FirstOrDefault();
             if (candidate is null) continue;
             var bounds = observation.BoundingBox;
@@ -132,5 +135,13 @@ internal static class PhotoOcr
             lines.Add(line with { Words = words.ToArray() });
         }
         return lines.ToArray();
+    }
+
+    private static bool IsRotatedText(VNRecognizedTextObservation observation, CGImage image)
+    {
+        // The leading edge of the quad follows the reading direction, even for a single word.
+        var dx = ((double)observation.TopRight.X - (double)observation.TopLeft.X) * (double)image.Width;
+        var dy = ((double)observation.TopRight.Y - (double)observation.TopLeft.Y) * (double)image.Height;
+        return Math.Abs(dy) > Math.Abs(dx) * 1.6 || (dx < 0 && Math.Abs(dx) > Math.Abs(dy) * 1.6);
     }
 }

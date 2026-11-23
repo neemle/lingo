@@ -133,6 +133,8 @@ public sealed class CoreClient : IDisposable
         Invoke<PdfLigatureJoin[]>(0, new { version = 1, operation = "find_pdf_ligature_joins", text, words });
     public static OcrLine[] ParseOcrTsv(string tsv, int width, int height, string? sparseTsv = null) =>
         Invoke<OcrLine[]>(0, new { version = 1, operation = "parse_ocr_tsv", tsv, width, height, sparseTsv });
+    public static OcrLine[] MergeRotatedOcr(OcrLine[] primary, OcrLine[] native) =>
+        Invoke<OcrLine[]>(0, new { version = 1, operation = "merge_rotated_ocr", primary, native });
     public Backup Export() => Call<Backup>(new { version = 1, operation = "export" });
     public void ExportBackupFile(string path) =>
         Call<JsonElement>(new { version = 1, operation = "export_backup_file", path });
