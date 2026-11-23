@@ -43,11 +43,14 @@ public partial class ReadingPage
             : AppState.Session.Sentence;
         selected = PdfHighlightSentence(address.Source, selected);
         if (selected is null) return null;
-        var row = Array.Find(pdfLayoutRows, candidate => candidate.StartUtf16 < selected.EndUtf16 &&
-            candidate.EndUtf16 > selected.StartUtf16 && !string.IsNullOrWhiteSpace(candidate.Text) &&
-            !string.IsNullOrWhiteSpace(candidate.SourceText));
-        return row is { SourceText: { } original, Text: { } translated }
-            ? new TranslationPair(original, document.Language, translated, address.Target) : null;
+        var rows = pdfLayoutRows.Where(row => row.StartUtf16 < selected.EndUtf16 &&
+            row.EndUtf16 > selected.StartUtf16).OrderBy(row => row.StartUtf16).ToArray();
+        if (rows.Length == 0 || rows.Any(row => string.IsNullOrWhiteSpace(row.SourceText) ||
+            string.IsNullOrWhiteSpace(row.Text))) return null;
+
+        return new TranslationPair(
+            string.Join(Environment.NewLine, rows.Select(row => row.SourceText)), document.Language,
+            string.Join(Environment.NewLine, rows.Select(row => row.Text)), address.Target);
     }
 
     private TranslationPair? DisplayedDetachedTranslationPair()
