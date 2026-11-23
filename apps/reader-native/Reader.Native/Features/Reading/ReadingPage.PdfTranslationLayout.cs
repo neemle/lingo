@@ -157,6 +157,11 @@ public partial class ReadingPage
             pdfLayoutRequestId++;
             pdfAutoAttempts = null;
             pdfLayoutRows = [];
+            pdfDrawingPlan = null;
+            PdfTranslationSurface.Drawable = DetachedPdfTranslationSurface.Drawable = null;
+            PdfTranslationBackground.Source = DetachedPdfTranslationBackground.Source = null;
+            PdfTranslationSurface.Invalidate();
+            DetachedPdfTranslationSurface.Invalidate();
             pdfLayoutStatus = null;
             overflowContent = null;
             lastPdfTranslationFollow = null;
@@ -630,7 +635,7 @@ public partial class ReadingPage
         }
         var drawing = new TranslatedPdfDrawing(pdfLayoutRows,
             pdfLayoutSentence, text => GlossRanges(text, gloss), background.IsVisible, query,
-            PdfReadingHorizontalBounds(), cached.Plan);
+            PdfReadingHorizontalBounds(), cached.Plan, surface);
         var overflow = detached ? DetachedPdfTranslationOverflow : PdfTranslationOverflow;
         drawing.OverflowChanged = rows => Dispatcher.Dispatch(() =>
         {
@@ -789,7 +794,7 @@ public partial class ReadingPage
 
     private sealed class TranslatedPdfDrawing(PdfPageTranslationRow[] rows,
         Sentence? active, Func<string, IEnumerable<(int Start, int End)>> glossRanges, bool preserveArtwork, string? query,
-        (double Left, double Right) visibleWidth, PdfTranslationLayout layout) : IDrawable
+        (double Left, double Right) visibleWidth, PdfTranslationLayout layout, GraphicsView surface) : IDrawable
     {
         private readonly record struct Fragment(PdfPageTranslationRow Source, int Start, int End, bool Active, TextSelection? Match);
         private readonly List<(RectF Bounds, PdfPageTranslationRow Source)> hitTargets = [];
@@ -812,14 +817,22 @@ public partial class ReadingPage
             return null;
         }
 
-        public void Draw(ICanvas canvas, RectF page)
+        public void Draw(ICanvas canvas, RectF dirtyRect)
         {
             hitTargets.Clear();
             ActiveBounds = null;
             MatchBounds = null;
+            var page = surface.Width > 0 && surface.Height > 0
+                ? new RectF(0, 0, (float)surface.Width, (float)surface.Height) : dirtyRect;
             canvas.FillColor = Colors.White;
             if (page.Width <= 0 || page.Height <= 0) return;
-            if (!preserveArtwork) canvas.FillRectangle(page);
+            if (preserveArtwork)
+            {
+                canvas.BlendMode = BlendMode.Clear;
+                canvas.FillRectangle(page);
+                canvas.BlendMode = BlendMode.Normal;
+            }
+            else canvas.FillRectangle(page);
             var overflow = layout.Overflow.Select(index => rows[index]).ToList();
             if (rows.Length > 0 && layout.Regions.Length == 0 && layout.Pending.Length == 0 &&
                 (!preserveArtwork || layout.Anchors.All(fragment => fragment.Bounds is null)))

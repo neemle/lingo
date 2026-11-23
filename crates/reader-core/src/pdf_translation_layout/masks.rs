@@ -77,10 +77,15 @@ pub(super) fn plan(
 }
 
 fn clipped(x: f64, y: f64, width: f64, height: f64) -> Option<Bounds> {
-    let left = x.max(0.0);
-    let top = y.max(0.0);
-    let right = (x + width).min(1.0);
-    let bottom = (y + height).min(1.0);
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    // Optical glyph bounds can omit the faint outer pixels of an ascender or descender.
+    const MARGIN: f64 = 0.0008;
+    let left = (x - MARGIN).max(0.0);
+    let top = (y - MARGIN).max(0.0);
+    let right = (x + width + MARGIN).min(1.0);
+    let bottom = (y + height + MARGIN).min(1.0);
     (right > left && bottom > top).then_some(Bounds {
         x: left,
         y: top,
@@ -133,7 +138,7 @@ mod tests {
         assert_eq!(all[1].background, [0.5, 0.9, 0.5, 1.0]);
         let part = plan(std::iter::once(5..8), &geometry, &styles).unwrap();
         assert_eq!(part.len(), 1);
-        assert_eq!(part[0].bounds.x, 0.6);
+        assert!((part[0].bounds.x - 0.6).abs() < 0.001);
         assert!(plan(std::iter::once(5..7), &geometry, &styles).is_none());
     }
 }

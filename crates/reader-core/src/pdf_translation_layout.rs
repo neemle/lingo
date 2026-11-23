@@ -136,9 +136,31 @@ fn plan(fragments: &[SourceFragment]) -> Result<PageLayout> {
         }
         !covers_pending
     });
+    remove_overlapping_regions(&mut page);
     page.overflow
         .sort_unstable_by_key(|&index| (fragments[index].start_utf16, index));
     Ok(page)
+}
+
+fn remove_overlapping_regions(page: &mut PageLayout) {
+    let mut colliding = vec![false; page.regions.len()];
+    for (index, region) in page.regions.iter().enumerate() {
+        for (other, candidate) in page.regions.iter().enumerate().skip(index + 1) {
+            let (width, height) = region.bounds.overlap(candidate.bounds);
+            if width > 0.001 && height > 0.001 {
+                colliding[index] = true;
+                colliding[other] = true;
+            }
+        }
+    }
+    let mut colliding = colliding.into_iter();
+    page.regions.retain_mut(|region| {
+        let conflict = colliding.next().unwrap_or(false);
+        if conflict {
+            page.overflow.append(&mut region.fragments);
+        }
+        !conflict
+    });
 }
 
 fn fits(
@@ -215,5 +237,17 @@ mod tests {
         );
         assert_eq!(regions.pending, [4]);
         assert_eq!(regions.overflow, [3]);
+    }
+
+    #[test]
+    fn overlapping_source_blocks_are_not_painted_over_each_other() {
+        let page = plan(&[
+            fragment(0.1, 0.2, 1, 10),
+            fragment(0.15, 0.207, 2, 20),
+            fragment(0.6, 0.2, 3, 30),
+        ])
+        .unwrap();
+        assert_eq!(page.overflow, [0, 1]);
+        assert_eq!(page.regions[0].fragments, [2]);
     }
 }
