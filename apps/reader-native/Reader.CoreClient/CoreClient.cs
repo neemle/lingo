@@ -265,6 +265,9 @@ public sealed class CoreClient : IDisposable
     public bool RepairStoredPdfTextOrder(string id, int page, string revisionId, string reference, PdfTextOrderEdit[] changes) =>
         Call<bool>(new { version = 1, operation = "repair_stored_pdf_text_order", id, page, revisionId, reference, changes });
 
+    public bool UpgradeStoredOcrLayout(string id, int page, string revisionId, string reference, bool detached) =>
+        Call<bool>(new { version = 1, operation = "upgrade_stored_ocr_layout", id, page, revisionId, reference, detached });
+
     public bool ReconcilePhotoOcr(string id, string revisionId) =>
         Call<bool>(new { version = 1, operation = "reconcile_photo_ocr", id, revisionId });
 

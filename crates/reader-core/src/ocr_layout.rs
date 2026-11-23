@@ -1,4 +1,4 @@
-use crate::ocr::{byte_at_utf16, OcrLine};
+use crate::ocr::{byte_at_utf16, OcrLine, TranscriptEdit};
 use crate::pdf_text_blocks::{separate_blocks, PositionedWord};
 use std::ops::Range;
 
@@ -15,6 +15,51 @@ pub(crate) fn reconstruct_blocks(lines: &mut Vec<OcrLine>) {
         result.extend(reconstruct_page(&page).unwrap_or(page));
     }
     *lines = result;
+}
+
+pub(crate) fn upgrade_cached_page(lines: &[OcrLine], text: &str) -> Option<(Vec<OcrLine>, String, Vec<TranscriptEdit>)> {
+    let pages = lines.first()?.page.checked_add(1)?;
+    if crate::ocr::recognized_lines(lines, pages).ok()? != text { return None; }
+    let lines = reconstruct_page(lines)?;
+    let revised = crate::ocr::recognized_lines(&lines, pages).ok()?;
+    if revised == text { return None; }
+    let edits = layout_edits(text, &revised);
+    Some((lines, revised, edits))
+}
+
+fn layout_edits(old: &str, new: &str) -> Vec<TranscriptEdit> {
+    if old.split_whitespace().eq(new.split_whitespace()) {
+        let mut edits = Vec::new();
+        let mut old_tail = old;
+        let mut new_tail = new;
+        let mut offset = 0;
+        for word in old.split_whitespace() {
+            let a = old_tail.find(word).expect("unchanged word");
+            let b = new_tail.find(word).expect("unchanged word");
+            let old_len = old_tail[..a].encode_utf16().count();
+            let new_len = new_tail[..b].encode_utf16().count();
+            if old_tail[..a] != new_tail[..b] {
+                edits.push(TranscriptEdit { start_utf16: offset, old_len, new_len });
+            }
+            offset += old_len + word.encode_utf16().count();
+            old_tail = &old_tail[a + word.len()..];
+            new_tail = &new_tail[b + word.len()..];
+        }
+        return edits;
+    }
+    let prefix: usize = old.chars().zip(new.chars()).take_while(|(a, b)| a == b)
+        .map(|(ch, _)| ch.len_utf8()).sum();
+    let suffix: usize = old[prefix..].chars().rev().zip(new[prefix..].chars().rev())
+        .take_while(|(a, b)| a == b).map(|(ch, _)| ch.len_utf16()).sum();
+    vec![TranscriptEdit {
+        start_utf16: old[..prefix].encode_utf16().count(),
+        old_len: old[prefix..].encode_utf16().count() - suffix,
+        new_len: new[prefix..].encode_utf16().count() - suffix,
+    }]
+}
+
+pub(crate) fn intersects_edits(start: usize, end: usize, edits: &[TranscriptEdit]) -> bool {
+    edits.iter().any(|edit| edit.start_utf16 < end && edit.start_utf16 + edit.old_len > start)
 }
 
 fn reconstruct_page(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
@@ -151,11 +196,8 @@ mod tests {
     use super::*;
     use crate::ocr::OcrWord;
 
-    #[test]
-    fn imported_scan_keeps_independent_captions_and_word_positions() {
-        let root = tempfile::tempdir().unwrap();
-        let mut store = crate::Store::open(&root.path().join("reader.db")).unwrap();
-        let line = OcrLine {
+    fn caption_line() -> OcrLine {
+        OcrLine {
             page: 0, text: "Left caption Right caption".into(), x: 0.12, y: 0.3, width: 0.68, height: 0.02,
             confidence: None, correction: None, block_start: false, source_span: None,
             words: [("Left", 0, 0.12), ("caption", 5, 0.17), ("Right", 13, 0.60), ("caption", 19, 0.66)]
@@ -163,7 +205,43 @@ mod tests {
                     text: text.into(), x, y: 0.3, width: 0.04, height: 0.02,
                     raw_start_utf16: Some(offset), source_span: None,
                 }).collect(),
-        };
+        }
+    }
+
+    #[test]
+    fn cached_scan_layout_preserves_protected_anchors_before_upgrading() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = crate::Store::open(&root.path().join("reader.db")).unwrap();
+        let original = root.path().join("scan.pdf");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let mut line = caption_line();
+        line.block_start = true;
+        let prepared = crate::file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "scan.pdf", &original, "en", vec![String::new()], vec![line],
+        ).unwrap();
+        let doc = store.import_pdf_file(prepared).unwrap();
+        assert_eq!(doc.text, "Left caption Right caption");
+        // Simulate an older import without a layout marker, retaining the saved OCR geometry.
+        store.connection.execute(
+            "UPDATE documents SET body=json_set(body, '$.ocrLines[0].blockStart', json('false')) WHERE id=?1",
+            [&doc.id],
+        ).unwrap();
+        let revision = doc.current_revision_id.as_deref().unwrap();
+        let sentence = &doc.sentences[0].id;
+        store.set_bookmark(&doc.id, sentence, true).unwrap();
+        assert!(!store.upgrade_stored_ocr_layout(&doc.id, 0, revision, &doc.text, false).unwrap());
+        store.set_bookmark(&doc.id, sentence, false).unwrap();
+        assert!(store.upgrade_stored_ocr_layout(&doc.id, 0, revision, &doc.text, false).unwrap());
+        let window = store.pdf_read_window(&doc.id, 0).unwrap();
+        assert_eq!(window.pages[0].text, "Left caption\n\nRight caption");
+        assert!(!store.upgrade_stored_ocr_layout(&doc.id, 0, revision, &doc.text, false).unwrap());
+    }
+
+    #[test]
+    fn imported_scan_keeps_independent_captions_and_word_positions() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = crate::Store::open(&root.path().join("reader.db")).unwrap();
+        let line = caption_line();
         let document = store.import_scanned_pdf("scan.pdf", b"%PDF-1.4\n", "en", vec![line.clone()], 1).unwrap();
         assert_eq!(document.text, "Left caption\n\nRight caption");
         assert_eq!(document.sentences.len(), 2);

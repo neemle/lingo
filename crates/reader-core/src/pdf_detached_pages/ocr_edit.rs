@@ -134,6 +134,43 @@ impl Store {
         tx.commit().map_err(database_error)?;
         Ok(true)
     }
+
+    pub(crate) fn upgrade_detached_ocr_layout(&mut self, id: &str, page: u16, revision: &str, reference: &str) -> Result<bool> {
+        let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(database_error)?;
+        let current: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM documents WHERE id=?1 AND json_extract(body, '$.currentRevisionId')=?2)",
+            params![id, revision], |row| row.get(0),
+        ).map_err(database_error)?;
+        if !current { return Ok(false); }
+        let Some((old, encoded)) = read_ocr(&tx, id, page)? else { return Ok(false); };
+        if old != reference { return Ok(false); }
+        let lines = ocr_page(&old, &encoded)?.lines;
+        let Some((rebuilt, _, edits)) = crate::ocr_layout::upgrade_cached_page(&lines, &old)
+            else { return Ok(false); };
+        let layout = super::page_layout(&tx, id, page)?;
+        let sentences = layout.segment(&old, "");
+        let protected = annotations::list(&tx, id, page)?.iter().any(|item| {
+            let sentence = sentence_at(&sentences, item.start_utf16).and_then(|index| sentences.get(index));
+            sentence.is_none_or(|sentence|
+                crate::ocr_layout::intersects_edits(sentence.start_utf16, sentence.end_utf16, &edits))
+        });
+        let has_resume: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pdf_detached_speech_resume WHERE document_id=?1 AND page=?2)",
+            params![id, page], |row| row.get(0),
+        ).map_err(database_error)?;
+        if protected || has_resume ||
+            crate::dictionary_transfer::selection_overlaps_layout_edits(&tx, id, Some(page), &page_revision(&old), &edits)? {
+            return Ok(false);
+        }
+        let edits: Vec<_> = edits.into_iter().map(|edit| Edit {
+            start: edit.start_utf16,
+            old_end: edit.start_utf16 + edit.old_len,
+            new_end: edit.start_utf16 + edit.new_len,
+        }).collect();
+        save_ocr_edits(&tx, id, page, &old, rebuilt, &edits)?;
+        tx.commit().map_err(database_error)?;
+        Ok(true)
+    }
 }
 
 fn save_ocr_edits(

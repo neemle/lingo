@@ -212,6 +212,27 @@ pub(crate) fn reanchor_canonical_selections(
     })
 }
 
+pub(crate) fn selection_overlaps_layout_edits(
+    db: &Connection, id: &str, page: Option<u16>, revision: &str, edits: &[crate::ocr::TranscriptEdit],
+) -> Result<bool> {
+    let mut query = db.prepare(
+        "SELECT anchor FROM dictionary_context_anchors WHERE document_id=?1
+         AND json_extract(anchor,'$.page') IS ?2 AND json_extract(anchor,'$.revisionId')=?3
+         AND json_type(anchor,'$.selection')='object'",
+    ).map_err(error)?;
+    let rows = query.query_map(params![id, page, revision], |row| row.get::<_, String>(0)).map_err(error)?;
+    for row in rows {
+        let anchor: DictionarySentenceAnchor = serde_json::from_str(&row.map_err(error)?).map_err(error)?;
+        if let Some(selection) = anchor.selection {
+            let start = selection.start_utf16;
+            if crate::ocr_layout::intersects_edits(start, start + selection.text.encode_utf16().count(), edits) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 pub(crate) fn reanchor_selections(
     db: &Connection,
     (id, page, before_revision, after_revision): (&str, Option<u16>, &str, &str),

@@ -161,10 +161,15 @@ public partial class ReadingPage
             }
             var window = await session.PdfReadWindowAsync(document.Id, page);
             if (!IsCurrentPdfSnapshot(session, document)) return;
-            if (await RepairStoredPdfTextOrderAsync(session, document, window))
+            if (await RepairStoredPdfLayoutAsync(session, document, window))
             {
-                if (IsCurrentPdfSnapshot(session, document)) await session.RefreshAsync();
-                return;
+                if (!IsCurrentPdfSnapshot(session, document)) return;
+                if (!window.Pages.Any(item => item.Page == window.Center && item.State == "detached"))
+                {
+                    await session.RefreshAsync();
+                    return;
+                }
+                window = await session.PdfReadWindowAsync(document.Id, page);
             }
             if (!IsCurrentPdfSnapshot(session, document)) return;
             var pageChanged = pdfWindow?.Center != window.Center;
@@ -216,12 +221,12 @@ public partial class ReadingPage
     private bool IsCurrentPdfSnapshot(ReaderSession session, Document document) =>
         readingPageActive && ReferenceEquals(pdfSnapshot, document) && ReferenceEquals(session.Document, document);
 
-    private async Task<bool> RepairStoredPdfTextOrderAsync(ReaderSession session, Document document, PdfReadWindow window)
+    private async Task<bool> RepairStoredPdfLayoutAsync(ReaderSession session, Document document, PdfReadWindow window)
     {
         var page = window.Pages.FirstOrDefault(candidate => candidate.Page == window.Center);
         if (document.CurrentRevisionId is not { } revision ||
-            page is not { HasOcr: false, State: "textLayer" or "detached" } ||
-            page.Text.Length == 0)
+            page is null || page.Text.Length == 0 ||
+            page is not ({ HasOcr: true } or { State: "textLayer" or "detached" }))
             return false;
 
         var attempt = (document.Id, page.Page, page.Text);
@@ -229,6 +234,9 @@ public partial class ReadingPage
         attemptedPdfTextOrderRepair = attempt;
         try
         {
+            if (page.HasOcr)
+                return await session.UpgradeStoredOcrLayoutAsync(document.Id, page.Page, revision, page.Text,
+                    page.State == "detached");
             if (await session.OriginalFileAsync(document.Id) is not { } original ||
                 !IsCurrentPdfSnapshot(session, document)) return false;
             var corrections = await PdfScan.ReadStoredTextOrderFixesAsync(original.Path, page.Page, page.Text);

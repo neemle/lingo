@@ -619,6 +619,44 @@ impl Store {
         Ok(changed)
     }
 
+    pub fn upgrade_stored_ocr_layout(&mut self, id: &str, page: u16, revision: &str, reference: &str, detached: bool) -> Result<bool> {
+        if reference.len() > 96_000 || reference.is_empty() { return Ok(false); }
+        if detached {
+            return self.upgrade_detached_ocr_layout(id, page, revision, reference);
+        }
+        let mut updated = false;
+        self.edit_document(id, |document, tx| {
+            if document.current_revision_id.as_deref() != Some(revision) || !has_ocr_lines(document, page) {
+                return Ok(false);
+            }
+            let Some(pages) = file_originals::native_pdf_page_text(tx, id)? else { return Ok(false); };
+            let Some((start, _)) = crate::pdf_reading_position::page_bounds(document, page) else { return Ok(false); };
+            let lines = document.ocr_lines.as_ref().expect("verified OCR lines");
+            let first = lines.partition_point(|line| line.page < page);
+            let end = lines.partition_point(|line| line.page <= page);
+            let Some((rebuilt, _, mut edits)) = crate::ocr_layout::upgrade_cached_page(&lines[first..end], reference)
+                else { return Ok(false); };
+            for edit in &mut edits { edit.start_utf16 += start; }
+            let resume = Store::read_speech_resume(tx, id)?;
+            let protected = document.sentences.iter().any(|sentence| {
+                crate::ocr_layout::intersects_edits(sentence.start_utf16, sentence.end_utf16, &edits)
+                    && (document.bookmarks.contains(&sentence.id)
+                    || document.notes.contains_key(&sentence.id)
+                    || document.speech_text_overrides.contains_key(&sentence.id)
+                    || document.reviewed_translations.values().any(|values| values.contains_key(&sentence.id))
+                    || resume.as_ref().is_some_and(|resume| resume.sentence_id == sentence.id))
+            });
+            if protected || crate::dictionary_transfer::selection_overlaps_layout_edits(tx, id, None, revision, &edits)? {
+                return Ok(false);
+            }
+            document.ocr_lines.as_mut().expect("verified OCR lines").splice(first..end, rebuilt);
+            reflow_pdf_document(tx, document, pages, &edits, page)?;
+            updated = true;
+            Ok(true)
+        })?;
+        Ok(updated)
+    }
+
     pub fn reconcile_pdf_ocr_page(
         &mut self, id: &str, page: u16, revision: &str, language: &str, reference: &str, detached: bool,
     ) -> Result<bool> {

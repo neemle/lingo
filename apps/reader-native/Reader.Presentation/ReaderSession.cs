@@ -337,6 +337,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         return changed;
     }
 
+    public Task<bool> UpgradeStoredOcrLayoutAsync(string id, int page, string revisionId, string reference, bool detached) =>
+        Task.Run(() => client.UpgradeStoredOcrLayout(id, page, revisionId, reference, detached));
+
     public async Task CachePdfOcrPageAsync(string id, PdfOcrRequest claim, OcrLine[] lines, string? textLayer = null)
     {
         await Task.Run(() => client.CachePdfOcrPage(id, claim, lines, textLayer));

@@ -341,6 +341,14 @@ pub enum Command {
         reference: String,
         changes: Vec<reader_core::PdfTextOrderEdit>,
     },
+    UpgradeStoredOcrLayout {
+        id: String,
+        page: u16,
+        #[serde(rename = "revisionId")]
+        revision_id: String,
+        reference: String,
+        detached: bool,
+    },
     ReconcilePhotoOcr {
         id: String,
         #[serde(rename = "revisionId")]

@@ -199,6 +199,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             value(store.reconcile_pdf_ocr_page(&id, page, &revision_id, &language, &reference, detached)),
         Command::RepairStoredPdfTextOrder { id, page, revision_id, reference, changes } =>
             value(store.repair_stored_pdf_text_order(&id, page, &revision_id, &reference, &changes)),
+        Command::UpgradeStoredOcrLayout { id, page, revision_id, reference, detached } =>
+            value(store.upgrade_stored_ocr_layout(&id, page, &revision_id, &reference, detached)),
         Command::ReconcilePhotoOcr { id, revision_id } => value(store.reconcile_photo_ocr(&id, &revision_id)),
         Command::PdfOcrJob { job } => value(store.pdf_ocr_job(job)),
         Command::ImportMixedPdf {
