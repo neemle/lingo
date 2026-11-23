@@ -1,5 +1,6 @@
-use super::{annotations, database_error, page_revision, read, sentence_prefix};
+use super::{annotations, database_error, page_revision, sentence_prefix};
 use crate::{
+    document_layout::{self, DocumentBlock},
     document_tokens::word_parts, ocr, pdf_reading_position, translation::word_hyphen,
     Document, Result, Sentence, Store,
 };
@@ -73,7 +74,8 @@ fn canonical_edges(
         .and_then(|first| {
             let page = page_at(first.start_utf16)?;
             let previous = page.checked_sub(1)?;
-            let start = ocr::byte_at_utf16(&document.text, starts[page]?)?;
+            let bounds = canonical_body_range(document, u16::try_from(page).ok()?)?;
+            let start = bounds.start;
             if starts[previous].is_some() || !document.text.get(start..first.start_utf8)?.trim().is_empty() {
                 return None;
             }
@@ -83,8 +85,7 @@ fn canonical_edges(
         let page = page_at(last.end_utf16.checked_sub(1)?)?;
         let next = page + 1;
         if starts.get(next)?.is_some() { return None; }
-        let (_, end) = pdf_reading_position::page_bounds(document, u16::try_from(page).ok()?)?;
-        let end = ocr::byte_at_utf16(&document.text, end)?;
+        let end = canonical_body_range(document, u16::try_from(page).ok()?)?.end;
         if !document.text.get(last.end_utf8..end)?.trim().is_empty() { return None; }
         Some((u16::try_from(next).ok()?, last.text.len()))
     });
@@ -99,20 +100,25 @@ fn canonical_edges(
 
 // A word spoken across pages belongs to the page where it starts.
 pub(super) fn narration(
-    db: &Connection, id: &str, page: u16, sentences: &[Sentence], position: usize,
+    db: &Connection, id: &str, page: u16, layout: &Document, sentence: &Sentence,
 ) -> Result<Option<String>> {
-    let source = &sentences[position].text;
-    let previous = if position == 0 && source.starts_with(char::is_lowercase) {
+    let body = prose_range(&layout.blocks, 0..layout.text.len());
+    let source = layout.text.get(sentence.start_utf8..sentence.end_utf8.min(body.end))
+        .unwrap_or(&sentence.text).trim_end();
+    let first = layout.text.get(body.start..sentence.start_utf8).is_some_and(|text| text.trim().is_empty());
+    let last = layout.text.get(sentence.end_utf8.min(body.end)..body.end).is_some_and(|text| text.trim().is_empty());
+    let previous = if first && source.starts_with(char::is_lowercase) {
         page.checked_sub(1).map(|page| excerpt(
             db, id, page, EdgeUse::Speech, Neighbor::Previous, source.len(),
         )).transpose()?.flatten()
     } else { None };
-    let next = if position == sentences.len() - 1 && word_hyphen(source).is_some() {
+    let next = if last && word_hyphen(source).is_some() {
         page.checked_add(1).map(|page| excerpt(
             db, id, page, EdgeUse::Speech, Neighbor::Next, source.len(),
         )).transpose()?.flatten()
     } else { None };
-    Ok(narration_fragments(source, previous.as_deref(), next.as_deref()))
+    Ok(narration_fragments(source, previous.as_deref(), next.as_deref())
+        .or_else(|| (source != sentence.text).then(|| source.to_owned())))
 }
 
 pub(crate) fn canonical_narration(
@@ -243,11 +249,19 @@ fn excerpt(
     if budget == 0 {
         return Ok(None);
     }
-    if let Some((text, _)) = read(db, id, page)? {
-        let Some((start, part)) = edge(&text, side, budget) else {
+    let detached: Option<(String, Option<String>)> = db.query_row(
+        "SELECT text,lines FROM pdf_detached_pages WHERE document_id=?1 AND page=?2",
+        params![id, page], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional().map_err(database_error)?;
+    if let Some((text, encoded)) = detached {
+        let lines = encoded.as_deref().map(|encoded| super::ocr_edit::ocr_page(&text, encoded))
+            .transpose()?.map(|ocr| ocr.lines);
+        let layout = document_layout::detached_pdf_document(text, "", lines);
+        let bounds = prose_range(&layout.blocks, 0..layout.text.len());
+        let Some((start, part)) = edge(&layout.text, bounds, side, budget) else {
             return Ok(None);
         };
-        let offset = text[..start].encode_utf16().count();
+        let offset = layout.text[..start].encode_utf16().count();
         match usage {
             EdgeUse::Lookup(Some(target)) if annotations::reviewed(db, id, page, offset)?.contains_key(target) => return Ok(None),
             EdgeUse::Speech if annotations::speech_text(db, id, page, offset)?.is_some() => return Ok(None),
@@ -269,23 +283,12 @@ fn excerpt(
         return Ok(None);
     };
     let document: Document = serde_json::from_str(&body).map_err(database_error)?;
-    let Some((start, end)) = pdf_reading_position::page_bounds(&document, page) else {
+    let Some(bounds) = canonical_body_range(&document, page) else {
         return Ok(None);
     };
-    let Some(start_byte) = ocr::byte_at_utf16(&document.text, start) else {
+    let Some((absolute, part)) = edge(&document.text, bounds, side, budget) else {
         return Ok(None);
     };
-    let Some(end_byte) = ocr::byte_at_utf16(&document.text, end) else {
-        return Ok(None);
-    };
-    let Some((relative, part)) = document
-        .text
-        .get(start_byte..end_byte)
-        .and_then(|text| edge(text, side, budget))
-    else {
-        return Ok(None);
-    };
-    let absolute = start_byte + relative;
     let index = document.sentences.partition_point(|sentence| sentence.end_utf8 <= absolute);
     if let Some(sentence) = document.sentences.get(index) {
         let has_override = match usage {
@@ -301,12 +304,30 @@ fn excerpt(
     Ok(Some(part.to_owned()))
 }
 
-fn edge(text: &str, side: Neighbor, budget: usize) -> Option<(usize, &str)> {
-    let mut edges = text
+fn canonical_body_range(document: &Document, page: u16) -> Option<Range<usize>> {
+    let (start, end) = pdf_reading_position::page_bounds(document, page)?;
+    let start = ocr::byte_at_utf16(&document.text, start)?;
+    let end = ocr::byte_at_utf16(&document.text, end)?;
+    Some(prose_range(&document.blocks, start..end))
+}
+
+fn prose_range(blocks: &[DocumentBlock], page: Range<usize>) -> Range<usize> {
+    let first = blocks.partition_point(|block| block.end_utf8 <= page.start);
+    let last = blocks.partition_point(|block| block.start_utf8 < page.end);
+    let blocks = &blocks[first..last];
+    if blocks.is_empty() { return page; }
+    let mut prose = blocks.iter().filter(|block| !block.footnote);
+    let Some(first) = prose.next() else { return page.start..page.start; };
+    let last = prose.next_back().unwrap_or(first);
+    first.start_utf8.max(page.start)..last.end_utf8.min(page.end)
+}
+
+fn edge(text: &str, bounds: Range<usize>, side: Neighbor, budget: usize) -> Option<(usize, &str)> {
+    let mut edges = text.get(bounds.clone())?
         .split_sentence_bound_indices()
         .filter_map(|(start, part)| {
             let trimmed = part.trim();
-            (!trimmed.is_empty()).then_some((start + part.len() - part.trim_start().len(), trimmed))
+            (!trimmed.is_empty()).then_some((bounds.start + start + part.len() - part.trim_start().len(), trimmed))
         });
     let (start, part) = match side {
         Neighbor::Previous => edges.last(),

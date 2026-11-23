@@ -428,8 +428,15 @@ mod tests {
             page, text: text.into(), x: 0.1, y, width: 0.8, height,
             confidence: None, correction: None, words: vec![], source_span: None,
         };
-        pdf_detached_pages::write_ocr(&store.connection, &document.id, 0, "fr",
-            &[line(0, "C'était un voyage extraordi-", 0.2, 0.04)], 2).unwrap();
+        pdf_detached_pages::write_ocr(&store.connection, &document.id, 0, "fr", &[
+            line(0, "Les marins partirent.", 0.1, 0.04),
+            line(0, "La mer était calme.", 0.15, 0.04),
+            line(0, "Le vent soufflait.", 0.2, 0.04),
+            line(0, "C'était un voyage extraordi-", 0.25, 0.04),
+            line(0, "Marin : métier de la mer.", 0.8, 0.015),
+            line(0, "Mer : grande étendue d'eau.", 0.82, 0.015),
+            line(0, "Voyage : déplacement lointain.", 0.84, 0.015),
+        ], 2).unwrap();
         pdf_detached_pages::write_ocr(&store.connection, &document.id, 1, "fr", &[
             line(1, "naire. Le marin s'approcha du quai.", 0.1, 0.04),
             line(1, "Le vent soufflait fort.", 0.15, 0.04),
@@ -450,10 +457,18 @@ mod tests {
         let (joined, _) = sentence_source(&store, &projection.document, projection.physical.start,
             "uk", PageBoundaries::Projected).unwrap();
         assert!(joined.contains("extraordinaire."), "{joined}");
+        assert!(!joined.contains("métier"));
         assert_eq!(projection.document.blocks.iter().filter(|block| block.footnote).count(), 3);
         let rows = store.pdf_page_translation(&document.id, 1, "uk", true).unwrap();
         assert!(!rows.is_empty());
         assert!(rows.iter().all(|row| row.end_utf16 <= glossary_start));
+
+        let left = store.detached_pdf_sentences(&document.id, 0).unwrap().unwrap();
+        let dangling = left.sentences.iter().position(|sentence| sentence.text.contains("extraordi-")).unwrap();
+        let spoken = store.detached_pdf_sentence(&document.id, 0, Some(dangling)).unwrap().unwrap();
+        assert_eq!(spoken.narration_text.as_deref(), Some("C'était un voyage extraordinaire."));
+        let continuation = store.detached_pdf_sentence(&document.id, 1, Some(0)).unwrap().unwrap();
+        assert!(continuation.narration_text.as_deref().is_some_and(|text| !text.starts_with("naire")));
     }
 }
 

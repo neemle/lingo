@@ -164,7 +164,7 @@ fn read_ocr(db: &Connection, id: &str, page: u16) -> Result<Option<(String, Stri
     ).optional().map_err(database_error)
 }
 
-fn ocr_page(text: &str, encoded: &str) -> Result<DetachedPdfOcrPage> {
+pub(super) fn ocr_page(text: &str, encoded: &str) -> Result<DetachedPdfOcrPage> {
     let mut lines: Vec<ocr::OcrLine> = serde_json::from_str(encoded).map_err(database_error)?;
     ocr::refresh_line_provenance(text, &mut lines, None);
     Ok(DetachedPdfOcrPage {

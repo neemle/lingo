@@ -72,9 +72,11 @@ impl Store {
                 .ok_or("Текст сторінки PDF недоступний.")?;
             let position = current.saved.min(current.sentences.len() - 1);
             let sentence = &current.sentences[position];
-            let (speech, boundary_text) = narration_text(&tx, id, page, &current.sentences, position)?;
+            let layout = self.detached_speech_layout(id, page, current.text, &current.language)?;
+            let (speech, boundary_text) = narration_text(&tx, id, page, &layout, sentence)?;
             if sentence.id != sentence_id
                 || resume.sentence_id != sentence_id
+                || crate::document_layout::sentence_in_footnote(&layout.blocks, sentence)
                 || boundary_text.as_deref() == Some("")
                 || !valid(&resume, sentence, &current.language, speech.as_deref().or(boundary_text.as_deref()))
             {

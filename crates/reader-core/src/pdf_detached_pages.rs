@@ -193,7 +193,11 @@ impl Store {
             sentences.partition_point(|sentence| sentence.end_utf16 <= offset).min(total - 1)
         });
         let position = from_offset.or(requested).unwrap_or(saved).min(total - 1);
-        let (speech_text, narration_text) = narration_text(&self.connection, id, page, &sentences, position)?;
+        let layout = self.detached_speech_layout(id, page, text, &language)?;
+        let footnote = crate::document_layout::sentence_in_footnote(&layout.blocks, &sentences[position]);
+        let (speech_text, narration_text) = if footnote { (None, None) } else {
+            narration_text(&self.connection, id, page, &layout, &sentences[position])?
+        };
         let checkpoint = speech_resume::read(&self.connection, id, page)?;
         let speech_resume = checkpoint.as_ref()
             .filter(|checkpoint| checkpoint.position == position && speech_resume::matches_original(checkpoint, &sentences))
@@ -205,8 +209,6 @@ impl Store {
         if requested.is_some() || source_offset.is_some() {
             write_position(&self.connection, id, page, position)?;
         }
-        let layout = self.detached_speech_layout(id, page, text, &language)?;
-        let footnote = crate::document_layout::sentence_in_footnote(&layout.blocks, &sentence);
         let pronunciation_text = if !footnote && speech_text.is_none() {
             crate::speech::pdf_narration(&layout, &sentence, narration_text.as_deref().unwrap_or(&sentence.text))
         } else { None };
@@ -250,12 +252,12 @@ impl Store {
         &self, id: &str, page: u16, language: String, sentences: &[Sentence],
         layout: &crate::Document, start: usize, skip_consumed: bool,
     ) -> Result<Option<(String, crate::speech::SpeechSource)>> {
-        for (position, sentence) in sentences.iter().enumerate().skip(start) {
+        for sentence in sentences.iter().skip(start) {
             if crate::document_layout::sentence_in_footnote(&layout.blocks, sentence) {
                 if !skip_consumed { break; }
                 continue;
             }
-            let (speech, narration) = narration_text(&self.connection, id, page, sentences, position)?;
+            let (speech, narration) = narration_text(&self.connection, id, page, layout, sentence)?;
             let text = speech.unwrap_or_else(|| {
                 let text = narration.unwrap_or_else(|| sentence.text.clone());
                 crate::speech::pdf_narration(layout, sentence, &text).unwrap_or(text)
@@ -319,11 +321,11 @@ pub(crate) fn source_language(db: &Connection, id: &str, page: u16) -> Result<Op
 }
 
 fn narration_text(
-    db: &Connection, id: &str, page: u16, sentences: &[Sentence], position: usize,
+    db: &Connection, id: &str, page: u16, layout: &crate::Document, sentence: &Sentence,
 ) -> Result<(Option<String>, Option<String>)> {
-    let speech = annotations::speech_text(db, id, page, sentences[position].start_utf16)?;
+    let speech = annotations::speech_text(db, id, page, sentence.start_utf16)?;
     let narration = if speech.is_none() {
-        word_break::narration(db, id, page, sentences, position)?
+        word_break::narration(db, id, page, layout, sentence)?
     } else {
         None
     };
