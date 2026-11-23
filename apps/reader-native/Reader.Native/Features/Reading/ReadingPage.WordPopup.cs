@@ -63,14 +63,15 @@ public partial class ReadingPage
                 if (visual is ScrollView scroll)
                 {
                     origin = new Point(origin.X - scroll.ScrollX, origin.Y - scroll.ScrollY);
-                    if (word is { } bounds && !IntersectsViewport(bounds, origin, scroll.Width, scroll.Height))
-                        word = null;
+                    if (word is { } bounds)
+                        word = ClipWord(bounds, origin, scroll.Width, scroll.Height);
                 }
                 origin = new Point(origin.X + visual.X, origin.Y + visual.Y);
             }
 
-        var anchorInRoot = word is { } rect && IntersectsViewport(rect, origin, ReaderRoot.Width, ReaderRoot.Height)
-            ? new Rect(rect.X + origin.X, rect.Y + origin.Y, rect.Width, rect.Height) : (Rect?)null;
+        var visible = word is { } rect ? ClipWord(rect, origin, ReaderRoot.Width, ReaderRoot.Height) : null;
+        var anchorInRoot = visible is { } clipped
+            ? new Rect(clipped.X + origin.X, clipped.Y + origin.Y, clipped.Width, clipped.Height) : (Rect?)null;
         var expanded = popup.Card == DetachedWordCard
             ? DetachedWordDetails.IsVisible || DetachedMeanings.IsVisible
             : WordDetails.IsVisible || WordMeanings.IsVisible;
@@ -78,7 +79,7 @@ public partial class ReadingPage
         AbsoluteLayout.SetLayoutBounds(popup.Card, placement.Card);
         WordPointer.IsVisible = placement.Pointer is not null;
         if (placement.Pointer is not { } pointer) return;
-        WordPointer.Rotation = placement.Above ? 180 : 0;
+        WordPointer.Rotation = placement.Rotation;
         AbsoluteLayout.SetLayoutBounds(WordPointer, pointer);
     }
 
@@ -94,11 +95,16 @@ public partial class ReadingPage
             bounds.Width * fit.Width, bounds.Height * fit.Height);
     }
 
-    private static bool IntersectsViewport(Rect word, Point origin, double width, double height) =>
-        word.Right + origin.X > 0 && word.Left + origin.X < width &&
-        word.Bottom + origin.Y > 0 && word.Top + origin.Y < height;
+    private static Rect? ClipWord(Rect word, Point origin, double width, double height)
+    {
+        var left = Math.Max(word.Left, -origin.X);
+        var top = Math.Max(word.Top, -origin.Y);
+        var right = Math.Min(word.Right, width - origin.X);
+        var bottom = Math.Min(word.Bottom, height - origin.Y);
+        return right > left && bottom > top ? new Rect(left, top, right - left, bottom - top) : null;
+    }
 
-    private static (Rect Card, Rect? Pointer, bool Above) FitWordPopup(
+    private static (Rect Card, Rect? Pointer, double Rotation) FitWordPopup(
         Rect? word, double viewportWidth, double viewportHeight, double preferredHeight)
     {
         const double arrow = 8;
@@ -114,15 +120,33 @@ public partial class ReadingPage
         var roomBelow = viewportHeight - margin - (belowEdge + arrow);
         var above = roomBelow < preferredHeight && roomAbove > roomBelow;
         var available = above ? roomAbove : roomBelow;
+        if (word is { } visibleWord && available < Math.Min(preferredHeight, 210))
+        {
+            var roomLeft = visibleWord.Left - clearance - arrow - margin;
+            var roomRight = viewportWidth - margin - (visibleWord.Right + clearance + arrow);
+            var onLeft = roomLeft > roomRight;
+            var sideWidth = Math.Min(width, Math.Max(roomLeft, roomRight));
+            var sideHeight = Math.Min(preferredHeight, viewportHeight - margin * 2);
+            if (sideWidth >= 280 && sideHeight > available && sideHeight >= 32)
+            {
+                var sideLeft = onLeft ? visibleWord.Left - clearance - arrow - sideWidth
+                    : visibleWord.Right + clearance + arrow;
+                var sideTop = Math.Clamp(visibleWord.Center.Y - sideHeight / 2, margin, viewportHeight - sideHeight - margin);
+                var arrowCenterY = Math.Clamp(visibleWord.Center.Y, sideTop + arrow, sideTop + sideHeight - arrow);
+                var arrowCenterX = onLeft ? sideLeft + sideWidth + arrow / 2 : sideLeft - arrow / 2;
+                return (new Rect(sideLeft, sideTop, sideWidth, sideHeight),
+                    new Rect(arrowCenterX - arrow, arrowCenterY - arrow / 2, arrow * 2, arrow), onLeft ? 90 : -90);
+            }
+        }
         var left = Math.Clamp(anchorX - width / 2, margin, Math.Max(margin, viewportWidth - width - margin));
         if (available <= 0)
-            return (new Rect(left, margin, width, Math.Min(preferredHeight, viewportHeight - 2 * margin)), null, false);
+            return (new Rect(left, margin, width, Math.Min(preferredHeight, viewportHeight - 2 * margin)), null, 0);
         var height = Math.Min(preferredHeight, available);
         var top = above ? aboveEdge - arrow - height : belowEdge + arrow;
         var card = new Rect(left, top, width, height);
-        if (word is null || width < 32) return (card, null, above);
+        if (word is null || width < 32) return (card, null, 0);
         var pointer = Math.Clamp(anchorX - arrow, left + arrow, left + width - arrow * 3);
-        return (card, new Rect(pointer, above ? top + height : top - arrow, arrow * 2, arrow), above);
+        return (card, new Rect(pointer, above ? top + height : top - arrow, arrow * 2, arrow), above ? 180 : 0);
     }
 
     private void ToggleWordDetailsClicked(object? sender, EventArgs args)
