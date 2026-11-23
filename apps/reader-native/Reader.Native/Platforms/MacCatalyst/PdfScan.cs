@@ -224,8 +224,9 @@ internal static partial class PdfScan
         if (text.Length == 0 || crop.Width <= 0 || crop.Height <= 0) return (image, text, [], appearance);
         var boxes = new List<OcrLine>();
         using var attributed = page.AttributedString;
-        var attributes = string.Equals(attributed?.Value, page.Text, StringComparison.Ordinal) ? attributed : null;
-        var rotation = (page.Rotation % 360 + 360) % 360;
+        var raw = page.Text ?? "";
+        var attributes = string.Equals(attributed?.Value, raw, StringComparison.Ordinal) ? attributed : null;
+        var rotation = DisplayRotation(page);
         var pageHeight = (double)(rotation is 90 or 270 ? crop.Width : crop.Height);
         using var inkSpace = CGColorSpace.CreateSrgb();
         // PDFKit emits U+FFFC for artwork. Its selection bounds can span the entire page.
@@ -248,13 +249,39 @@ internal static partial class PdfScan
                 270 => (1 - y - height, 1 - x - width, height, width),
                 _ => (x, 1 - y - height, width, height),
             };
+            var direction = TextDirection(page, offset + original.Start, original.Length, raw, rotation);
             boxes.Add(new(word.Value, x, y, width, height, null, index,
-                SourceSpan: new(0, 0, word.Index, word.Index + word.Length)));
+                SourceSpan: new(0, 0, word.Index, word.Index + word.Length), Rotation: direction));
             appearance[word.Index] = ReadAppearance(attributes, offset + original.Start, pageHeight, inkSpace);
         }
         bitmap?.AddColors(boxes, appearance);
         return (image, text, boxes.ToArray(), appearance);
     });
+
+    private static int DisplayRotation(PdfPage page) => (int)((page.Rotation % 360 + 360) % 360);
+
+    private static int? TextDirection(PdfPage page, int start, int length, string raw, int pageRotation)
+    {
+        var source = raw.AsSpan(start, length);
+        var split = System.Globalization.StringInfo.GetNextTextElementLength(source);
+        if (split == length) return null;
+
+        // PDFKit character bounds follow the individual text matrix. Selections use page coordinates.
+        using var leading = page.GetSelection(new NSRange(start, split));
+        using var trailing = page.GetSelection(new NSRange(start + split, length - split));
+        if (leading is null || trailing is null) return null;
+        var first = leading.GetBoundsForPage(page);
+        var rest = trailing.GetBoundsForPage(page);
+        if (first.IsEmpty || rest.IsEmpty) return null;
+
+        var dx = (double)(rest.X - first.X + (rest.Width - first.Width) / 2);
+        var dy = (double)(rest.Y - first.Y + (rest.Height - first.Height) / 2);
+        int direction;
+        if (Math.Abs(dx) > Math.Abs(dy) * 1.6) direction = dx > 0 ? 0 : 180;
+        else if (Math.Abs(dy) > Math.Abs(dx) * 1.6) direction = dy < 0 ? 90 : 270;
+        else return null;
+        return (direction + pageRotation) % 360;
+    }
 
     private static bool IsPdfListLabel(string text, int start, int length)
     {
@@ -377,7 +404,10 @@ internal static partial class PdfScan
         if (!double.IsFinite(maxSide) || maxSide <= 0)
             throw new InvalidDataException("Сторінка PDF має некоректний розмір.");
         var scale = limit / maxSide;
-        return page.GetThumbnail(new CGSize(Math.Max(1, Math.Round((double)bounds.Width * scale)),
-            Math.Max(1, Math.Round((double)bounds.Height * scale))), PdfDisplayBox.Crop);
+        var sideways = DisplayRotation(page) is 90 or 270;
+        var width = sideways ? bounds.Height : bounds.Width;
+        var height = sideways ? bounds.Width : bounds.Height;
+        return page.GetThumbnail(new CGSize(Math.Max(1, Math.Round((double)width * scale)),
+            Math.Max(1, Math.Round((double)height * scale))), PdfDisplayBox.Crop);
     }
 }
