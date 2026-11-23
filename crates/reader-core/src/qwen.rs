@@ -967,7 +967,7 @@ impl ReviewSentenceJob {
         let Some(model) = model else {
             return Ok(read_cache()?.map(|reviews| Self::merge(reviews, true)));
         };
-        model.run_optional_with_cache(
+        model.run_requested_with_cache(
             || Ok(read_cache()?.map(|reviews| Some(Self::merge(reviews, true)))),
             |directory, should_yield| {
                 let opening_deadline = Instant::now() + Duration::from_secs(20);
@@ -1050,7 +1050,7 @@ fn run_prompt<T: Serialize + serde::de::DeserializeOwned>(
     cache: &HintCache,
     parse: impl Fn(&[u8]) -> Result<T>,
 ) -> Result<(T, bool)> {
-    job.run_optional_with_cache(
+    job.run_requested_with_cache(
         || cache.load().map(|result| result.map(|hint| (hint, true))),
         |directory, should_yield| {
             let deadline = Instant::now() + Duration::from_secs(20);
@@ -1069,7 +1069,7 @@ const GENERATION_TIMEOUT: &str = "Qwen не завершив локальний 
 
 fn prompt_checkpoint(should_yield: &dyn Fn() -> bool, deadline: Instant) -> Result<()> {
     if should_yield() {
-        Err("Локальний аналіз перервано, щоб виконати переклад.".into())
+        Err("Локальний аналіз перервано іншим активним запитом.".into())
     } else if Instant::now() >= deadline {
         Err(GENERATION_TIMEOUT.into())
     } else {

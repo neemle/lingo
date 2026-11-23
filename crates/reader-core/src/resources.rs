@@ -48,6 +48,15 @@ impl ResourceGovernor {
         guard
     }
 
+    /// A manual model request waits for the running job to yield, but still
+    /// yields to subsequent foreground work at its inference checkpoints.
+    pub(crate) fn requested_model(&self) -> OptionalJob<'_> {
+        OptionalJob {
+            governor: self,
+            _work: self.interactive(),
+        }
+    }
+
     pub(crate) fn optional(&self) -> Result<OptionalJob<'_>> {
         let busy = "Читай обробляє інший запит. Спробуйте ще раз.";
         if self.interactive_waiting.load(Ordering::SeqCst) != 0 {
@@ -225,13 +234,13 @@ mod tests {
     }
 
     #[test]
-    fn queued_reader_signals_optional_job_and_takes_the_permit_next() {
+    fn requested_model_signals_background_work_and_takes_the_permit_next() {
         let governor = ResourceGovernor::new();
         let optional = governor.optional().unwrap();
         assert!(governor.optional().is_err());
         thread::scope(|scope| {
             let reader = scope.spawn(|| {
-                let _reader = governor.interactive();
+                let _model = governor.requested_model();
             });
             let deadline = Instant::now() + Duration::from_secs(2);
             while !optional.should_yield() && Instant::now() < deadline {

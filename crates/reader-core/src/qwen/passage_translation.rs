@@ -235,7 +235,7 @@ impl TranslatePassageJob {
             return self.cached()?.ok_or_else(|| "Збережений переклад не знайдено.".into());
         };
 
-        model.run_optional_with_cache(|| self.cached(), |directory, should_yield| {
+        model.run_requested_with_cache(|| self.cached(), |directory, should_yield| {
             let opening = Instant::now() + Duration::from_secs(25);
             with_prompt_context(
                 directory,
