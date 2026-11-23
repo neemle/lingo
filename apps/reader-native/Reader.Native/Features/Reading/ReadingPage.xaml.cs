@@ -796,9 +796,25 @@ public partial class ReadingPage : ContentPage
 
     private void SpeechPreferencesChanged(object? sender, EventArgs args)
     {
-        if (!speechPreferencesReady || loadingSpeechPreferences || Rate.SelectedIndex < 0) return;
-        SaveReaderPreference(ReaderPreferenceChange.SpeechPlayback(SpeechRatePercent, ContinueSpeech.IsChecked));
-        if (!ContinueSpeech.IsChecked) CancelDetachedSpeechTravel();
+        if (!speechPreferencesReady || loadingSpeechPreferences) return;
+        loadingSpeechPreferences = true;
+        try
+        {
+            if (sender is Picker picker && picker.SelectedIndex >= 0 && picker.SelectedIndex < speechRates.Length)
+            {
+                var index = picker.SelectedIndex;
+                Rate.SelectedIndex = DetachedRate.SelectedIndex = index;
+                SaveReaderPreference(ReaderPreferenceChange.SpeechRate(speechRates[index]));
+            }
+            else if (sender is CheckBox checkbox)
+            {
+                var continuous = checkbox.IsChecked;
+                ContinueSpeech.IsChecked = DetachedContinueSpeech.IsChecked = continuous;
+                SaveReaderPreference(ReaderPreferenceChange.ContinuousSpeech(continuous));
+                if (!continuous) CancelDetachedSpeechTravel();
+            }
+        }
+        finally { loadingSpeechPreferences = false; }
         if (!utteranceActive) RefreshSpeechResume();
         if (detachedAddress is not null) UpdateDetachedControls();
     }

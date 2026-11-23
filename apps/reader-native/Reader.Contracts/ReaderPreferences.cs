@@ -21,10 +21,6 @@ public sealed record ReaderPreferenceChange(string Field)
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object? Value { get; private init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public int? RatePercent { get; private init; }
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public bool? Continuous { get; private init; }
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Source { get; private init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Target { get; private init; }
@@ -39,8 +35,8 @@ public sealed record ReaderPreferenceChange(string Field)
     public static ReaderPreferenceChange PdfTranslationLayout(bool value) => new("pdfTranslationLayout") { Value = value };
     public static ReaderPreferenceChange AutoTranslate(bool value) => new("autoTranslate") { Value = value };
     public static ReaderPreferenceChange BackgroundTranslation(bool value) => new("backgroundTranslation") { Value = value };
-    public static ReaderPreferenceChange SpeechPlayback(int ratePercent, bool continuous) =>
-        new("speechPlayback") { RatePercent = ratePercent, Continuous = continuous };
+    public static ReaderPreferenceChange SpeechRate(int ratePercent) => new("speechRatePercent") { Value = ratePercent };
+    public static ReaderPreferenceChange ContinuousSpeech(bool value) => new("continuousSpeech") { Value = value };
     public static ReaderPreferenceChange TranslationTarget(string source, string target) =>
         new("translationTarget") { Source = source, Target = target };
     public static ReaderPreferenceChange SpeechVoice(string language, string? voiceId) =>

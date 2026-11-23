@@ -15,9 +15,9 @@ public partial class ReadingPage
     private const string AutoTranslatePreference = "reader.translation.follow";
     private const string TargetPreferencePrefix = "reader.translation.target.";
     private const string VoicePreferencePrefix = "reader.speech.voice.";
-    private const int DefaultSpeechRate = 85;
+    private const int DefaultSpeechRate = 40;
     private static readonly int[] LegacySpeechRates = [75, 100, 125];
-    private static readonly int[] DefaultSpeechRates = [40, 50, 65, 75, DefaultSpeechRate, 100, 115, 125];
+    private static readonly int[] DefaultSpeechRates = [DefaultSpeechRate, 45, 50, 55, 60, 65, 75, 85, 100, 115, 125];
 
     private ReaderPreferences readerPreferences = new();
     private int[] speechRates = DefaultSpeechRates;
@@ -84,9 +84,9 @@ public partial class ReadingPage
         var rate = readerPreferences.SpeechRatePercent ?? DefaultSpeechRate;
         speechRates = DefaultSpeechRates.Contains(rate)
             ? DefaultSpeechRates : [.. DefaultSpeechRates.Append(rate).Order()];
-        Rate.ItemsSource = speechRates.Select(value =>
+        Rate.ItemsSource = DetachedRate.ItemsSource = speechRates.Select(value =>
             (value / 100d).ToString("0.##", CultureInfo.InvariantCulture) + "×").ToArray();
-        Rate.SelectedIndex = Array.IndexOf(speechRates, rate);
-        ContinueSpeech.IsChecked = readerPreferences.ContinuousSpeech ?? false;
+        Rate.SelectedIndex = DetachedRate.SelectedIndex = Array.IndexOf(speechRates, rate);
+        ContinueSpeech.IsChecked = DetachedContinueSpeech.IsChecked = readerPreferences.ContinuousSpeech ?? false;
     }
 }

@@ -374,6 +374,13 @@
         Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Picker x:Name="DetachedVoicePicker" Title="Голос" SelectedIndexChanged="DetachedVoiceChanged"
         MaximumWidthRequest="148" SemanticProperties.Description="Голос для сторінки PDF" />
+       <Picker x:Name="DetachedRate" Title="Темп" WidthRequest="80" Margin="5,0,0,0"
+        SelectedIndexChanged="SpeechPreferencesChanged" SemanticProperties.Description="Темп озвучення PDF" />
+       <HorizontalStackLayout Margin="5,0,0,0" Spacing="2" VerticalOptions="Center">
+        <CheckBox x:Name="DetachedContinueSpeech" CheckedChanged="SpeechPreferencesChanged"
+         SemanticProperties.Description="Автоматично озвучувати наступні речення PDF" />
+        <Label Text="Озвучувати далі" Style="{StaticResource ReaderMeta}" VerticalOptions="Center" />
+       </HorizontalStackLayout>
        <Label x:Name="DetachedSentenceStatus" Margin="5,0" Style="{StaticResource ReaderMeta}" />
       </FlexLayout>
      </Grid>
