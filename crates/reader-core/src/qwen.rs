@@ -313,6 +313,29 @@ impl HintCache {
     }
 
     fn save(&self, review: &impl Serialize) -> Result<()> {
+        let db = self.write_connection()?;
+        annotation_cache::write_model_hint(&db, &self.document_id, &self.key, review)
+    }
+
+    fn save_batch<'a, T: Serialize + 'a>(
+        updates: impl IntoIterator<Item = (&'a Self, &'a T)>,
+    ) -> Result<()> {
+        let mut updates = updates.into_iter().peekable();
+        let Some(&(first, _)) = updates.peek() else {
+            return Ok(());
+        };
+        let mut db = first.write_connection()?;
+        let tx = db.transaction().map_err(|error| error.to_string())?;
+        for (cache, value) in updates {
+            if cache.database != first.database || cache.document_id != first.document_id {
+                return Err("Оновлення кешу має стосуватися одного документа.".into());
+            }
+            annotation_cache::write_model_hint(&tx, &cache.document_id, &cache.key, value)?;
+        }
+        tx.commit().map_err(|error| error.to_string())
+    }
+
+    fn write_connection(&self) -> Result<Connection> {
         let db = Connection::open_with_flags(
             &self.database,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -320,7 +343,7 @@ impl HintCache {
         .map_err(|error| format!("Не вдалося відкрити кеш підказок. {error}"))?;
         db.pragma_update(None, "foreign_keys", true)
             .map_err(|error| error.to_string())?;
-        annotation_cache::write_model_hint(&db, &self.document_id, &self.key, review)
+        Ok(db)
     }
 }
 

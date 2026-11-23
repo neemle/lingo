@@ -1,6 +1,6 @@
 use super::{
     generate_in_mode, json_output, prompt_checkpoint, with_prompt_context, GenerationMode,
-    HintCacheMode, HintWork, GENERATION_TIMEOUT, HINT_GENERATION_MODEL,
+    HintCache, HintCacheMode, HintWork, GENERATION_TIMEOUT, HINT_GENERATION_MODEL,
 };
 use crate::{pdf_sentences::Layout, translation_passage::passage_chunks, Result, Store};
 use serde::{Deserialize, Serialize};
@@ -77,6 +77,8 @@ impl Store {
         if language == target {
             return Err("Виберіть іншу мову перекладу.".into());
         }
+        // Read all chunk entries from the same generation while a refresh may be publishing.
+        let snapshot = self.connection.unchecked_transaction().map_err(|error| error.to_string())?;
         let chunks = passage_chunks(&text)?
             .into_iter()
             .map(|text| {
@@ -96,6 +98,7 @@ impl Store {
                 )
             })
             .collect::<Result<Vec<_>>>()?;
+        snapshot.commit().map_err(|error| error.to_string())?;
         Ok(TranslatePassageJob {
             source: language,
             source_text: text,
@@ -147,8 +150,8 @@ impl TranslatePassageJob {
                 directory,
                 || prompt_checkpoint(should_yield, opening),
                 |model, context| {
-                    let mut translated = Vec::with_capacity(self.chunks.len());
-                    let mut updates = Vec::new();
+                    let mut translated: Vec<TranslationChunk> = Vec::with_capacity(self.chunks.len());
+                    let mut updates: Vec<(&HintCache, usize)> = Vec::new();
                     for item in &self.chunks {
                         check()?;
                         let value = match item {
@@ -156,7 +159,10 @@ impl TranslatePassageJob {
                                 value.clone().ok_or("Збережений переклад не знайдено.")?
                             }
                             HintWork::Generate { example, cache, .. } => {
-                                let previous = if self.regenerate { None } else { cache.load()? };
+                                let previous = if self.regenerate {
+                                    updates.iter().find(|(saved, _)| saved.key == cache.key)
+                                        .map(|(_, index)| translated[*index].clone())
+                                } else { cache.load()? };
                                 if let Some(value) = previous {
                                     value
                                 } else {
@@ -197,9 +203,7 @@ impl TranslatePassageJob {
                         translated.push(value);
                     }
                     check()?;
-                    for (cache, index) in updates {
-                        cache.save(&translated[index])?;
-                    }
+                    HintCache::save_batch(updates.into_iter().map(|(cache, index)| (cache, &translated[index])))?;
                     Ok(self.combine(translated, false))
                 },
             )
@@ -479,5 +483,37 @@ mod tests {
         let retry = store.prepare_passage_translation(&document.id, None, sentence, "uk", false).unwrap();
         assert!(matches!(&retry.chunks[0], HintWork::Cached(Some(_))));
         assert!(matches!(&retry.chunks[1], HintWork::Generate { .. }));
+    }
+
+    #[test]
+    fn regeneration_rolls_back_all_chunks_when_a_later_write_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let source = concat!(
+            "Le jeune marin rentre chez lui et raconte son voyage à sa famille, qui l'attend depuis longtemps et lui pose toutes sortes de questions. ",
+            "Ses amis arrivent dans la soirée avec de quoi manger et restent autour de la table pour écouter le récit. ",
+            "Il explique ensuite comment il a repris le chemin du port malgré un vent très fort qui soufflait toute la nuit."
+        );
+        let document = store.import("Texte.txt", source.as_bytes(), "fr").unwrap();
+        let sentence = &document.sentences[0].id;
+        let refresh = store.prepare_passage_translation(&document.id, None, sentence, "uk", true).unwrap();
+        let [HintWork::Generate { cache: first, .. }, HintWork::Generate { cache: second, .. }] =
+            refresh.chunks.as_slice() else { panic!("expected two chunks"); };
+        let chunk = |text: &str| TranslationChunk { text: text.to_owned() };
+        let previous = [chunk("Перший старий переклад."), chunk("Другий старий переклад.")];
+        HintCache::save_batch([(first, &previous[0]), (second, &previous[1])]).unwrap();
+        store.connection.execute_batch(
+            "CREATE TRIGGER reject_second_refresh_chunk BEFORE UPDATE ON model_hints
+             WHEN NEW.annotation_blob LIKE '%неприйнятний%'
+             BEGIN SELECT RAISE(ABORT, 'test cache write failure'); END;",
+        ).unwrap();
+        let replacement = [chunk("Перший новий переклад."), chunk("Другий неприйнятний переклад.")];
+        assert!(HintCache::save_batch([(first, &replacement[0]), (second, &replacement[1])]).is_err());
+        let read = || store.cached_passage_translation(&document.id, None, sentence, "uk").unwrap().unwrap().text;
+        assert_eq!(read(), "Перший старий переклад. Другий старий переклад.");
+
+        store.connection.execute_batch("DROP TRIGGER reject_second_refresh_chunk").unwrap();
+        HintCache::save_batch([(first, &replacement[0]), (second, &replacement[1])]).unwrap();
+        assert_eq!(read(), "Перший новий переклад. Другий неприйнятний переклад.");
     }
 }
