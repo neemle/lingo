@@ -184,6 +184,8 @@ pub struct WordExplanation {
     pub cached: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gloss: Option<DictionaryGloss>,
+    #[serde(default, rename = "modelGloss", skip_serializing_if = "Option::is_none")]
+    pub model_gloss: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -882,6 +884,9 @@ impl ExplainWordJob {
             .map(|result| {
                 result.map(|(mut explanation, cached)| {
                     explanation.cached = cached;
+                    if cached && explanation.model_gloss.is_none() && explanation.gloss.is_none() {
+                        explanation.model_gloss = legacy_model_gloss(&word, &explanation.explanation).map(str::to_owned);
+                    }
                     explanation.explanation = supported_word_explanation(
                         &explanation.explanation, self.genitive_preposition.as_deref(), self.finite_verb,
                     );
@@ -1392,7 +1397,7 @@ fn parse_explanation(bytes: &[u8]) -> Option<GeneratedAnalysis> {
 }
 
 fn render_explanation(word: &str, analysis: GeneratedAnalysis) -> WordExplanation {
-    let mut explanation = match analysis.meaning {
+    let mut explanation = match &analysis.meaning {
         Some(meaning) => format!("«{word}» — {meaning}."),
         None => format!("«{word}» · Модель не визначила значення в цьому контексті."),
     };
@@ -1403,7 +1408,13 @@ fn render_explanation(word: &str, analysis: GeneratedAnalysis) -> WordExplanatio
         explanation,
         cached: false,
         gloss: None,
+        model_gloss: analysis.meaning,
     }
+}
+
+fn legacy_model_gloss<'a>(word: &str, explanation: &'a str) -> Option<&'a str> {
+    let (meaning, _) = explanation.strip_prefix(&format!("«{word}» — "))?.split_once('.')?;
+    (!meaning.is_empty()).then_some(meaning)
 }
 
 fn word_context<'a>(sentence: &'a str, word: &str, start: usize) -> (&'a str, usize) {
@@ -1528,15 +1539,22 @@ mod tests {
     fn generated_text_requires_a_short_gloss_and_a_known_role() {
         let fenced = "```json\n{\"meaning\":\"книжка\",\"role\":\"direct_object\"}\n```";
         let analysis = parse_explanation(fenced.as_bytes()).unwrap();
+        let result = render_explanation("livre", analysis);
         assert_eq!(
-            render_explanation("livre", analysis).explanation,
+            result.explanation,
             "«livre» — книжка. У цьому реченні — прямий додаток."
         );
+        assert_eq!(result.model_gloss.as_deref(), Some("книжка"));
+        assert_eq!(legacy_model_gloss("livre", &result.explanation), Some("книжка"));
+        assert!(legacy_model_gloss("bateau", &result.explanation).is_none());
         let unknown = parse_explanation(br#"{"meaning":null,"role":"other"}"#).unwrap();
+        let result = render_explanation("fragment", unknown);
         assert_eq!(
-            render_explanation("fragment", unknown).explanation,
+            result.explanation,
             "«fragment» · Модель не визначила значення в цьому контексті."
         );
+        assert!(result.model_gloss.is_none());
+        assert!(legacy_model_gloss("fragment", &result.explanation).is_none());
         assert!(parse_explanation(br#"{"meaning":"book","role":"object"}"#).is_none());
         assert!(parse_explanation(br#"{"meaning":"It is a book.","role":"other"}"#).is_none());
         assert!(

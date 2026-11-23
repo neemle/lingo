@@ -61,6 +61,15 @@ public partial class ReadingPage
         wordExplanationRun = run;
         var token = run.Token;
         bool Current() => ReferenceEquals(wordExplanationRun, run) && !token.IsCancellationRequested && isCurrent();
+        void Apply(string text)
+        {
+            if (!isCurrent()) return;
+            var meaning = new ChosenWordMeaning(null, text, target);
+            var detached = ReferenceEquals(glossHost, DetachedWordExplanationGloss);
+            if (detached) SetDetachedSense(meaning);
+            else ChooseCanonicalMeaning(meaning);
+            _ = (detached ? DetachedWordCardScroll : WordCardScroll).ScrollToAsync(0, 0, animated: true);
+        }
         ExplainWord.IsEnabled = DetachedExplainWord.IsEnabled = false;
         try
         {
@@ -69,7 +78,7 @@ public partial class ReadingPage
             if (!Current()) return;
             if (selected is not null && await explain(selected.Id, true, token) is { } saved)
             {
-                await ShowExplanationAsync(result, glossHost, spinner, documentId, target, selected.Name, saved, Current);
+                await ShowExplanationAsync(result, glossHost, spinner, documentId, target, selected.Name, saved, Current, Apply);
                 return;
             }
             if (!Current()) return;
@@ -87,7 +96,7 @@ public partial class ReadingPage
             result.Text = $"{selected.Name} готує пояснення…";
             var explanation = await explain(selected.Id, false, token);
             if (explanation is not null)
-                await ShowExplanationAsync(result, glossHost, spinner, documentId, target, selected.Name, explanation, Current);
+                await ShowExplanationAsync(result, glossHost, spinner, documentId, target, selected.Name, explanation, Current, Apply);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception error)
@@ -128,12 +137,13 @@ public partial class ReadingPage
     }
 
     private async Task ShowExplanationAsync(Label result, VerticalStackLayout glossHost, ActivityIndicator spinner,
-        string documentId, string target, string model, WordExplanation explanation, Func<bool> isCurrent)
+        string documentId, string target, string model, WordExplanation explanation, Func<bool> isCurrent, Action<string> apply)
     {
         if (!isCurrent()) return;
         var detail = explanation.Explanation.Replace(" У цьому реченні — ", $"{Environment.NewLine}Граматична роль: ");
         var label = explanation.Cached ? "Збережена підказка" : "Локальна підказка";
-        if (explanation.Gloss is { } gloss)
+        var proposed = explanation.Gloss ?? (explanation.ModelGloss is { } modelGloss ? new DictionaryGloss(modelGloss, "uk") : null);
+        if (proposed is { } gloss)
         {
             string? localized = gloss.Language == target ? gloss.Text : null;
             if (localized is null)
@@ -152,10 +162,22 @@ public partial class ReadingPage
             if (string.IsNullOrWhiteSpace(localized))
                 glossHost.Children.Add(new Label { Text = $"Значення недоступне мовою перекладу ({DocumentLanguages.Name(target)})." });
             else
+            {
                 glossHost.Children.Add(WordDetailAudioRow(localized, target, 15));
+                var use = new Button
+                {
+                    Text = "Використати переклад", Style = (Style)Resources["PlayerButton"],
+                    HorizontalOptions = LayoutOptions.Start,
+                };
+                use.Clicked += (_, _) =>
+                {
+                    if (glossHost.Children.Contains(use)) apply(localized);
+                };
+                glossHost.Children.Add(use);
+            }
             glossHost.IsVisible = true;
-            label += gloss.Language != target && !string.IsNullOrWhiteSpace(localized)
-                ? " · Wiktionary, офлайн-переклад" : " · Wiktionary";
+            if (explanation.Gloss is not null) label += " · Wiktionary";
+            if (gloss.Language != target && !string.IsNullOrWhiteSpace(localized)) label += " · офлайн-переклад";
         }
         result.IsVisible = true;
         result.Text = $"{detail}{Environment.NewLine}{label} · {model}";

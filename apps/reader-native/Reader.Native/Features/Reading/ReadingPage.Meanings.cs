@@ -7,7 +7,7 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage
 {
     private WordMeaning[] meanings = [];
-    private sealed record ChosenWordMeaning(SenseSnapshot Sense, string Translation, string Target);
+    private sealed record ChosenWordMeaning(SenseSnapshot? Sense, string Translation, string Target);
     private ChosenWordMeaning? canonicalSense;
     private ChosenWordMeaning? detachedSense;
     private SenseSnapshot? selectedSense => canonicalSense?.Sense;
@@ -25,6 +25,15 @@ public partial class ReadingPage
         detachedSense = meaning;
         DetachedClearSense.IsVisible = meaning is not null;
         if (DetachedWordCard.IsVisible) UpdatePopupGloss(detached: true);
+    }
+
+    private void ChooseCanonicalMeaning(ChosenWordMeaning meaning)
+    {
+        SetSelectedSense(meaning);
+        Translation.Text = meaning.Translation;
+        if (VocabularyReading.SelectedIndex > 0 &&
+            vocabularyReadings.ElementAtOrDefault(VocabularyReading.SelectedIndex - 1)?.Expression is not null)
+            VocabularyReading.SelectedIndex = 0;
     }
 
     private void ClearSenseClicked(object? sender, EventArgs args)
@@ -69,14 +78,8 @@ public partial class ReadingPage
         OpenMeanings.Text = WordMeanings.IsVisible ? "Згорнути значення" : $"Значення · {meanings.Length}";
         PositionWordPopup();
         if (WordMeanings.IsVisible && WordMeanings.Children.Count == 0)
-            await ShowMeaningRowsAsync(WordMeanings, word, document.Id, document.Language, target, meanings, (sense, text) =>
-            {
-                SetSelectedSense(new(sense, text, target));
-                Translation.Text = text;
-                if (VocabularyReading.SelectedIndex > 0 &&
-                    vocabularyReadings.ElementAtOrDefault(VocabularyReading.SelectedIndex - 1)?.Expression is not null)
-                    VocabularyReading.SelectedIndex = 0;
-            });
+            await ShowMeaningRowsAsync(WordMeanings, word, document.Id, document.Language, target, meanings,
+                (sense, text) => ChooseCanonicalMeaning(new(sense, text, target)));
     }
 
     private async void OpenDetachedMeaningsClicked(object? sender, EventArgs args)
