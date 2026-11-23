@@ -759,7 +759,7 @@ public partial class ReadingPage
         Sentence? active, string? gloss, bool preserveArtwork, string? query,
         (double Left, double Right) visibleWidth) : IDrawable
     {
-        private sealed record Region(RectF Bounds, List<PdfPageTranslationRow> Rows);
+        private sealed record Region(RectF Bounds, float LineHeight, List<PdfPageTranslationRow> Rows);
         private readonly record struct Fragment(PdfPageTranslationRow Source, int Start, int End, bool Active, TextSelection? Match);
         private readonly record struct WrappedLine(int Start, int End);
         private readonly List<(RectF Bounds, PdfPageTranslationRow Source)> hitTargets = [];
@@ -767,7 +767,7 @@ public partial class ReadingPage
         internal RectF? ActiveBounds { get; private set; }
         internal RectF? MatchBounds { get; private set; }
 
-        internal double? SourceTop(PdfPageTranslationRow row) => Bounds(row, new RectF(0, 0, 1, 1))?.Top;
+        internal double? SourceTop(PdfPageTranslationRow row) => Bounds(row, new RectF(0, 0, 1, 1), out _)?.Top;
 
         internal PdfPageTranslationRow? HitTest(Point point)
         {
@@ -785,26 +785,12 @@ public partial class ReadingPage
             MatchBounds = null;
             canvas.FillColor = Colors.White;
             if (page.Width <= 0 || page.Height <= 0) return;
-            if (preserveArtwork)
-            {
-                foreach (var line in geometry)
-                {
-                    if (!HasTranslatableText(line.SourceSpan)) continue;
-                    if (line.Words is { Length: > 0 } words && words.All(word => word.SourceSpan is not null) &&
-                        words.Any(word => !HasTranslatableText(word.SourceSpan)))
-                    {
-                        foreach (var word in words)
-                            if (HasTranslatableText(word.SourceSpan)) Mask(word.X, word.Y, word.Width, word.Height);
-                    }
-                    else Mask(line.X, line.Y, line.Width, line.Height);
-                }
-            }
-            else canvas.FillRectangle(page);
+            if (!preserveArtwork) canvas.FillRectangle(page);
             var regions = new List<Region>();
             var overflow = new List<PdfPageTranslationRow>();
             foreach (var row in rows)
             {
-                var bounds = Bounds(row, page);
+                var bounds = Bounds(row, page, out var lineHeight);
                 if (bounds is not { } rect)
                 {
                     overflow.Add(row);
@@ -818,9 +804,10 @@ public partial class ReadingPage
                     var previous = regions[index];
                     grouped.AddRange(previous.Rows);
                     rect = Union(previous.Bounds, rect);
+                    lineHeight = Math.Min(lineHeight, previous.LineHeight);
                     regions.RemoveAt(index);
                 }
-                regions.Add(new(rect, grouped));
+                regions.Add(new(rect, lineHeight, grouped));
             }
 
             if (rows.Length > 0 && regions.Count == 0)
@@ -845,24 +832,46 @@ public partial class ReadingPage
                     text.Append(HasPdfTranslation(row) ? row.Text : "…");
                     fragments.Add(MakeFragment(row, start, text.Length, isActive));
                 }
-                if (!DrawFitted(canvas, text.ToString(), region.Bounds, fragments, gloss))
+                var preferredSize = Math.Min(page.Width * 0.045f, region.LineHeight * 0.82f);
+                var minimumSize = Math.Max(2, preferredSize * 0.60f);
+                if (!DrawFitted(canvas, text.ToString(), region.Bounds, fragments, gloss, preferredSize, minimumSize,
+                    preserveArtwork ? () => MaskRegion(region.Rows) : null))
                     overflow.AddRange(fragments.Select(fragment => fragment.Source));
             }
 
             OverflowChanged?.Invoke(overflow.OrderBy(row => row.StartUtf16).ToArray());
 
-            bool HasTranslatableText(OcrSpan? span) => span is { } range && rows.Any(row =>
-                range.StartUtf16 + offset < row.EndUtf16 && range.EndUtf16 + offset > row.StartUtf16);
+            void MaskRegion(List<PdfPageTranslationRow> region)
+            {
+                foreach (var line in geometry)
+                {
+                    if (!Covers(line.SourceSpan)) continue;
+                    if (line.Words is { Length: > 0 } words && words.All(word => word.SourceSpan is not null) &&
+                        words.Any(word => !Covers(word.SourceSpan)))
+                    {
+                        foreach (var word in words)
+                            if (Covers(word.SourceSpan)) Mask(word.X, word.Y, word.Width, word.Height);
+                    }
+                    else Mask(line.X, line.Y, line.Width, line.Height);
+                }
 
-            void Mask(double x, double y, double width, double height) =>
+                bool Covers(OcrSpan? span) => span is { } range && region.Any(row =>
+                    range.StartUtf16 + offset < row.EndUtf16 && range.EndUtf16 + offset > row.StartUtf16);
+            }
+
+            void Mask(double x, double y, double width, double height)
+            {
+                canvas.FillColor = Colors.White;
                 canvas.FillRectangle(page.X + (float)x * page.Width - 1, page.Y + (float)y * page.Height - 1,
                     (float)width * page.Width + 2, (float)height * page.Height + 2);
+            }
         }
 
         private PdfPageTranslationRow[] DrawReflowedPage(ICanvas canvas, RectF page)
         {
             var font = new Microsoft.Maui.Graphics.Font("Georgia");
             var size = Math.Clamp(page.Width * 0.032f, 10, 19);
+            var lineHeight = MeasureLineHeight(canvas, font, size);
             var margin = page.Width * 0.075f;
             var width = page.Width - 2 * margin;
             var top = page.Top + margin;
@@ -873,11 +882,11 @@ public partial class ReadingPage
                 var row = ordered[index];
                 var text = HasPdfTranslation(row) ? row.Text! : "…";
                 var lines = Wrap(canvas, text, Regex.Matches(text, @"\S+"), font, size, width);
-                var height = lines.Count * size * 1.16f;
+                var height = lines.Count * lineHeight;
                 if (top + height > bottom) return ordered[index..];
                 var isActive = active is not null && row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16;
                 var bounds = new RectF(page.Left + margin, top, width, height);
-                if (!DrawFitted(canvas, text, bounds, [MakeFragment(row, 0, text.Length, isActive)], gloss, size))
+                if (!DrawFitted(canvas, text, bounds, [MakeFragment(row, 0, text.Length, isActive)], gloss, size, 7))
                     return ordered[index..];
                 top += height + size * 0.45f;
             }
@@ -888,9 +897,10 @@ public partial class ReadingPage
             new(row, start, end, isActive, isActive && query is not null && row.Text is { } text
                 ? DocumentFind.SourceMatch(text, query, start) : null);
 
-        private RectF? Bounds(PdfPageTranslationRow row, RectF page)
+        private RectF? Bounds(PdfPageTranslationRow row, RectF page, out float lineHeight)
         {
             RectF? result = null;
+            var heights = new List<float>();
             foreach (var line in geometry)
             {
                 if (!Intersects(line.SourceSpan)) continue;
@@ -901,6 +911,8 @@ public partial class ReadingPage
                 }
                 else Include(line.X, line.Y, line.Width, line.Height);
             }
+            heights.Sort();
+            lineHeight = heights.Count > 0 ? heights[heights.Count / 2] : 0;
             return result;
 
             bool Intersects(OcrSpan? span) => span is { } range &&
@@ -909,6 +921,8 @@ public partial class ReadingPage
             {
                 var box = new RectF(page.X + (float)x * page.Width, page.Y + (float)y * page.Height,
                     (float)width * page.Width, (float)height * page.Height);
+                if (box.Width <= 0 || box.Height <= 0) return;
+                heights.Add(box.Height);
                 result = result is { } previous ? Union(previous, box) : box;
             }
         }
@@ -921,32 +935,33 @@ public partial class ReadingPage
         }
 
         private bool DrawFitted(ICanvas canvas, string text, RectF area, IReadOnlyList<Fragment> fragments, string? gloss,
-            float? preferredSize = null)
+            float preferredSize, float minimumSize, Action? beforePaint = null)
         {
             if (area.Width < 2 || area.Height < 2) return false;
             var font = new Microsoft.Maui.Graphics.Font("Georgia");
             canvas.Font = font;
             canvas.FontColor = Color.FromArgb("#302D27");
-            var size = preferredSize ?? Math.Min(21, area.Height * 0.78f);
+            var size = preferredSize;
             var words = Regex.Matches(text, @"\S+");
             if (words.Count == 0) return false;
-            const int minimum = 7;
             List<WrappedLine> lines;
+            float lineHeight;
             while (true)
             {
-                if (size < minimum) return false;
+                if (size < minimumSize) return false;
+                lineHeight = MeasureLineHeight(canvas, font, size);
                 lines = Wrap(canvas, text, words, font, size, area.Width);
-                if (lines.Count * size * 1.16f <= area.Height + 0.01f &&
+                if (lines.Count * lineHeight <= area.Height + 0.01f &&
                     lines.All(line => canvas.GetStringSize(text[line.Start..line.End], font, size).Width <= area.Width))
                     break;
-                if (size == minimum) return false;
-                size = Math.Max(minimum, size * 0.84f);
+                if (size == minimumSize) return false;
+                size = Math.Max(minimumSize, size * 0.84f);
             }
+            beforePaint?.Invoke();
             canvas.FontSize = size;
             var y = area.Top;
             foreach (var range in lines)
             {
-                if (y + size * 1.16f > area.Bottom + 0.01f) break;
                 var line = text[range.Start..range.End];
                 foreach (var fragment in fragments)
                 {
@@ -986,19 +1001,22 @@ public partial class ReadingPage
                         }
                     }
                 }
-                canvas.DrawString(line, area.Left, y, area.Width, size * 1.16f,
-                    HorizontalAlignment.Left, VerticalAlignment.Center);
-                y += size * 1.16f;
+                canvas.DrawString(line, area.Left, y, area.Width, lineHeight,
+                    HorizontalAlignment.Left, VerticalAlignment.Top, TextFlow.OverflowBounds);
+                y += lineHeight;
 
                 RectF BoundsFor(int start, int end)
                 {
                     var left = canvas.GetStringSize(line[..start], font, size).Width;
                     var width = canvas.GetStringSize(line[start..end], font, size).Width;
-                    return new RectF(area.Left + left, y, width, size * 1.16f);
+                    return new RectF(area.Left + left, y, width, lineHeight);
                 }
             }
             return true;
         }
+
+        private static float MeasureLineHeight(ICanvas canvas, Microsoft.Maui.Graphics.Font font, float size) =>
+            Math.Max(size * 1.16f, canvas.GetStringSize("Ág", font, size).Height);
 
         private static List<WrappedLine> Wrap(ICanvas canvas, string text, MatchCollection words,
             Microsoft.Maui.Graphics.Font font, float size, float width)
