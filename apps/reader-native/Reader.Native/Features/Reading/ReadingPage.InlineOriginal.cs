@@ -13,6 +13,7 @@ public partial class ReadingPage
     private string? inlineOriginalDocumentId;
     private bool inlinePdfFitWidth = true;
     private (string Document, int Page, int Start, int End, double SurfaceHeight, double ViewportHeight)? lastInlinePdfFollow;
+    private int followingInlinePdf;
     private int inlinePdfRequest;
     private InlinePdfAddress? inlinePdfAddress;
     private InlinePdfAddress? inlinePdfLoading;
@@ -226,8 +227,11 @@ public partial class ReadingPage
         var target = Math.Clamp(top - margin, 0, Math.Max(0, surface.Height - viewport.Height));
         Dispatcher.Dispatch(async () =>
         {
-            if (lastInlinePdfFollow == key && showInlineOriginal && inlinePdfFitWidth)
-                await viewport.ScrollToAsync(0, target, animated: false);
+            if (lastInlinePdfFollow != key || !showInlineOriginal || !inlinePdfFitWidth) return;
+            followingInlinePdf++;
+            try { await viewport.ScrollToAsync(0, target, animated: false); }
+            catch (Exception error) when (error is InvalidOperationException or OperationCanceledException) { }
+            finally { followingInlinePdf--; }
         });
     }
 
