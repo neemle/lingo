@@ -5,6 +5,7 @@ mod validation;
 mod wire;
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use registry::ModelRequestKind;
 use wire::{Command, Error, Result, MAX_WIRE, VERSION};
 
 #[repr(C)]
@@ -53,9 +54,14 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         unsafe { std::slice::from_raw_parts(input, len as usize) }
     };
     let command = validation::decode(bytes)?;
-    if let Command::CancelModelTranslation { request_id } = &command {
+    let cancellation = match &command {
+        Command::CancelModelTranslation { request_id } => Some((ModelRequestKind::Passage, *request_id)),
+        Command::CancelSpeech { request_id, prefetch } => Some((speech_request_kind(*prefetch), *request_id)),
+        _ => None,
+    };
+    if let Some((kind, request_id)) = cancellation {
         // Cancellation must reach inference even when storage maintenance is waiting on it.
-        registry::lock()?.model_cancellation(handle)?.cancel_through(*request_id);
+        registry::lock()?.model_cancellation(handle, kind)?.cancel_through(request_id);
         return Ok(serde_json::Value::Null);
     }
     // Maintenance waits for independent worker connections as well as registry calls.
@@ -308,7 +314,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                     .cached_passage_translation(id, *page, sentence_id, target));
             }
             let state = registry::lock()?;
-            let cancellation = state.model_cancellation(handle)?;
+            let cancellation = state.model_cancellation(handle, ModelRequestKind::Passage)?;
             let canceled = || request_id.is_some_and(|id| cancellation.is_canceled(id));
             let canceled_error = || Error::new("canceled", "Переклад скасовано.");
             if canceled() {
@@ -427,14 +433,17 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
-        Command::SynthesizeSpeechText { text, language, engine, speaker, rate } => {
+        Command::SynthesizeSpeechText { text, language, engine, speaker, rate, request_id } => {
+            let canceled = speech_cancellation(handle, *request_id, false)?;
+            if canceled() { return Err(speech_canceled()); }
             let engine = reader_core::speech::ModelSpeechEngine::from_id(engine)
                 .ok_or_else(|| Error::new("invalid_argument", "Невідомий рушій озвучення."))?;
             let job = registry::lock()?
                 .store(handle)?
                 .prepare_speech_text(text, language, engine, *speaker, *rate)
                 .map_err(gateway::domain)?;
-            return encode_job(job.run());
+            let checkpoint = request_id.map(|_| &canceled as &dyn Fn() -> bool);
+            return encode_speech_job(&canceled, job.run_cancellable(checkpoint));
         }
         Command::SynthesizeSpeech {
             id,
@@ -443,6 +452,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             engine,
             speaker,
             rate,
+            request_id,
         }
         | Command::PrefetchSpeech {
             id,
@@ -451,21 +461,25 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             engine,
             speaker,
             rate,
+            request_id,
         } => {
             let engine = reader_core::speech::ModelSpeechEngine::from_id(
                 engine.as_deref().unwrap_or("piper-uk"),
             )
             .ok_or_else(|| Error::new("invalid_argument", "Невідомий рушій озвучення."))?;
             let background = matches!(&command, Command::PrefetchSpeech { .. });
+            let canceled = speech_cancellation(handle, *request_id, background)?;
+            if canceled() { return Err(speech_canceled()); }
+            let checkpoint = request_id.map(|_| &canceled as &dyn Fn() -> bool);
             if let Some(page) = page {
                 let job = registry::lock()?.store(handle)?
                     .prepare_detached_pdf_speech(id, (*page, sentence_id), engine, *speaker, *rate, background)
                     .map_err(gateway::domain)?;
                 return if background {
-                    encode_job(job.map(|job| job.prefetch()).transpose())
+                    encode_speech_job(&canceled, job.map(|job| job.prefetch_cancellable(checkpoint)).transpose())
                 } else {
-                    encode_job(job.ok_or_else(|| "Речення PDF для озвучення не знайдено.".to_owned())
-                        .and_then(|job| job.run()))
+                    encode_speech_job(&canceled, job.ok_or_else(|| "Речення PDF для озвучення не знайдено.".to_owned())
+                        .and_then(|job| job.run_cancellable(checkpoint)))
                 };
             }
             if background {
@@ -473,13 +487,13 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                     .store(handle)?
                     .prepare_speech_prefetch(id, sentence_id, engine, *speaker, *rate)
                     .map_err(gateway::domain)?;
-                return encode_job(job.map(|job| job.prefetch()).transpose());
+                return encode_speech_job(&canceled, job.map(|job| job.prefetch_cancellable(checkpoint)).transpose());
             }
             let job = registry::lock()?
                 .store(handle)?
                 .prepare_model_speech(id, sentence_id, engine, *speaker, *rate)
                 .map_err(gateway::domain)?;
-            return encode_job(job.run());
+            return encode_speech_job(&canceled, job.run_cancellable(checkpoint));
         }
         _ => {}
     }
@@ -491,6 +505,28 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             "Rust operation panicked; reopen the store",
         ))
     })
+}
+
+fn speech_request_kind(prefetch: bool) -> ModelRequestKind {
+    if prefetch { ModelRequestKind::SpeechPrefetch } else { ModelRequestKind::Speech }
+}
+
+fn speech_cancellation(handle: u64, request_id: Option<u64>, prefetch: bool) -> Result<impl Fn() -> bool> {
+    let request = request_id.map(|id| {
+        let cancellation = registry::lock()?.model_cancellation(handle, speech_request_kind(prefetch))?;
+        Ok::<_, Error>((id, cancellation))
+    }).transpose()?;
+    Ok(move || request.as_ref().is_some_and(|(id, cancellation)| cancellation.is_canceled(*id)))
+}
+
+fn speech_canceled() -> Error {
+    Error::new("canceled", "Озвучення скасовано.")
+}
+
+fn encode_speech_job<T: serde::Serialize>(
+    canceled: &dyn Fn() -> bool, result: reader_core::Result<T>,
+) -> Result<serde_json::Value> {
+    if canceled() { Err(speech_canceled()) } else { encode_job(result) }
 }
 
 fn encode_job<T: serde::Serialize>(result: reader_core::Result<T>) -> Result<serde_json::Value> {

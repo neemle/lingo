@@ -320,6 +320,7 @@ impl OptionalModelJob {
     pub(crate) fn run_cached<T>(
         self,
         priority: InferencePriority,
+        canceled: Option<&dyn Fn() -> bool>,
         cached: impl Fn(&Path) -> Option<T>,
         inference: impl FnOnce(&Path, &dyn Fn() -> bool) -> Result<T>,
     ) -> Result<T> {
@@ -328,18 +329,21 @@ impl OptionalModelJob {
         }
         match priority {
             InferencePriority::Foreground => {
-                let _permit = RESOURCES.interactive();
+                let _permit = match canceled {
+                    Some(check) => RESOURCES.interactive_until(check).ok_or("Озвучення скасовано.")?,
+                    None => RESOURCES.interactive(),
+                };
                 if let Some(audio) = self.read_installed_cache(cached)? {
                     return Ok(audio);
                 }
-                self.run_checked(inference, &|| false)
+                self.run_checked(inference, &|| canceled.is_some_and(|check| check()))
             }
             InferencePriority::Background => {
                 let permit = RESOURCES.optional()?;
                 if let Some(audio) = self.read_installed_cache(cached)? {
                     return Ok(audio);
                 }
-                self.run_checked(inference, &|| permit.should_yield())
+                self.run_checked(inference, &|| canceled.is_some_and(|check| check()) || permit.should_yield())
             }
         }
     }

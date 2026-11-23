@@ -161,7 +161,7 @@ public partial class ReadingPage
                 try
                 {
                     token.ThrowIfCancellationRequested();
-                    clip = await AppState.Session.SynthesizeSpeechTextAsync(text, language, voice.Speaker, rate, engine);
+                    clip = await AppState.Session.SynthesizeSpeechTextAsync(text, language, voice.Speaker, rate, engine, token);
                 }
                 finally { modelInference.Release(); }
                 token.ThrowIfCancellationRequested();

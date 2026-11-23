@@ -11,6 +11,13 @@ use std::{
 #[derive(Default)]
 pub struct ModelCancellation(AtomicU64);
 
+#[derive(Clone, Copy)]
+pub enum ModelRequestKind {
+    Passage,
+    Speech,
+    SpeechPrefetch,
+}
+
 impl ModelCancellation {
     pub fn cancel_through(&self, request_id: u64) {
         self.0.fetch_max(request_id, std::sync::atomic::Ordering::Relaxed);
@@ -23,7 +30,7 @@ impl ModelCancellation {
 
 struct OpenStore {
     store: gateway::Store,
-    model_cancellation: Arc<ModelCancellation>,
+    model_cancellations: [Arc<ModelCancellation>; 3],
 }
 
 #[derive(Default)]
@@ -55,7 +62,7 @@ impl Registry {
             if let Command::Open { path } = command {
                 let store = gateway::open(&path)?;
                 let id = self.next_id()?;
-                self.stores.insert(id, OpenStore { store, model_cancellation: Arc::default() });
+                self.stores.insert(id, OpenStore { store, model_cancellations: Default::default() });
                 return Ok(json!({ "handle": id }));
             }
         }
@@ -70,8 +77,8 @@ impl Registry {
         self.open_store(handle).map(|entry| &entry.store)
     }
 
-    pub fn model_cancellation(&self, handle: u64) -> Result<Arc<ModelCancellation>> {
-        self.open_store(handle).map(|entry| Arc::clone(&entry.model_cancellation))
+    pub fn model_cancellation(&self, handle: u64, kind: ModelRequestKind) -> Result<Arc<ModelCancellation>> {
+        self.open_store(handle).map(|entry| Arc::clone(&entry.model_cancellations[kind as usize]))
     }
 
     fn open_store(&self, handle: u64) -> Result<&OpenStore> {
@@ -107,7 +114,9 @@ impl Registry {
 
     pub fn close(&mut self, handle: u64) -> bool {
         if let Some(entry) = self.stores.remove(&handle) {
-            entry.model_cancellation.cancel_through(u64::MAX);
+            for cancellation in entry.model_cancellations {
+                cancellation.cancel_through(u64::MAX);
+            }
             return true;
         }
         false

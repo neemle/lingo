@@ -83,10 +83,10 @@ impl Store {
 
 impl MultilingualSpeechJob {
     pub fn run(self) -> Result<SpeechAudio> {
-        self.render(InferencePriority::Foreground).map(|result| result.audio)
+        self.render(InferencePriority::Foreground, None).map(|result| result.audio)
     }
 
-    fn render(self, priority: InferencePriority) -> Result<RenderedSpeech> {
+    fn render(self, priority: InferencePriority, canceled: Option<&dyn Fn() -> bool>) -> Result<RenderedSpeech> {
         let spoken = if self.language == "uk" {
             ukrainian_stress(&self.text)
         } else {
@@ -104,6 +104,7 @@ impl MultilingualSpeechJob {
         );
         let mut rendered = self.model.run_cached(
             priority,
+            canceled,
             |directory| cache.read(directory).map(|audio| RenderedSpeech { audio, cached: true }),
             |directory, should_yield| {
                 let mut engine = Engine::load(directory, self.voice)?;
@@ -131,6 +132,7 @@ impl MultilingualSpeechJob {
                     waveform.extend(audio);
                 }
                 let audio = to_wav(&waveform, SAMPLE_RATE)?;
+                check_interrupted(should_yield)?;
                 let cached = cache.write(directory, &audio);
                 Ok(RenderedSpeech { audio, cached })
             },
@@ -141,8 +143,8 @@ impl MultilingualSpeechJob {
 }
 
 impl SpeechAdapter for MultilingualSpeechJob {
-    fn render(self: Box<Self>, priority: InferencePriority) -> Result<RenderedSpeech> {
-        MultilingualSpeechJob::render(*self, priority)
+    fn render(self: Box<Self>, priority: InferencePriority, canceled: Option<&dyn Fn() -> bool>) -> Result<RenderedSpeech> {
+        MultilingualSpeechJob::render(*self, priority, canceled)
     }
 }
 

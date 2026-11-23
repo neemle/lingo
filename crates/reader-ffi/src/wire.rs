@@ -591,6 +591,8 @@ pub enum Command {
         engine: Option<String>,
         speaker: u32,
         rate: f32,
+        #[serde(rename = "requestId")]
+        request_id: Option<u64>,
     },
     SynthesizeSpeechText {
         text: String,
@@ -598,6 +600,8 @@ pub enum Command {
         engine: String,
         speaker: u32,
         rate: f32,
+        #[serde(rename = "requestId")]
+        request_id: Option<u64>,
     },
     PrefetchSpeech {
         id: String,
@@ -607,6 +611,14 @@ pub enum Command {
         engine: Option<String>,
         speaker: u32,
         rate: f32,
+        #[serde(rename = "requestId")]
+        request_id: Option<u64>,
+    },
+    CancelSpeech {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+        #[serde(default)]
+        prefetch: bool,
     },
     TranslateParagraph {
         id: String,

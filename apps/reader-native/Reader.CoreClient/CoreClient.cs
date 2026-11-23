@@ -11,6 +11,8 @@ public sealed class CoreClient : IDisposable
     private readonly StoreHandle handle;
     private bool disposed;
     private long nextModelTranslationRequest;
+    private long nextSpeechRequest;
+    private long nextSpeechPrefetchRequest;
     public const int MaxImportBytes = 20 * 1024 * 1024;
     public const long MaxPdfBytes = 4L * 1024 * 1024 * 1024;
     public const int MaxBackupFileBytes = 1024 * 1024 * 1024;
@@ -463,13 +465,25 @@ public sealed class CoreClient : IDisposable
         Call<DictionaryImport>(new { version = 1, operation = "import_dictionary", archive });
     public string PrepareUkrainianSpeech(string text) =>
         CallIndependent<string>(new { version = 1, operation = "prepare_ukrainian_speech", text });
-    public SpeechAudio SynthesizeSpeech(string id, string sentenceId, uint speaker, float rate, string engine = "piper-uk", int? page = null) =>
-        CallIndependent<SpeechAudio>(new { version = 1, operation = "synthesize_speech", id, page, sentenceId, engine, speaker, rate });
-    public SpeechAudio SynthesizeSpeechText(string text, string language, uint speaker, float rate, string engine) =>
-        CallIndependent<SpeechAudio>(new { version = 1, operation = "synthesize_speech_text", text, language, engine, speaker, rate });
+    public SpeechAudio SynthesizeSpeech(string id, string sentenceId, uint speaker, float rate,
+        string engine = "piper-uk", int? page = null, CancellationToken cancellationToken = default) =>
+        CallCancelable<SpeechAudio>(ref nextSpeechRequest, cancellationToken,
+            requestId => new { version = 1, operation = "synthesize_speech", id, page, sentenceId, engine, speaker, rate, requestId },
+            CancelSpeechRequest);
+    public SpeechAudio SynthesizeSpeechText(string text, string language, uint speaker, float rate, string engine,
+        CancellationToken cancellationToken = default) =>
+        CallCancelable<SpeechAudio>(ref nextSpeechRequest, cancellationToken,
+            requestId => new { version = 1, operation = "synthesize_speech_text", text, language, engine, speaker, rate, requestId },
+            CancelSpeechRequest);
 
-    public void PrefetchSpeech(string id, string sentenceId, uint speaker, float rate, string engine, int? page = null) =>
-        CallIndependent<JsonElement>(new { version = 1, operation = "prefetch_speech", id, page, sentenceId, engine, speaker, rate });
+    public void PrefetchSpeech(string id, string sentenceId, uint speaker, float rate, string engine,
+        int? page = null, CancellationToken cancellationToken = default) =>
+        CallCancelable<JsonElement>(ref nextSpeechPrefetchRequest, cancellationToken,
+            requestId => new { version = 1, operation = "prefetch_speech", id, page, sentenceId, engine, speaker, rate, requestId },
+            requestId => new { version = 1, operation = "cancel_speech", requestId, prefetch = true });
+
+    private static object CancelSpeechRequest(long requestId) =>
+        new { version = 1, operation = "cancel_speech", requestId };
 
     public void ScheduleTranslationWindow(string id, string sentenceId, string revisionId, string target) =>
         Call<JsonElement>(new { version = 1, operation = "schedule_translation_window", id, sentenceId, revisionId, target });
@@ -484,23 +498,26 @@ public sealed class CoreClient : IDisposable
     public MachineTranslation? TranslateSentence(string id, string sentenceId, string target) =>
         CallIndependent<MachineTranslation?>(new { version = 1, operation = "translate_sentence", id, sentenceId, target });
     public ModelPassageTranslation TranslateWithModel(string id, int? page, string sentenceId, string target,
-        bool regenerate, CancellationToken cancellationToken = default)
+        bool regenerate, CancellationToken cancellationToken = default) =>
+        CallCancelable<ModelPassageTranslation>(ref nextModelTranslationRequest, cancellationToken,
+            requestId => new { version = 1, operation = "translate_with_model", id, page, sentenceId, target, regenerate, requestId },
+            requestId => new { version = 1, operation = "cancel_model_translation", requestId });
+
+    private T CallCancelable<T>(ref long sequence, CancellationToken cancellationToken,
+        Func<long?, object> request, Func<long, object> cancel)
     {
+        if (!cancellationToken.CanBeCanceled) return CallIndependent<T>(request(null));
         cancellationToken.ThrowIfCancellationRequested();
-        long? requestId = cancellationToken.CanBeCanceled
-            ? Interlocked.Increment(ref nextModelTranslationRequest) : null;
+        var requestId = Interlocked.Increment(ref sequence);
         using var registration = cancellationToken.Register(() =>
         {
-            try { CallIndependent<JsonElement>(new { version = 1, operation = "cancel_model_translation", requestId }); }
+            try { CallIndependent<JsonElement>(cancel(requestId)); }
             catch (ObjectDisposedException) { }
             catch (CoreException error) { System.Diagnostics.Debug.WriteLine(error.Message); }
         });
         try
         {
-            var result = CallIndependent<ModelPassageTranslation>(new
-            {
-                version = 1, operation = "translate_with_model", id, page, sentenceId, target, regenerate, requestId,
-            });
+            var result = CallIndependent<T>(request(requestId));
             cancellationToken.ThrowIfCancellationRequested();
             return result;
         }

@@ -153,6 +153,28 @@ fn model_cancellation_can_arrive_first_and_is_scoped_to_the_store() {
 }
 
 #[test]
+fn canceling_speech_prefetch_does_not_cancel_active_speech_or_qwen() {
+    let store = StoreFixture::new();
+    let cancel = |prefetch| call(store.handle, json!({
+        "version": 1, "operation": "cancel_speech", "requestId": 3, "prefetch": prefetch,
+    }));
+    let speech = |operation, request_id| call(store.handle, json!({
+        "version": 1, "operation": operation, "requestId": request_id,
+        "id": "missing-document", "sentenceId": "missing-sentence", "speaker": 0, "rate": 1.0,
+    }));
+    assert_eq!(cancel(true)["ok"], true);
+    assert_error(&speech("prefetch_speech", 3), "canceled");
+    assert_error(&speech("synthesize_speech", 3), "core_error");
+    assert_error(&call(store.handle, json!({
+        "version": 1, "operation": "translate_with_model", "requestId": 3,
+        "id": "missing-document", "sentenceId": "missing-sentence", "target": "uk",
+    })), "core_error");
+    assert_eq!(cancel(false)["ok"], true);
+    assert_error(&speech("synthesize_speech", 3), "canceled");
+    assert_error(&speech("synthesize_speech", 4), "core_error");
+}
+
+#[test]
 fn bookmarks_are_idempotent_and_survive_restart_and_restore() {
     let mut store = StoreFixture::new();
     let imported = call(

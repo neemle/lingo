@@ -592,15 +592,17 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         return imported;
     }
     public Task<string> PrepareUkrainianSpeechAsync(string text) => Task.Run(() => client.PrepareUkrainianSpeech(text));
-    public Task<SpeechAudio> SynthesizeSpeechTextAsync(string text, string language, uint speaker, float rate, string engine) =>
-        Task.Run(() => client.SynthesizeSpeechText(text, language, speaker, rate, engine));
+    public Task<SpeechAudio> SynthesizeSpeechTextAsync(string text, string language, uint speaker, float rate,
+        string engine, CancellationToken cancellationToken = default) =>
+        Task.Run(() => client.SynthesizeSpeechText(text, language, speaker, rate, engine, cancellationToken), cancellationToken);
 
-    public Task<SpeechAudio> SynthesizeSpeechAsync(string id, string sentenceId, uint speaker, float rate, string engine, int? page = null) =>
-        Task.Run(() => client.SynthesizeSpeech(id, sentenceId, speaker, rate, engine, page));
+    public Task<SpeechAudio> SynthesizeSpeechAsync(string id, string sentenceId, uint speaker, float rate,
+        string engine, int? page = null, CancellationToken cancellationToken = default) =>
+        Task.Run(() => client.SynthesizeSpeech(id, sentenceId, speaker, rate, engine, page, cancellationToken), cancellationToken);
 
     public Task PrefetchSpeechAsync(string id, string sentenceId, uint speaker, float rate, string engine,
         CancellationToken cancellation, int? page = null) =>
-        Task.Run(() => client.PrefetchSpeech(id, sentenceId, speaker, rate, engine, page), cancellation);
+        Task.Run(() => client.PrefetchSpeech(id, sentenceId, speaker, rate, engine, page, cancellation), cancellation);
 
     public Task<ParagraphTranslation?> PrefetchTranslationWindowAsync(
         string id, string sentenceId, string revisionId, string target) =>

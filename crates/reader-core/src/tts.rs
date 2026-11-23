@@ -80,10 +80,10 @@ impl Store {
 
 impl SpeechJob {
     pub fn run(self) -> Result<SpeechAudio> {
-        self.render(InferencePriority::Foreground).map(|result| result.audio)
+        self.render(InferencePriority::Foreground, None).map(|result| result.audio)
     }
 
-    fn render(self, priority: InferencePriority) -> Result<RenderedSpeech> {
+    fn render(self, priority: InferencePriority, canceled: Option<&dyn Fn() -> bool>) -> Result<RenderedSpeech> {
         let normalized = uk_numbers::expand(&self.text);
         let spoken = ukrainian_stress(&normalized);
         let synthesis_rate = model_synthesis_rate(self.rate);
@@ -98,6 +98,7 @@ impl SpeechJob {
         );
         let mut rendered = self.model.run_cached(
             priority,
+            canceled,
             |directory| cache.read(directory).map(|audio| RenderedSpeech { audio, cached: true }),
             |directory, should_yield| {
                 let audio = synthesize_at(
@@ -108,6 +109,7 @@ impl SpeechJob {
                     MAX_SAMPLES,
                     should_yield,
                 )?;
+                if should_yield() { return Err("Локальне озвучення перервано".into()); }
                 let cached = cache.write(directory, &audio);
                 Ok(RenderedSpeech { audio, cached })
             },
@@ -124,8 +126,8 @@ pub(crate) fn model_synthesis_rate(requested: f32) -> f32 {
 }
 
 impl SpeechAdapter for SpeechJob {
-    fn render(self: Box<Self>, priority: InferencePriority) -> Result<RenderedSpeech> {
-        SpeechJob::render(*self, priority)
+    fn render(self: Box<Self>, priority: InferencePriority, canceled: Option<&dyn Fn() -> bool>) -> Result<RenderedSpeech> {
+        SpeechJob::render(*self, priority, canceled)
     }
 }
 

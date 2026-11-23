@@ -223,7 +223,7 @@ public partial class ReadingPage
     private Task<SpeechAudio> PrepareAudio(ReaderSession session, ClipKey key, CancellationToken token, int? page = null)
     {
         var task = GenerateAudioAsync(session, key, token, page);
-        // A stopped or superseded request may leave a native job running to completion.
+        // The view can stop awaiting before the native job reaches a cancellation checkpoint.
         _ = task.ContinueWith(failed => { _ = failed.Exception; }, CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         return task;
@@ -249,7 +249,8 @@ public partial class ReadingPage
         try
         {
             token.ThrowIfCancellationRequested();
-            return await session.SynthesizeSpeechAsync(key.Source.Document, key.Source.Sentence, key.Speaker, key.Rate, key.Engine, page);
+            return await session.SynthesizeSpeechAsync(key.Source.Document, key.Source.Sentence,
+                key.Speaker, key.Rate, key.Engine, page, token);
         }
         finally { modelInference.Release(); }
     }

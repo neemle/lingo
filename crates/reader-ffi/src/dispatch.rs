@@ -257,6 +257,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         | Command::ReviewSentence { .. }
         | Command::TranslateWithModel { .. }
         | Command::CancelModelTranslation { .. }
+        | Command::CancelSpeech { .. }
         | Command::SemanticVocabulary { .. }
         | Command::InstallLexicalPackage { .. }
         | Command::ModelTransfer { .. }

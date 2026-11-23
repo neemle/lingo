@@ -58,6 +58,10 @@ impl ResourceGovernor {
     }
 
     pub(crate) fn requested_model_until(&self, canceled: &dyn Fn() -> bool) -> Option<OptionalJob<'_>> {
+        self.interactive_until(canceled).map(|_work| OptionalJob { governor: self, _work })
+    }
+
+    pub(crate) fn interactive_until(&self, canceled: &dyn Fn() -> bool) -> Option<MutexGuard<'_, ()>> {
         self.interactive_waiting.fetch_add(1, Ordering::SeqCst);
         let work = loop {
             if canceled() {
@@ -72,7 +76,7 @@ impl ResourceGovernor {
             }
         };
         self.interactive_waiting.fetch_sub(1, Ordering::SeqCst);
-        work.map(|_work| OptionalJob { governor: self, _work })
+        work
     }
 
     pub(crate) fn optional(&self) -> Result<OptionalJob<'_>> {

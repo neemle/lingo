@@ -30,7 +30,7 @@ pub(crate) struct RenderedSpeech {
 
 /// Prepared speech engine adapter. The job owns the text and model selection.
 pub(crate) trait SpeechAdapter {
-    fn render(self: Box<Self>, priority: InferencePriority) -> Result<RenderedSpeech>;
+    fn render(self: Box<Self>, priority: InferencePriority, canceled: Option<&dyn Fn() -> bool>) -> Result<RenderedSpeech>;
 }
 
 pub struct PreparedSpeech {
@@ -47,11 +47,19 @@ pub struct SpeechPrefetch {
 
 impl PreparedSpeech {
     pub fn run(self) -> Result<SpeechAudio> {
-        self.adapter.render(InferencePriority::Foreground).map(|result| result.audio)
+        self.run_cancellable(None)
+    }
+
+    pub fn run_cancellable(self, canceled: Option<&dyn Fn() -> bool>) -> Result<SpeechAudio> {
+        self.adapter.render(InferencePriority::Foreground, canceled).map(|result| result.audio)
     }
 
     pub fn prefetch(self) -> Result<SpeechPrefetch> {
-        let result = self.adapter.render(InferencePriority::Background)?;
+        self.prefetch_cancellable(None)
+    }
+
+    pub fn prefetch_cancellable(self, canceled: Option<&dyn Fn() -> bool>) -> Result<SpeechPrefetch> {
+        let result = self.adapter.render(InferencePriority::Background, canceled)?;
         Ok(SpeechPrefetch { sentence_id: self.sentence_id, cached: result.cached })
     }
 }
