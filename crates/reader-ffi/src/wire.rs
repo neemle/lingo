@@ -40,7 +40,10 @@ pub enum Command {
         page_width: f64,
     },
     PlanPdfTranslationLayout {
-        fragments: Vec<reader_core::pdf_translation_layout::SourceFragment>,
+        rows: Vec<reader_core::pdf_translation_layout::SourceRow>,
+        geometry: Vec<reader_core::ocr::OcrLine>,
+        offset: usize,
+        styles: Vec<reader_core::pdf_translation_layout::SourceStyleAnchor>,
     },
     FindPdfLigatureJoins {
         text: String,

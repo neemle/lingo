@@ -25,7 +25,7 @@ public partial class ReadingPage
     private PdfLayoutAddress? translatingPdfLayout;
     private CancellationTokenSource? pdfLayoutTranslationCancellation;
     private PdfPageTranslationRow[] pdfLayoutRows = [];
-    private (PdfPageTranslationRow[] Rows, PdfSourceLayout? Source, bool PreserveArtwork, PdfDrawingPlan Plan)? pdfDrawingPlan;
+    private (PdfPageTranslationRow[] Rows, PdfSourceLayout? Source, bool PreserveArtwork, PdfTranslationLayout Plan)? pdfDrawingPlan;
     private PdfSourceLayout? pdfSourceLayout;
     private Sentence? pdfLayoutSentence => pdfSourceLayout is { } source && source.Matches(pdfLayoutRequest)
         ? source.Sentence : null;
@@ -621,11 +621,11 @@ public partial class ReadingPage
         var gloss = (detached ? DetachedWordCard : WordCard).IsVisible ? PopupGloss(detached) : null;
         QueueGlossAlignment(gloss, pdfLayoutRows.Select(row => row.Text));
         var query = PdfTranslationFindQuery();
-        if (pdfDrawingPlan is not { } cached || cached.Rows != pdfLayoutRows || cached.Source != source ||
+        if (pdfDrawingPlan is not { } cached || cached.Rows != pdfLayoutRows || !SamePdfGeometry(cached.Source, source) ||
             cached.PreserveArtwork != background.IsVisible)
         {
             cached = (pdfLayoutRows, source, background.IsVisible,
-                PdfDrawingPlan.Create(pdfLayoutRows, source, background.IsVisible));
+                PlanPdfDrawing(pdfLayoutRows, source, background.IsVisible));
             pdfDrawingPlan = cached;
         }
         var drawing = new TranslatedPdfDrawing(pdfLayoutRows, source?.Lines ?? [], source?.Offset ?? 0,
@@ -765,32 +765,31 @@ public partial class ReadingPage
         });
     }
 
-    private sealed record PdfDrawingPlan(PdfTranslationLayout Layout, PdfTranslationFragment[] Fragments,
-        PdfBoxAppearance?[] Styles)
-    {
-        internal static PdfDrawingPlan Create(PdfPageTranslationRow[] rows, PdfSourceLayout? source, bool preserveArtwork)
-        {
-            var fragments = new PdfTranslationFragment[rows.Length];
-            var styles = new PdfBoxAppearance?[rows.Length];
-            for (var index = 0; index < rows.Length; index++)
-            {
-                var row = rows[index];
-                var bounds = TranslatedPdfDrawing.SourceBounds(row, source, out var lineHeight, out var style);
-                styles[index] = style;
-                fragments[index] = new(bounds, lineHeight, row.StartUtf16, row.SourceBlockIndex,
-                    preserveArtwork && !HasPdfTranslation(row), Rgb(style?.Background), Rgb(style?.Ink),
-                    style?.RelativeFontSize);
-            }
-            return new(CoreClient.CoreClient.PlanPdfTranslationLayout(fragments), fragments, styles);
+    private static bool SamePdfGeometry(PdfSourceLayout? first, PdfSourceLayout? second) =>
+        ReferenceEquals(first, second) || first is not null && second is not null &&
+        first.Page == second.Page && first.Offset == second.Offset &&
+        ReferenceEquals(first.Appearance, second.Appearance) && first.Lines.SequenceEqual(second.Lines);
 
-            static double[]? Rgb(Color? color) => color is null ? null : [color.Red, color.Green, color.Blue];
-        }
+    private static PdfTranslationLayout PlanPdfDrawing(PdfPageTranslationRow[] rows, PdfSourceLayout? source,
+        bool preserveArtwork)
+    {
+        var spans = Array.ConvertAll(rows, row => new PdfTranslationSourceRow(
+            row.StartUtf16, row.EndUtf16, row.SourceBlockIndex, preserveArtwork && !HasPdfTranslation(row)));
+        var styles = source?.Appearance?.ToDictionary(entry => entry.Key, entry =>
+        {
+            var style = entry.Value;
+            return new PdfTranslationSourceStyle(style.FontFamily, style.RelativeFontSize, style.Weight,
+                style.Italic, style.Ink is { } ink ? Rgba(ink) : null, Rgba(style.Background));
+        }) ?? [];
+        return CoreClient.CoreClient.PlanPdfTranslationLayout(spans, source?.Lines ?? [], source?.Offset ?? 0, styles);
+
+        static double[] Rgba(Color color) => [color.Red, color.Green, color.Blue, color.Alpha];
     }
 
     private sealed class TranslatedPdfDrawing(PdfPageTranslationRow[] rows, OcrLine[] geometry, int offset,
         Sentence? active, Func<string, IEnumerable<(int Start, int End)>> glossRanges, bool preserveArtwork, string? query,
         (double Left, double Right) visibleWidth, IReadOnlyDictionary<int, PdfBoxAppearance>? appearance,
-        PdfDrawingPlan plan) : IDrawable
+        PdfTranslationLayout layout) : IDrawable
     {
         private readonly record struct Fragment(PdfPageTranslationRow Source, int Start, int End, bool Active, TextSelection? Match);
         private readonly List<(RectF Bounds, PdfPageTranslationRow Source)> hitTargets = [];
@@ -801,7 +800,7 @@ public partial class ReadingPage
         internal double? SourceTop(PdfPageTranslationRow row)
         {
             var index = Array.IndexOf(rows, row);
-            return index >= 0 ? plan.Fragments[index].Bounds?.Y : null;
+            return index >= 0 ? layout.Anchors[index].Bounds?.Y : null;
         }
 
         internal PdfPageTranslationRow? HitTest(Point point)
@@ -821,10 +820,9 @@ public partial class ReadingPage
             canvas.FillColor = Colors.White;
             if (page.Width <= 0 || page.Height <= 0) return;
             if (!preserveArtwork) canvas.FillRectangle(page);
-            var layout = plan.Layout;
             var overflow = layout.Overflow.Select(index => rows[index]).ToList();
             if (rows.Length > 0 && layout.Regions.Length == 0 && layout.Pending.Length == 0 &&
-                (!preserveArtwork || plan.Fragments.All(fragment => fragment.Bounds is null)))
+                (!preserveArtwork || layout.Anchors.All(fragment => fragment.Bounds is null)))
             {
                 canvas.FillRectangle(page);
                 var reflowBounds = new RectF(page.X + (float)visibleWidth.Left * page.Width, page.Y,
@@ -837,7 +835,7 @@ public partial class ReadingPage
             foreach (var region in layout.Regions)
             {
                 var regionRows = Array.ConvertAll(region.Fragments, index => rows[index]);
-                var appearance = region.StyleFragment is { } style ? plan.Styles[style] : null;
+                var appearance = region.StyleFragment is { } style ? TranslateAppearance(layout.Anchors[style].Style) : null;
                 var text = new StringBuilder();
                 var fragments = new List<Fragment>();
                 foreach (var row in regionRows)
@@ -859,7 +857,7 @@ public partial class ReadingPage
             foreach (var index in layout.Pending)
             {
                 var row = rows[index];
-                var bounds = Scale(plan.Fragments[index].Bounds!, page);
+                var bounds = Scale(layout.Anchors[index].Bounds!, page);
                 // Keep the original pixels visible and selectable until this row has a translation.
                 hitTargets.Add((bounds, row));
                 if (active is null || row.StartUtf16 >= active.EndUtf16 || row.EndUtf16 <= active.StartUtf16)
@@ -933,44 +931,13 @@ public partial class ReadingPage
         private PdfBoxAppearance? AppearanceFor(OcrSpan? span) => span is { } range
             ? appearance?.GetValueOrDefault(range.StartUtf16) : null;
 
-        internal static PdfSampleBox? SourceBounds(PdfPageTranslationRow row, PdfSourceLayout? source,
-            out float lineHeight, out PdfBoxAppearance? style)
-        {
-            lineHeight = 0;
-            style = null;
-            if (source is null) return null;
-            RectF? result = null;
-            PdfBoxAppearance? firstStyle = null;
-            var heights = new List<float>();
-            foreach (var line in source.Lines)
-            {
-                if (!Intersects(line.SourceSpan)) continue;
-                var words = line.Words?.Where(word => Intersects(word.SourceSpan)).ToArray();
-                if (words is { Length: > 0 })
-                {
-                    foreach (var word in words) Include(word.X, word.Y, word.Width, word.Height, word.SourceSpan);
-                }
-                else Include(line.X, line.Y, line.Width, line.Height, line.SourceSpan);
-            }
-            heights.Sort();
-            lineHeight = heights.Count > 0 ? heights[heights.Count / 2] : 0;
-            style = firstStyle;
-            return result is { } bounds ? new(bounds.X, bounds.Y, bounds.Width, bounds.Height) : null;
+        private static PdfBoxAppearance? TranslateAppearance(PdfTranslationSourceStyle? style) => style is null
+            ? null
+            : new(style.FontFamily, style.FontHeight ?? 0, style.Weight, style.Italic,
+                style.Ink is { } ink ? ColorFrom(ink) : null, ColorFrom(style.Background));
 
-            bool Intersects(OcrSpan? span) => span is { } range &&
-                range.StartUtf16 + source.Offset < row.EndUtf16 && range.EndUtf16 + source.Offset > row.StartUtf16;
-            void Include(double x, double y, double width, double height, OcrSpan? span)
-            {
-                var box = new RectF((float)x, (float)y, (float)width, (float)height);
-                if (box.Width <= 0 || box.Height <= 0) return;
-                var candidate = span is { } range ? source.Appearance?.GetValueOrDefault(range.StartUtf16) : null;
-                firstStyle ??= candidate;
-                if (firstStyle is { Ink: null } && candidate?.Ink is { } measured)
-                    firstStyle = firstStyle with { Ink = measured };
-                heights.Add(box.Height);
-                result = result is { } previous ? Union(previous, box) : box;
-            }
-        }
+        private static Color ColorFrom(double[] channels) =>
+            new((float)channels[0], (float)channels[1], (float)channels[2], (float)channels[3]);
 
         private static RectF Union(RectF a, RectF b)
         {

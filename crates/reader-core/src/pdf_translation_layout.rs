@@ -1,7 +1,9 @@
 use crate::Result;
 use serde::{Deserialize, Serialize};
 
+mod source;
 pub mod text;
+pub use source::{project, SourceRow, SourceStyle, SourceStyleAnchor};
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,17 +41,13 @@ impl Bounds {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SourceFragment {
+struct SourceFragment {
     bounds: Option<Bounds>,
     line_height: f64,
     start_utf16: usize,
     block_index: Option<usize>,
     pending: bool,
-    background: Option<[f64; 3]>,
-    ink: Option<[f64; 3]>,
-    font_height: Option<f64>,
+    style: Option<SourceStyle>,
 }
 
 #[derive(Serialize)]
@@ -71,7 +69,7 @@ pub struct PageLayout {
 }
 
 /// Plan in normalized page coordinates, so resizing the viewport never changes block membership.
-pub fn plan(fragments: &[SourceFragment]) -> Result<PageLayout> {
+fn plan(fragments: &[SourceFragment]) -> Result<PageLayout> {
     let mut page = PageLayout::default();
     for (index, fragment) in fragments.iter().enumerate() {
         let Some(bounds) = fragment.bounds else {
@@ -92,7 +90,7 @@ pub fn plan(fragments: &[SourceFragment]) -> Result<PageLayout> {
             preferred_font_height: 0.0,
             limit_font_by_width: false,
             fragments: vec![index],
-            style_fragment: fragment.background.map(|_| index),
+            style_fragment: fragment.style.as_ref().map(|_| index),
         };
         while let Some(position) = page
             .regions
@@ -113,7 +111,7 @@ pub fn plan(fragments: &[SourceFragment]) -> Result<PageLayout> {
             .sort_unstable_by_key(|&index| (fragments[index].start_utf16, index));
         let font = region
             .style_fragment
-            .and_then(|index| fragments[index].font_height)
+            .and_then(|index| fragments[index].style.as_ref()?.font_height)
             .filter(|height| *height > 0.0);
         region.preferred_font_height = font.map_or(region.line_height * 0.82, |height| {
             height.min(region.line_height * 0.90)
@@ -149,13 +147,18 @@ fn fits(
     if fragments[previous.fragments[0]].block_index != block {
         return false;
     }
-    if let (Some(previous), Some(current)) = (previous.style_fragment, region.style_fragment) {
-        let (previous, current) = (&fragments[previous], &fragments[current]);
-        if different_color(previous.background, current.background)
-            || different_color(previous.ink, current.ink)
-        {
+    let style = |index: Option<usize>| index.and_then(|index| fragments[index].style.as_ref());
+    if let (Some(previous), Some(current)) =
+        (style(previous.style_fragment), style(region.style_fragment))
+    {
+        if previous.differs_from(current) {
             return false;
         }
+    }
+    if previous.line_height.max(region.line_height)
+        > 1.45 * previous.line_height.min(region.line_height)
+    {
+        return false;
     }
     let (horizontal, vertical) = previous.bounds.overlap(region.bounds);
     horizontal > 0.0
@@ -163,15 +166,6 @@ fn fits(
             || (block.is_some()
                 && horizontal >= 0.4 * previous.bounds.width.min(region.bounds.width)
                 && -vertical <= 0.9 * previous.line_height.min(region.line_height)))
-}
-
-fn different_color(first: Option<[f64; 3]>, second: Option<[f64; 3]>) -> bool {
-    first.zip(second).is_some_and(|(first, second)| {
-        first
-            .into_iter()
-            .zip(second)
-            .any(|(a, b)| (a - b).abs() > 0.12)
-    })
 }
 
 #[cfg(test)]
@@ -190,16 +184,14 @@ mod tests {
             start_utf16: position,
             block_index: Some(block),
             pending: false,
-            background: Some([1.0; 3]),
-            ink: Some([0.0; 3]),
-            font_height: Some(0.015),
+            style: Some(SourceStyle::test_style([1.0; 3], 0.015)),
         }
     }
 
     #[test]
     fn plans_column_and_color_boundaries_and_preserves_pending_source() {
         let mut colored = fragment(0.1, 0.26, 1, 30);
-        colored.background = Some([0.6, 1.0, 0.7]);
+        colored.style = Some(SourceStyle::test_style([0.6, 1.0, 0.7], 0.015));
         let mut pending = fragment(0.55, 0.205, 2, 50);
         pending.pending = true;
         let regions = plan(&[

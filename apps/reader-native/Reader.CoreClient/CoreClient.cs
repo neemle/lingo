@@ -90,8 +90,11 @@ public sealed class CoreClient : IDisposable
         Invoke<PdfSampleColors[]>(0, new { version = 1, operation = "sample_pdf_backgrounds", width, height, rgba, boxes, withInk = true });
     public static PdfLayoutEdit[] SeparatePdfBlocks(string text, PdfLayoutWord[] words, double pageWidth) =>
         Invoke<PdfLayoutEdit[]>(0, new { version = 1, operation = "separate_pdf_blocks", text, words, pageWidth });
-    public static PdfTranslationLayout PlanPdfTranslationLayout(PdfTranslationFragment[] fragments) =>
-        Invoke<PdfTranslationLayout>(0, new { version = 1, operation = "plan_pdf_translation_layout", fragments });
+    public static PdfTranslationLayout PlanPdfTranslationLayout(PdfTranslationSourceRow[] rows, OcrLine[] geometry,
+        int offset, IReadOnlyDictionary<int, PdfTranslationSourceStyle> styles) =>
+        Invoke<PdfTranslationLayout>(0, new { version = 1, operation = "plan_pdf_translation_layout",
+            rows, geometry, offset,
+            styles = styles.Select(entry => new PdfTranslationStyleAnchor(entry.Key, entry.Value)).ToArray() });
     public static unsafe PdfTextFit? FitPdfText(string text, float width, float height,
         float preferred, float minimum, Func<int, int, float, float> measure)
     {
