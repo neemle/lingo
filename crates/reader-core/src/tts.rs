@@ -262,10 +262,15 @@ pub fn ukrainian_stress(text: &str) -> std::borrow::Cow<'_, str> {
         }
 
         let has_prior = phrase_space(&text[previous_end..offset]);
-        let prior = if has_prior { cue(previous_word) } else { String::new() };
-        let earlier = if has_prior &&
-            phrase_space(&text[earlier_end..previous_end - previous_word.len()])
+        let earlier_gap = &text[earlier_end..previous_end - previous_word.len()];
+        let mut prior = if has_prior { cue(previous_word) } else { String::new() };
+        if has_prior && matches!(earlier_gap, "-" | "‑" | "‐")
+            && matches!(prior.as_str(), "під" | "за" | "над")
+            && matches!(cue(earlier_word).as_str(), "з" | "із" | "зі")
         {
+            prior.insert_str(0, "з-");
+        }
+        let earlier = if has_prior && phrase_space(earlier_gap) {
             cue(earlier_word)
         } else {
             String::new()
@@ -295,8 +300,11 @@ pub fn ukrainian_stress(text: &str) -> std::borrow::Cow<'_, str> {
 
 fn window_stress(earlier: &str, prior: &str, next: &str) -> Option<usize> {
     // Two, three, and four retain the genitive singular stress in this plural form.
-    let count =
-        |token: &str| matches!(token, "два" | "обидва" | "три" | "чотири" | "2" | "3" | "4");
+    let count = |token: &str| {
+        matches!(token, "два" | "обидва" | "три" | "чотири")
+            || token.parse::<u8>().is_ok_and(|number| number < 100
+                && matches!(number % 10, 2..=4) && !matches!(number, 12..=14))
+    };
     let plural_modifier = |token: &str| {
         matches!(
             token,
@@ -331,6 +339,9 @@ fn window_stress(earlier: &str, prior: &str, next: &str) -> Option<usize> {
 
     match (earlier, prior) {
         (_, token) if genitive_preposition(token) || count(token) => Some(4),
+        // These prepositions can take the accusative plural «вікна»,
+        // but the singular forms for their cases have different endings.
+        (_, "в" | "у" | "на" | "під" | "крізь" | "через" | "про" | "повз") => Some(1),
         (preposition, modifier)
             if genitive_preposition(preposition) && modifier.ends_with("ого") => Some(4),
         (number, token) if count(number) && plural_modifier(token) => Some(4),
@@ -370,7 +381,8 @@ fn genitive_preposition(token: &str) -> bool {
     matches!(
         token,
         "біля" | "поблизу" | "неподалік" | "навколо" | "до" | "від" | "без" | "коло"
-            | "після" | "з" | "із" | "зі"
+            | "після" | "з" | "із" | "зі" | "з-під" | "з-за" | "з-над"
+            | "для" | "навпроти" | "замість" | "довкола" | "посеред" | "щодо" | "стосовно"
     )
 }
 
@@ -608,6 +620,14 @@ mod tests {
                 "Є чотири великі вікна́, а ці ві́кна старі.",
             ),
             ("Є 3 вікна; біля\n\nВікна", "Є 3 вікна́; біля\n\nВікна"),
+            ("Сонце світить крізь вікна. Шум чути з-під вікна.",
+                "Сонце світить крізь ві́кна. Шум чути з-під вікна́."),
+            ("Вона глянула на вікна з-за вікна сусіднього будинку.",
+                "Вона глянула на ві́кна з-за вікна́ сусіднього будинку."),
+            ("Карниз для вікна; квіти під вікна; завіси для нового вікна.",
+                "Карниз для вікна́; квіти під ві́кна; завіси для нового вікна́."),
+            ("Ми оглянули 22 вікна. Вони нарахували 13 вікон.",
+                "Ми оглянули 22 вікна́. Вони нарахували 13 вікон."),
             ("Вікна відчинені. Зі старого вікна дме.", "Ві́кна відчинені. Зі старого вікна́ дме."),
             ("Скло вікна запітніло. Інші вікна зачинені.", "Скло вікна́ запітніло. Інші ві́кна зачинені."),
             ("Вікна, відчинені навстіж.", "Вікна, відчинені навстіж."),
