@@ -124,17 +124,18 @@ public partial class ReadingPage
             await LoadDetachedSentenceAsync(address, position: null, sourceOffset: selected.StartUtf16);
         if (ReferenceEquals(detachedAddress, address) && detachedSentence?.Sentence is { } hit &&
             selected.StartUtf16 >= hit.StartUtf16 && selected.StartUtf16 < hit.EndUtf16)
-            ShowDetachedWord(selected, pdfAnchor);
+            await ShowDetachedWordAsync(selected, pdfAnchor);
     }
 
-    private void ShowDetachedWord(TextSelection selected, (VisualElement View, Point Point)? pdfAnchor = null)
+    private async Task ShowDetachedWordAsync(TextSelection selected, (VisualElement View, Point Point)? pdfAnchor)
     {
-        if (detachedAddress is null || loadingDetachedSentence) return;
+        if (detachedAddress is not { } address || detachedSentence is not { } sentence || loadingDetachedSentence) return;
         dictionaryFocus = null;
         SetDetachedSelection(selected);
         UpdateDetachedControls();
         DetachedSelectedWord.Text = selected.Text;
         ShowWordPopup(DetachedPdfText, selected, DetachedWordCard, pdfAnchor);
+        await LoadDetachedSyntaxHintAsync(address, sentence.RevisionId, selected);
     }
 
     private void SetDetachedSelection(TextSelection? selected)

@@ -1,5 +1,6 @@
 using Reader.Contracts;
 using Reader.Native.Services;
+using Reader.Presentation;
 
 namespace Reader.Native.Features.Reading;
 
@@ -7,6 +8,7 @@ public partial class ReadingPage
 {
     private WordLookup? syntaxLookup;
     private int wordSyntaxRequest;
+    private (DetachedAddress Address, string? Revision, TextSelection Selection, Task<WordLookup?> Pending)? detachedLookup;
 
     private void ShowLocalSyntax(WordLookup? lookup)
     {
@@ -22,8 +24,41 @@ public partial class ReadingPage
     private void ResetDetachedSyntax()
     {
         wordSyntaxRequest++;
+        detachedLookup = null;
+        SetDetachedSyntaxHint(null);
         DetachedSyntaxDetails.IsVisible = false;
         DetachedOpenSyntax.Text = "Синтаксис";
+    }
+
+    private Task<WordLookup?> LookupDetachedCardAsync(DetachedAddress address, string? revision, TextSelection selected)
+    {
+        if (detachedLookup is { } lookup && ReferenceEquals(lookup.Address, address) &&
+            lookup.Revision == revision && lookup.Selection == selected &&
+            !lookup.Pending.IsFaulted && !lookup.Pending.IsCanceled) return lookup.Pending;
+        var pending = AppState.Session.LookupDetachedPdfWordAsync(address.Document, address.Page, selected);
+        detachedLookup = (address, revision, selected, pending);
+        return pending;
+    }
+
+    private async Task LoadDetachedSyntaxHintAsync(DetachedAddress address, string? revision, TextSelection selected)
+    {
+        try
+        {
+            var lookup = await LookupDetachedCardAsync(address, revision, selected);
+            if (readingPageActive && DetachedWordCard.IsVisible && ReferenceEquals(detachedAddress, address) &&
+                detachedSentence?.RevisionId == revision && detachedSelection == selected)
+            {
+                SetDetachedSyntaxHint(lookup?.SyntaxHint);
+                PositionWordPopup();
+            }
+        }
+        catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
+    }
+
+    private void SetDetachedSyntaxHint(string? hint)
+    {
+        DetachedSyntaxHint.Text = hint;
+        DetachedSyntaxHint.IsVisible = hint is not null;
     }
 
     private async void OpenSyntaxClicked(object? sender, EventArgs args)
@@ -52,12 +87,11 @@ public partial class ReadingPage
             LinguisticAnalysis? analysis;
             if (anchor.Page is { } page)
             {
-                if (!hint.IsVisible)
+                if (!hint.IsVisible && detachedAddress is { } address)
                 {
-                    var lookup = await session.LookupDetachedPdfWordAsync(anchor.DocumentId, page, selected);
+                    var lookup = await LookupDetachedCardAsync(address, anchor.Revision, selected);
                     if (!Current()) return;
-                    hint.Text = lookup?.SyntaxHint;
-                    hint.IsVisible = lookup?.SyntaxHint is not null;
+                    SetDetachedSyntaxHint(lookup?.SyntaxHint);
                 }
                 analysis = await session.AnalyzeDetachedPdfSelectionAsync(anchor.DocumentId, page, selected);
             }

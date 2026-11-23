@@ -33,7 +33,6 @@ public partial class ReadingPage
         DetachedMeaningsButton.Text = "Значення";
         DetachedMeanings.Children.Clear();
         DetachedMeanings.IsVisible = false;
-        DetachedSyntaxHint.IsVisible = false;
     }
 
     private async void OpenMeaningsClicked(object? sender, EventArgs args)
@@ -59,6 +58,7 @@ public partial class ReadingPage
     {
         if (detachedSelection is not { } word || detachedAddress is not { } address ||
             TargetCode is not { } target) return;
+        var revision = detachedSentence?.RevisionId;
         DetachedMeanings.IsVisible = !DetachedMeanings.IsVisible;
         DetachedMeaningsButton.Text = DetachedMeanings.IsVisible ? "Згорнути значення" : "Значення";
         PositionWordPopup();
@@ -68,11 +68,11 @@ public partial class ReadingPage
         DetachedMeanings.Children.Add(status);
         try
         {
-            var lookup = await AppState.Session.LookupDetachedPdfWordAsync(address.Document, address.Page, word);
-            if (!DetachedMeanings.Children.Contains(status)) return;
+            var lookup = await LookupDetachedCardAsync(address, revision, word);
+            if (!DetachedMeanings.Children.Contains(status) || !ReferenceEquals(detachedAddress, address) ||
+                detachedSentence?.RevisionId != revision || detachedSelection != word) return;
             DetachedMeanings.Children.Clear();
-            DetachedSyntaxHint.Text = lookup?.SyntaxHint;
-            DetachedSyntaxHint.IsVisible = lookup?.SyntaxHint is not null;
+            SetDetachedSyntaxHint(lookup?.SyntaxHint);
             await ShowMeaningRowsAsync(DetachedMeanings, word, address.Document, address.Language, target,
                 lookup?.Meanings ?? [], (sense, text) =>
                 {
