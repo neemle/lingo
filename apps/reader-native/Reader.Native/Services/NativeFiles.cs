@@ -8,15 +8,13 @@ public static class NativeFiles
     private static readonly TimeSpan SharedExportLifetime = TimeSpan.FromDays(7);
     internal static string ExportRoot => Path.Combine(FileSystem.CacheDirectory, "exports");
 
-    internal static void ClearStagedExports()
+    internal static bool TryPauseExports() => ExportDialog.Wait(0);
+
+    internal static void ResumeExports() => ExportDialog.Release();
+
+    internal static void ClearPausedExports()
     {
-        if (!ExportDialog.Wait(0))
-            throw new InvalidOperationException("Завершіть збереження або поширення файла й повторіть дію.");
-        try
-        {
-            if (Directory.Exists(ExportRoot)) Directory.Delete(ExportRoot, recursive: true);
-        }
-        finally { ExportDialog.Release(); }
+        if (Directory.Exists(ExportRoot)) Directory.Delete(ExportRoot, recursive: true);
     }
 
     public static async Task<byte[]> ReadBoundedAsync(FileResult file, int maximum)

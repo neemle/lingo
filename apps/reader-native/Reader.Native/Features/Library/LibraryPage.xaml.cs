@@ -162,6 +162,7 @@ public partial class LibraryPage : ContentPage
 
     private async void FilesDropped(object? sender, DropEventArgs args)
     {
+        using var incoming = DesktopImport.TrackIncoming();
         try
         {
             if (!await DesktopFiles.QueueDropAsync(args))

@@ -19,30 +19,42 @@ internal static class DesktopImport
     internal static bool HasIncoming => HasPending || Volatile.Read(ref receiving) > 0;
     internal static bool TryTake(out ShareInboxItem[]? items) => Pending.TryDequeue(out items);
 
-    internal static async Task ReceiveBatchAsync(IEnumerable<(string Name, Func<Task<ShareInboxItem>> Stage)> inputs)
+    internal static IDisposable TrackIncoming()
     {
         Interlocked.Increment(ref receiving);
-        try
-        {
-            var staged = new List<ShareInboxItem>();
-            (string Name, Exception Error)? firstFailure = null;
-            var rejected = 0;
-            foreach (var (name, stage) in inputs)
-            {
-                try { staged.Add(await stage().ConfigureAwait(false)); }
-                catch (Exception error)
-                {
-                    firstFailure ??= (name, error);
-                    rejected++;
-                }
-            }
+        return new IncomingBatch();
+    }
 
-            if (firstFailure is { } failed)
-                RecordFailure(failed.Name, failed.Error, rejected);
-            PublishBatch(staged);
-            if (rejected > 0 && staged.Count == 0) Available?.Invoke();
+    private sealed class IncomingBatch : IDisposable
+    {
+        private int disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0) Interlocked.Decrement(ref receiving);
         }
-        finally { Interlocked.Decrement(ref receiving); }
+    }
+
+    internal static async Task ReceiveBatchAsync(IEnumerable<(string Name, Func<Task<ShareInboxItem>> Stage)> inputs)
+    {
+        using var incoming = TrackIncoming();
+        var staged = new List<ShareInboxItem>();
+        (string Name, Exception Error)? firstFailure = null;
+        var rejected = 0;
+        foreach (var (name, stage) in inputs)
+        {
+            try { staged.Add(await stage().ConfigureAwait(false)); }
+            catch (Exception error)
+            {
+                firstFailure ??= (name, error);
+                rejected++;
+            }
+        }
+
+        if (firstFailure is { } failed)
+            RecordFailure(failed.Name, failed.Error, rejected);
+        PublishBatch(staged);
+        if (rejected > 0 && staged.Count == 0) Available?.Invoke();
     }
 
     private static string? failure;

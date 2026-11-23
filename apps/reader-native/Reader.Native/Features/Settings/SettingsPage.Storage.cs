@@ -172,6 +172,10 @@ public partial class SettingsPage
         changingStorage = true;
         SettingsScroll.IsEnabled = false;
         var importGateHeld = false;
+        var inboxPaused = false;
+        var exportsPaused = false;
+        var storageOperationStarted = false;
+        BackgroundTranslation? pausedWorker = null;
         try
         {
             if (ResourceOperationActive || AppState.Session.Busy)
@@ -192,8 +196,27 @@ public partial class SettingsPage
                 StorageStatus.Text = "Зачекайте, поки завершиться імпорт файла.";
                 return;
             }
+            if (scope == "all")
+            {
+                inboxPaused = ShareInbox.TryPauseStaging();
+                if (!inboxPaused || DesktopImport.HasIncoming)
+                {
+                    StorageStatus.Text = "Зачекайте, поки завершиться імпорт файла.";
+                    return;
+                }
+            }
+            if (scope != "downloads" && !(exportsPaused = NativeFiles.TryPauseExports()))
+            {
+                StorageStatus.Text = "Завершіть збереження або поширення файла й повторіть дію.";
+                return;
+            }
             StorageStatus.Text = "Видаляємо дані…";
-            if (AppState.TranslationWorker is { } worker) await worker.PauseAsync();
+            storageOperationStarted = true;
+            if (AppState.TranslationWorker is { } worker)
+            {
+                pausedWorker = worker;
+                await worker.PauseAsync();
+            }
             var session = AppState.Session;
             if (scope != "downloads") AppState.InvalidateReaderCache();
             try
@@ -228,15 +251,20 @@ public partial class SettingsPage
         catch (Exception error) { StorageStatus.Text = error.Message; }
         finally
         {
-            if (importGateHeld)
+            if (exportsPaused) NativeFiles.ResumeExports();
+            if (inboxPaused) ShareInbox.ResumeStaging();
+            if (importGateHeld) DesktopImport.Gate.Release();
+            try
             {
-                DesktopImport.Gate.Release();
-                await RefreshStorageAsync(syncWorker: scope != "downloads");
-                AppState.TranslationWorker?.Resume(clearProgress: true);
+                if (storageOperationStarted) await RefreshStorageAsync(syncWorker: scope != "downloads");
             }
-            changingStorage = false;
-            StorageControls.IsEnabled = true;
-            SettingsScroll.IsEnabled = true;
+            finally
+            {
+                pausedWorker?.Resume(clearProgress: true);
+                changingStorage = false;
+                StorageControls.IsEnabled = true;
+                SettingsScroll.IsEnabled = true;
+            }
         }
     }
 
@@ -251,7 +279,7 @@ public partial class SettingsPage
         if (scope == "all")
             foreach (var name in LocalIntake)
                 RemoveFolder(Path.Combine(FileSystem.AppDataDirectory, name));
-        if (scope != "downloads") NativeFiles.ClearStagedExports();
+        if (scope != "downloads") NativeFiles.ClearPausedExports();
     }
 
     private static IEnumerable<FileSystemInfo> DownloadStaging()

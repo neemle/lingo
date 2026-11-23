@@ -19,6 +19,10 @@ internal static class ShareInbox
     private static readonly SemaphoreSlim Staging = new(1, 1);
     private static readonly Lazy<string> Storage = new(Initialize);
 
+    internal static bool TryPauseStaging() => Staging.Wait(0);
+
+    internal static void ResumeStaging() => Staging.Release();
+
     internal static async Task<ShareInboxItem> StageAsync(string kind, string name, Stream source, bool scanPdf = false,
         CancellationToken cancellation = default, IProgress<long>? progress = null)
     {
