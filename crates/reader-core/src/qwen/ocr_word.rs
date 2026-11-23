@@ -75,6 +75,7 @@ pub struct OcrPageReview {
     checked_lines: usize,
     reviewed_indices: Vec<usize>,
     remaining_lines: usize,
+    pending_in_batch: usize,
     corrections: Vec<OcrLineEdit>,
 }
 
@@ -242,23 +243,22 @@ impl ReviewOcrPageJob {
             if canceled() { Err("Звірку OCR скасовано.".into()) } else { Ok(()) }
         };
         check_canceled()?;
-        let read_cache = || -> Result<Option<Vec<OcrSpelling>>> {
-            let results = self.lines.iter().map(|(_, job)| match &job.work {
+        let read_cache = || -> Result<Vec<Option<OcrSpelling>>> {
+            self.lines.iter().map(|(_, job)| match &job.work {
                 HintWork::Cached(result) => Ok(result.clone()),
                 HintWork::Generate { cache, .. } => cache.load(),
-            }).collect::<Result<Vec<_>>>()?;
-            Ok(results.into_iter().collect::<Option<Vec<OcrSpelling>>>())
+            }).collect()
         };
         let model = self.lines.iter().find_map(|(_, job)| match &job.work {
             HintWork::Generate { model, .. } => Some(model),
             HintWork::Cached(_) => None,
         });
         let Some(model) = model else {
-            return Ok(read_cache()?.map(|results| self.merge(results)));
+            return Ok(self.merge(read_cache()?));
         };
-        model.run_requested_with_cache(
+        let result = model.run_requested_with_cache(
             Some(canceled),
-            || Ok(read_cache()?.map(|results| Some(self.merge(results)))),
+            || Ok(self.merge(read_cache()?).filter(|review| review.pending_in_batch == 0).map(Some)),
             |directory, should_yield| {
                 let deadline = Instant::now() + Duration::from_secs(20);
                 with_prompt_context(directory, || prompt_checkpoint(should_yield, deadline), |model, context| {
@@ -266,8 +266,7 @@ impl ReviewOcrPageJob {
                     for (_, job) in &self.lines {
                         check_canceled()?;
                         match &job.work {
-                            HintWork::Cached(Some(review)) => results.push(review.clone()),
-                            HintWork::Cached(None) => return Ok(None),
+                            HintWork::Cached(review) => results.push(review.clone()),
                             HintWork::Generate { example, cache, .. } => {
                                 let review = if let Some(review) = cache.load()? {
                                     review
@@ -281,26 +280,43 @@ impl ReviewOcrPageJob {
                                     cache.save(&review)?;
                                     review
                                 };
-                                results.push(review);
+                                results.push(Some(review));
                             }
                         }
                     }
-                    Ok(Some(self.merge(results)))
+                    Ok(self.merge(results))
                 })
             },
-        )
+        );
+        match result {
+            Err(error) if !canceled() => self.merge(read_cache()?).map_or(Err(error), |review| Ok(Some(review))),
+            result => result,
+        }
     }
 
-    fn merge(&self, results: Vec<OcrSpelling>) -> OcrPageReview {
-        let corrections = self.lines.iter().zip(results).filter_map(|((index, job), hint)|
-            hint.replacement.map(|replacement| OcrLineEdit { index: *index, source: job.text.clone(), replacement })
-        ).collect();
-        OcrPageReview {
-            checked_lines: self.lines.len(),
-            reviewed_indices: self.lines.iter().map(|(index, _)| *index).collect(),
-            remaining_lines: self.remaining_lines,
-            corrections,
+    fn merge(&self, results: Vec<Option<OcrSpelling>>) -> Option<OcrPageReview> {
+        let mut reviewed_indices = Vec::new();
+        let mut corrections = Vec::new();
+        for ((index, job), result) in self.lines.iter().zip(results) {
+            if let Some(hint) = result {
+                reviewed_indices.push(*index);
+                if let Some(replacement) = hint.replacement {
+                    corrections.push(OcrLineEdit { index: *index, source: job.text.clone(), replacement });
+                }
+            }
         }
+        let checked_lines = reviewed_indices.len();
+        let pending_in_batch = self.lines.len() - checked_lines;
+        if checked_lines == 0 && pending_in_batch > 0 {
+            return None;
+        }
+        Some(OcrPageReview {
+            checked_lines,
+            reviewed_indices,
+            remaining_lines: self.remaining_lines + pending_in_batch,
+            pending_in_batch,
+            corrections,
+        })
     }
 }
 
@@ -445,6 +461,33 @@ mod tests {
         assert_eq!(apply_line_edits(text, edits.edits).as_deref(), Some("A magic  book, vraiment."));
         let edit = || LineEdit { index: 1, replacement: "magic".into() };
         assert!(apply_line_edits(text, vec![edit(), edit()]).is_none());
+    }
+
+    #[test]
+    fn page_review_restores_partial_line_cache_without_the_model_files() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let lines = ["A rnagic book.", "An ordinary page.", "A b0ok on the table."];
+        let document = store.import_image("scan.png", b"\x89PNG\r\n\x1a\n", "en",
+            lines.iter().enumerate().map(|(index, text)| OcrLine {
+                page: 0, text: (*text).into(), x: 0.1, y: 0.1 + index as f64 * 0.1,
+                width: 0.8, height: 0.05, confidence: Some(0.5), correction: None,
+                words: vec![], source_span: None,
+            }).collect()).unwrap();
+        let revision = document.current_revision_id.as_deref().unwrap();
+        for (index, replacement) in [(0, Some("A magic book.".to_owned())), (1, None)] {
+            let job = store.prepare_ocr_line_review(&document.id, None, revision, index, false).unwrap();
+            let HintWork::Generate { cache, .. } = job.work else { panic!("unseeded cache"); };
+            cache.save(&OcrSpelling { replacement }).unwrap();
+        }
+        for cached_only in [true, false] {
+            let review = store.prepare_ocr_page_review(&document.id, 0, false, revision, cached_only, &[])
+                .unwrap().run().unwrap().unwrap();
+            assert_eq!(review.reviewed_indices, [0, 1]);
+            assert_eq!((review.checked_lines, review.pending_in_batch, review.remaining_lines), (2, 1, 1));
+            assert_eq!(review.corrections[0].replacement, "A magic book.");
+            assert_eq!(review.corrections.len(), 1);
+        }
     }
 
     #[test]

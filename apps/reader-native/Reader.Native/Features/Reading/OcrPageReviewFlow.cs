@@ -82,9 +82,21 @@ internal sealed class OcrPageReviewFlow
         inferenceChanged?.Invoke(true);
         try
         {
-            var review = await LoadAsync(session, isCurrent, status, "Qwen перевіряє рядки з низькою впевненістю OCR…",
-                cachedOnly => session.ReviewOcrPageAsync(source.DocumentId, source.Page, source.Detached,
-                    source.Revision, cachedOnly, reviewed, cancellation.Token));
+            Task<OcrPageReview?> Read(bool cachedOnly) => session.ReviewOcrPageAsync(source.DocumentId, source.Page,
+                source.Detached, source.Revision, cachedOnly, reviewed, cancellation.Token);
+            status("Шукаємо збережену перевірку…");
+            var review = await Read(true);
+            if (review is { PendingInBatch: 0 } || !isCurrent()) return review;
+            var model = (await session.OptionalModelsAsync()).FirstOrDefault(item => item.CanGenerateLanguageHints);
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (!isCurrent()) return null;
+            if (model is not { FilesPresent: true })
+            {
+                if (review is null) status("Установіть Qwen 2B у налаштуваннях.");
+                return review;
+            }
+            status("Qwen перевіряє рядки з низькою впевненістю OCR…");
+            review = await Read(false);
             cancellation.Token.ThrowIfCancellationRequested();
             return review;
         }
@@ -122,6 +134,8 @@ internal sealed class OcrPageReviewFlow
         reviewedIndices.UnionWith(review.ReviewedIndices);
         previousSource = source;
         remainingLines = review.RemainingLines;
+        if (review.PendingInBatch > 0)
+            message += " Показано збережені результати.";
         status(remainingLines == 0 ? message : $"{message} Ще рядків для перевірки: {remainingLines}.");
     }
 }
