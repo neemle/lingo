@@ -98,7 +98,8 @@ impl Store {
                 let normalized;
                 let prompt_text = if language == "fr" && target == "uk" {
                     // The output validator can then verify the exact cardinal value.
-                    normalized = crate::french_cardinals::digits_in_text(text);
+                    normalized = protected_translation::transform_outside_web_addresses(
+                        text, crate::french_cardinals::digits_in_text);
                     normalized.as_str()
                 } else {
                     text
@@ -114,7 +115,9 @@ impl Store {
                     };
                     (HINT_GENERATION_MODEL, SYSTEM, example, cache_kind)
                 };
-                let cache_kind = if protected_translation::contains_protected(prompt_text) {
+                let cache_kind = if protected_translation::web_address_spans(prompt_text).next().is_some() {
+                    "passage-protected-web-addresses-v1"
+                } else if protected_translation::contains_protected(prompt_text) {
                     "passage-protected-spans-v1"
                 } else { cache_kind };
                 self.prepare_hint_work(
@@ -314,15 +317,19 @@ fn recover_chunk(
 fn split_for_retry(input: &str, context_overflow: bool) -> Option<(&str, &str)> {
     let input = input.trim();
     let middle = input.len() / 2;
+    let addresses: Vec<_> = protected_translation::web_address_spans(input).collect();
+    let can_split = |offset: &usize| !addresses.iter().any(|span| span.start < *offset && *offset < span.end);
     let nearest = |position: &usize| position.abs_diff(middle);
     let offset = Layout::ClosingQuotes.segment(input, "").iter().skip(1)
         .map(|sentence| sentence.start_utf8)
+        .filter(can_split)
         .min_by_key(nearest)
         .or_else(|| {
             input.match_indices([';', ',', ':'])
                 .map(|(offset, mark)| offset + mark.len())
                 .filter(|&offset| input[..offset].chars().count() >= 32 &&
                     input[offset..].trim_start().chars().count() >= 32)
+                .filter(can_split)
                 .min_by_key(nearest)
         })
         .or_else(|| {
@@ -339,7 +346,8 @@ fn split_for_retry(input: &str, context_overflow: bool) -> Option<(&str, &str)> 
 }
 
 fn complete_sentences(text: &str) -> usize {
-    Layout::ClosingQuotes.segment(text, "").iter().filter(|sentence| {
+    let prose = protected_translation::without_identifiers(text);
+    Layout::ClosingQuotes.segment(&prose, "").iter().filter(|sentence| {
         let text = sentence.text.trim_end_matches([' ', '\t', '»', '”', '"', '’', '\'', ')', ']']);
         text.ends_with(['.', '!', '?', '…']) && text.chars().any(char::is_alphabetic)
     }).count()

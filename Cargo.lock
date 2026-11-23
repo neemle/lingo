@@ -1680,6 +1680,7 @@ dependencies = [
  "ort",
  "pdf-extract",
  "quick-xml",
+ "regex",
  "rusqlite",
  "rustix",
  "sentencepiece-rs",

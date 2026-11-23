@@ -1290,8 +1290,10 @@ pub(crate) fn sentence_source(
 
 pub(crate) fn prepare_translation_input(source: &str, target: &str, text: String) -> String {
     if source == "fr" && target == "uk" {
-        let digits = crate::french_cardinals::digits_in_text(&text);
-        crate::marian_target_uk::clarify_french_instructions(&digits)
+        crate::protected_translation::transform_outside_web_addresses(&text, |prose| {
+            let digits = crate::french_cardinals::digits_in_text(prose);
+            crate::marian_target_uk::clarify_french_instructions(&digits)
+        })
     } else {
         text
     }
@@ -2636,7 +2638,7 @@ impl Store {
                     && (target != "uk"
                         || !segments
                             .iter()
-                            .any(|text| crate::marian_target_uk::clearly_russian(text)))
+                            .any(|text| russian_prose(text)))
             }))
     }
 
@@ -2719,7 +2721,7 @@ fn infer_independent_units(
         for outcome in &mut outcomes {
             if outcome.as_ref().is_ok_and(|text| {
                 text.trim().is_empty() || text.len() > MAX_BATCH_BYTES
-                    || (edge.target == "uk" && crate::marian_target_uk::clearly_russian(text))
+                    || (edge.target == "uk" && russian_prose(text))
             }) {
                 *outcome = Err("Мовний пакет повернув некоректний переклад речення".into());
             }
@@ -2780,6 +2782,8 @@ fn cache_key(
             .unwrap_or(4)
     };
     let version = match route {
+        _ if segments.iter().any(|text| crate::protected_translation::web_address_spans(text.as_ref()).next().is_some())
+            || context.is_some_and(|text| crate::protected_translation::web_address_spans(text).next().is_some()) => 14,
         _ if segments.iter().any(|text| crate::protected_translation::contains_protected(text.as_ref()))
             || context.is_some_and(crate::protected_translation::contains_protected) => 13,
         Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" && segments.iter().any(|text|
@@ -2822,8 +2826,12 @@ fn checked_inference(
     if result.len() != source.len() || !valid_segments(&result) {
         return Err("Мовний пакет повернув некоректне вирівнювання перекладу".into());
     }
-    if model.target == "uk" && result.iter().any(|text| crate::marian_target_uk::clearly_russian(text)) {
+    if model.target == "uk" && result.iter().any(|text| russian_prose(text)) {
         return Err("Мовний пакет повернув російський текст замість українського".into());
     }
     Ok(result)
+}
+
+fn russian_prose(text: &str) -> bool {
+    crate::marian_target_uk::clearly_russian(&crate::protected_translation::without_identifiers(text))
 }

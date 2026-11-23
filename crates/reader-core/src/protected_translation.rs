@@ -1,7 +1,51 @@
 use crate::Result;
-use std::{borrow::Cow, ops::Range};
+use regex::Regex;
+use std::{borrow::Cow, ops::Range, sync::LazyLock};
 
-pub(crate) const MARKER_ERROR: &str = "Перекладач змінив або пропустив захищене скорочення чи код.";
+pub(crate) const MARKER_ERROR: &str = "Перекладач змінив або пропустив захищений фрагмент.";
+
+static WEB_ADDRESSES: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r#"(?i:https?://)[^\s<>"«»“”‘’]+"#,
+        r"|[A-Za-z0-9_%+.-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,63}\b",
+    )).expect("web addresses")
+});
+
+pub(crate) fn web_address_spans(text: &str) -> impl Iterator<Item = Range<usize>> + '_ {
+    WEB_ADDRESSES.find_iter(text).filter_map(|address| {
+        let raw = address.as_str();
+        if !raw.contains("://") {
+            return Some(address.range());
+        }
+
+        // Adjacent closing punctuation belongs to the prose unless it is paired inside the URL.
+        let mut url = raw.trim_end_matches(['.', ',', ';', ':', '!', '?', '\'']);
+        for (open, close) in [('(', ')'), ('[', ']'), ('{', '}')] {
+            while url.ends_with(close) && url.matches(close).count() > url.matches(open).count() {
+                url = url.trim_end_matches(close);
+            }
+        }
+        let (_, tail) = url.split_once("://")?;
+        let host = tail.split(['/', '?', '#']).next()?;
+        host.chars().any(char::is_alphanumeric).then_some(address.start()..address.start() + url.len())
+    })
+}
+
+pub(crate) fn transform_outside_web_addresses(text: &str, transform: impl Fn(&str) -> String) -> String {
+    let mut spans = web_address_spans(text).peekable();
+    if spans.peek().is_none() {
+        return transform(text);
+    }
+    let mut output = String::with_capacity(text.len());
+    let mut offset = 0;
+    for span in spans {
+        output.push_str(&transform(&text[offset..span.start]));
+        output.push_str(&text[span.clone()]);
+        offset = span.end;
+    }
+    output.push_str(&transform(&text[offset..]));
+    output
+}
 
 struct Marker<'a> {
     token: String,
@@ -117,7 +161,7 @@ pub(crate) fn contains_protected(source: &str) -> bool {
 pub(crate) fn without_identifiers(text: &str) -> Cow<'_, str> {
     let mut output = String::new();
     let mut offset = 0;
-    for range in ascii_tokens(text).filter(|range| is_identifier(&text[range.clone()])) {
+    for range in token_spans(text, |word| is_identifier(word).then_some(None)).map(|(range, _)| range) {
         output.push_str(&text[offset..range.start]);
         output.push(' ');
         offset = range.end;
@@ -132,17 +176,39 @@ pub(crate) fn without_identifiers(text: &str) -> Cow<'_, str> {
 fn protected_spans(
     source: &str,
 ) -> impl Iterator<Item = (Range<usize>, Option<&'static str>)> + '_ {
-    ascii_tokens(source).filter_map(|range| {
-        let word = &source[range.clone()];
+    token_spans(source, |word| {
+        if let Some(translated) = ukrainian_acronym(word) {
+            return Some(Some(translated));
+        }
+        (is_identifier(word) || in_marker_namespace(word)).then_some(None)
+    })
+}
+
+fn token_spans(
+    source: &str,
+    classify: fn(&str) -> Option<Option<&'static str>>,
+) -> impl Iterator<Item = (Range<usize>, Option<&'static str>)> + '_ {
+    let mut addresses = web_address_spans(source).peekable();
+    let mut words = ascii_tokens(source).peekable();
+    std::iter::from_fn(move || loop {
+        if let Some(address) = addresses.peek() {
+            if words.peek().is_none_or(|word| word.end > address.start) {
+                let address = addresses.next()?;
+                while words.peek().is_some_and(|word| word.start < address.end) {
+                    words.next();
+                }
+                return Some((address, None));
+            }
+        }
+        let range = words.next()?;
         if source[..range.start].ends_with(char::is_alphabetic)
             || source[range.end..].starts_with(char::is_alphabetic)
         {
-            return None;
+            continue;
         }
-        if let Some(translated) = ukrainian_acronym(word) {
-            return Some((range, Some(translated)));
+        if let Some(replacement) = classify(&source[range.clone()]) {
+            return Some((range, replacement));
         }
-        (is_identifier(word) || in_marker_namespace(word)).then_some((range, None))
     })
 }
 
@@ -254,5 +320,24 @@ mod tests {
             collision.restore(collision.input().to_owned()).unwrap(),
             "ZXQ001QXZ et ООН"
         );
+    }
+
+    #[test]
+    fn protects_whole_addresses_without_consuming_prose_punctuation() {
+        let url = "https://example.org/dix-neuf_(fr)?id=A320-200&n=2";
+        let email = "A320+ONu@example.org";
+        let source = format!("Consultez ({url}), ou écrivez à {email}.");
+        let protected = ProtectedText::new(&source, "uk");
+        assert_eq!(protected.input(), "Consultez (ZXQ001QXZ), ou écrivez à ZXQ002QXZ.");
+        assert_eq!(protected.restore("Пишіть на ZXQ002QXZ або відкрийте (ZXQ001QXZ).".into()).unwrap(),
+            format!("Пишіть на {email} або відкрийте ({url})."));
+        assert_eq!(without_identifiers(&format!("Пишіть на {email}.")), "Пишіть на  .");
+        assert_eq!(
+            crate::translation::prepare_translation_input("fr", "uk", format!("Il y a dix-neuf exemples sur {url}.")),
+            format!("Il y a 19 exemples sur {url}."),
+        );
+        let address = ProtectedText::new(url, "uk");
+        assert!(address.only_protected());
+        assert_eq!(address.restore(address.input().to_owned()).unwrap(), url);
     }
 }

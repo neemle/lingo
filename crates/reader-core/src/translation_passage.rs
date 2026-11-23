@@ -101,6 +101,16 @@ mod tests {
         assert_eq!(join_translated_chunks(translated, chunks.iter().map(|chunk| chunk.separator)),
             translated.join("\n"));
     }
+
+    #[test]
+    fn passage_chunk_limits_keep_addresses_whole() {
+        let address = format!("https://example.org/{}?lang=fr", "section.".repeat(50));
+        let sentence = format!("Ouvrez {address} puis revenez ici.");
+        let pieces = passage_chunks(&sentence).unwrap();
+        assert!(pieces.iter().any(|chunk| chunk.text.contains(&address)));
+        assert_eq!(join_translated_chunks(pieces.iter().map(|piece| piece.text),
+            pieces.iter().map(|piece| piece.separator)), sentence);
+    }
 }
 
 fn normalize_passage(document: &Document, range: Range<usize>) -> String {
@@ -162,22 +172,25 @@ fn chunks(text: &str) -> Result<Vec<&str>> {
             .char_indices()
             .nth(MAX_CHARS)
             .map_or(rest.len(), |(offset, _)| offset);
-        let prefix = &rest[..end];
         let cut = if end == rest.len() {
             end
         } else {
+            let addresses: Vec<_> = crate::protected_translation::web_address_spans(rest).collect();
+            let spanning = addresses.iter().find(|span| span.start < end && end < span.end);
+            let limit = spanning.map_or(end, |span| if span.start == 0 { span.end } else { span.start });
+            let prefix = &rest[..limit];
             let minimum = prefix
                 .char_indices()
                 .nth(MIN_CHARS)
                 .map_or(0, |(offset, _)| offset);
             prefix
                 .rmatch_indices(['.', '!', '?', '…'])
-                .next()
                 .map(|(offset, ch)| offset + ch.len())
                 .filter(|&offset| offset >= minimum)
+                .find(|offset| !addresses.iter().any(|span| span.start < *offset && *offset <= span.end))
                 .or_else(|| prefix.rfind(char::is_whitespace))
                 .filter(|&offset| offset > 0)
-                .unwrap_or(end)
+                .unwrap_or(limit)
         };
         result.push(rest[..cut].trim());
         rest = rest[cut..].trim_start();
