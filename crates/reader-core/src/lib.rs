@@ -1258,17 +1258,16 @@ impl Store {
         valid_language(target)?;
         let text = text.trim();
         validate_translation(text)?;
-        self.edit_document(id, |document, _| {
+        self.edit_document(id, |document, tx| {
             if target == document.language {
                 return Err("Мова перекладу має відрізнятися від мови джерела".into());
             }
-            if !document
+            let Some(position) = document
                 .sentences
                 .iter()
-                .any(|sentence| sentence.id == sentence_id)
-            {
+                .position(|sentence| sentence.id == sentence_id) else {
                 return Err("Речення для перекладу не знайдено".into());
-            }
+            };
             let translations = &mut document.reviewed_translations;
             if text.is_empty() {
                 let Some(segments) = translations.get_mut(target) else {
@@ -1277,6 +1276,15 @@ impl Store {
                 let removed = segments.remove(sentence_id).is_some();
                 if segments.is_empty() {
                     translations.remove(target);
+                }
+                if removed {
+                    let cursor = if document.format == "pdf" {
+                        pdf_reading_position::page_for_offset(document, document.sentences[position].start_utf16)
+                            .map_or(0, |page| usize::from(page.saturating_sub(1)))
+                    } else {
+                        position
+                    };
+                    translation_queue::revisit_reviewed_translation(tx, id, target, cursor)?;
                 }
                 return Ok(removed);
             }

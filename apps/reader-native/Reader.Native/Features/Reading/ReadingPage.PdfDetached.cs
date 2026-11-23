@@ -351,11 +351,16 @@ public partial class ReadingPage
                 detachedSentence?.Sentence.Id != current.Sentence.Id || TargetCode != target) return;
             var updated = await AppState.Session.UpdateDetachedPdfAnnotationAsync(
                 address.Document, address.Page, current.Sentence.Id, new { kind = "translation", target, text });
+            if (own is not null && string.IsNullOrWhiteSpace(text))
+                AppState.TranslationWorker?.TranslationReviewRemoved(address.Document, target);
             if (ReferenceEquals(detachedAddress, address) && detachedSentence?.Sentence.Id == current.Sentence.Id)
             {
                 detachedSentence = updated;
                 ResetDetachedTranslation();
             }
+            if (CurrentPdfLayoutAddress() is { } page && page.Document == address.Document &&
+                page.Page == address.Page && page.Target == target)
+                RefreshCachedPdfPageLayout();
         }
         catch (Exception error) { await DisplayAlertAsync("Переклад", error.Message, "Гаразд"); }
         finally

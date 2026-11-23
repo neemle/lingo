@@ -493,7 +493,14 @@ public partial class ReadingPage : ContentPage
             initialValue: existing ?? IndependentMachineText(document, target) ?? "");
         if (text is not null && session.Document?.Id == document.Id && session.Sentence?.Id == sentence.Id
             && TargetCode == target && !session.Busy)
+        {
             await session.SetReviewedTranslationAsync(document.Id, sentence.Id, target, text);
+            if (session.Error.Length != 0) return;
+            if (existing is not null && string.IsNullOrWhiteSpace(text))
+                AppState.TranslationWorker?.TranslationReviewRemoved(document.Id, target);
+            if (CurrentPdfLayoutAddress() is { } page && page.Document == document.Id && page.Target == target)
+                RefreshCachedPdfPageLayout();
+        }
     }
 
     private async void SourceSelected(object? sender, TextSelection selected) => await ShowWordAsync(selected);

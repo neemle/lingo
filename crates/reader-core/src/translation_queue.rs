@@ -305,6 +305,18 @@ pub(crate) fn revise_pdf_checkpoint(
     Ok(())
 }
 
+pub(crate) fn revisit_reviewed_translation(
+    db: &Connection, id: &str, target: &str, cursor: usize,
+) -> Result<()> {
+    db.execute(
+        "UPDATE background_translation_progress
+         SET cursor=min(cursor,?3),resume_at=0,ocr_generation=ocr_generation+1
+         WHERE document_id=?1 AND target=?2",
+        params![id, target, i64::try_from(cursor).map_err(database_error)?],
+    ).map_err(database_error)?;
+    Ok(())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationWarmStep {
@@ -364,12 +376,16 @@ impl Store {
                 ..progress
             });
         };
-        let document = self.translation_document(id)?;
-        if document.current_revision_id.as_deref() != Some(revision) || document.language == target
-        {
+        let source: Option<String> = self.connection.query_row(
+            "SELECT json_extract(body,'$.language') FROM documents
+             WHERE id=?1 AND json_extract(body,'$.currentRevisionId')=?2",
+            params![id, revision],
+            |row| row.get(0),
+        ).optional().map_err(database_error)?;
+        let Some(source) = source.filter(|source| source != target) else {
             return Ok(progress);
-        }
-        let (route_identity, missing_packages) = self.background_translation_route(&document.language, target)?;
+        };
+        let (route_identity, missing_packages) = self.background_translation_route(&source, target)?;
         let now = crate::now();
         // Reserve before inference so concurrent OCR can invalidate the exact checkpoint.
         // A different route uses different cache keys, even for an unchanged document revision.
@@ -401,6 +417,12 @@ impl Store {
         let Some((cursor, incomplete, resume_at, generation)) = checkpoint else {
             return Ok(progress);
         };
+        // A review can change without a text revision. Read the body after the
+        // checkpoint so an older body cannot be committed under a newer generation.
+        let document = self.translation_document(id)?;
+        if document.current_revision_id.as_deref() != Some(revision) || document.language != source {
+            return Ok(BackgroundTranslationProgress { resume_at: Some(0), ..progress });
+        }
         if resume_at.is_none() {
             progress.waiting_for_pdf_ocr = document.format == "pdf"
                 && self.pdf_has_unprocessed_pages(&document)?;

@@ -1726,6 +1726,60 @@ mod tests {
     }
 
     #[test]
+    fn removed_pdf_review_restores_machine_cache_and_rewinds_background_translation() {
+        use crate::pdf_detached_pages::DetachedPdfAnnotationChange;
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("library.sqlite")).unwrap();
+        let input = root.path().join("book.pdf");
+        std::fs::write(&input, b"%PDF-1.4\n").unwrap();
+        let prepared = crate::file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "book.pdf", &input, "fr",
+            vec!["Le bateau arrive.".into()], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let sentence = &document.sentences[0];
+        let route = french_uk_route_with_invalid_assets(&store);
+        store.save_cached_segments([(
+            unit_cache_key(&route, &sentence.text).unwrap(), &["Корабель прибуває.".into()][..],
+        )]).unwrap();
+        let revision = document.current_revision_id.as_deref().unwrap();
+        let complete_background_pass = |store: &Store| {
+            store.connection.execute(
+                "INSERT OR REPLACE INTO background_translation_progress
+                 (document_id,target,revision_id,cursor,incomplete,resume_at)
+                 VALUES (?1,'uk',?2,1,0,NULL)",
+                params![document.id, revision],
+            ).unwrap();
+        };
+        let check_restored = |store: &mut Store| {
+            let rows = store.pdf_page_translation(&document.id, 0, "uk", true).unwrap();
+            assert_eq!(rows[0].text.as_deref(), Some("Корабель прибуває."));
+            assert_eq!(store.connection.query_row(
+                "SELECT cursor,resume_at,ocr_generation FROM background_translation_progress
+                 WHERE document_id=?1 AND target='uk'",
+                [&document.id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+            ).unwrap(), (0, 0, 1));
+        };
+        let checked = "Судно прибуло.";
+        store.set_reviewed_translation(&document.id, &sentence.id, "uk", checked).unwrap();
+        assert_eq!(store.pdf_page_translation(&document.id, 0, "uk", true).unwrap()[0].text.as_deref(), Some(checked));
+        complete_background_pass(&store);
+        store.set_reviewed_translation(&document.id, &sentence.id, "uk", "").unwrap();
+        check_restored(&mut store);
+
+        crate::pdf_detached_pages::write_text_layer(&store.connection, &document.id, 0, &document.text).unwrap();
+        let detached = store.detached_pdf_sentences(&document.id, 0).unwrap().unwrap();
+        let sentence = &detached.sentences[0];
+        let edit = |text: &str| DetachedPdfAnnotationChange::Translation { target: "uk".into(), text: text.into() };
+        store.update_detached_pdf_annotation(&document.id, 0, &sentence.id, edit(checked)).unwrap();
+        assert_eq!(store.pdf_page_translation(&document.id, 0, "uk", true).unwrap()[0].text.as_deref(), Some(checked));
+        complete_background_pass(&store);
+        store.update_detached_pdf_annotation(&document.id, 0, &sentence.id, edit("")).unwrap();
+        check_restored(&mut store);
+    }
+
+    #[test]
     fn rendered_pdf_keeps_cached_rows_when_page_inference_fails() {
         let root = tempfile::tempdir().unwrap();
         let mut store = Store::open(&root.path().join("library.sqlite")).unwrap();

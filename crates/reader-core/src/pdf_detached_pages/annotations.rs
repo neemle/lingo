@@ -266,11 +266,16 @@ impl Store {
                 }
                 let text = text.trim();
                 if text.is_empty() {
-                    tx.execute(
+                    let removed = tx.execute(
                         "DELETE FROM pdf_detached_translations
                          WHERE document_id=?1 AND page=?2 AND start_utf16=?3 AND target=?4",
                         params![id, page, sqlite_offset(start)?, target],
                     ).map_err(database_error)?;
+                    if removed != 0 {
+                        crate::translation_queue::revisit_reviewed_translation(
+                            &tx, id, &target, usize::from(page.saturating_sub(1)),
+                        )?;
+                    }
                     current.reviewed_translations.remove(&target);
                 } else {
                     crate::validate_translation(text)?;

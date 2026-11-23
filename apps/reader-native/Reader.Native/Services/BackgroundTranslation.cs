@@ -90,6 +90,19 @@ internal sealed class BackgroundTranslation
         Wake();
     }
 
+    internal void TranslationReviewRemoved(string document, string target)
+    {
+        if (!enabled) return;
+        foreach (var key in jobs.Keys.Where(key => key.Document == document && key.Target == target).ToArray())
+            jobs.Remove(key);
+        if (lastLibraryJob is { } active && active.Document == document && active.Target == target)
+            libraryStepInvalidated = true;
+        if (visibleAttempt is { Page.Address: var address } && address.DocumentId == document && address.Target == target)
+            visibleAttempt = null;
+        UpdateRequiredPackages();
+        Wake();
+    }
+
     internal void Stop()
     {
         SetEnabled(false);

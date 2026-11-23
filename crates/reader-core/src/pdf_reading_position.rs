@@ -62,6 +62,13 @@ impl Store {
 }
 
 pub(crate) fn focus_for_offset(db: &Connection, document: &Document, offset: usize) -> Result<()> {
+    if let Some(page) = page_for_offset(document, offset) {
+        set_page(db, document, page, false)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn page_for_offset(document: &Document, offset: usize) -> Option<u16> {
     let page = if document.format != "pdf" {
         None
     } else if let Some(starts) = &document.pdf_page_starts {
@@ -75,10 +82,7 @@ pub(crate) fn focus_for_offset(db: &Connection, document: &Document, offset: usi
                 .find(|line| line.source_span.is_some_and(|span| span.start_utf16 <= offset && offset < span.end_utf16))
                 .map(|line| line.page))
     };
-    if let Some(page) = page.filter(|&page| contains_page(document, page)) {
-        set_page(db, document, page, false)?;
-    }
-    Ok(())
+    page.filter(|&page| contains_page(document, page))
 }
 
 /// Move the sentence cursor into the page while retaining an overlapping selection.
