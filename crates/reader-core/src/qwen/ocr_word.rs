@@ -66,12 +66,15 @@ pub struct ReviewOcrLineJob {
 
 pub struct ReviewOcrPageJob {
     lines: Vec<(usize, ReviewOcrLineJob)>,
+    remaining_lines: usize,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OcrPageReview {
     checked_lines: usize,
+    reviewed_indices: Vec<usize>,
+    remaining_lines: usize,
     corrections: Vec<OcrLineEdit>,
 }
 
@@ -137,18 +140,23 @@ impl Store {
 
     pub fn prepare_ocr_page_review(
         &self, id: &str, physical_page: u16, detached: bool, revision: &str, cached_only: bool,
+        reviewed_indices: &[usize],
     ) -> Result<ReviewOcrPageJob> {
+        const BATCH_SIZE: usize = 6;
+        let reviewed: std::collections::HashSet<_> = reviewed_indices.iter().copied().collect();
         let (language, lines) = self.ocr_review_lines(id, detached.then_some(physical_page), revision)?;
-        let mut candidates: Vec<_> = lines.iter().enumerate().filter(|(_, line)|
+        let mut candidates: Vec<_> = lines.iter().enumerate().filter(|(index, line)|
             line.page == physical_page && line.correction.is_none() && line.needs_proofreading()
+                && !reviewed.contains(index)
                 && reviewable_line(line.reading_text())).collect();
         candidates.sort_by(|(_, left), (_, right)| left.confidence.partial_cmp(&right.confidence)
             .unwrap_or(std::cmp::Ordering::Equal));
-        let mut checked = candidates.into_iter().take(6).map(|(index, line)| {
+        let remaining_lines = candidates.len().saturating_sub(BATCH_SIZE);
+        let mut checked = candidates.into_iter().take(BATCH_SIZE).map(|(index, line)| {
             self.prepare_ocr_line_hint(id, &language, line.reading_text(), cached_only).map(|job| (index, job))
         }).collect::<Result<Vec<_>>>()?;
         checked.sort_by_key(|(index, _)| *index);
-        Ok(ReviewOcrPageJob { lines: checked })
+        Ok(ReviewOcrPageJob { lines: checked, remaining_lines })
     }
 
     fn prepare_ocr_line_hint(
@@ -278,7 +286,12 @@ impl ReviewOcrPageJob {
         let corrections = self.lines.iter().zip(results).filter_map(|((index, job), hint)|
             hint.replacement.map(|replacement| OcrLineEdit { index: *index, source: job.text.clone(), replacement })
         ).collect();
-        OcrPageReview { checked_lines: self.lines.len(), corrections }
+        OcrPageReview {
+            checked_lines: self.lines.len(),
+            reviewed_indices: self.lines.iter().map(|(index, _)| *index).collect(),
+            remaining_lines: self.remaining_lines,
+            corrections,
+        }
     }
 }
 
@@ -388,9 +401,27 @@ mod tests {
         }).collect();
         let document = store.import_image("scan.png", b"\x89PNG\r\n\x1a\n", "en", lines).unwrap();
         let revision = document.current_revision_id.as_deref().unwrap();
-        let job = store.prepare_ocr_page_review(&document.id, 0, false, revision, true).unwrap();
-        assert_eq!(job.lines.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [2, 3, 4, 5, 6, 7]);
+        let job = store.prepare_ocr_page_review(&document.id, 0, false, revision, true, &[]).unwrap();
+        let reviewed: Vec<_> = job.lines.iter().map(|(index, _)| *index).collect();
+        assert_eq!(reviewed, [2, 3, 4, 5, 6, 7]);
+        assert_eq!(job.remaining_lines, 2);
         assert!(job.run().unwrap().is_none());
+        let followup = store.prepare_ocr_page_review(&document.id, 0, false, revision, true, &reviewed).unwrap();
+        assert_eq!(followup.lines.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [0, 1]);
+        assert_eq!(followup.remaining_lines, 0);
+        store.apply_ocr_page_review(&document.id, 0, false, revision, vec![OcrLineEdit {
+            index: 2,
+            source: "A rnagic line 2.".into(),
+            replacement: "A magic line 2.".into(),
+        }]).unwrap();
+        let updated = store.token_document(&document.id).unwrap();
+        let revision = updated.current_revision_id.as_deref().unwrap();
+        let followup = store.prepare_ocr_page_review(&document.id, 0, false, revision, true, &reviewed).unwrap();
+        assert_eq!(followup.lines.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [0, 1]);
+        let done = store.prepare_ocr_page_review(&document.id, 0, false, revision, true, &[0, 1, 2, 3, 4, 5, 6, 7])
+            .unwrap().run().unwrap().unwrap();
+        assert!(done.reviewed_indices.is_empty());
+        assert_eq!(done.remaining_lines, 0);
     }
 
     #[test]

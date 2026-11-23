@@ -365,9 +365,9 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
-        Command::ReviewOcrPage { id, page, detached, revision_id, cached_only } => {
+        Command::ReviewOcrPage { id, page, detached, revision_id, cached_only, reviewed_indices } => {
             let job = registry::lock()?.store(handle)?
-                .prepare_ocr_page_review(id, *page, *detached, revision_id, *cached_only)
+                .prepare_ocr_page_review(id, *page, *detached, revision_id, *cached_only, reviewed_indices)
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }

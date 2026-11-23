@@ -43,6 +43,9 @@ internal sealed class OriginalPage : ContentPage
     private readonly Button suggest = new() { Text = "Підказки" };
     private readonly Button reviewOcrLine = new() { Text = "Звірити рядок із Qwen" };
     private readonly Button reviewOcrPage = new() { Text = "Звірити сторінку із Qwen" };
+    private (int Page, bool Detached, string Revision)? ocrReviewProgressAddress;
+    private readonly HashSet<int> reviewedOcrIndices = [];
+    private int remainingOcrReviewLines;
     private readonly Button reset = new() { Text = "Скинути" };
     private readonly Label editStatus = new();
     private int[] currentLineIndices = [];
@@ -596,6 +599,10 @@ internal sealed class OriginalPage : ContentPage
         suggest.IsEnabled = edit.IsEnabled;
         reviewOcrLine.IsEnabled = edit.IsEnabled && !session.Busy;
         reviewOcrPage.IsEnabled = canInteract && !session.Busy && currentLineIndices.Length > 0;
+        var revision = detachedOcr?.Revision ?? session.Document?.CurrentRevisionId;
+        reviewOcrPage.Text = remainingOcrReviewLines > 0 && revision is not null &&
+            ocrReviewProgressAddress == (pageIndex, detachedOcr is not null, revision)
+            ? "Звірити наступні рядки" : "Звірити сторінку із Qwen";
         reset.IsEnabled = edit.IsEnabled && lines[index].Correction is not null;
     }
 
@@ -708,6 +715,12 @@ internal sealed class OriginalPage : ContentPage
         var detached = detachedOcr is not null;
         var revision = detachedOcr?.Revision ?? document.CurrentRevisionId;
         if (revision is null) return;
+        if (ocrReviewProgressAddress != (page, detached, revision) || remainingOcrReviewLines == 0)
+        {
+            reviewedOcrIndices.Clear();
+            remainingOcrReviewLines = 0;
+        }
+        var reviewed = reviewedOcrIndices.ToArray();
         bool IsCurrent() => visible && page == pageIndex && detached == (detachedOcr is not null) &&
             session.Document is { } current && current.Id == documentId &&
             (detachedOcr?.Revision ?? current.CurrentRevisionId) == revision;
@@ -717,18 +730,24 @@ internal sealed class OriginalPage : ContentPage
         try
         {
             var review = await ReadOcrReviewAsync(
-                cachedOnly => session.ReviewOcrPageAsync(documentId, page, detached, revision, cachedOnly),
+                cachedOnly => session.ReviewOcrPageAsync(documentId, page, detached, revision, cachedOnly, reviewed),
                 IsCurrent, "Qwen перевіряє рядки з низькою впевненістю OCR…");
             if (review is null || !IsCurrent()) return;
             if (review.Corrections.Length == 0)
             {
-                editStatus.Text = review.CheckedLines == 0 ? "Немає рядків із низькою впевненістю OCR."
-                    : $"Перевірено рядків: {review.CheckedLines}. Виправлень немає.";
+                FinishOcrReviewBatch(review, page, detached, revision,
+                    review.CheckedLines == 0 ? "Немає рядків із низькою впевненістю OCR."
+                        : $"Перевірено рядків: {review.CheckedLines}. Виправлень немає.");
                 return;
             }
             var preview = string.Join("\n\n", review.Corrections.Select(edit => $"{edit.Source}\n→ {edit.Replacement}"));
             var apply = await DisplayAlertAsync("Застосувати виправлення OCR?", preview, "Застосувати", "Залишити");
-            if (!IsCurrent() || !apply || session.Busy) return;
+            if (!IsCurrent() || session.Busy) return;
+            if (!apply)
+            {
+                FinishOcrReviewBatch(review, page, detached, revision, "Рядки залишено як є.");
+                return;
+            }
             await session.ApplyOcrPageReviewAsync(documentId, page, detached, revision, review.Corrections);
             if (!visible || page != pageIndex || session.Document?.Id != documentId) return;
             if (session.Error.Length > 0)
@@ -738,8 +757,13 @@ internal sealed class OriginalPage : ContentPage
             }
             activeWord = null;
             focus = detached ? null : SentenceRange();
-            ApplyOcrLines(detached ? await session.DetachedPdfOcrAsync(documentId, page) : null);
-            editStatus.Text = $"Виправлено рядків: {review.Corrections.Length}.";
+            var updatedPage = detached ? await session.DetachedPdfOcrAsync(documentId, page) : null;
+            if (!visible || page != pageIndex || session.Document?.Id != documentId ||
+                (detached && updatedPage is null)) return;
+            ApplyOcrLines(updatedPage);
+            var updatedRevision = updatedPage?.Revision ?? session.Document?.CurrentRevisionId;
+            if (updatedRevision is not null)
+                FinishOcrReviewBatch(review, page, detached, updatedRevision, $"Виправлено рядків: {review.Corrections.Length}.");
         }
         catch (Exception error) { if (visible && page == pageIndex) editStatus.Text = error.Message; }
         finally
@@ -747,6 +771,14 @@ internal sealed class OriginalPage : ContentPage
             editing = false;
             UpdateEditButtons();
         }
+    }
+
+    private void FinishOcrReviewBatch(OcrPageReview review, int page, bool detached, string revision, string status)
+    {
+        reviewedOcrIndices.UnionWith(review.ReviewedIndices);
+        ocrReviewProgressAddress = (page, detached, revision);
+        remainingOcrReviewLines = review.RemainingLines;
+        editStatus.Text = remainingOcrReviewLines == 0 ? status : $"{status} Ще рядків для перевірки: {remainingOcrReviewLines}.";
     }
 
     private async Task<T?> ReadOcrReviewAsync<T>(Func<bool, Task<T?>> review, Func<bool> isCurrent,

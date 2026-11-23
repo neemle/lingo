@@ -274,8 +274,9 @@ public sealed class CoreClient : IDisposable
             version = 1, operation = "review_ocr_line", id, page, revisionId, index, cachedOnly,
         });
 
-    public OcrPageReview? ReviewOcrPage(string id, int page, bool detached, string revisionId, bool cachedOnly) =>
-        CallIndependent<OcrPageReview?>(new { version = 1, operation = "review_ocr_page", id, page, detached, revisionId, cachedOnly });
+    public OcrPageReview? ReviewOcrPage(string id, int page, bool detached, string revisionId, bool cachedOnly, int[] reviewedIndices) =>
+        CallIndependent<OcrPageReview?>(new
+        { version = 1, operation = "review_ocr_page", id, page, detached, revisionId, cachedOnly, reviewedIndices });
 
     public void ApplyOcrPageReview(string id, int page, bool detached, string revisionId, OcrLineEdit[] edits) =>
         Call<JsonElement>(new { version = 1, operation = "apply_ocr_page_review", id, page, detached, revisionId, edits });

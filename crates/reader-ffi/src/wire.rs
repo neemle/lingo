@@ -508,6 +508,8 @@ pub enum Command {
         revision_id: String,
         #[serde(default, rename = "cachedOnly")]
         cached_only: bool,
+        #[serde(default, rename = "reviewedIndices")]
+        reviewed_indices: Vec<usize>,
     },
     ApplyOcrPageReview {
         id: String,
