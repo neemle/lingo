@@ -91,6 +91,7 @@ public partial class ReadingPage : ContentPage
         UpdateAutoTranslateButton();
         BindingContext = AppState.Session;
         AppState.Session.PropertyChanged += SessionChanged;
+        AppState.Session.BackgroundPageTranslated += BackgroundPageTranslated;
         SyncReaderPdf();
         SyncAnalysisPrefetch();
         BeginReadingHistory();
@@ -127,6 +128,7 @@ public partial class ReadingPage : ContentPage
         SetSelectedSense(null);
         WordCard.IsVisible = false;
         Translation.Text = "";
+        AppState.Session.BackgroundPageTranslated -= BackgroundPageTranslated;
         AppState.Session.PropertyChanged -= SessionChanged;
         base.OnDisappearing();
     }

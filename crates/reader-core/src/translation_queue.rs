@@ -202,6 +202,8 @@ fn database_error(error: impl std::fmt::Display) -> String {
 pub struct TranslationWarmStep {
     next: Option<usize>,
     incomplete: bool,
+    #[serde(skip)]
+    translated_page: Option<u16>,
 }
 
 #[derive(Serialize)]
@@ -209,6 +211,8 @@ pub struct TranslationWarmStep {
 pub struct BackgroundTranslationProgress {
     // Zero means the next step is ready. No deadline means the document is complete.
     resume_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    translated_page: Option<u16>,
 }
 
 impl Store {
@@ -219,7 +223,10 @@ impl Store {
         target: &str,
     ) -> Result<BackgroundTranslationProgress> {
         valid_language(target)?;
-        let done = BackgroundTranslationProgress { resume_at: None };
+        let done = BackgroundTranslationProgress {
+            resume_at: None,
+            translated_page: None,
+        };
         if self.reader_preferences()?.background_translation != Some(true) {
             return Ok(done);
         }
@@ -230,6 +237,7 @@ impl Store {
         else {
             return Ok(BackgroundTranslationProgress {
                 resume_at: Some(crate::now() + 2),
+                ..done
             });
         };
         let document = self.translation_document(id)?;
@@ -256,22 +264,27 @@ impl Store {
             .unwrap_or((0, false, Some(0)));
         let now = crate::now();
         if resume_at.is_none_or(|deadline| deadline > now) {
-            return Ok(BackgroundTranslationProgress { resume_at });
+            return Ok(BackgroundTranslationProgress { resume_at, ..done });
         }
-        let (cursor, incomplete, resume_at) = if cursor == 0
+        let (cursor, incomplete, resume_at, translated_page) = if cursor == 0
             && !self
                 .translation_readiness(&document.language, target)?
                 .ready
         {
-            (0, false, Some(now + 30))
+            (0, false, Some(now + 30), None)
         } else {
             let step = self.warm_document_translation_step(&document, target, cursor as usize)?;
             match step.next {
-                Some(next) => (next, incomplete || step.incomplete, Some(0)),
+                Some(next) => (
+                    next,
+                    incomplete || step.incomplete,
+                    Some(0),
+                    step.translated_page,
+                ),
                 None if incomplete || document.format == "pdf" => {
-                    (0, false, Some(crate::now() + 300))
+                    (0, false, Some(crate::now() + 300), None)
                 }
-                None => (0, false, None),
+                None => (0, false, None, None),
             }
         };
         self.connection.execute(
@@ -282,7 +295,10 @@ impl Store {
                cursor=excluded.cursor,incomplete=excluded.incomplete,resume_at=excluded.resume_at",
             params![id, target, revision, i64::try_from(cursor).map_err(database_error)?, incomplete, resume_at],
         ).map_err(database_error)?;
-        Ok(BackgroundTranslationProgress { resume_at })
+        Ok(BackgroundTranslationProgress {
+            resume_at,
+            translated_page,
+        })
     }
 
     pub fn warm_translation_step(
@@ -295,6 +311,7 @@ impl Store {
         let done = TranslationWarmStep {
             next: None,
             incomplete: false,
+            translated_page: None,
         };
         if self.reader_preferences()?.background_translation != Some(true) {
             return Ok(done);
@@ -316,6 +333,7 @@ impl Store {
         let done = TranslationWarmStep {
             next: None,
             incomplete: false,
+            translated_page: None,
         };
         let page_count = document
             .pdf_page_starts
@@ -340,17 +358,22 @@ impl Store {
             let Some(page) = canonical.into_iter().chain(detached.map(usize::from)).min() else {
                 return Ok(done);
             };
+            let rows = self.pdf_page_translation_with_priority(
+                &document.id,
+                page as u16,
+                target,
+                false,
+                true,
+            );
+            let translated_page = rows
+                .as_ref()
+                .ok()
+                .filter(|rows| rows.iter().any(|row| row.text.is_some()))
+                .map(|_| page as u16);
             return Ok(TranslationWarmStep {
                 next: Some(page + 1),
-                incomplete: self
-                    .pdf_page_translation_with_priority(
-                        &document.id,
-                        page as u16,
-                        target,
-                        false,
-                        true,
-                    )
-                    .map_or(true, |rows| rows.iter().any(|row| row.text.is_none())),
+                incomplete: rows.map_or(true, |rows| rows.iter().any(|row| row.text.is_none())),
+                translated_page,
             });
         }
         if start >= document.sentences.len() {
@@ -367,6 +390,7 @@ impl Store {
             return Ok(TranslationWarmStep {
                 next: Some(start + 1),
                 incomplete: true,
+                translated_page: None,
             });
         };
         let next = document.sentences[start..]
@@ -387,6 +411,7 @@ impl Store {
                 .units
                 .iter()
                 .any(|unit| unit.translation.is_none()),
+            translated_page: None,
         })
     }
 }

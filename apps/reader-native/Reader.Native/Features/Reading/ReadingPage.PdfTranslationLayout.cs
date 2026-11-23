@@ -56,9 +56,6 @@ public partial class ReadingPage
         PdfTranslationMode.Text = DetachedPdfTranslationMode.Text = shown ? "Список" : "Верстка";
         PdfTranslationViewport.IsVisible = TranslatePdfPage.IsVisible = shown && !detached;
         DetachedPdfTranslationViewport.IsVisible = DetachedTranslatePdfPage.IsVisible = shown && detached;
-        var hasRows = pdfLayoutRows.Any(row => !string.IsNullOrWhiteSpace(row.Text));
-        ReadPdfTranslationText.IsVisible = shown && !detached && hasRows;
-        DetachedReadPdfTranslationText.IsVisible = shown && detached && hasRows;
         TranslationViewport.IsVisible = !PdfTranslationViewport.IsVisible;
         DetachedTranslationViewport.IsVisible = !DetachedPdfTranslationViewport.IsVisible;
         var translatingPage = translatingPdfLayout == address && address is not null;
@@ -76,6 +73,9 @@ public partial class ReadingPage
         }
         else if (shown && address is not null && pdfLayoutRows.Length == 0 && pdfLayoutStatus is null)
             _ = LoadPdfPageLayoutAsync(address, cachedOnly: true);
+        var hasRows = pdfLayoutRows.Any(row => !string.IsNullOrWhiteSpace(row.Text));
+        ReadPdfTranslationText.IsVisible = shown && !detached && hasRows;
+        DetachedReadPdfTranslationText.IsVisible = shown && detached && hasRows;
         if (shown)
         {
             ResizePdfTranslationLayout();
@@ -144,15 +144,31 @@ public partial class ReadingPage
         if (ActiveInlinePdf().Viewport.IsVisible) _ = FollowPdfTranslationScrollAsync(fromOriginal: true);
     }
 
+    private void BackgroundPageTranslated(BackgroundTranslatedPage translated)
+    {
+        if (!readingPageActive || CurrentPdfLayoutAddress() is not { } address ||
+            translated.DocumentId != address.Document || translated.RevisionId != address.Revision ||
+            translated.Target != address.Target || translated.Page != address.Page)
+            return;
+
+        if (pdfTranslationLayout) RefreshCachedPdfPageLayout();
+        else if (DetachedPdfReader.IsVisible) _ = RestoreDetachedTranslationAsync(allowAutoTranslate: false);
+        else
+        {
+            lastCacheRestore = null;
+            _ = RestoreCachedTranslationAsync();
+        }
+    }
+
     private async void RefreshCachedPdfPageLayout()
     {
-        if (refreshingPdfLayout || !pdfTranslationLayout || translatingPdfLayout is not null ||
+        if (!readingPageActive || refreshingPdfLayout || !pdfTranslationLayout || translatingPdfLayout is not null ||
             CurrentPdfLayoutAddress() is not { } address) return;
         refreshingPdfLayout = true;
         try
         {
             await Task.Delay(150);
-            if (CurrentPdfLayoutAddress() == address && translatingPdfLayout is null)
+            if (readingPageActive && pdfTranslationLayout && CurrentPdfLayoutAddress() == address && translatingPdfLayout is null)
                 await LoadPdfPageLayoutAsync(address, cachedOnly: true);
         }
         finally { refreshingPdfLayout = false; }

@@ -12,6 +12,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     private bool busy;
     private string error = "";
     public event PropertyChangedEventHandler? PropertyChanged;
+    public event Action<BackgroundTranslatedPage>? BackgroundPageTranslated;
     public Snapshot Snapshot => snapshot;
     public Document? Document => snapshot.Documents.FirstOrDefault(item => item.Id == selectedId);
     public Sentence? Sentence => Document?.Sentences.ElementAtOrDefault(Document.Position);
@@ -32,8 +33,13 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task RefreshAsync() => RunAsync(Read);
     public Task<StorageUsage> StorageUsageAsync() => Task.Run(client.StorageUsage);
     public Task ClearStorageAsync(string scope) => Task.Run(() => client.ClearStorage(scope));
-    public Task<BackgroundTranslationProgress> AdvanceBackgroundTranslationAsync(string id, string revision, string target) =>
-        Task.Run(() => client.AdvanceBackgroundTranslation(id, revision, target));
+    public async Task<BackgroundTranslationProgress> AdvanceBackgroundTranslationAsync(string id, string revision, string target)
+    {
+        var progress = await Task.Run(() => client.AdvanceBackgroundTranslation(id, revision, target));
+        if (progress.TranslatedPage is { } page)
+            BackgroundPageTranslated?.Invoke(new(id, revision, page, target));
+        return progress;
+    }
     public Task<TranslationWarmStep> WarmTranslationStepAsync(string id, string revision, string target, int start) =>
         Task.Run(() => client.WarmTranslationStep(id, revision, target, start));
 

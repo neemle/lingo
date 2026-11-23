@@ -414,7 +414,7 @@ public partial class ReadingPage
         }
     }
 
-    private async Task RestoreDetachedTranslationAsync()
+    private async Task RestoreDetachedTranslationAsync(bool allowAutoTranslate = true)
     {
         if (!readingPageActive || loadingDetachedSentence || translatingDetachedSentence ||
             detachedAddress is not { } address || detachedSentence is not { Footnote: false } current || TargetCode is not { } target ||
@@ -432,7 +432,7 @@ public partial class ReadingPage
                 ShowDetachedMachineTranslation(active, current.Language, target);
                 UpdateDetachedControls();
             }
-            else if (CurrentDetachedTranslation() is null && autoTranslate &&
+            else if (allowAutoTranslate && CurrentDetachedTranslation() is null && autoTranslate &&
                 !speakingDetachedSentence && !AppState.Session.Busy)
             {
                 await Task.Delay(250);
