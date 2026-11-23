@@ -109,15 +109,15 @@ public static class LanguageCapabilities
     {
         var tags = inventory.LanguageTags.Where(tag => SpeechVoice.MatchesLanguage(tag, language)).ToArray();
         var fallback = inventory.FallbackLanguages?.Contains(language) == true;
-        var fallbackDescription = "Tesseract · локальний резервний OCR";
+        const string portableDescription = "Tesseract · локальний OCR";
         if (tags.Length == 0)
-            return fallback ? new LanguageCapability(CapabilityLevel.Installed, fallbackDescription, [language])
+            return fallback ? new LanguageCapability(CapabilityLevel.Installed, portableDescription, [language])
                 : Unavailable(inventory.Detail);
 
         var detail = $"{inventory.Source} · {string.Join(", ", tags)}";
         return fallback
             ? new LanguageCapability(inventory.Level == CapabilityLevel.Validated ? CapabilityLevel.Validated : CapabilityLevel.Installed,
-                $"{detail}{Environment.NewLine}{fallbackDescription}", tags.Append(language).Distinct().ToArray())
+                $"{portableDescription}{Environment.NewLine}{detail} · резерв", tags.Append(language).Distinct().ToArray())
             : new LanguageCapability(inventory.Level, detail, tags);
     }
 

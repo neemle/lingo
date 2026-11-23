@@ -27,7 +27,7 @@ internal static class PhotoOcr
 
     internal static Task<OcrLine[]> RecognizeAsync(byte[] bytes, string language,
         CancellationToken cancellation = default, PhotoPreview? rendered = null) =>
-        TesseractOcr.WithFallbackAsync(() => RecognizeNativeAsync(bytes, language),
+        TesseractOcr.RecognizeAsync(() => RecognizeNativeAsync(bytes, language),
             () => rendered is null ? PreviewAsync(bytes) : Task.FromResult(rendered), language, cancellation);
 
     private static async Task<OcrLine[]> RecognizeNativeAsync(byte[] bytes, string language)

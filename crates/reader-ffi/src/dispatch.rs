@@ -62,7 +62,7 @@ pub fn cached_translation(
 pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
     match command {
         Command::Open { .. } => Err(Error::new("invalid_handle", "Open requires handle zero")),
-        Command::SamplePdfBackgrounds { .. } | Command::SeparatePdfBlocks { .. } =>
+        Command::SamplePdfBackgrounds { .. } | Command::SeparatePdfBlocks { .. } | Command::ParseOcrTsv { .. } =>
             unreachable!("Stateless command handled before store dispatch"),
         Command::Snapshot => {
             let snapshot = store.snapshot().map_err(gateway::domain)?;

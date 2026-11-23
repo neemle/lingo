@@ -18,6 +18,7 @@ pub enum Command {
         path: String,
     },
     Snapshot,
+    ParseOcrTsv { tsv: String, width: u32, height: u32 },
     SamplePdfBackgrounds {
         rgba: String,
         width: usize,

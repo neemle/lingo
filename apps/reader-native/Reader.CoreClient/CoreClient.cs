@@ -86,6 +86,8 @@ public sealed class CoreClient : IDisposable
         Invoke<uint[]>(0, new { version = 1, operation = "sample_pdf_backgrounds", width, height, rgba, boxes });
     public static PdfLayoutEdit[] SeparatePdfBlocks(string text, PdfLayoutWord[] words, double pageWidth) =>
         Invoke<PdfLayoutEdit[]>(0, new { version = 1, operation = "separate_pdf_blocks", text, words, pageWidth });
+    public static OcrLine[] ParseOcrTsv(string tsv, int width, int height) =>
+        Invoke<OcrLine[]>(0, new { version = 1, operation = "parse_ocr_tsv", tsv, width, height });
     public Backup Export() => Call<Backup>(new { version = 1, operation = "export" });
     public void ExportBackupFile(string path) =>
         Call<JsonElement>(new { version = 1, operation = "export_backup_file", path });

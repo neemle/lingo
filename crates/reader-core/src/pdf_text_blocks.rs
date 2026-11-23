@@ -61,7 +61,20 @@ pub fn separate_blocks(text: &str, words: &[PositionedWord], page_width: f64) ->
             }
         }
         if has_text {
-            lines.push(&remaining[..count]);
+            let row = &remaining[..count];
+            let mut start = 0;
+            for split in 2..=row.len().saturating_sub(2) {
+                let left = row[split - 1];
+                let right = row[split];
+                if split - start >= 2 && left.end < right.start &&
+                    same_baseline(left, right) && wide_gap(left, right, page_width) &&
+                    whitespace(&units[left.end..right.start])
+                {
+                    lines.push(&row[start..split]);
+                    start = split;
+                }
+            }
+            lines.push(&row[start..]);
         }
         remaining = &remaining[count..];
         line_start = end;
@@ -77,23 +90,15 @@ pub fn separate_blocks(text: &str, words: &[PositionedWord], page_width: f64) ->
         }
 
         let line = lines[index];
-        for split in 2..=line.len().saturating_sub(2) {
-            let left = line[split - 1];
-            let right = line[split];
-            if same_baseline(left, right) && wide_gap(left, right, page_width) &&
-                left.end < right.start && whitespace(&units[left.end..right.start])
-            {
-                edits.push(BlockEdit { start: left.end, end: right.start, slices: Vec::new() });
-            }
-        }
         if let Some(next) = lines.get(index + 1).filter(|next| next.len() >= 2) {
             if line.len() >= 2 {
                 let left = *line.last().expect("line has text");
                 let right = next[0];
                 let gap = &units[left.end..right.start];
-                if whitespace(gap) && gap.iter().filter(|&&unit| unit == 10).count() == 1 &&
-                    (same_baseline(left, right) && wide_gap(left, right, page_width) ||
-                     column_transition(&lines, index, page_width))
+                let newlines = gap.iter().filter(|&&unit| unit == 10).count();
+                if !gap.is_empty() && whitespace(gap) &&
+                    (newlines <= 1 && same_baseline(left, right) && wide_gap(left, right, page_width) ||
+                     newlines == 1 && column_transition(&lines, index, page_width))
                 {
                     edits.push(BlockEdit { start: left.end, end: right.start, slices: Vec::new() });
                 }
@@ -166,7 +171,8 @@ fn parallel_lines(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) -
 
     let next_line = |upper: PositionedWord, lower: PositionedWord| {
         let drop = lower.center_y - upper.center_y;
-        (left.height * 0.6..=left.height * 2.2).contains(&drop)
+        (upper.height.min(lower.height) * 0.6..=upper.height.max(lower.height) * 2.5)
+            .contains(&drop)
     };
     if !next_line(left, left_next) || !aligned(right, right_next) ||
         !same_baseline(left, right) || !wide_gap(*left_top.last()?, right, page_width) {
@@ -231,6 +237,27 @@ fn aligned(upper: PositionedWord, lower: PositionedWord) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn separates_columns_when_ocr_groups_two_columns_into_each_row() {
+        let text = "Left starts Right starts\nLeft ends Right ends";
+        let words = text.split_whitespace().zip([10.0, 24.0, 70.0, 85.0, 10.0, 24.0, 70.0, 85.0])
+            .enumerate().scan(0, |cursor, (index, (word, left))| {
+                let start = *cursor + text[*cursor..].find(word).unwrap();
+                let end = start + word.len();
+                *cursor = end;
+                Some(PositionedWord {
+                    start, end, left, right: left + 8.0,
+                    center_y: if index < 4 { 10.0 } else { 19.0 },
+                    height: if index == 4 { 3.0 } else { 4.0 },
+                })
+            }).collect::<Vec<_>>();
+        let edits = separate_blocks(text, &words, 100.0).unwrap();
+        assert_eq!(edits.len(), 1);
+        let reordered = edits[0].slices.iter()
+            .map(|part| format!("{}{}", part.separator, &text[part.start..part.end])).collect::<String>();
+        assert_eq!(reordered, "Left starts\nLeft ends\n\nRight starts\nRight ends");
+    }
 
     #[test]
     fn separates_parallel_blocks_and_keeps_original_utf16_spans() {

@@ -3,6 +3,9 @@ use std::path::Path;
 
 use crate::{Result, MAX_IMPORT};
 
+mod tesseract;
+pub use tesseract::parse_tesseract_tsv;
+
 /// Coordinates use the upright image, with the origin in its upper left corner.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

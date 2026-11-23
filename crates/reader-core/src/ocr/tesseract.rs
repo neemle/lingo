@@ -1,0 +1,131 @@
+use super::{OcrLine, OcrWord};
+use crate::Result;
+use std::collections::BTreeMap;
+
+/// Convert one Tesseract page into the normalized, upright OCR geometry used by the reader.
+pub fn parse_tesseract_tsv(tsv: &str, width: u32, height: u32) -> Result<Vec<OcrLine>> {
+    if tsv.len() > 16 * 1024 * 1024 || !(1..=4096).contains(&width) || !(1..=4096).contains(&height)
+    {
+        return Err("Результат OCR або розмір зображення перевищує допустимі межі.".into());
+    }
+    let mut rows = tsv.lines();
+    if rows.next() != Some("level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext") {
+        return Err("Tesseract повернув некоректний формат TSV.".into());
+    }
+    let mut groups = BTreeMap::<_, Vec<_>>::new();
+    let mut word_count = 0;
+    for row in rows.filter(|row| row.starts_with("5\t")) {
+        let mut fields = row.splitn(12, '\t');
+        let fields: [_; 12] = std::array::from_fn(|_| fields.next().unwrap_or(""));
+        if fields[1] != "1" {
+            continue;
+        }
+        let [Ok(block), Ok(paragraph), Ok(line), Ok(x), Ok(y), Ok(w), Ok(h)] =
+            [2, 3, 4, 6, 7, 8, 9].map(|index| fields[index].parse::<i32>())
+        else {
+            continue;
+        };
+        let normalize =
+            |coordinate: f64, extent: u32| (coordinate / f64::from(extent)).clamp(0.0, 1.0);
+        let left = normalize(f64::from(x), width);
+        let top = normalize(f64::from(y), height);
+        let right = normalize(f64::from(x) + f64::from(w), width);
+        let bottom = normalize(f64::from(y) + f64::from(h), height);
+        if right <= left || bottom <= top || fields[11].contains('\0') || fields[11].len() > 8192 {
+            continue;
+        }
+        let text = fields[11].split_whitespace().collect::<Vec<_>>().join(" ");
+        if text.is_empty() {
+            continue;
+        }
+        let confidence = fields[10]
+            .parse::<f64>()
+            .ok()
+            .filter(|score| (0.0..=100.0).contains(score))
+            .map(|score| score / 100.0);
+        groups.entry((block, paragraph, line)).or_default().push((
+            OcrWord {
+                text,
+                x: left,
+                y: top,
+                width: right - left,
+                height: bottom - top,
+                raw_start_utf16: None,
+                source_span: None,
+            },
+            confidence,
+        ));
+        word_count += 1;
+        if word_count > 65_536 || groups.len() > 8192 {
+            return Err("Результат OCR перевищує допустимий розмір.".into());
+        }
+    }
+
+    groups
+        .into_values()
+        .map(|group| {
+            let mut line = OcrLine {
+                page: 0,
+                text: String::new(),
+                x: 1.0,
+                y: 1.0,
+                width: 0.0,
+                height: 0.0,
+                confidence: None,
+                correction: None,
+                block_start: false,
+                words: Vec::with_capacity(group.len()),
+                source_span: None,
+            };
+            let (mut right, mut bottom, mut offset, mut score, mut scored) =
+                (0.0_f64, 0.0_f64, 0, 0.0, 0);
+            for (mut word, confidence) in group {
+                if !line.text.is_empty() {
+                    line.text.push(' ');
+                    offset += 1;
+                }
+                word.raw_start_utf16 = Some(offset);
+                offset += word.text.encode_utf16().count();
+                line.text.push_str(&word.text);
+                if line.text.len() > 8192 {
+                    return Err("Рядок OCR завеликий.".into());
+                }
+                line.x = line.x.min(word.x);
+                line.y = line.y.min(word.y);
+                right = right.max(word.x + word.width);
+                bottom = bottom.max(word.y + word.height);
+                if let Some(confidence) = confidence {
+                    score += confidence;
+                    scored += 1;
+                }
+                line.words.push(word);
+            }
+            line.width = right - line.x;
+            line.height = bottom - line.y;
+            line.confidence = (scored > 0).then(|| score / f64::from(scored));
+            Ok(line)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tesseract_tsv_keeps_line_geometry_and_utf16_word_positions() {
+        let tsv = concat!(
+            "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n",
+            "5\t1\t2\t1\t1\t1\t60\t50\t25\t10\t70\tAutre\n",
+            "5\t1\t1\t1\t1\t1\t10\t10\t20\t10\t90\t𐐷\n",
+            "5\t1\t1\t1\t1\t2\t35\t10\t15\t10\t80\trègle\n",
+        );
+        let lines = parse_tesseract_tsv(tsv, 100, 100).unwrap();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text, "𐐷 règle");
+        assert_eq!(lines[0].words[1].raw_start_utf16, Some(3));
+        assert!((lines[0].width - 0.4).abs() < 1e-9);
+        assert!((lines[0].confidence.unwrap() - 0.85).abs() < 1e-9);
+        assert_eq!(lines[1].text, "Autre");
+    }
+}

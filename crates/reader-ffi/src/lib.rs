@@ -54,6 +54,9 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         unsafe { std::slice::from_raw_parts(input, len as usize) }
     };
     let command = validation::decode(bytes)?;
+    if let Command::ParseOcrTsv { tsv, width, height } = command {
+        return encode_job(reader_core::ocr::parse_tesseract_tsv(&tsv, width, height));
+    }
     if let Command::SeparatePdfBlocks { text, words, page_width } = command {
         return encode_job(reader_core::pdf_text_blocks::separate_blocks(&text, &words, page_width));
     }
