@@ -7,13 +7,14 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage
 {
+    private sealed record InlinePdfAddress(string Document, int Page, string? Revision, string? DetachedText);
     private bool showInlineOriginal;
     private string? inlineOriginalDocumentId;
     private bool inlinePdfFitWidth = true;
     private (string Document, int Page, int Start, int End, double SurfaceHeight, double ViewportHeight)? lastInlinePdfFollow;
     private int inlinePdfRequest;
-    private (string Document, int Page, string? DetachedText)? inlinePdfAddress;
-    private (string Document, int Page, string? DetachedText)? inlinePdfLoading;
+    private InlinePdfAddress? inlinePdfAddress;
+    private InlinePdfAddress? inlinePdfLoading;
     private PhotoPreview? inlinePdfPreview;
     private OcrLine[] inlineDetachedLines = [];
     private OcrLine[] inlineNativeBoxes = [];
@@ -61,6 +62,7 @@ public partial class ReadingPage
         inlinePdfRequest++;
         inlinePdfAddress = inlinePdfLoading = null;
         inlinePdfPreview = null;
+        pdfSourceLayout = null;
         inlineDetachedLines = inlineNativeBoxes = [];
         inlineNativeText = "";
         InlinePdfHighlight.IsVisible = DetachedInlinePdfHighlight.IsVisible = false;
@@ -98,7 +100,7 @@ public partial class ReadingPage
             if (request != inlinePdfRequest || !showInlineOriginal) return;
             var detachedText = detachedAddress is { } detached && detached.Document == document.Id &&
                 detached.Page == page && DetachedPdfReader.IsVisible ? detached.Text : null;
-            var address = (document.Id, page, detachedText);
+            var address = new InlinePdfAddress(document.Id, page, document.CurrentRevisionId, detachedText);
             if (inlinePdfAddress == address)
             {
                 if (inlinePdfLoading is not null && inlinePdfLoading != address)
@@ -143,7 +145,8 @@ public partial class ReadingPage
             }
 
             if (request != inlinePdfRequest || !showInlineOriginal || !readingPageActive ||
-                session.Document?.Id != document.Id) return;
+                session.Document is not { } current || current.Id != address.Document ||
+                current.CurrentRevisionId != address.Revision) return;
             var source = ImageSource.FromStream(() => new MemoryStream(preview.Bytes, writable: false));
             InlinePdfImage.Source = DetachedInlinePdfImage.Source = PendingInlinePdfImage.Source = source;
             InlinePdfViewport.IsVisible = DetachedInlinePdfViewport.IsVisible = true;
@@ -264,7 +267,8 @@ public partial class ReadingPage
     {
         if (!wordOnly) RefreshPdfTranslationLayout();
         if (!showInlineOriginal || inlinePdfAddress is not { } address || inlinePdfPreview is not { } preview ||
-            AppState.Session.Document is not { } document || document.Id != address.Document) return;
+            AppState.Session.Document is not { } document || document.Id != address.Document ||
+            document.CurrentRevisionId != address.Revision) return;
 
         var detached = DetachedPdfReader.IsVisible;
         var overlay = detached ? DetachedInlinePdfHighlight : InlinePdfHighlight;
@@ -276,6 +280,11 @@ public partial class ReadingPage
             (detached && detachedAddress?.Page != address.Page))
         {
             overlay.IsVisible = false;
+            if (!wordOnly)
+            {
+                pdfSourceLayout = null;
+                DrawPdfTranslationLayout();
+            }
             return;
         }
 
@@ -304,9 +313,7 @@ public partial class ReadingPage
         }
 
         overlay.IsVisible = lines.Length > 0;
-        pdfLayoutGeometry = lines;
-        pdfLayoutOffset = offset;
-        pdfLayoutSentence = sentence;
+        pdfSourceLayout = new(address, lines, offset, sentence);
         DrawPdfTranslationLayout();
         if (!overlay.IsVisible)
         {

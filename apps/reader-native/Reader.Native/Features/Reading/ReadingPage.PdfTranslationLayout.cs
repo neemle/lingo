@@ -10,14 +10,20 @@ public partial class ReadingPage
 {
     private sealed record PdfLayoutAddress(string Document, int Page, string? Revision, string Target, string? DetachedText);
     private sealed record PdfAutoTranslation(PdfLayoutAddress Address, int RouteRequest);
+    private sealed record PdfSourceLayout(InlinePdfAddress Page, OcrLine[] Lines, int Offset, Sentence Sentence)
+    {
+        public bool Matches(PdfLayoutAddress? address) => address is not null &&
+            Page.Document == address.Document && Page.Page == address.Page &&
+            Page.Revision == address.Revision && Page.DetachedText == address.DetachedText;
+    }
     private bool pdfTranslationLayout = true;
     private bool syncingPdfTranslationScroll;
     private PdfLayoutAddress? pdfLayoutRequest;
     private PdfLayoutAddress? translatingPdfLayout;
     private PdfPageTranslationRow[] pdfLayoutRows = [];
-    private OcrLine[] pdfLayoutGeometry = [];
-    private int pdfLayoutOffset;
-    private Sentence? pdfLayoutSentence;
+    private PdfSourceLayout? pdfSourceLayout;
+    private Sentence? pdfLayoutSentence => pdfSourceLayout is { } source && source.Matches(pdfLayoutRequest)
+        ? source.Sentence : null;
     private string? pdfLayoutStatus;
     private int pdfLayoutRequestId;
     private bool refreshingPdfLayout;
@@ -75,6 +81,7 @@ public partial class ReadingPage
     private PdfLayoutAddress? CurrentPdfLayoutAddress() =>
         showInlineOriginal && inlinePdfAddress is { } page && TargetCode is { } target &&
         AppState.Session.Document is { Format: "pdf" } document && page.Document == document.Id &&
+        page.Revision == document.CurrentRevisionId &&
         target != document.Language && (!PdfPageNotice.IsVisible || DetachedPdfReader.IsVisible) &&
         (CurrentNativePdfWindow(document.Id) is not { } window || window.Center == page.Page)
             ? new(page.Document, page.Page, document.CurrentRevisionId, target, page.DetachedText)
@@ -105,8 +112,6 @@ public partial class ReadingPage
             pdfLayoutRequestId++;
             pdfAutoAttempts = null;
             pdfLayoutRows = [];
-            pdfLayoutGeometry = [];
-            pdfLayoutSentence = null;
             pdfLayoutStatus = null;
             overflowContent = null;
             PdfTranslationOverflow.IsVisible = DetachedPdfTranslationOverflow.IsVisible = false;
@@ -392,11 +397,13 @@ public partial class ReadingPage
         var background = detached ? DetachedPdfTranslationBackground : PdfTranslationBackground;
         var original = detached ? DetachedInlinePdfImage : InlinePdfImage;
         if (!ReferenceEquals(background.Source, original.Source)) background.Source = original.Source;
-        background.IsVisible = background.Source is not null && pdfLayoutGeometry.Length > 0;
+        var source = pdfSourceLayout is { } layout && layout.Matches(pdfLayoutRequest) ? layout : null;
+        background.IsVisible = background.Source is not null && source is { Lines.Length: > 0 } &&
+            pdfLayoutRows.Length > 0;
         var gloss = detached
             ? (DetachedWordCard.IsVisible && detachedWordTranslation?.Target == TargetCode ? detachedWordTranslation?.Text : null)
             : (WordCard.IsVisible && wordTranslation?.Target == TargetCode ? wordTranslation?.Text : null);
-        var drawing = new TranslatedPdfDrawing(pdfLayoutRows, pdfLayoutGeometry, pdfLayoutOffset,
+        var drawing = new TranslatedPdfDrawing(pdfLayoutRows, source?.Lines ?? [], source?.Offset ?? 0,
             pdfLayoutSentence, gloss, background.IsVisible);
         var overflow = detached ? DetachedPdfTranslationOverflow : PdfTranslationOverflow;
         drawing.OverflowChanged = rows => Dispatcher.Dispatch(() =>
@@ -530,12 +537,16 @@ public partial class ReadingPage
             if (page.Width <= 0 || page.Height <= 0) return;
             if (preserveArtwork)
             {
-                foreach (var line in geometry.Where(line => line.SourceSpan is not null))
+                foreach (var line in geometry)
                 {
-                    var x = page.X + (float)line.X * page.Width;
-                    var y = page.Y + (float)line.Y * page.Height;
-                    canvas.FillRectangle(x - 1, y - 1, (float)line.Width * page.Width + 2,
-                        (float)line.Height * page.Height + 2);
+                    if (!HasTranslatableText(line.SourceSpan)) continue;
+                    if (line.Words is { Length: > 0 } words && words.All(word => word.SourceSpan is not null) &&
+                        words.Any(word => !HasTranslatableText(word.SourceSpan)))
+                    {
+                        foreach (var word in words)
+                            if (HasTranslatableText(word.SourceSpan)) Mask(word.X, word.Y, word.Width, word.Height);
+                    }
+                    else Mask(line.X, line.Y, line.Width, line.Height);
                 }
             }
             else canvas.FillRectangle(page);
@@ -590,6 +601,13 @@ public partial class ReadingPage
             }
 
             OverflowChanged?.Invoke(overflow.OrderBy(row => row.StartUtf16).ToArray());
+
+            bool HasTranslatableText(OcrSpan? span) => span is { } range && rows.Any(row =>
+                range.StartUtf16 + offset < row.EndUtf16 && range.EndUtf16 + offset > row.StartUtf16);
+
+            void Mask(double x, double y, double width, double height) =>
+                canvas.FillRectangle(page.X + (float)x * page.Width - 1, page.Y + (float)y * page.Height - 1,
+                    (float)width * page.Width + 2, (float)height * page.Height + 2);
         }
 
         private RectF? Bounds(PdfPageTranslationRow row, RectF page)
