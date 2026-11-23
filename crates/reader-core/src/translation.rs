@@ -360,6 +360,10 @@ pub struct AlignedTranslation {
 }
 
 impl AlignedTranslation {
+    fn from_route(route: Route, segments: Vec<String>) -> Self {
+        Self { route, segments, joined_lines: false, alignment: None }
+    }
+
     pub(crate) fn attach_source_sentences(&mut self, sentence_ids: Vec<String>) {
         self.joined_lines = sentence_ids.len() > 1;
         self.alignment = self
@@ -566,6 +570,7 @@ pub(crate) fn cached_translation(
 
 pub(crate) struct CacheRoutes {
     preferred: Option<Route>,
+    installed_count: usize,
     candidates: Vec<Route>,
 }
 
@@ -577,6 +582,7 @@ impl CacheRoutes {
         target: &str,
     ) -> Result<Self> {
         let mut candidates = ranked_routes(installed, source, target)?;
+        let installed_count = candidates.len();
         let preferred = candidates.first().cloned();
         let installed_identities: Vec<_> = candidates.iter().map(Route::without_quality).collect();
         candidates.extend(
@@ -585,6 +591,7 @@ impl CacheRoutes {
         );
         Ok(Self {
             preferred,
+            installed_count,
             candidates,
         })
     }
@@ -628,15 +635,22 @@ impl CacheRoutes {
         if text.len() > MAX_BATCH_BYTES {
             return Ok(None);
         }
+        let cached = self.cached_aligned(store, &[text], context, target, TranslationSettings::default())?;
+        Ok(cached.map(|(translation, _)| translation))
+    }
+
+    fn cached_aligned(
+        &self,
+        store: &Store,
+        input: &[impl Serialize + AsRef<str>],
+        context: Option<&str>,
+        target: &str,
+        settings: TranslationSettings,
+    ) -> Result<Option<(AlignedTranslation, String)>> {
         for route in &self.candidates {
-            let key = cache_key(route, &[text], context, TranslationSettings::default())?;
-            if let Some(segments) = store.cached_segments(&key, 1, target)? {
-                return Ok(Some(AlignedTranslation {
-                    route: route.clone(),
-                    segments,
-                    joined_lines: false,
-                    alignment: None,
-                }));
+            let key = cache_key(route, input, context, settings)?;
+            if let Some(segments) = store.cached_segments(&key, input.len(), target)? {
+                return Ok(Some((AlignedTranslation::from_route(route.clone(), segments), key)));
             }
         }
         Ok(None)
@@ -1420,6 +1434,65 @@ mod tests {
     }
 
     #[test]
+    fn contextual_cache_remains_available_after_fallback_packages_are_removed() {
+        struct Provider {
+            installed: Vec<ModelEdge>,
+            calls: usize,
+        }
+        impl TranslationProvider for Provider {
+            fn installed_models(&self) -> Result<Vec<ModelEdge>> {
+                Ok(self.installed.clone())
+            }
+
+            fn translate(
+                &mut self, _: &ModelEdge, _: &[String], _: Option<&str>, _: TranslationSettings,
+            ) -> Result<Vec<String>> {
+                self.calls += 1;
+                Err("test inference unavailable".into())
+            }
+        }
+
+        let model = |source: &str, target: &str| ModelEdge {
+            source: source.into(),
+            target: target.into(),
+            revision: "test".into(),
+            quality: None,
+        };
+        let catalog = [model("fr", "uk"), model("fr", "en"), model("en", "uk")];
+        let fallback = Route::Pivot { first: catalog[1].clone(), second: catalog[2].clone() };
+        let mut provider = Provider { installed: catalog.to_vec(), calls: 0 };
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let document = store.import("reader.txt", b"Il prend la page.", "fr").unwrap();
+        let input = ["la page".to_owned()];
+        let request = |context| TranslationRequest {
+            source: "fr",
+            target: "uk",
+            segments: &input,
+            context: Some(context),
+            settings: TranslationSettings::default(),
+        };
+        let context = "Il prend la page.";
+        let key = cache_key(&fallback, &input, Some(context), TranslationSettings::default()).unwrap();
+        store.save_cached_segments([(key.clone(), &["сторінка".into()][..])]).unwrap();
+        for installed in [catalog.len(), 1, 0] {
+            provider.installed.truncate(installed);
+            let result = store.translate_aligned_with_catalog(
+                &mut provider, request(context), &catalog, Some(&document.id),
+            ).unwrap().unwrap();
+            assert_eq!(result.route, fallback);
+            assert_eq!(result.segments, ["сторінка"]);
+        }
+        assert_eq!(provider.calls, 0);
+        let owner: String = store.connection.query_row(
+            "SELECT document_id FROM translation_cache_owners WHERE cache_key=?1", [&key], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(owner, document.id);
+        assert!(store.translate_aligned_with_catalog(
+            &mut provider, request("Elle tourne la page."), &catalog, Some(&document.id),
+        ).unwrap().is_none());
+    }
+
+    #[test]
     fn rendered_pdf_keeps_cached_rows_when_page_inference_fails() {
         let root = tempfile::tempdir().unwrap();
         let mut store = Store::open(&root.path().join("library.sqlite")).unwrap();
@@ -1778,11 +1851,6 @@ pub struct TranslationRequest<'a> {
     pub settings: TranslationSettings,
 }
 
-enum RouteAttemptError {
-    Storage(String),
-    Inference(String),
-}
-
 pub(crate) struct UnitsTranslation {
     pub(crate) segments: Vec<Option<UnitTranslation>>,
     preferred_pivot: Option<String>,
@@ -1797,12 +1865,6 @@ pub(crate) struct UnitTranslation {
 impl UnitTranslation {
     fn from_route(text: String, route: &Route) -> Self {
         Self { text, pivot_language: route.pivot_language().map(str::to_owned) }
-    }
-}
-
-impl From<String> for RouteAttemptError {
-    fn from(error: String) -> Self {
-        Self::Storage(error)
     }
 }
 
@@ -1835,6 +1897,16 @@ impl Store {
         provider: &mut impl TranslationProvider,
         request: TranslationRequest<'_>,
     ) -> Result<Option<AlignedTranslation>> {
+        self.translate_aligned_with_catalog(provider, request, &[], None)
+    }
+
+    pub(crate) fn translate_aligned_with_catalog(
+        &mut self,
+        provider: &mut impl TranslationProvider,
+        request: TranslationRequest<'_>,
+        catalog: &[ModelEdge],
+        document: Option<&str>,
+    ) -> Result<Option<AlignedTranslation>> {
         let TranslationRequest {
             source,
             target,
@@ -1849,15 +1921,30 @@ impl Store {
             return Err("Некоректні параметри перекладу".into());
         }
         let context = context.filter(|text| !text.trim().is_empty());
-        self.translate_using_routes(provider, source, target, |store, provider, route| {
-            let key = cache_key(route, segments, context, settings)?;
-            if let Some(segments) = store.cached_segments(&key, segments.len(), target)? {
-                return Ok(segments);
+        let routes = CacheRoutes::resolve(&provider.installed_models()?, catalog, source, target)?;
+        if let Some((translation, key)) = routes.cached_aligned(self, segments, context, target, settings)? {
+            if let Some(document) = document {
+                self.link_translation_cache_keys(document, std::iter::once(key.as_str()))?;
             }
-            let output = infer_route(provider, route, segments, context, settings)?;
-            store.save_cached_segments([(key, output.as_slice())])?;
-            Ok(output)
-        })
+            return Ok(Some(translation));
+        }
+
+        let attempts = if provider.allow_alternative_routes() { routes.installed_count } else { 1.min(routes.installed_count) };
+        let mut first_failure = None;
+        for route in routes.candidates.into_iter().take(attempts) {
+            match infer_route(provider, &route, segments, context, settings) {
+                Ok(output) => {
+                    let key = cache_key(&route, segments, context, settings)?;
+                    self.save_cached_segments([(key.clone(), output.as_slice())])?;
+                    if let Some(document) = document {
+                        self.link_translation_cache_keys(document, std::iter::once(key.as_str()))?;
+                    }
+                    return Ok(Some(AlignedTranslation::from_route(route, output)));
+                }
+                Err(error) => { first_failure.get_or_insert(error); }
+            }
+        }
+        first_failure.map_or(Ok(None), Err)
     }
 
     pub(crate) fn translate_units(
@@ -1927,38 +2014,6 @@ impl Store {
         Ok(UnitsTranslation { segments, preferred_pivot })
     }
 
-    fn translate_using_routes<P: TranslationProvider>(
-        &mut self,
-        provider: &mut P,
-        source: &str,
-        target: &str,
-        mut attempt: impl FnMut(&mut Self, &mut P, &Route)
-            -> std::result::Result<Vec<String>, RouteAttemptError>,
-    ) -> Result<Option<AlignedTranslation>> {
-        let mut routes = ranked_routes(&provider.installed_models()?, source, target)?;
-        if !provider.allow_alternative_routes() {
-            routes.truncate(1);
-        }
-        let mut first_failure = None;
-        for route in routes {
-            match attempt(self, provider, &route) {
-                Ok(segments) => {
-                    return Ok(Some(AlignedTranslation {
-                        route,
-                        segments,
-                        joined_lines: false,
-                        alignment: None,
-                    }));
-                }
-                Err(RouteAttemptError::Inference(error)) => {
-                    first_failure.get_or_insert(error);
-                }
-                Err(RouteAttemptError::Storage(error)) => return Err(error),
-            }
-        }
-        first_failure.map_or(Ok(None), Err)
-    }
-
     fn cached_segments(
         &self,
         key: &str,
@@ -2025,10 +2080,9 @@ fn infer_route(
     segments: &[String],
     context: Option<&str>,
     settings: TranslationSettings,
-) -> std::result::Result<Vec<String>, RouteAttemptError> {
+) -> Result<Vec<String>> {
     let mut infer = |edge: &ModelEdge, input: &[String], context: Option<&str>| {
         checked_inference(provider, edge, input, context, settings)
-            .map_err(RouteAttemptError::Inference)
     };
     match route {
         Route::Direct(edge) => infer(edge, segments, context),

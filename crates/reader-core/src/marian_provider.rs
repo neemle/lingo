@@ -995,7 +995,8 @@ impl Store {
         let context = (context != source && context.len() <= 768).then_some(context.as_ref());
         let input = [crate::translation::normalize_cardinals(&language, target, source.clone())];
         let directory = self.model_directory.clone();
-        let result = self.translate_aligned(
+        let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
+        let result = self.translate_aligned_with_catalog(
             &mut MarianProvider::interactive(&directory),
             TranslationRequest {
                 source: &language,
@@ -1004,12 +1005,9 @@ impl Store {
                 context,
                 settings: TranslationSettings::default(),
             },
+            &catalog,
+            Some(id),
         )?;
-        let result = match result {
-            Some(translation) => Some(translation),
-            None => self.translation_cache_routes(&language, target)?
-                .cached_contextual_selection(self, &input[0], context, target)?,
-        };
         Ok(result.map(|translation| SelectedTranslation::Model { translation, source_text: source }))
     }
 
@@ -1051,7 +1049,8 @@ impl Store {
     ) -> Result<Option<AlignedTranslation>> {
         if text.trim().is_empty() { return Ok(None); }
         let directory = self.model_directory.clone();
-        let translated = self.translate_aligned(
+        let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
+        let result = self.translate_aligned_with_catalog(
             &mut MarianProvider::interactive(&directory),
             TranslationRequest {
                 source,
@@ -1060,16 +1059,13 @@ impl Store {
                 context: None,
                 settings: TranslationSettings::default(),
             },
+            &catalog,
+            Some(document_id),
         )?;
-        let result = match translated {
-            Some(translated) => Some(translated),
-            None => self.translation_cache_routes(source, target)?.cached_sentence(self, &text, target)?,
-        };
-        result.map(|mut translation| {
-            self.record_translation_cache_use(document_id, &translation.route, std::slice::from_ref(&text))?;
+        Ok(result.map(|mut translation| {
             translation.attach_source_sentences(sentence_ids);
-            Ok(translation)
-        }).transpose()
+            translation
+        }))
     }
 }
 
