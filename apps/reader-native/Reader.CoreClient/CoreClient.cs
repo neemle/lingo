@@ -12,6 +12,7 @@ public sealed class CoreClient : IDisposable
     private bool disposed;
     private long nextModelTranslationRequest;
     private long nextPdfPageTranslationRequest;
+    private long nextBackgroundTranslationRequest;
     private long nextSpeechRequest;
     private long nextSpeechPrefetchRequest;
     public const int MaxImportBytes = 20 * 1024 * 1024;
@@ -32,8 +33,14 @@ public sealed class CoreClient : IDisposable
     public void ClearStorage(string scope) =>
         CallIndependent<JsonElement>(new { version = 1, operation = "clear_storage", scope });
 
-    public BackgroundTranslationProgress AdvanceBackgroundTranslation(string id, string revision, string target) =>
-        CallIndependent<BackgroundTranslationProgress>(new { version = 1, operation = "advance_background_translation", id, revision, target });
+    public BackgroundTranslationProgress AdvanceBackgroundTranslation(string id, string revision, string target,
+        CancellationToken cancellationToken = default) =>
+        CallCancelable<BackgroundTranslationProgress>(ref nextBackgroundTranslationRequest, cancellationToken,
+            requestId => new { version = 1, operation = "advance_background_translation", id, revision, target, requestId },
+            CancelBackgroundTranslationRequest);
+
+    private static object CancelBackgroundTranslationRequest(long requestId) =>
+        new { version = 1, operation = "cancel_background_translation", requestId };
 
     public TranslationWarmStep WarmTranslationStep(string id, string revision, string target, int start) =>
         CallIndependent<TranslationWarmStep>(new { version = 1, operation = "warm_translation_step", id, revision, target, start });
@@ -228,10 +235,14 @@ public sealed class CoreClient : IDisposable
         Call<bool>(new { version = 1, operation = "cache_background_pdf_text_layer", id, revision, page, text });
 
     public PdfPageTranslationRow[] PdfPageTranslation(string id, int page, string target, bool cachedOnly,
-        bool background = false, CancellationToken cancellationToken = default) =>
-        CallCancelable<PdfPageTranslationRow[]>(ref nextPdfPageTranslationRequest, cancellationToken,
+        bool background = false, CancellationToken cancellationToken = default)
+    {
+        ref var sequence = ref (background ? ref nextBackgroundTranslationRequest : ref nextPdfPageTranslationRequest);
+        return CallCancelable<PdfPageTranslationRow[]>(ref sequence, cancellationToken,
             requestId => new { version = 1, operation = "pdf_page_translation", id, page, target, cachedOnly, background, requestId },
-            requestId => new { version = 1, operation = "cancel_pdf_page_translation", requestId });
+            background ? CancelBackgroundTranslationRequest
+                : requestId => new { version = 1, operation = "cancel_pdf_page_translation", requestId });
+    }
 
     public void CachePdfOcrPage(string id, PdfOcrRequest claim, OcrLine[] lines, string? textLayer = null) =>
         Call<JsonElement>(new

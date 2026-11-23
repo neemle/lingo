@@ -1838,6 +1838,16 @@ mod tests {
         let _foreground = RESOURCES.interactive();
         for document in [&text, &pdf] {
             let revision = document.current_revision_id.as_deref().unwrap();
+            let started = std::cell::Cell::new(false);
+            let result = store.advance_background_translation_until_canceled(
+                &document.id, revision, "uk", &|| started.replace(true),
+            );
+            assert!(result.is_err());
+            let interrupted: (u32, i64) = store.connection.query_row(
+                "SELECT cursor,resume_at FROM background_translation_progress WHERE document_id=?1",
+                [&document.id], |row| Ok((row.get(0)?, row.get(1)?)),
+            ).unwrap();
+            assert_eq!(interrupted, (0, 0));
             let progress = store.advance_background_translation(&document.id, revision, "uk").unwrap();
             let progress = serde_json::to_value(progress).unwrap();
             if document.format == "pdf" {

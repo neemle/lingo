@@ -12,6 +12,8 @@ internal sealed class BackgroundTranslation
     private readonly IDispatcherTimer timer;
     private readonly Dictionary<JobKey, BackgroundTranslationProgress> jobs = [];
     private Task pending = Task.CompletedTask;
+    private CancellationTokenSource? stepCancellation;
+    private bool prefetchingVisiblePage;
     private Document[] observedDocuments = [];
     private int wakeVersion;
     private DateTimeOffset retryAt;
@@ -45,6 +47,13 @@ internal sealed class BackgroundTranslation
         (BackgroundTranslatedPage Address, string? DetachedText)? next = address is null ? null : (address, detachedText);
         if (visiblePdf == next) return;
         visiblePdf = next;
+        if (prefetchingVisiblePage)
+            visibleAttempt = null;
+        if (prefetchingVisiblePage || next is not null)
+        {
+            retryAt = default;
+            stepCancellation?.Cancel();
+        }
         Wake();
     }
 
@@ -54,6 +63,7 @@ internal sealed class BackgroundTranslation
         visibleAttempt = null;
         if (!value)
         {
+            stepCancellation?.Cancel();
             jobs.Clear();
             lastLibraryJob = null;
             UpdateRequiredPackages();
@@ -67,6 +77,7 @@ internal sealed class BackgroundTranslation
     {
         paused = true;
         timer.Stop();
+        stepCancellation?.Cancel();
         if (enabled) SetStatus("Фоновий переклад призупинено.");
         await pending;
     }
@@ -81,6 +92,7 @@ internal sealed class BackgroundTranslation
 
     internal void TranslationRoutesChanged()
     {
+        stepCancellation?.Cancel();
         jobs.Clear();
         libraryStepInvalidated = true;
         lastLibraryJob = null;
@@ -200,10 +212,14 @@ internal sealed class BackgroundTranslation
 
     private async Task RunStepAsync()
     {
+        using var cancellation = new CancellationTokenSource();
+        stepCancellation = cancellation;
+        var token = cancellation.Token;
         try
         {
             var wake = wakeVersion;
             var preferences = await Task.Run(session.GetReaderPreferences);
+            token.ThrowIfCancellationRequested();
             if (!enabled || paused || session.Busy) return;
             var current = session.Document?.Id;
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -243,10 +259,12 @@ internal sealed class BackgroundTranslation
                 var key = new JobKey(address.DocumentId, address.RevisionId, address.Target);
                 if (live.Contains(key) && jobs.GetValueOrDefault(key)?.MissingPackages is null)
                 {
+                    prefetchingVisiblePage = true;
                     Schedule(Cadence);
                     SetStatus($"Опрацьовуємо відкриту сторінку {address.Page + 1}…", running: true);
                     visibleAttempt = (visible, now + 30);
-                    var complete = await session.PrefetchVisiblePdfTranslationAsync(address);
+                    var complete = await session.PrefetchVisiblePdfTranslationAsync(address, token);
+                    token.ThrowIfCancellationRequested();
                     if (enabled && !paused && visiblePdf == visible && visibleAttempt == (visible, now + 30))
                     {
                         visibleAttempt = (visible, complete ? long.MaxValue : DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 30);
@@ -277,7 +295,8 @@ internal sealed class BackgroundTranslation
             lastLibraryJob = work.Key;
             libraryStepInvalidated = false;
             SetStatus($"Опрацьовуємо «{title}»…", running: true);
-            var progress = await session.AdvanceBackgroundTranslationAsync(work.Key.Document, work.Key.Revision, work.Key.Target);
+            var progress = await session.AdvanceBackgroundTranslationAsync(work.Key.Document, work.Key.Revision, work.Key.Target, token);
+            token.ThrowIfCancellationRequested();
             if (!enabled || paused || libraryStepInvalidated) return;
             jobs[work.Key] = progress;
             UpdateRequiredPackages();
@@ -287,8 +306,10 @@ internal sealed class BackgroundTranslation
                 await session.OriginalFileAsync(work.Key.Document) is { } original)
             {
                 if (!enabled || paused || libraryStepInvalidated) return;
+                token.ThrowIfCancellationRequested();
                 SetStatus($"Читаємо текстовий шар сторінки {pendingPage + 1} · «{title}»…", running: true);
-                var text = await PdfScan.ReadPageTextAsync(original.Path, pendingPage, pageCount, CancellationToken.None);
+                var text = await PdfScan.ReadPageTextAsync(original.Path, pendingPage, pageCount, token);
+                token.ThrowIfCancellationRequested();
                 if (!enabled || paused || libraryStepInvalidated) return;
                 await session.CacheBackgroundPdfTextLayerAsync(work.Key.Document, work.Key.Revision, pendingPage, text);
                 if (enabled && !paused) SetStatus("Черга перекладу продовжується.");
@@ -301,12 +322,22 @@ internal sealed class BackgroundTranslation
                     ? $"Переклад сторінки {page + 1} · «{title}»."
                     : $"Перевірено кеш · «{title}».");
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            if (prefetchingVisiblePage) visibleAttempt = null;
+            if (enabled && !paused) SetStatus("Перевіряємо чергу перекладу…");
+        }
         catch (Exception error)
         {
             System.Diagnostics.Debug.WriteLine(error);
             retryAt = DateTimeOffset.UtcNow.AddSeconds(10);
             Schedule(TimeSpan.FromSeconds(10));
             if (enabled && !paused) SetStatus("Фоновий переклад повторить спробу.");
+        }
+        finally
+        {
+            prefetchingVisiblePage = false;
+            stepCancellation = null;
         }
     }
 }

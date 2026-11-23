@@ -530,7 +530,14 @@ impl StoreWorker {
     pub fn advance_background_translation(
         self, id: &str, revision: &str, target: &str,
     ) -> Result<crate::translation_queue::BackgroundTranslationProgress> {
-        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?.advance_background_translation(id, revision, target)
+        self.advance_background_translation_until_canceled(id, revision, target, &|| false)
+    }
+
+    pub fn advance_background_translation_until_canceled(
+        self, id: &str, revision: &str, target: &str, canceled: &dyn Fn() -> bool,
+    ) -> Result<crate::translation_queue::BackgroundTranslationProgress> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?
+            .advance_background_translation_until_canceled(id, revision, target, canceled)
     }
 
     pub fn warm_translation_step(
@@ -790,13 +797,20 @@ impl Store {
         background: bool,
         boundaries: PageBoundaries,
     ) -> std::result::Result<ParagraphTranslation, TranslationBatchError> {
+        self.translate_document_paragraph_until_canceled(document, selected, target, background, boundaries, &|| false)
+    }
+
+    pub(crate) fn translate_document_paragraph_until_canceled(
+        &mut self, document: &crate::Document, selected: usize, target: &str,
+        background: bool, boundaries: PageBoundaries, canceled: &dyn Fn() -> bool,
+    ) -> std::result::Result<ParagraphTranslation, TranslationBatchError> {
         let directory = self.model_directory.clone();
         let translated = translate_paragraph(
             self,
             &mut MarianProvider {
                 directory: &directory,
                 background,
-                canceled: &|| false,
+                canceled,
             },
             document, selected, target, boundaries,
         )?;

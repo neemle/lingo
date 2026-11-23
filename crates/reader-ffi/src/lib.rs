@@ -57,6 +57,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
     let cancellation = match &command {
         Command::CancelModelTranslation { request_id } => Some((ModelRequestKind::Passage, *request_id)),
         Command::CancelPdfPageTranslation { request_id } => Some((ModelRequestKind::PdfPageTranslation, *request_id)),
+        Command::CancelBackgroundTranslation { request_id } => Some((ModelRequestKind::BackgroundTranslation, *request_id)),
         Command::CancelSpeech { request_id, prefetch } => Some((speech_request_kind(*prefetch), *request_id)),
         _ => None,
     };
@@ -70,10 +71,14 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
     let exclusive = matches!(&command, Command::ClearStorage { .. });
     let _write = exclusive.then(|| STORAGE_GATE.write().unwrap_or_else(|error| error.into_inner()));
     let _read = (!exclusive).then(|| STORAGE_GATE.read().unwrap_or_else(|error| error.into_inner()));
-    if let Command::AdvanceBackgroundTranslation { id, revision, target } = &command {
+    if let Command::AdvanceBackgroundTranslation { id, revision, target, request_id } = &command {
+        let canceled = request_cancellation(handle, *request_id, ModelRequestKind::BackgroundTranslation)?;
+        let canceled_error = || Error::new("canceled", "Фоновий переклад скасовано.");
+        if canceled() { return Err(canceled_error()); }
         let worker = registry::lock()?.store(handle)?.prepare_translation_worker();
         if let Some(worker) = worker {
-            return encode_job(worker.advance_background_translation(id, revision, target));
+            let result = worker.advance_background_translation_until_canceled(id, revision, target, &canceled);
+            return if canceled() { Err(canceled_error()) } else { encode_job(result) };
         }
     }
     if let Command::WarmTranslationStep { id, revision, target, start } = &command {
@@ -210,16 +215,11 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             }
         }
         Command::PdfPageTranslation { id, page, target, cached_only, background, request_id } => {
-            let state = registry::lock()?;
-            let cancellation = request_id.map(|request| {
-                state.model_cancellation(handle, ModelRequestKind::PdfPageTranslation)
-                    .map(|tag| (request, tag))
-            }).transpose()?;
-            let canceled = || cancellation.as_ref().is_some_and(|(request, tag)| tag.is_canceled(*request));
+            let kind = if *background { ModelRequestKind::BackgroundTranslation } else { ModelRequestKind::PdfPageTranslation };
+            let canceled = request_cancellation(handle, *request_id, kind)?;
             let canceled_error = || Error::new("canceled", "Переклад сторінки скасовано.");
             if canceled() { return Err(canceled_error()); }
-            let worker = state.store(handle)?.prepare_translation_worker();
-            drop(state);
+            let worker = registry::lock()?.store(handle)?.prepare_translation_worker();
             if let Some(worker) = worker {
                 let result = worker.pdf_page_translation_until_canceled(
                     id, *page, target, *cached_only, *background, &canceled,
@@ -538,8 +538,12 @@ fn speech_request_kind(prefetch: bool) -> ModelRequestKind {
 }
 
 fn speech_cancellation(handle: u64, request_id: Option<u64>, prefetch: bool) -> Result<impl Fn() -> bool> {
+    request_cancellation(handle, request_id, speech_request_kind(prefetch))
+}
+
+fn request_cancellation(handle: u64, request_id: Option<u64>, kind: ModelRequestKind) -> Result<impl Fn() -> bool> {
     let request = request_id.map(|id| {
-        let cancellation = registry::lock()?.model_cancellation(handle, speech_request_kind(prefetch))?;
+        let cancellation = registry::lock()?.model_cancellation(handle, kind)?;
         Ok::<_, Error>((id, cancellation))
     }).transpose()?;
     Ok(move || request.as_ref().is_some_and(|(id, cancellation)| cancellation.is_canceled(*id)))

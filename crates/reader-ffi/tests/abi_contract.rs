@@ -42,12 +42,23 @@ fn canceled_pdf_translation_does_not_cancel_a_later_page_request() {
         "version": 1, "operation": "cancel_pdf_page_translation", "requestId": 5,
     }));
     assert_eq!(cancel["ok"], true, "{cancel}");
-    let request = |request_id| call(store.handle, json!({
+    let request = |request_id, background| call(store.handle, json!({
         "version": 1, "operation": "pdf_page_translation", "id": id, "page": 0,
-        "target": "uk", "cachedOnly": true, "requestId": request_id,
+        "target": "uk", "cachedOnly": true, "requestId": request_id, "background": background,
     }));
-    assert_error(&request(5), "canceled");
-    let current = request(6);
+    assert_error(&request(5, false), "canceled");
+    assert_eq!(request(5, true)["ok"], true);
+    let cancel_background = call(store.handle, json!({
+        "version": 1, "operation": "cancel_background_translation", "requestId": 6,
+    }));
+    assert_eq!(cancel_background["ok"], true, "{cancel_background}");
+    assert_error(&request(6, true), "canceled");
+    let advance = call(store.handle, json!({
+        "version": 1, "operation": "advance_background_translation", "id": id,
+        "revision": imported["data"]["currentRevisionId"], "target": "uk", "requestId": 6,
+    }));
+    assert_error(&advance, "canceled");
+    let current = request(6, false);
     assert_eq!(current["ok"], true, "{current}");
     assert_eq!(current["data"].as_array().unwrap().len(), 1);
 }

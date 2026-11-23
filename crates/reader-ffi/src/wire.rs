@@ -26,6 +26,12 @@ pub enum Command {
         id: String,
         revision: String,
         target: String,
+        #[serde(rename = "requestId")]
+        request_id: Option<u64>,
+    },
+    CancelBackgroundTranslation {
+        #[serde(rename = "requestId")]
+        request_id: u64,
     },
     WarmTranslationStep {
         id: String,

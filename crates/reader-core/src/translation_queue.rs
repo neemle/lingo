@@ -354,6 +354,12 @@ impl Store {
         revision: &str,
         target: &str,
     ) -> Result<BackgroundTranslationProgress> {
+        self.advance_background_translation_until_canceled(id, revision, target, &|| false)
+    }
+
+    pub(crate) fn advance_background_translation_until_canceled(
+        &mut self, id: &str, revision: &str, target: &str, canceled: &dyn Fn() -> bool,
+    ) -> Result<BackgroundTranslationProgress> {
         valid_language(target)?;
         let mut progress = BackgroundTranslationProgress {
             resume_at: None,
@@ -363,6 +369,8 @@ impl Store {
             pending_pdf_text_page: None,
             waiting_for_pdf_ocr: false,
         };
+        let canceled_error = || "Фоновий переклад скасовано.".to_owned();
+        if canceled() { return Err(canceled_error()); }
         if self.reader_preferences()?.background_translation != Some(true) {
             return Ok(progress);
         }
@@ -434,7 +442,7 @@ impl Store {
         let (cursor, incomplete, resume_at) = if missing_packages.is_some() {
             (0, false, Some(now + 30))
         } else {
-            let step = self.warm_document_translation_step(&document, target, cursor as usize)?;
+            let step = self.warm_document_translation_step(&document, target, cursor as usize, canceled)?;
             progress.translated_page = step.translated_page;
             progress.translated_sentence_ids = step.translated_sentence_ids;
             if step.deferred {
@@ -456,6 +464,9 @@ impl Store {
                 }
             }
         };
+        // A superseded step may already have cached complete units. Keep its old
+        // checkpoint so the next run can reuse those units and finish the rest.
+        if canceled() { return Err(canceled_error()); }
         let saved = self.connection.execute(
             "UPDATE background_translation_progress SET cursor=?4,incomplete=?5,resume_at=?6
              WHERE document_id=?1 AND target=?2 AND revision_id=?3 AND ocr_generation=?7
@@ -529,7 +540,7 @@ impl Store {
         {
             return Ok(done);
         }
-        self.warm_document_translation_step(&document, target, start)
+        self.warm_document_translation_step(&document, target, start, &|| false)
     }
 
     fn warm_document_translation_step(
@@ -537,7 +548,10 @@ impl Store {
         document: &Document,
         target: &str,
         start: usize,
+        canceled: &dyn Fn() -> bool,
     ) -> Result<TranslationWarmStep> {
+        let canceled_error = || "Фоновий переклад скасовано.".to_owned();
+        if canceled() { return Err(canceled_error()); }
         let done = TranslationWarmStep {
             next: None,
             incomplete: false,
@@ -568,13 +582,15 @@ impl Store {
             let Some(page) = canonical.into_iter().chain(detached.map(usize::from)).min() else {
                 return Ok(done);
             };
-            let rows = self.pdf_page_translation_result(
+            let rows = self.pdf_page_translation_result_interruptible(
                 &document.id,
                 page as u16,
                 target,
                 false,
                 true,
+                canceled,
             );
+            if canceled() { return Err(canceled_error()); }
             let deferred = matches!(&rows, Err(TranslationBatchError::Deferred { .. }));
             let rows = if deferred {
                 self.pdf_page_translation_result(&document.id, page as u16, target, true, true)
@@ -595,13 +611,15 @@ impl Store {
         if start >= document.sentences.len() {
             return Ok(done);
         }
-        let translated = match self.translate_document_paragraph(
+        let translated = match self.translate_document_paragraph_until_canceled(
             document,
             start,
             target,
             true,
             crate::translation::PageBoundaries::Canonical,
+            canceled,
         ) {
+            _ if canceled() => return Err(canceled_error()),
             Ok(translated) => translated,
             Err(TranslationBatchError::Deferred { .. }) => {
                 let routes = self.translation_cache_routes(&document.language, target)?;

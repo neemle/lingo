@@ -82,7 +82,7 @@ impl Store {
         canceled: &dyn Fn() -> bool,
     ) -> Result<Vec<PdfPageTranslationRow>> {
         match self.pdf_page_translation_result_interruptible(id, page, target, cached_only, background, canceled) {
-            Err(TranslationBatchError::Deferred { .. }) if background && !cached_only =>
+            Err(TranslationBatchError::Deferred { .. }) if background && !cached_only && !canceled() =>
                 self.pdf_page_translation_result(id, page, target, true, background).map_err(String::from),
             result => result.map_err(String::from),
         }
@@ -94,7 +94,7 @@ impl Store {
         self.pdf_page_translation_result_interruptible(id, page, target, cached_only, background, &|| false)
     }
 
-    fn pdf_page_translation_result_interruptible(
+    pub(crate) fn pdf_page_translation_result_interruptible(
         &mut self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
         canceled: &dyn Fn() -> bool,
     ) -> std::result::Result<Vec<PdfPageTranslationRow>, TranslationBatchError> {

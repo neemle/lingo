@@ -36,9 +36,10 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task RefreshAsync() => RunAsync(Read);
     public Task<StorageUsage> StorageUsageAsync() => Task.Run(client.StorageUsage);
     public Task ClearStorageAsync(string scope) => Task.Run(() => client.ClearStorage(scope));
-    public async Task<BackgroundTranslationProgress> AdvanceBackgroundTranslationAsync(string id, string revision, string target)
+    public async Task<BackgroundTranslationProgress> AdvanceBackgroundTranslationAsync(string id, string revision, string target,
+        CancellationToken cancellationToken = default)
     {
-        var progress = await Task.Run(() => client.AdvanceBackgroundTranslation(id, revision, target));
+        var progress = await Task.Run(() => client.AdvanceBackgroundTranslation(id, revision, target, cancellationToken), cancellationToken);
         if (progress.TranslatedPage is { } page)
             BackgroundPageTranslated?.Invoke(new(id, revision, page, target));
         if (progress.TranslatedSentenceIds is { Length: > 0 } sentences)
@@ -305,10 +306,11 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         Task.Run(() => client.PdfPageTranslation(id, page, target, cachedOnly, cancellationToken: cancellationToken),
             cancellationToken);
 
-    public async Task<bool> PrefetchVisiblePdfTranslationAsync(BackgroundTranslatedPage address)
+    public async Task<bool> PrefetchVisiblePdfTranslationAsync(BackgroundTranslatedPage address, CancellationToken cancellationToken)
     {
         var rows = await Task.Run(() =>
-            client.PdfPageTranslation(address.DocumentId, address.Page, address.Target, cachedOnly: false, background: true));
+            client.PdfPageTranslation(address.DocumentId, address.Page, address.Target, cachedOnly: false,
+                background: true, cancellationToken: cancellationToken), cancellationToken);
         if (rows.Any(row => row.Text is not null)) BackgroundPageTranslated?.Invoke(address);
         return rows.Length > 0 && rows.All(row => row.Text is not null);
     }
