@@ -1,5 +1,6 @@
 using Reader.Contracts;
 using Reader.Native.Services;
+using Reader.Presentation;
 
 namespace Reader.Native.Features.Reading;
 
@@ -16,11 +17,13 @@ public partial class ReadingPage
             item => word.StartUtf16 >= item.StartUtf16 && word.StartUtf16 < item.EndUtf16);
         if (sentence is null) return;
 
-        bool CurrentSelection() => selection == word && session.Document is { } current &&
+        var target = TargetCode;
+        bool CurrentSelection() => TargetCode == target && selection == word && session.Document is { } current &&
             current.Id == document.Id && current.Language == document.Language &&
             current.CurrentRevisionId == revision && WordCard.IsVisible;
 
-        await ExplainSelectionAsync(WordExplanationText, WordExplanationBusy, document.Id, CurrentSelection,
+        await ExplainSelectionAsync(WordExplanationText, WordExplanationGloss, WordExplanationBusy,
+            document.Id, target ?? "uk", CurrentSelection,
             (model, cachedOnly) => session.ExplainWordAsync(model, document.Id, sentence.Id, word.Text,
                 cachedOnly: cachedOnly, startUtf16: word.StartUtf16, revisionId: revision));
     }
@@ -30,19 +33,30 @@ public partial class ReadingPage
         if (explainingWord || loadingDetachedSentence || detachedAddress is not { } address ||
             detachedSelection is not { } word || detachedSentence is not { RevisionId: { } revision }) return;
 
-        bool CurrentSelection() => DetachedPdfReader.IsVisible && DetachedWordCard.IsVisible &&
+        var target = TargetCode;
+        bool CurrentSelection() => TargetCode == target && DetachedPdfReader.IsVisible && DetachedWordCard.IsVisible &&
             ReferenceEquals(detachedAddress, address) && ReferenceEquals(detachedSelection, word) &&
             detachedSentence?.RevisionId == revision;
 
         var session = AppState.Session;
-        await ExplainSelectionAsync(DetachedWordExplanationText, DetachedWordExplanationBusy, address.Document, CurrentSelection,
+        await ExplainSelectionAsync(DetachedWordExplanationText, DetachedWordExplanationGloss, DetachedWordExplanationBusy,
+            address.Document, target ?? "uk", CurrentSelection,
             (model, cachedOnly) => session.ExplainDetachedWordAsync(model, address.Document, address.Page, word,
                 revisionId: revision, cachedOnly: cachedOnly));
     }
 
-    private async Task ExplainSelectionAsync(Label result, ActivityIndicator spinner, string documentId,
-        Func<bool> isCurrent, Func<string, bool, Task<WordExplanation?>> explain)
+    private static void ResetExplanation(Label result, VerticalStackLayout glossHost)
     {
+        result.Text = "";
+        result.IsVisible = false;
+        glossHost.Children.Clear();
+        glossHost.IsVisible = false;
+    }
+
+    private async Task ExplainSelectionAsync(Label result, VerticalStackLayout glossHost, ActivityIndicator spinner,
+        string documentId, string target, Func<bool> isCurrent, Func<string, bool, Task<WordExplanation?>> explain)
+    {
+        ResetExplanation(result, glossHost);
         explainingWord = true;
         ExplainWord.IsEnabled = DetachedExplainWord.IsEnabled = false;
         try
@@ -52,7 +66,7 @@ public partial class ReadingPage
             if (!isCurrent()) return;
             if (selected is not null && await explain(selected.Id, true) is { } saved)
             {
-                await ShowExplanationAsync(result, spinner, documentId, selected.Name, saved, isCurrent);
+                await ShowExplanationAsync(result, glossHost, spinner, documentId, target, selected.Name, saved, isCurrent);
                 return;
             }
             if (!isCurrent()) return;
@@ -70,7 +84,7 @@ public partial class ReadingPage
             result.Text = $"{selected.Name} готує пояснення…";
             var explanation = await explain(selected.Id, false);
             if (explanation is not null)
-                await ShowExplanationAsync(result, spinner, documentId, selected.Name, explanation, isCurrent);
+                await ShowExplanationAsync(result, glossHost, spinner, documentId, target, selected.Name, explanation, isCurrent);
         }
         catch (Exception error)
         {
@@ -96,29 +110,35 @@ public partial class ReadingPage
         DetachedExplainWord.IsEnabled = DetachedExplainWord.IsVisible && !explainingWord;
     }
 
-    private static async Task ShowExplanationAsync(Label result, ActivityIndicator spinner, string documentId,
-        string model, WordExplanation explanation, Func<bool> isCurrent)
+    private async Task ShowExplanationAsync(Label result, VerticalStackLayout glossHost, ActivityIndicator spinner,
+        string documentId, string target, string model, WordExplanation explanation, Func<bool> isCurrent)
     {
         if (!isCurrent()) return;
         var detail = explanation.Explanation.Replace(" У цьому реченні — ", $"{Environment.NewLine}Граматична роль: ");
         var label = explanation.Cached ? "Збережена підказка" : "Локальна підказка";
         if (explanation.Gloss is { } gloss)
         {
-            string? ukrainian = gloss.Language == "uk" ? gloss.Text : null;
-            if (ukrainian is null)
+            string? localized = gloss.Language == target ? gloss.Text : null;
+            if (localized is null)
             {
                 spinner.IsVisible = spinner.IsRunning = true;
                 result.IsVisible = true;
                 result.Text = "Перекладаємо словникове визначення…";
                 try
                 {
-                    ukrainian = (await AppState.Session.TranslateDictionaryGlossAsync(documentId, gloss.Language, gloss.Text))?.Text;
+                    localized = (await AppState.Session.TranslateDictionaryGlossAsync(documentId, gloss.Language,
+                        gloss.Text, target))?.Text;
                 }
                 catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
             }
             if (!isCurrent()) return;
-            detail += $"{Environment.NewLine}{ukrainian ?? gloss.Text}";
-            label = ukrainian is null ? $"{label} · Wiktionary" : $"{label} · Wiktionary, офлайн-переклад";
+            if (string.IsNullOrWhiteSpace(localized))
+                glossHost.Children.Add(new Label { Text = $"Значення недоступне мовою перекладу ({DocumentLanguages.Name(target)})." });
+            else
+                glossHost.Children.Add(WordDetailAudioRow(localized, target, 15));
+            glossHost.IsVisible = true;
+            label += gloss.Language != target && !string.IsNullOrWhiteSpace(localized)
+                ? " · Wiktionary, офлайн-переклад" : " · Wiktionary";
         }
         result.IsVisible = true;
         result.Text = $"{detail}{Environment.NewLine}{label} · {model}";

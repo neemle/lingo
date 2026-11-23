@@ -171,7 +171,7 @@ public partial class VocabularyPage : ContentPage
         bool Matches(string value) => value.Contains(query, StringComparison.CurrentCultureIgnoreCase);
         VocabularyList.ItemsSource = query.Length == 0 ? entries : entries.Where(entry =>
             Matches(entry.Word) || Matches(entry.Translation) || Matches(entry.Context) ||
-            entry.AcceptedTranslations.Any(Matches) || (entry.Sense is { } sense && Matches(sense.Gloss))).ToArray();
+            entry.AcceptedTranslations.Any(Matches) || (entry.DisplaySenseGloss is { } gloss && Matches(gloss))).ToArray();
 
         EmptyVocabulary.Text = loadingCollection ? "Завантажуємо добірку…"
             : query.Length > 0 ? "Збігів за текстом немає."
@@ -306,7 +306,7 @@ public partial class VocabularyPage : ContentPage
         body.Children.Add(new Label { Text = card.Word, FontSize = 24 });
         if (card.Sense is { } sense)
         {
-            body.Children.Add(new Label { Text = sense.Gloss });
+            if (card.DisplaySenseGloss is { } gloss) body.Children.Add(new Label { Text = gloss });
             var attribution = $"{sense.SourceName} · {sense.SourceLicense}";
             if (Uri.TryCreate(sense.SourceUrl, UriKind.Absolute, out var source) &&
                 source.Scheme == Uri.UriSchemeHttps && source.Host == "en.wiktionary.org")
@@ -406,8 +406,10 @@ public partial class VocabularyPage : ContentPage
             var text = $"{heading}{Environment.NewLine}{source} → {target}";
             if (card.AcceptedTranslations.Length > 0)
                 text += $"{Environment.NewLine}Варіанти: {card.AcceptedTranslationsLabel}";
+            if (card.DisplaySenseGloss is { } gloss)
+                text += $"{Environment.NewLine}{gloss}";
             if (card.Sense is { } sense)
-                text += $"{Environment.NewLine}{sense.Gloss}{Environment.NewLine}{sense.SourceName} · " +
+                text += $"{Environment.NewLine}{sense.SourceName} · " +
                     $"{sense.SourceLicense}{Environment.NewLine}{sense.SourceUrl}";
             if (!string.IsNullOrWhiteSpace(card.Context))
                 text += $"{Environment.NewLine}{Environment.NewLine}{card.Context}";

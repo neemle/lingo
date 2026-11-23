@@ -449,6 +449,8 @@ public partial class ReadingPage : ContentPage
             WordMeanings.IsVisible = false;
             OpenMeanings.Text = $"Значення · {meanings.Length}";
             ResetDetachedMeanings();
+            ResetExplanation(WordExplanationText, WordExplanationGloss);
+            ResetExplanation(DetachedWordExplanationText, DetachedWordExplanationGloss);
             PositionWordPopup();
             Translation.Text = "";
             if (WordCard.IsVisible || DetachedWordCard.IsVisible)
@@ -493,8 +495,7 @@ public partial class ReadingPage : ContentPage
             Translation.Text = "";
             SetSelectedSense(null);
         }
-        WordExplanationText.Text = "";
-        WordExplanationText.IsVisible = false;
+        ResetExplanation(WordExplanationText, WordExplanationGloss);
         selection = selected;
         wordTranslation = null;
         vocabularyReadings = [];

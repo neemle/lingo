@@ -146,7 +146,7 @@ public partial class ReadingPage
             ResetDetachedSyntax();
         }
         detachedSelection = selected;
-        DetachedWordExplanationText.IsVisible = false;
+        ResetExplanation(DetachedWordExplanationText, DetachedWordExplanationGloss);
         if (selected is null) DetachedWordCard.IsVisible = false;
     }
 

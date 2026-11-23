@@ -509,6 +509,7 @@
        IsVisible="{Binding Source={x:Reference WordExplanationText}, Path=IsVisible}"
        SemanticProperties.Description="Прослухати пояснення слова" />
      </Grid>
+     <VerticalStackLayout x:Name="WordExplanationGloss" IsVisible="False" />
      <Picker x:Name="VocabularyReading" Title="Форма для словникової картки" IsVisible="False" />
      </VerticalStackLayout>
     </VerticalStackLayout>
@@ -568,6 +569,7 @@
        IsVisible="{Binding Source={x:Reference DetachedWordExplanationText}, Path=IsVisible}"
        SemanticProperties.Description="Прослухати пояснення слова" />
      </Grid>
+     <VerticalStackLayout x:Name="DetachedWordExplanationGloss" IsVisible="False" />
      </VerticalStackLayout>
     </VerticalStackLayout>
    </ScrollView>

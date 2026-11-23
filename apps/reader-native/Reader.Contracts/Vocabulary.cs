@@ -19,6 +19,11 @@ public sealed record Vocabulary(
     public string[] AcceptedTranslations { get; init; } = [];
 
     [JsonIgnore]
+    public string? DisplaySenseGloss =>
+        Sense is { } sense && sense.GlossLanguage == TargetLanguage && sense.Gloss != Translation
+            ? sense.Gloss : null;
+
+    [JsonIgnore]
     public string AcceptedTranslationsLabel => string.Join(" · ", AcceptedTranslations);
 }
 

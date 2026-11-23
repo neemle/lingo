@@ -79,7 +79,13 @@
             <Setter Property="IsVisible" Value="False" />
            </DataTrigger>
           </VerticalStackLayout.Triggers>
-          <Label Text="{Binding Sense.Gloss}" FontSize="14" LineBreakMode="WordWrap" />
+          <Label Text="{Binding DisplaySenseGloss}" FontSize="14" LineBreakMode="WordWrap">
+           <Label.Triggers>
+            <DataTrigger TargetType="Label" Binding="{Binding DisplaySenseGloss}" Value="{x:Null}">
+             <Setter Property="IsVisible" Value="False" />
+            </DataTrigger>
+           </Label.Triggers>
+          </Label>
           <Label Text="{Binding Sense.SourceName}" TextColor="{StaticResource Muted}" FontSize="11" />
          </VerticalStackLayout>
          <Label Text="{Binding Context}" FontFamily="Georgia" FontAttributes="Italic" FontSize="14"
