@@ -190,8 +190,7 @@ public partial class ReadingPage
         var session = AppState.Session;
         savingDetachedWord = true;
         UpdateDetachedControls();
-        (string Target, string Text, string Source)? draft =
-            detachedWordTranslation is { } candidate && candidate.Target == target ? candidate : null;
+        var draft = detachedWordTranslation?.Target == target ? detachedWordTranslation : null;
         var reconstructed = draft is { } result && result.Source != selected.Text.Trim() ? result.Source : null;
         try
         {
