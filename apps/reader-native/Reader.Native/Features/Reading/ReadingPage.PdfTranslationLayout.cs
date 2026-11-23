@@ -91,8 +91,10 @@ public partial class ReadingPage
     private void RefreshPdfTranslationLayout()
     {
         var address = CurrentPdfLayoutAddress();
+        var alreadyCached = address == pdfLayoutRequest && pdfLayoutRows.Length > 0 &&
+            pdfLayoutRows.All(row => row.Text is not null);
         AppState.TranslationWorker?.SetVisiblePdf(readingPageActive && TranslationVisible &&
-            !(autoTranslate && PdfUsesPageTranslation) &&
+            !alreadyCached && !(autoTranslate && PdfUsesPageTranslation) &&
             address is { Revision: { } revision }
                 ? new BackgroundTranslatedPage(address.Document, revision, address.Page, address.Target) : null,
             address?.DetachedText);

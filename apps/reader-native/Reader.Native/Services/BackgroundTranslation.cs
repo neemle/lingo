@@ -1,15 +1,19 @@
 using Reader.Contracts;
 using Reader.Presentation;
+using System.ComponentModel;
 
 namespace Reader.Native.Services;
 
 internal sealed class BackgroundTranslation
 {
+    private static readonly TimeSpan Cadence = TimeSpan.FromSeconds(2);
     private readonly ReaderSession session;
     private readonly IDispatcher dispatcher;
     private readonly IDispatcherTimer timer;
     private readonly Dictionary<JobKey, BackgroundTranslationProgress> jobs = [];
     private Task pending = Task.CompletedTask;
+    private Document[] observedDocuments = [];
+    private int wakeVersion;
     private DateTimeOffset retryAt;
     private bool enabled;
     private bool paused;
@@ -29,14 +33,20 @@ internal sealed class BackgroundTranslation
         this.session = session;
         this.dispatcher = dispatcher;
         timer = dispatcher.CreateTimer();
-        timer.Interval = TimeSpan.FromSeconds(2);
+        timer.Interval = Cadence;
         timer.Tick += Tick;
         session.PdfOcrUpdated += OnPdfOcrUpdated;
+        session.PropertyChanged += OnSessionChanged;
         SetEnabled(session.GetReaderPreferences().BackgroundTranslation == true);
     }
 
-    internal void SetVisiblePdf(BackgroundTranslatedPage? address, string? detachedText = null) =>
-        visiblePdf = address is null ? null : (address, detachedText);
+    internal void SetVisiblePdf(BackgroundTranslatedPage? address, string? detachedText = null)
+    {
+        (BackgroundTranslatedPage Address, string? DetachedText)? next = address is null ? null : (address, detachedText);
+        if (visiblePdf == next) return;
+        visiblePdf = next;
+        Wake();
+    }
 
     internal void SetEnabled(bool value)
     {
@@ -48,14 +58,15 @@ internal sealed class BackgroundTranslation
             lastLibraryJob = null;
             UpdateRequiredPackages();
         }
-        UpdateTimer();
+        if (enabled) Wake();
+        else timer.Stop();
         SetStatus(value ? "Перевіряємо чергу перекладу…" : "");
     }
 
     internal async Task PauseAsync()
     {
         paused = true;
-        UpdateTimer();
+        timer.Stop();
         if (enabled) SetStatus("Фоновий переклад призупинено.");
         await pending;
     }
@@ -64,7 +75,7 @@ internal sealed class BackgroundTranslation
     {
         if (clearProgress) TranslationRoutesChanged();
         paused = false;
-        UpdateTimer();
+        Wake();
         if (enabled) SetStatus("Перевіряємо чергу перекладу…");
     }
 
@@ -76,6 +87,7 @@ internal sealed class BackgroundTranslation
         retryAt = default;
         visibleAttempt = null;
         UpdateRequiredPackages();
+        Wake();
     }
 
     internal void Stop()
@@ -83,6 +95,7 @@ internal sealed class BackgroundTranslation
         SetEnabled(false);
         timer.Tick -= Tick;
         session.PdfOcrUpdated -= OnPdfOcrUpdated;
+        session.PropertyChanged -= OnSessionChanged;
     }
 
     private void OnPdfOcrUpdated(string documentId, int page)
@@ -100,12 +113,39 @@ internal sealed class BackgroundTranslation
             Math.Abs(address.Page - page) <= 1)
             visibleAttempt = null;
         UpdateRequiredPackages();
+        Wake();
     }
 
-    private void UpdateTimer()
+    internal void Wake()
     {
-        if (enabled && !paused && !timer.IsRunning) timer.Start();
-        if ((!enabled || paused) && timer.IsRunning) timer.Stop();
+        wakeVersion++;
+        Schedule(Cadence);
+    }
+
+    private void OnSessionChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        if (!enabled || args.PropertyName != nameof(ReaderSession.Snapshot)) return;
+        if (dispatcher.IsDispatchRequired)
+        {
+            dispatcher.Dispatch(() => OnSessionChanged(sender, args));
+            return;
+        }
+        var documents = session.Snapshot.Documents;
+        if (ReferenceEquals(documents, observedDocuments)) return;
+        var changed = documents.Length != observedDocuments.Length || documents.Zip(observedDocuments)
+            .Any(pair => pair.First.Id != pair.Second.Id || pair.First.Language != pair.Second.Language ||
+                pair.First.CurrentRevisionId != pair.Second.CurrentRevisionId);
+        observedDocuments = documents;
+        if (changed) Wake();
+    }
+
+    private void Schedule(TimeSpan delay)
+    {
+        if (!enabled || paused) return;
+        if (timer.IsRunning && timer.Interval == delay) return;
+        timer.Stop();
+        timer.Interval = delay;
+        timer.Start();
     }
 
     private void SetStatus(string text, bool running = false)
@@ -122,6 +162,7 @@ internal sealed class BackgroundTranslation
             return;
         if (session.Snapshot.Documents.Length == 0)
         {
+            timer.Stop();
             jobs.Clear();
             lastLibraryJob = null;
             UpdateRequiredPackages();
@@ -148,14 +189,17 @@ internal sealed class BackgroundTranslation
     {
         try
         {
+            var wake = wakeVersion;
+            var preferences = await Task.Run(session.GetReaderPreferences);
+            if (!enabled || paused || session.Busy) return;
             var current = session.Document?.Id;
-            var preferences = session.GetReaderPreferences();
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var live = new HashSet<JobKey>();
             var ready = new List<(JobKey Key, Document Document)>();
             string? missing = null;
             string? waitingForScan = null;
             var waiting = false;
+            long? retry = null;
             foreach (var document in session.Snapshot.Documents.OrderByDescending(doc => doc.Id == current))
             {
                 if (document.CurrentRevisionId is not { } revision) continue;
@@ -174,6 +218,8 @@ internal sealed class BackgroundTranslation
                     waitingForScan ??= document.Title;
                 else if (job.ResumeAt is not null)
                     waiting = true;
+                if (job?.ResumeAt is { } due && due > now && (retry is null || due < retry))
+                    retry = due;
             }
             foreach (var key in jobs.Keys.Where(key => !live.Contains(key)).ToArray()) jobs.Remove(key);
             UpdateRequiredPackages();
@@ -184,6 +230,7 @@ internal sealed class BackgroundTranslation
                 var key = new JobKey(address.DocumentId, address.RevisionId, address.Target);
                 if (live.Contains(key) && jobs.GetValueOrDefault(key)?.MissingPackages is null)
                 {
+                    Schedule(Cadence);
                     SetStatus($"Опрацьовуємо відкриту сторінку {address.Page + 1}…", running: true);
                     visibleAttempt = (visible, now + 30);
                     var complete = await session.PrefetchVisiblePdfTranslationAsync(address);
@@ -201,8 +248,15 @@ internal sealed class BackgroundTranslation
                 SetStatus(missing ?? (waiting ? "Очікує на повторну спробу."
                     : waitingForScan is not null ? $"Відкрийте сторінки «{waitingForScan}», щоб розпізнати текст для перекладу."
                     : "Чергу перекладу опрацьовано."));
+                if (visibleAttempt is { RetryAt: var visibleRetry } attempt && attempt.Page == visiblePdf &&
+                    visibleRetry > now && visibleRetry < long.MaxValue && (retry is null || visibleRetry < retry))
+                    retry = visibleRetry;
+                if (wake != wakeVersion) return;
+                if (retry is long due) Schedule(TimeSpan.FromSeconds(Math.Max(Cadence.TotalSeconds, due - now)));
+                else timer.Stop();
                 return;
             }
+            Schedule(Cadence);
 
             var previous = ready.FindIndex(candidate => candidate.Key == lastLibraryJob);
             var work = ready[(previous + 1) % ready.Count];
@@ -238,6 +292,7 @@ internal sealed class BackgroundTranslation
         {
             System.Diagnostics.Debug.WriteLine(error);
             retryAt = DateTimeOffset.UtcNow.AddSeconds(10);
+            Schedule(TimeSpan.FromSeconds(10));
             if (enabled && !paused) SetStatus("Фоновий переклад повторить спробу.");
         }
     }

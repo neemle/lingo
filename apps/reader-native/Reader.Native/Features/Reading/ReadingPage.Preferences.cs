@@ -72,7 +72,11 @@ public partial class ReadingPage
 
     private void SaveReaderPreference(ReaderPreferenceChange change)
     {
-        try { readerPreferences = AppState.Session.UpdateReaderPreference(change); }
+        try
+        {
+            readerPreferences = AppState.Session.UpdateReaderPreference(change);
+            if (change.Source is not null) AppState.TranslationWorker?.Wake();
+        }
         catch (Exception error) { ReportPreferenceError(error); }
     }
 

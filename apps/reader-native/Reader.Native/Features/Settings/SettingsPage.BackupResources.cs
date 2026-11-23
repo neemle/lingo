@@ -41,6 +41,11 @@ public partial class SettingsPage
             Status.Text = "Відновлюємо архів…";
             var resources = await session.RestoreBackupFileAsync(path);
             Status.Text = resources is null ? "Відновлення не підтверджено." : "Архів відновлено.";
+            if (resources is not null)
+            {
+                AppState.TranslationWorker?.TranslationRoutesChanged();
+                await RefreshStorageAsync(syncWorker: true);
+            }
             if (resources is { Length: > 0 }) await ReportBackupResourcesAsync(resources);
         }
         catch (Exception error)
