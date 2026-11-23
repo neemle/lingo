@@ -95,6 +95,7 @@ public partial class ReadingPage : ContentPage
         BindingContext = AppState.Session;
         AppState.Session.PropertyChanged += SessionChanged;
         AppState.Session.BackgroundPageTranslated += BackgroundPageTranslated;
+        AppState.Session.BackgroundTextTranslated += BackgroundTextTranslated;
         SyncReaderPdf();
         SyncInlinePdfMode();
         SyncAnalysisPrefetch();
@@ -135,6 +136,7 @@ public partial class ReadingPage : ContentPage
         WordCard.IsVisible = false;
         Translation.Text = "";
         AppState.Session.BackgroundPageTranslated -= BackgroundPageTranslated;
+        AppState.Session.BackgroundTextTranslated -= BackgroundTextTranslated;
         AppState.Session.PropertyChanged -= SessionChanged;
         base.OnDisappearing();
     }

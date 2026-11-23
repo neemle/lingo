@@ -1222,6 +1222,21 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    fn french_uk_route_with_invalid_assets(store: &Store) -> Route {
+        let package = store.translation_packages().into_iter()
+            .find(|package| (package.source, package.target) == ("fr", "uk")).unwrap();
+        let directory = store.model_directory.join(package.repository);
+        std::fs::create_dir_all(&directory).unwrap();
+        // Route discovery checks file sizes. Verification rejects the test bytes before inference.
+        for asset in &package.assets {
+            std::fs::File::create(directory.join(asset.name)).unwrap().set_len(asset.bytes).unwrap();
+        }
+        Route::Direct(ModelEdge {
+            source: package.source.into(), target: package.target.into(),
+            revision: package.revision.into(), quality: None,
+        })
+    }
+
     #[test]
     fn pdf_page_batches_missing_units_across_paragraphs_and_reuses_the_cache() {
         #[derive(Default)]
@@ -1270,21 +1285,10 @@ mod tests {
             }], 1,
         ).unwrap();
         assert_eq!(document.sentences.len(), 2);
-        let package = store.translation_packages().into_iter()
-            .find(|package| (package.source, package.target) == ("fr", "uk")).unwrap();
-        let package_directory = store.model_directory.join(package.repository);
-        std::fs::create_dir_all(&package_directory).unwrap();
-        // Advertise the package to route discovery, but fail verification before inference.
-        for asset in &package.assets {
-            std::fs::File::create(package_directory.join(asset.name)).unwrap().set_len(asset.bytes).unwrap();
-        }
+        let route = french_uk_route_with_invalid_assets(&store);
         assert!(store.translation_readiness("fr", "uk").unwrap().ready);
         assert!(store.pdf_page_translation(&document.id, 0, "uk", false).is_err());
 
-        let route = Route::Direct(ModelEdge {
-            source: package.source.into(), target: package.target.into(),
-            revision: package.revision.into(), quality: None,
-        });
         let first = &document.sentences[0];
         store.save_cached_segments([(
             unit_cache_key(&route, &first.text).unwrap(), &["Корабель прибуває.".into()][..],
@@ -1295,6 +1299,31 @@ mod tests {
         assert_eq!(rows[0]["endUtf16"], first.end_utf16);
         assert!(rows[1]["text"].is_null());
         assert!(store.pdf_page_translation_with_priority(&document.id, 0, "uk", false, true).is_err());
+    }
+
+    #[test]
+    fn background_text_progress_identifies_machine_translated_sentences() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("library.sqlite")).unwrap();
+        let document = store.import("reader.txt", b"Le bateau arrive. Le marin part.", "fr").unwrap();
+        let [reviewed, machine] = document.sentences.as_slice() else { panic!("expected two sentences"); };
+        store.set_reviewed_translation(&document.id, &reviewed.id, "uk", "Корабель прибуває.").unwrap();
+        store.update_reader_preference(crate::reader_preferences::ReaderPreferenceChange::BackgroundTranslation { value: true }).unwrap();
+        let route = french_uk_route_with_invalid_assets(&store);
+        store.save_cached_segments([(
+            unit_cache_key(&route, &machine.text).unwrap(), &["Моряк вирушає.".into()][..],
+        )]).unwrap();
+
+        let revision = document.current_revision_id.as_deref().unwrap();
+        let warm = store.advance_background_translation(&document.id, revision, "uk").unwrap();
+        let progress = serde_json::to_value(warm).unwrap();
+        assert_eq!(progress["translatedSentenceIds"], serde_json::json!([machine.id]));
+        assert!(progress.get("translatedPage").is_none());
+
+        let done = store.advance_background_translation(&document.id, revision, "uk").unwrap();
+        let progress = serde_json::to_value(done).unwrap();
+        assert!(progress.get("translatedSentenceIds").is_none());
+        assert!(progress["resumeAt"].is_null());
     }
 
     #[test]

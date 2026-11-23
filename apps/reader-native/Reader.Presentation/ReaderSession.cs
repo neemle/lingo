@@ -13,6 +13,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     private string error = "";
     public event PropertyChangedEventHandler? PropertyChanged;
     public event Action<BackgroundTranslatedPage>? BackgroundPageTranslated;
+    public event Action<BackgroundTranslatedText>? BackgroundTextTranslated;
     public event Action<string, int>? PdfOcrUpdated;
     public Snapshot Snapshot => snapshot;
     public Document? Document => snapshot.Documents.FirstOrDefault(item => item.Id == selectedId);
@@ -39,6 +40,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         var progress = await Task.Run(() => client.AdvanceBackgroundTranslation(id, revision, target));
         if (progress.TranslatedPage is { } page)
             BackgroundPageTranslated?.Invoke(new(id, revision, page, target));
+        if (progress.TranslatedSentenceIds is { Length: > 0 } sentences)
+            BackgroundTextTranslated?.Invoke(new(id, revision, target, sentences));
         return progress;
     }
     public Task<TranslationWarmStep> WarmTranslationStepAsync(string id, string revision, string target, int start) =>

@@ -192,6 +192,23 @@ public partial class ReadingPage
         if (autoTranslate) _ = RestoreDetachedTranslationAsync();
     }
 
+    private void BackgroundTextTranslated(BackgroundTranslatedText translated)
+    {
+        var session = AppState.Session;
+        if (!readingPageActive || session.Document is not { } document ||
+            document.Id != translated.DocumentId || document.CurrentRevisionId != translated.RevisionId ||
+            TargetCode != translated.Target || session.Sentence is not { } sentence)
+            return;
+
+        var window = FindTranslationWindow(document, translated.Target);
+        if (!translated.SentenceIds.Contains(sentence.Id) &&
+            window?.Units.Any(unit => unit.Sources.Any(source => translated.SentenceIds.Contains(source.Id))) != true)
+            return;
+
+        lastCacheRestore = null;
+        _ = RestoreCachedTranslationAsync();
+    }
+
     private async Task RestoreCachedTranslationAsync()
     {
         var session = AppState.Session;
@@ -203,6 +220,7 @@ public partial class ReadingPage
         var request = new CachedWindowRequest(key, document.CurrentRevisionId, readinessRequest);
         if (lastCacheRestore == request) return;
         if (FindTranslationWindow(document, key.Target) is { IsParagraph: true } existing && IsPreferredRoute(existing) &&
+            !HasUntranslatedUnits(document, existing) &&
             (ActiveMachineAlignment(document, key.Target, preferredOnly: true) is not null ||
                 ReviewedFor(document, key.Target, key.Sentence) is not null))
             return;
@@ -220,11 +238,19 @@ public partial class ReadingPage
 
             var scope = new TranslationScope(key.Document, key.Source, key.Target);
             var window = BuildParagraphWindow(current, scope, cached.Paragraph);
-            var matching = MatchingTranslationWindows(current, key.Target);
-            if (window.Units.Any(unit => MachineFor(current, window, unit) is not null) &&
-                !matching.Any(previous => previous.IsParagraph && previous.Anchor == window.Anchor
-                    && previous.Pivot == window.Pivot))
-                RememberWindow(window, background: true);
+            var matching = MatchingTranslationWindows(current, key.Target).ToArray();
+            var previous = matching.FirstOrDefault(candidate => candidate.IsParagraph && candidate.Anchor == window.Anchor
+                && candidate.Pivot == window.Pivot);
+            if (window.Units.Any(unit => MachineFor(current, window, unit) is not null &&
+                (previous?.UnitFor(unit.First) is not { } old || MachineFor(current, previous, old) is null)))
+            {
+                if (previous is not null)
+                    window = window with { Units = window.Units.Select(unit =>
+                        unit.MachineText is null && previous.UnitFor(unit.First) is { } old &&
+                        unit.Sources.SequenceEqual(old.Sources) && MachineFor(current, previous, old) is not null
+                            ? old : unit).ToArray() };
+                RememberWindow(window);
+            }
 
             if (cached.Sentence is { } sentence && ReviewedFor(current, key.Target, key.Sentence) is null &&
                 !matching.Any(previous => previous.Pivot == sentence.PivotLanguage

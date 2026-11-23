@@ -294,6 +294,8 @@ pub struct TranslationWarmStep {
     incomplete: bool,
     #[serde(skip)]
     translated_page: Option<u16>,
+    #[serde(skip)]
+    translated_sentence_ids: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -303,6 +305,8 @@ pub struct BackgroundTranslationProgress {
     resume_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     translated_page: Option<u16>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    translated_sentence_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     missing_packages: Option<Vec<crate::translation::TranslationPair>>,
 }
@@ -315,13 +319,14 @@ impl Store {
         target: &str,
     ) -> Result<BackgroundTranslationProgress> {
         valid_language(target)?;
-        let done = BackgroundTranslationProgress {
+        let mut progress = BackgroundTranslationProgress {
             resume_at: None,
             translated_page: None,
+            translated_sentence_ids: Vec::new(),
             missing_packages: None,
         };
         if self.reader_preferences()?.background_translation != Some(true) {
-            return Ok(done);
+            return Ok(progress);
         }
         let Some(_lock) = crate::file_originals::try_worker_lock(
             &self.file_original_directory,
@@ -330,13 +335,13 @@ impl Store {
         else {
             return Ok(BackgroundTranslationProgress {
                 resume_at: Some(crate::now() + 2),
-                ..done
+                ..progress
             });
         };
         let document = self.translation_document(id)?;
         if document.current_revision_id.as_deref() != Some(revision) || document.language == target
         {
-            return Ok(done);
+            return Ok(progress);
         }
         let (route_identity, missing_packages) = self.background_translation_route(&document.language, target)?;
         let now = crate::now();
@@ -368,30 +373,27 @@ impl Store {
             .optional()
             .map_err(database_error)?;
         let Some((cursor, incomplete, resume_at, generation)) = checkpoint else {
-            return Ok(done);
+            return Ok(progress);
         };
         if resume_at.is_none() {
-            return Ok(done);
+            return Ok(progress);
         }
         if resume_at.is_some_and(|deadline| deadline > now) {
-            return Ok(BackgroundTranslationProgress { resume_at, missing_packages, ..done });
+            return Ok(BackgroundTranslationProgress { resume_at, missing_packages, ..progress });
         }
-        let (cursor, incomplete, resume_at, translated_page) = if missing_packages.is_some() {
-            (0, false, Some(now + 30), None)
+        let (cursor, incomplete, resume_at) = if missing_packages.is_some() {
+            (0, false, Some(now + 30))
         } else {
             let step = self.warm_document_translation_step(&document, target, cursor as usize)?;
+            progress.translated_page = step.translated_page;
+            progress.translated_sentence_ids = step.translated_sentence_ids;
             match step.next {
-                Some(next) => (
-                    next,
-                    incomplete || step.incomplete,
-                    Some(0),
-                    step.translated_page,
-                ),
-                None if incomplete => (0, false, Some(crate::now() + 300), None),
+                Some(next) => (next, incomplete || step.incomplete, Some(0)),
+                None if incomplete => (0, false, Some(crate::now() + 300)),
                 None if document.format == "pdf" && self.pdf_has_unprocessed_pages(&document)? => {
-                    (cursor as usize, false, Some(crate::now() + PDF_OCR_POLL_SECONDS), None)
+                    (cursor as usize, false, Some(crate::now() + PDF_OCR_POLL_SECONDS))
                 }
-                None => (cursor as usize, false, None, None),
+                None => (cursor as usize, false, None),
             }
         };
         let saved = self.connection.execute(
@@ -401,13 +403,14 @@ impl Store {
             params![id, target, revision, i64::try_from(cursor).map_err(database_error)?, incomplete, resume_at, generation],
         ).map_err(database_error)?;
         if saved == 0 {
-            return Ok(BackgroundTranslationProgress { resume_at: Some(0), ..done });
+            progress.resume_at = Some(0);
+            progress.translated_page = None;
+            progress.translated_sentence_ids.clear();
+            return Ok(progress);
         }
-        Ok(BackgroundTranslationProgress {
-            resume_at,
-            translated_page,
-            missing_packages,
-        })
+        progress.resume_at = resume_at;
+        progress.missing_packages = missing_packages;
+        Ok(progress)
     }
 
     fn pdf_has_unprocessed_pages(&self, document: &Document) -> Result<bool> {
@@ -443,6 +446,7 @@ impl Store {
             next: None,
             incomplete: false,
             translated_page: None,
+            translated_sentence_ids: Vec::new(),
         };
         if self.reader_preferences()?.background_translation != Some(true) {
             return Ok(done);
@@ -465,6 +469,7 @@ impl Store {
             next: None,
             incomplete: false,
             translated_page: None,
+            translated_sentence_ids: Vec::new(),
         };
         let page_count = document
             .pdf_page_starts
@@ -505,6 +510,7 @@ impl Store {
                 next: Some(page + 1),
                 incomplete: rows.map_or(true, |rows| rows.iter().any(|row| row.text.is_none())),
                 translated_page,
+                ..done
             });
         }
         if start >= document.sentences.len() {
@@ -521,7 +527,7 @@ impl Store {
             return Ok(TranslationWarmStep {
                 next: Some(start + 1),
                 incomplete: true,
-                translated_page: None,
+                ..done
             });
         };
         let next = document.sentences[start..]
@@ -536,13 +542,16 @@ impl Store {
             .count()
             .max(1)
             + start;
+        let incomplete = translated.units.iter().any(|unit| unit.translation.is_none());
+        let translated_sentence_ids = translated.units.into_iter()
+            .filter(|unit| !unit.reviewed && unit.translation.is_some())
+            .flat_map(|unit| unit.sentence_ids)
+            .collect();
         Ok(TranslationWarmStep {
             next: Some(next),
-            incomplete: translated
-                .units
-                .iter()
-                .any(|unit| unit.translation.is_none()),
-            translated_page: None,
+            incomplete,
+            translated_sentence_ids,
+            ..done
         })
     }
 }
