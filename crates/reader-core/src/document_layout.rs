@@ -639,6 +639,7 @@ pub(crate) fn pdf_note_references(text: &str, numbers: &[u32]) -> Vec<Range<usiz
     let mut result = Vec::new();
     let mut letters = 0;
     let mut lower = true;
+    let mut after_punctuation = false;
     let mut chars = text.char_indices().peekable();
     while let Some((start, ch)) = chars.next() {
         if let Some((mut number, superscript)) = note_digit(ch) {
@@ -647,7 +648,7 @@ pub(crate) fn pdf_note_references(text: &str, numbers: &[u32]) -> Vec<Range<usiz
                 number = number.saturating_mul(10).saturating_add(digit.0);
             }
             let end = chars.peek().map_or(text.len(), |&(index, _)| index);
-            if letters > 0 && (superscript || letters >= 3 && lower) &&
+            if (superscript && (letters > 0 || after_punctuation) || letters >= 3 && lower) &&
                 chars.peek().is_none_or(|&(_, ch)| !ch.is_alphanumeric()) && numbers.contains(&number)
             {
                 result.push(start..end);
@@ -656,7 +657,10 @@ pub(crate) fn pdf_note_references(text: &str, numbers: &[u32]) -> Vec<Range<usiz
         if ch.is_alphabetic() {
             letters += 1;
             lower &= ch.is_lowercase();
+            after_punctuation = false;
         } else {
+            after_punctuation = matches!(ch, '.' | '!' | '?' | '…' | ')' | ']' | '»' | '”')
+                && (letters > 0 || after_punctuation);
             letters = 0;
             lower = true;
         }
@@ -737,7 +741,7 @@ pub(crate) fn pdf_list_label_ranges<'a>(document: &'a Document, text: &'a str, s
     })
 }
 
-fn note_digit(ch: char) -> Option<(u32, bool)> {
+pub(crate) fn note_digit(ch: char) -> Option<(u32, bool)> {
     if let Some(digit) = ch.to_digit(10) {
         return Some((digit, false));
     }
@@ -962,6 +966,19 @@ mod tests {
         let document = detached_pdf_document(raw.clone(), "fr", Some(ordinary));
         assert!(document.blocks.iter().all(|block| !block.footnote));
         assert!(mask_pdf_non_text(&document, &raw, 0).is_none());
+    }
+
+    #[test]
+    fn native_pdf_footnote_references_survive_proper_names_and_sentence_punctuation() {
+        let input = "Napoleon⁷ arrive au port.\nIl parle au capitaine.⁸\nLes avions A320 et V2 attendent.\n7 Napoleon : empereur.\n8 Capitaine : personne qui dirige.";
+        let document = detached_pdf_document(input.into(), "fr", None);
+        let references = document.blocks.iter().flat_map(|block| &block.footnote_references)
+            .map(|span| &input[span.start_utf8..span.end_utf8]).collect::<Vec<_>>();
+        assert_eq!(references, ["⁷", "⁸"]);
+        let masked = mask_pdf_non_text(&document, input, 0).unwrap();
+        assert!(masked.contains("Napoleon  arrive") && masked.contains("capitaine. "));
+        assert!(masked.contains("A320 et V2"));
+        assert_eq!(masked.encode_utf16().count(), input.encode_utf16().count());
     }
 
     #[test]

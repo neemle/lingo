@@ -13,6 +13,7 @@ public sealed class PdfOrderedText
     private static readonly Regex IsolatedAccent = new(@"(?m)^[ \t]*(à)[ \t\r]*$");
     private static readonly Regex Tokens = new(@"\S+");
     private static readonly Regex TextTokens = new(@"[^\s\uFFFC]+");
+    private static readonly Regex AttachedDigits = new(@"(?<=\p{L}[.!?…]?[)\]»”]?)[0-9]{1,3}(?![\p{L}\p{N}])");
     private readonly SourceSlice[] slices;
     private readonly string originalText;
 
@@ -35,6 +36,24 @@ public sealed class PdfOrderedText
     }
 
     public int? OriginalOffset(int start, int length) => OriginalRange(start, length)?.Start;
+
+    public PdfOrderedText MarkRaisedNoteReferences(Func<int, int, bool> smallerFont)
+    {
+        const string superscript = "⁰¹²³⁴⁵⁶⁷⁸⁹";
+        char[]? output = null;
+        var changes = new List<PdfTextOrderEdit>();
+        foreach (Match digits in AttachedDigits.Matches(Text))
+        {
+            if (OriginalRange(digits.Index, digits.Length) is not { } source ||
+                OriginalOffset(digits.Index - 1, 1) is not int preceding ||
+                source.Start != preceding + 1 || !smallerFont(source.Start, source.Length)) continue;
+            output ??= Text.ToCharArray();
+            for (var index = digits.Index; index < digits.Index + digits.Length; index++)
+                output[index] = superscript[output[index] - '0'];
+            changes.Add(new(digits.Index, digits.Index + digits.Length, new string(output, digits.Index, digits.Length)));
+        }
+        return output is null ? this : new(new string(output), originalText, slices, changes.ToArray());
+    }
 
     public (int Start, int Length)? OriginalRange(int start, int length)
     {

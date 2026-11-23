@@ -90,6 +90,12 @@ fn repair_text_order(old: &str, changes: &[PdfTextOrderEdit]) -> Result<(String,
 }
 
 fn valid_pdf_order_edit(original: &str, replacement: &str) -> bool {
+    if (1..=3).contains(&original.len()) && original.bytes().all(|byte| byte.is_ascii_digit())
+        && replacement.chars().map(|symbol| crate::document_layout::note_digit(symbol))
+            .eq(original.bytes().map(|byte| Some((u32::from(byte - b'0'), true))))
+    {
+        return true;
+    }
     if let Some((moved, restored)) = original.strip_suffix('à').zip(replacement.strip_prefix(" à ")) {
         return !restored.is_empty() && moved.trim() == restored
             && moved.starts_with(char::is_whitespace) && moved.ends_with(char::is_whitespace);
@@ -1533,6 +1539,8 @@ mod drop_cap_tests {
         assert!(!valid_pdf_order_edit(before, &after.replace("there", "elsewhere")));
         assert!(valid_pdf_order_edit(" ", "\n\n"));
         assert!(!valid_pdf_order_edit("text", "\n\n"));
+        assert!(valid_pdf_order_edit("78", "⁷⁸"));
+        assert!(!valid_pdf_order_edit("78", "⁷⁹"));
         let sentences = crate::segment_pdf_with_titles(after, "fixture");
         let segments = sentences.iter().map(|sentence| sentence.text.as_str()).collect::<Vec<_>>();
         assert_eq!(segments, ["Left choice\ncontinues here.", "OR", "Right choice\ncontinues there."]);

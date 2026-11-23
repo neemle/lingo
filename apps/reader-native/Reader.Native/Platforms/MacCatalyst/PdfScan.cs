@@ -130,6 +130,11 @@ internal static partial class PdfScan
             var width = page.GetBoundsForBox(PdfDisplayBox.Crop).Width;
             PdfOrderedText.WordBounds? LayoutBounds(int start, int length) => TextBounds(page, offset + start, length, raw);
             var layout = joined.SeparateBlocks(LayoutBounds, width);
+            if (layout.Text == storedText)
+            {
+                var marked = MarkNativeNoteReferences(page, raw, offset, layout);
+                return ReferenceEquals(marked, layout) ? [] : marked.Corrections;
+            }
             if (joined.Text == storedText) return layout.Corrections;
             if (accents.Text != joined.Text)
             {
@@ -312,13 +317,54 @@ internal static partial class PdfScan
         var width = page.GetBoundsForBox(PdfDisplayBox.Crop).Width;
         PdfOrderedText.WordBounds? LayoutBounds(int start, int length) => TextBounds(page, nativeOffset + start, length, raw);
         var layout = joined.SeparateBlocks(LayoutBounds, width);
+        if (expected.Span.StartsWith(layout.Text.AsSpan(), StringComparison.Ordinal)) return layout;
+        var marked = MarkNativeNoteReferences(page, raw, nativeOffset, layout);
         if (expected.IsEmpty || accents.Text == joined.Text ||
-            expected.Span.StartsWith(layout.Text.AsSpan(), StringComparison.Ordinal))
-            return layout;
+            expected.Span.StartsWith(marked.Text.AsSpan(), StringComparison.Ordinal))
+            return marked;
         var previousLayout = accents.SeparateBlocks(LayoutBounds, width);
         if (expected.Span.StartsWith(previousLayout.Text.AsSpan(), StringComparison.Ordinal)) return previousLayout;
         var upgraded = previousLayout.JoinLigatures(Bounds);
-        return expected.Span.StartsWith(upgraded.Text.AsSpan(), StringComparison.Ordinal) ? upgraded : layout;
+        return expected.Span.StartsWith(upgraded.Text.AsSpan(), StringComparison.Ordinal) ? upgraded : marked;
+    }
+
+    private static PdfOrderedText MarkNativeNoteReferences(PdfPage page, string raw, int offset, PdfOrderedText layout)
+    {
+        NSAttributedString? attributes = null;
+        var loaded = false;
+        try
+        {
+            return layout.MarkRaisedNoteReferences((start, length) =>
+            {
+                if (!loaded)
+                {
+                    loaded = true;
+                    attributes = page.AttributedString;
+                    if (attributes is not null && !string.Equals(attributes.Value, raw, StringComparison.Ordinal))
+                    {
+                        attributes.Dispose();
+                        attributes = null;
+                    }
+                }
+                if (attributes is null) return false;
+                var position = offset + start;
+                var bodySize = PointSize(attributes, position - 1);
+                if (bodySize <= 0) return false;
+                for (var index = position; index < position + length; index++)
+                {
+                    var size = PointSize(attributes, index);
+                    if (size <= 0 || size > bodySize * 0.75) return false;
+                }
+                return true;
+            });
+        }
+        finally { attributes?.Dispose(); }
+
+        static double PointSize(NSAttributedString source, int position)
+        {
+            using var values = source.GetAttributes(position, out _);
+            return values?[UIStringAttributeKey.Font] is UIFont font ? (double)font.PointSize : 0;
+        }
     }
 
     private static PdfOrderedText.WordBounds? TextBounds(PdfPage page, int start, int length, string? raw = null)
