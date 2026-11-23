@@ -233,7 +233,7 @@ public partial class ReadingPage
         {
             token.ThrowIfCancellationRequested();
             wordPopupSpeech.Rate = rate;
-            wordPopupSpeech.PreferredVoice = voiceId == SystemDefaultVoice ? null : voiceId;
+            wordPopupSpeech.PreferredVoice = voiceId == LocalSpeech.SystemDefaultVoice ? null : voiceId;
             return wordPopupSpeech.SpeakAsync(text, language);
         }
     }

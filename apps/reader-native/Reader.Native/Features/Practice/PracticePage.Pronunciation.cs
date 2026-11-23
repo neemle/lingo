@@ -6,11 +6,13 @@ namespace Reader.Native.Features.Practice;
 public partial class PracticePage
 {
     private readonly LocalSpeech pronunciation = new();
-    private int pronunciationRequest;
+    private CancellationTokenSource? pronunciationRun;
 
     private void StopPronunciation()
     {
-        pronunciationRequest++;
+        var previous = pronunciationRun;
+        pronunciationRun = null;
+        previous?.Cancel();
         pronunciation.Stop();
         PronunciationStatus.IsVisible = false;
     }
@@ -26,33 +28,64 @@ public partial class PracticePage
         if (card is null) return;
 
         StopPronunciation();
-        var request = pronunciationRequest;
+        using var run = new CancellationTokenSource();
+        pronunciationRun = run;
+        var token = run.Token;
         var answer = side == "answer";
         var reverse = state.Direction == "reverse";
         var language = answer == reverse ? card.Language : card.TargetLanguage;
         var text = answer ? string.Join(". ", question.Answers) : question.Prompt;
-        bool Current() => visible && pronunciationRequest == request && ReferenceEquals(progress, state);
+        bool Current() => visible && ReferenceEquals(pronunciationRun, run) && ReferenceEquals(progress, state);
 
         PronunciationStatus.Text = $"Озвучуємо · {DocumentLanguages.Name(language)}…";
         PronunciationStatus.IsVisible = true;
         try
         {
-            var preferences = await Task.Run(session.GetReaderPreferences);
-            var spoken = await LocalSpeech.PrepareSystemSpeechAsync(session, language, text);
+            var preferences = await Task.Run(session.GetReaderPreferences, token);
+            var (voices, error) = await LocalSpeech.ReadVoicesAsync(session, language).WaitAsync(token);
             if (!Current()) return;
             pronunciation.Rate = (preferences.SpeechRatePercent ?? LocalSpeech.DefaultRatePercent) / 100f;
             var preferred = preferences.SpeechVoices.GetValueOrDefault(language);
-            pronunciation.PreferredVoice = preferred is not null &&
-                LocalSpeech.VoicesForLanguage(language).Any(voice => voice.Id == preferred) ? preferred : null;
-            var result = await pronunciation.SpeakAsync(spoken, language);
+            var voice = voices.FirstOrDefault(item => item.Id == preferred) ?? LocalSpeech.AutomaticVoice(voices, language);
+            if (voice is null)
+                throw new InvalidOperationException(error ?? "Голос цієї мови відсутній. Локальні голоси можна завантажити в Налаштуваннях.");
+            string? result = null;
+            if (voice.Engine is { } engine)
+            {
+                try
+                {
+                    var audio = await session.SynthesizeSpeechTextAsync(
+                        text, language, voice.Speaker, pronunciation.Rate, engine, token);
+                    if (!Current()) return;
+                    result = await pronunciation.PlayWaveAsync(audio, 0, _ => { });
+                }
+                catch (Exception failed) when (!token.IsCancellationRequested)
+                {
+                    result = failed.Message;
+                }
+            }
+            if (!Current()) return;
+            if (voice.Engine is null || (result is not null && result != LocalSpeech.CompletedStatus &&
+                voices.Any(item => item.Id == LocalSpeech.SystemDefaultVoice)))
+            {
+                var spoken = await LocalSpeech.PrepareSystemSpeechAsync(session, language, text).WaitAsync(token);
+                if (!Current()) return;
+                pronunciation.PreferredVoice = voice.Engine is null && voice.Id != LocalSpeech.SystemDefaultVoice ? voice.Id : null;
+                result = await pronunciation.SpeakAsync(spoken, language);
+            }
             if (!Current()) return;
             PronunciationStatus.Text = result ?? "";
             PronunciationStatus.IsVisible = result is not null && result != LocalSpeech.CompletedStatus;
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception error)
         {
             if (!Current()) return;
             PronunciationStatus.Text = error.Message;
+        }
+        finally
+        {
+            if (ReferenceEquals(pronunciationRun, run)) pronunciationRun = null;
         }
     }
 }

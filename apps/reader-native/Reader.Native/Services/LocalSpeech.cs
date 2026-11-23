@@ -6,8 +6,11 @@ using Reader.Presentation;
 
 namespace Reader.Native.Services;
 
+internal sealed record VoiceChoice(string Id, string Label, string? Engine = null, uint Speaker = 0, string? Revision = null);
+
 public sealed class LocalSpeech : IDisposable
 {
+    internal const string SystemDefaultVoice = "@system";
     internal const int MaxModelAudioSeconds = 75;
     internal const int DefaultRatePercent = 40;
     internal const string CompletedStatus = "Озвучення завершено.";
@@ -20,6 +23,47 @@ public sealed class LocalSpeech : IDisposable
 
     internal static SpeechVoice[] VoicesForLanguage(string language) =>
         SpeechVoice.ForLanguage(NativeSpeech.InstalledVoices(), language);
+
+    internal static async Task<(VoiceChoice[] Voices, string? Error)> ReadVoicesAsync(ReaderSession session, string? language)
+    {
+        var voices = new List<VoiceChoice>();
+        string? error = null;
+        if (language is not null)
+        {
+            try
+            {
+                voices.AddRange(VoicesForLanguage(language).Select(voice =>
+                    new VoiceChoice(voice.Id, $"{voice.Name} ({voice.Language})")));
+                if (voices.Count > 0)
+                    voices.Insert(0, new VoiceChoice(SystemDefaultVoice, "Системний вибір"));
+            }
+            catch (Exception problem) { error = $"Не вдалося отримати системні голоси. {problem.Message}"; }
+
+            try
+            {
+                var installed = await session.OptionalModelsAsync();
+                string? InstalledRevision(string engine) => installed.FirstOrDefault(model => model.Id == engine && model.FilesPresent)?.Revision;
+                if (language == "uk" && InstalledRevision("piper-uk") is { } piper)
+                {
+                    voices.Add(new("piper-uk:0", "Лада · Piper", "piper-uk", 0, piper));
+                    voices.Add(new("piper-uk:1", "Микита · Piper", "piper-uk", 1, piper));
+                    voices.Add(new("piper-uk:2", "Тетяна · Piper", "piper-uk", 2, piper));
+                }
+                if (DocumentLanguages.All.Any(item => item.Code == language) && InstalledRevision("supertonic-3") is { } supertonic)
+                {
+                    voices.Add(new("supertonic-3:0", "M1 · Supertonic", "supertonic-3", 0, supertonic));
+                    voices.Add(new("supertonic-3:1", "F1 · Supertonic", "supertonic-3", 1, supertonic));
+                }
+            }
+            catch (Exception problem) { error ??= $"Не вдалося отримати локальні голоси. {problem.Message}"; }
+        }
+        return (voices.ToArray(), error);
+    }
+
+    internal static VoiceChoice? AutomaticVoice(VoiceChoice[] choices, string? language) =>
+        Array.Find(choices, voice => voice.Id == SystemDefaultVoice)
+        ?? (language == "uk" ? Array.Find(choices, voice => voice.Engine == "piper-uk") : null)
+        ?? Array.Find(choices, voice => voice.Engine == "supertonic-3");
 
     internal static async Task<string> PrepareSystemSpeechAsync(ReaderSession session, string language, string text)
     {

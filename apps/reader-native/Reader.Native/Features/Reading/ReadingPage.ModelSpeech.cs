@@ -7,9 +7,6 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage
 {
-    private const string SystemDefaultVoice = "@system";
-
-    private sealed record VoiceChoice(string Id, string Label, string? Engine = null, uint Speaker = 0, string? Revision = null);
     private sealed record SpeechSource(string Document, string Sentence, string Language, string SourceText, string SpeechText);
     private sealed record ClipKey(SpeechSource Source, string Engine, uint Speaker, float Rate);
 
@@ -31,45 +28,9 @@ public partial class ReadingPage
         loadingVoices = LoadVoicesAsync(language, ++voiceCatalogRevision);
     }
 
-    private static async Task<(VoiceChoice[] Voices, string? Error)> ReadVoicesAsync(string? language)
-    {
-        var voices = new List<VoiceChoice>();
-        string? error = null;
-        if (language is not null)
-        {
-            try
-            {
-                voices.AddRange(LocalSpeech.VoicesForLanguage(language).Select(voice =>
-                    new VoiceChoice(voice.Id, $"{voice.Name} ({voice.Language})")));
-                if (voices.Count > 0)
-                    voices.Insert(0, new VoiceChoice(SystemDefaultVoice, "Системний вибір"));
-            }
-            catch (Exception problem) { error = $"Не вдалося отримати системні голоси. {problem.Message}"; }
-
-            try
-            {
-                var installed = await AppState.Session.OptionalModelsAsync();
-                string? InstalledRevision(string engine) => installed.FirstOrDefault(model => model.Id == engine && model.FilesPresent)?.Revision;
-                if (language == "uk" && InstalledRevision("piper-uk") is { } piper)
-                {
-                    voices.Add(new("piper-uk:0", "Лада · Piper", "piper-uk", 0, piper));
-                    voices.Add(new("piper-uk:1", "Микита · Piper", "piper-uk", 1, piper));
-                    voices.Add(new("piper-uk:2", "Тетяна · Piper", "piper-uk", 2, piper));
-                }
-                if (DocumentLanguages.All.Any(item => item.Code == language) && InstalledRevision("supertonic-3") is { } supertonic)
-                {
-                    voices.Add(new("supertonic-3:0", "M1 · Supertonic", "supertonic-3", 0, supertonic));
-                    voices.Add(new("supertonic-3:1", "F1 · Supertonic", "supertonic-3", 1, supertonic));
-                }
-            }
-            catch (Exception problem) { error ??= $"Не вдалося отримати локальні голоси. {problem.Message}"; }
-        }
-        return (voices.ToArray(), error);
-    }
-
     private async Task LoadVoicesAsync(string? language, int revision)
     {
-        var (voices, error) = await ReadVoicesAsync(language);
+        var (voices, error) = await LocalSpeech.ReadVoicesAsync(AppState.Session, language);
         if (revision != voiceCatalogRevision) return;
 
         loadingSpeechPreferences = true;
@@ -137,12 +98,7 @@ public partial class ReadingPage
     private VoiceChoice? PickedVoice() => VoicePicker.SelectedIndex > 0 && VoicePicker.SelectedIndex <= availableVoices.Length
         ? availableVoices[VoicePicker.SelectedIndex - 1] : null;
 
-    private VoiceChoice? SelectedVoice() => PickedVoice() ?? AutomaticVoice(availableVoices, voiceLanguage);
-
-    private static VoiceChoice? AutomaticVoice(VoiceChoice[] choices, string? language) =>
-        Array.Find(choices, voice => voice.Id == SystemDefaultVoice)
-        ?? (language == "uk" ? Array.Find(choices, voice => voice.Engine == "piper-uk") : null)
-        ?? Array.Find(choices, voice => voice.Engine == "supertonic-3");
+    private VoiceChoice? SelectedVoice() => PickedVoice() ?? LocalSpeech.AutomaticVoice(availableVoices, voiceLanguage);
 
     private async Task<VoiceChoice?> WordDetailVoiceAsync(string language, CancellationToken token)
     {
@@ -151,9 +107,9 @@ public partial class ReadingPage
             await loadingVoices.WaitAsync(token);
             if (language == voiceLanguage) return SelectedVoice();
         }
-        var (voices, _) = await ReadVoicesAsync(language).WaitAsync(token);
+        var (voices, _) = await LocalSpeech.ReadVoicesAsync(AppState.Session, language).WaitAsync(token);
         var saved = readerPreferences.SpeechVoices.GetValueOrDefault(language);
-        return voices.FirstOrDefault(voice => voice.Id == saved) ?? AutomaticVoice(voices, language);
+        return voices.FirstOrDefault(voice => voice.Id == saved) ?? LocalSpeech.AutomaticVoice(voices, language);
     }
 
     private static string ModelTimelineRevision(VoiceChoice voice, string language) =>

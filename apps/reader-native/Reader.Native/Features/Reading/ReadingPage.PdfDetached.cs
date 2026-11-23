@@ -721,7 +721,7 @@ public partial class ReadingPage
                     checkpointDetachedSpeech = null;
                     DetachedSentenceStatus.Text = "Локальний голос недоступний. Використовуємо системний голос.";
                 }
-                detachedSpeech.PreferredVoice = fallback || voice?.Id == SystemDefaultVoice ? null : voice?.Id;
+                detachedSpeech.PreferredVoice = fallback || voice?.Id == LocalSpeech.SystemDefaultVoice ? null : voice?.Id;
                 var pronunciation = current.SpeechText ?? current.PronunciationText ?? speechText;
                 var pronounced = await LocalSpeech.PrepareSystemSpeechAsync(session, current.Language, pronunciation);
                 if (run != detachedAudioRun) return false;
