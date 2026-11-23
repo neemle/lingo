@@ -9,9 +9,9 @@ public partial class ReadingPage
     private bool findingInDocument;
     private sealed record DocumentFindSelection(int Position, bool Translation,
         int? PhysicalPage = null, string? SentenceId = null, DetachedPdfTranslation? CachedMachine = null,
-        string? SourceQuery = null);
+        string? Query = null);
     private sealed record DocumentFindFocus(string Document, string? Revision, int? Page,
-        string Sentence, TextSelection Span);
+        string Sentence, TextSelection? Span = null, string? Target = null, string? Query = null);
     private DocumentFindFocus? documentFindFocus;
 #if MACCATALYST
     private sealed record UnreadPdfFind(string Document, int Page, string Query);
@@ -48,7 +48,7 @@ public partial class ReadingPage
                 await pdfWindowRead;
                 if (!readingPageActive || session.Document?.Id != document.Id) return;
                 await OpenPdfPageAsync(unreadPage);
-                if (match.SourceQuery is { } query && readingPageActive && session.Document?.Id == document.Id &&
+                if (match.Query is { } query && readingPageActive && session.Document?.Id == document.Id &&
                     pdfWindow?.Center == unreadPage)
                 {
                     pendingUnreadPdfFind = new(document.Id, unreadPage, query);
@@ -66,7 +66,8 @@ public partial class ReadingPage
                     await LoadDetachedSentenceAsync(address, match.Position, sentenceId);
                     if (ReferenceEquals(detachedAddress, address) && !loadingDetachedSentence &&
                         detachedSentence is { } found && found.Sentence.Id == sentenceId &&
-                        match.SourceQuery is { } query && DocumentFind.SourceMatch(found.Sentence, query) is { } span)
+                        !match.Translation && match.Query is { } query &&
+                        DocumentFind.SourceMatch(found.Sentence, query) is { } span)
                         RevealDetachedFindSpan(address, found, span);
                     if (ReferenceEquals(detachedAddress, address) && !loadingDetachedSentence &&
                         detachedSentence is { } loaded && loaded.Sentence.Id == sentenceId &&
@@ -76,6 +77,9 @@ public partial class ReadingPage
                         ShowDetachedMachineTranslation(cached, loaded.Language, target);
                         UpdateDetachedControls();
                     }
+                    if (ReferenceEquals(detachedAddress, address) && !loadingDetachedSentence &&
+                        detachedSentence is { } selected && selected.Sentence.Id == sentenceId)
+                        RevealTranslationFindMatch(match, address.Document, selected.RevisionId, page, sentenceId, target);
                 }
                 return;
             }
@@ -96,11 +100,16 @@ public partial class ReadingPage
             await session.SelectSentenceAsync(position);
             if (readingPageActive && session.Error.Length == 0 && session.Document is { } opened &&
                 opened.Id == document.Id && opened.CurrentRevisionId == current.CurrentRevisionId &&
-                session.Sentence is { } sentence && sentence.Id == current.Sentences[position].Id &&
-                SetDocumentFindFocus(opened.Id, opened.CurrentRevisionId, null, sentence, match.SourceQuery) is { } foundSpan)
+                session.Sentence is { } sentence && sentence.Id == current.Sentences[position].Id)
             {
-                UpdateHighlight();
-                SourceText.RevealOffset(foundSpan.StartUtf16);
+                if (match.Translation && opened.Format == "pdf")
+                    RevealTranslationFindMatch(match, opened.Id, opened.CurrentRevisionId, null, sentence.Id, target);
+                else if (!match.Translation &&
+                    SetDocumentFindFocus(opened.Id, opened.CurrentRevisionId, null, sentence, match.Query) is { } foundSpan)
+                {
+                    UpdateHighlight();
+                    SourceText.RevealOffset(foundSpan.StartUtf16);
+                }
             }
         }
         catch (Exception error) { await DisplayAlertAsync("Пошук у документі", error.Message, "Гаразд"); }
@@ -117,6 +126,23 @@ public partial class ReadingPage
     private TextSelection? FindSourceFocus(string document, string? revision, Sentence sentence, int? page) =>
         documentFindFocus is { } focus && focus.Document == document && focus.Revision == revision &&
         focus.Sentence == sentence.Id && focus.Page == page ? focus.Span : null;
+
+    private void RevealTranslationFindMatch(DocumentFindSelection match, string document, string? revision,
+        int? page, string sentence, string? target)
+    {
+        if (!match.Translation || match.Query is not { } query || target is null || TargetCode != target) return;
+        documentFindFocus = new(document, revision, page, sentence, Target: target, Query: query);
+        DrawPdfTranslationLayout();
+    }
+
+    private string? PdfTranslationFindQuery() =>
+        documentFindFocus is { Target: not null } focus && pdfLayoutRequest is { } address &&
+        focus.Document == address.Document && focus.Target == address.Target &&
+        focus.Sentence == pdfLayoutSentence?.Id &&
+        (address.DetachedText is null
+            ? focus.Page is null && focus.Revision == address.Revision
+            : focus.Page == address.Page && focus.Revision == detachedSentence?.RevisionId)
+            ? focus.Query : null;
 
 #if MACCATALYST
     private void ScheduleUnreadPdfFind()
@@ -289,8 +315,7 @@ public partial class ReadingPage
                     : inTranslation ? "Збігів у збереженому перекладі немає." : "Збігів не знайдено.";
                 foreach (var match in page.Matches)
                 {
-                    var selection = match.Selection;
-                    if (!selection.Translation) selection = selection with { SourceQuery = query };
+                    var selection = match.Selection with { Query = query };
                     var text = DocumentFind.MatchingExcerpt(match.Text, query);
                     var label = selection.PhysicalPage is int physicalPage
                         ? $"PDF {physicalPage + 1} · {(selection.SentenceId is null ? text : BookmarkLabel(selection.Position, text))}"

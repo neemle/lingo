@@ -35,9 +35,10 @@ public partial class ReadingPage
     private PdfLayoutAddress? pendingPdfCacheRefresh;
     private PdfAutoTranslation? pendingPdfAutoTranslation;
     private (PdfAutoTranslation Request, int Attempts)? pdfAutoAttempts;
-    private (VerticalStackLayout Panel, PdfPageTranslationRow[] Rows, Label[] Labels, Sentence? Active)? overflowContent;
+    private (VerticalStackLayout Panel, PdfPageTranslationRow[] Rows, Label[] Labels, Sentence? Active, string? Query)? overflowContent;
     private (PdfLayoutAddress Address, string SentenceId, RectF Bounds, double ViewportHeight)? lastPdfTranslationFollow;
     private const string UntranslatedPdfFragment = "Фрагмент ще не перекладено";
+    private static readonly Color PdfSearchMatchColor = Color.FromArgb("#FFD27A");
 
     private static bool HasPdfTranslation(PdfPageTranslationRow row) => !string.IsNullOrWhiteSpace(row.Text);
 
@@ -256,9 +257,10 @@ public partial class ReadingPage
         if (PdfPagePivotNotice(address) is { } pivotNotice)
             text.Children.Add(new Label { Text = pivotNotice, Style = (Style)Resources["ReaderMeta"] });
         Grid? activeRow = null;
+        var query = PdfTranslationFindQuery();
         foreach (var row in rows)
         {
-            var label = PdfTranslationTextLabel(row, 20);
+            var label = PdfTranslationTextLabel(row, 20, query);
             var action = new Button
             {
                 Text = "До оригіналу",
@@ -329,10 +331,28 @@ public partial class ReadingPage
         AppState.Session.Document is { Format: "pdf" } document &&
         document.Id == address.Document && document.CurrentRevisionId == address.Revision;
 
-    private Label PdfTranslationTextLabel(PdfPageTranslationRow row, double size) =>
-        HasPdfTranslation(row)
-            ? new Label { Text = row.Text, FontFamily = "Georgia", FontSize = size, LineHeight = 1.3 }
-            : new Label { Text = UntranslatedPdfFragment, Style = (Style)Resources["ReaderMeta"] };
+    private Label PdfTranslationTextLabel(PdfPageTranslationRow row, double size, string? query = null)
+    {
+        if (row.Text is not { } text || !HasPdfTranslation(row))
+            return new Label { Text = UntranslatedPdfFragment, Style = (Style)Resources["ReaderMeta"] };
+        var label = new Label { FontFamily = "Georgia", FontSize = size, LineHeight = 1.3 };
+        if (pdfLayoutSentence is { } active && row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16 &&
+            query is not null && DocumentFind.SourceMatch(text, query) is { } match)
+        {
+            var end = match.StartUtf16 + match.LengthUtf16;
+            label.FormattedText = new FormattedString
+            {
+                Spans =
+                {
+                    new Span { Text = text[..match.StartUtf16] },
+                    new Span { Text = match.Text, BackgroundColor = PdfSearchMatchColor },
+                    new Span { Text = text[end..] },
+                },
+            };
+        }
+        else label.Text = text;
+        return label;
+    }
 
     private async Task LoadPdfPageLayoutAsync(PdfLayoutAddress address, bool cachedOnly)
     {
@@ -573,8 +593,9 @@ public partial class ReadingPage
         background.IsVisible = background.Source is not null && source is { Lines.Length: > 0 } &&
             pdfLayoutRows.Length > 0;
         var gloss = (detached ? DetachedWordCard : WordCard).IsVisible ? PopupGloss(detached) : null;
+        var query = PdfTranslationFindQuery();
         var drawing = new TranslatedPdfDrawing(pdfLayoutRows, source?.Lines ?? [], source?.Offset ?? 0,
-            pdfLayoutSentence, gloss, background.IsVisible);
+            pdfLayoutSentence, gloss, background.IsVisible, query);
         var overflow = detached ? DetachedPdfTranslationOverflow : PdfTranslationOverflow;
         drawing.OverflowChanged = rows => Dispatcher.Dispatch(() =>
         {
@@ -584,8 +605,8 @@ public partial class ReadingPage
                     .Select(row => HasPdfTranslation(row) ? row.Text : UntranslatedPdfFragment));
                 if (SemanticProperties.GetDescription(surface) != description)
                     SemanticProperties.SetDescription(surface, description);
-                var bounds = drawing.ActiveBounds;
-                ShowPdfTranslationOverflow(overflow, rows, bounds is not null);
+                var bounds = drawing.MatchBounds ?? drawing.ActiveBounds;
+                ShowPdfTranslationOverflow(overflow, rows, bounds is not null, query);
                 if (bounds is { } activeBounds && pdfLayoutSentence is { } active &&
                     !rows.Any(row => row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16))
                     _ = FollowRenderedPdfSentenceAsync(viewport, surface, active, activeBounds);
@@ -616,12 +637,14 @@ public partial class ReadingPage
         finally { syncingPdfTranslationScroll = false; }
     }
 
-    private void ShowPdfTranslationOverflow(VerticalStackLayout panel, PdfPageTranslationRow[] rows, bool hasRenderedActive)
+    private void ShowPdfTranslationOverflow(VerticalStackLayout panel, PdfPageTranslationRow[] rows, bool hasRenderedActive,
+        string? query)
     {
         var active = pdfLayoutSentence;
         var previous = overflowContent;
         Label[] labels;
-        if (previous is { } current && current.Panel == panel && current.Rows.SequenceEqual(rows))
+        if (previous is { } current && current.Panel == panel && current.Query == query &&
+            (query is null || current.Active == active) && current.Rows.SequenceEqual(rows))
         {
             if (current.Active == active) return;
             labels = current.Labels;
@@ -639,7 +662,7 @@ public partial class ReadingPage
                 for (var index = 0; index < rows.Length; index++)
                 {
                     var row = rows[index];
-                    var label = PdfTranslationTextLabel(row, 19);
+                    var label = PdfTranslationTextLabel(row, 19, query);
                     var tap = new TapGestureRecognizer();
                     tap.Tapped += async (_, _) => await SelectTranslatedPdfRowAsync(row);
                     label.GestureRecognizers.Add(tap);
@@ -648,7 +671,7 @@ public partial class ReadingPage
                 }
             }
         }
-        overflowContent = (panel, rows, labels, active);
+        overflowContent = (panel, rows, labels, active, query);
 
         Label? activeLabel = null;
         for (var index = 0; index < labels.Length; index++)
@@ -660,7 +683,8 @@ public partial class ReadingPage
         var previouslyInOverflow = active is not null && previous?.Rows.Any(row =>
             row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16) == true;
         if ((activeLabel is not null || !hasRenderedActive) &&
-            (previous?.Active != active || previous?.Panel != panel || previouslyInOverflow != (activeLabel is not null)))
+            (previous?.Active != active || previous?.Panel != panel || previous?.Query != query ||
+                previouslyInOverflow != (activeLabel is not null)))
             FollowOverflowSelection(panel, active, activeLabel);
     }
 
@@ -707,14 +731,15 @@ public partial class ReadingPage
     }
 
     private sealed class TranslatedPdfDrawing(PdfPageTranslationRow[] rows, OcrLine[] geometry, int offset,
-        Sentence? active, string? gloss, bool preserveArtwork) : IDrawable
+        Sentence? active, string? gloss, bool preserveArtwork, string? query = null) : IDrawable
     {
         private sealed record Region(RectF Bounds, List<PdfPageTranslationRow> Rows);
-        private readonly record struct Fragment(PdfPageTranslationRow Source, int Start, int End, bool Active);
+        private readonly record struct Fragment(PdfPageTranslationRow Source, int Start, int End, bool Active, TextSelection? Match);
         private readonly record struct WrappedLine(int Start, int End);
         private readonly List<(RectF Bounds, PdfPageTranslationRow Source)> hitTargets = [];
         internal Action<PdfPageTranslationRow[]>? OverflowChanged { get; set; }
         internal RectF? ActiveBounds { get; private set; }
+        internal RectF? MatchBounds { get; private set; }
 
         internal double? SourceTop(PdfPageTranslationRow row) => Bounds(row, new RectF(0, 0, 1, 1))?.Top;
 
@@ -731,6 +756,7 @@ public partial class ReadingPage
         {
             hitTargets.Clear();
             ActiveBounds = null;
+            MatchBounds = null;
             canvas.FillColor = Colors.White;
             if (page.Width <= 0 || page.Height <= 0) return;
             if (preserveArtwork)
@@ -774,7 +800,8 @@ public partial class ReadingPage
             if (rows.Length > 0 && regions.Count == 0)
             {
                 canvas.FillRectangle(page);
-                OverflowChanged?.Invoke(DrawReflowedPage(canvas, page));
+                var reflowOverflow = DrawReflowedPage(canvas, page);
+                OverflowChanged?.Invoke(reflowOverflow);
                 return;
             }
 
@@ -788,7 +815,7 @@ public partial class ReadingPage
                     if (text.Length > 0) text.Append(' ');
                     var start = text.Length;
                     text.Append(HasPdfTranslation(row) ? row.Text : "…");
-                    fragments.Add(new Fragment(row, start, text.Length, isActive));
+                    fragments.Add(MakeFragment(row, start, text.Length, isActive));
                 }
                 if (!DrawFitted(canvas, text.ToString(), region.Bounds, fragments, gloss))
                     overflow.AddRange(fragments.Select(fragment => fragment.Source));
@@ -822,12 +849,16 @@ public partial class ReadingPage
                 if (top + height > bottom) return ordered[index..];
                 var isActive = active is not null && row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16;
                 var bounds = new RectF(page.Left + margin, top, width, height);
-                if (!DrawFitted(canvas, text, bounds, [new(row, 0, text.Length, isActive)], gloss, size))
+                if (!DrawFitted(canvas, text, bounds, [MakeFragment(row, 0, text.Length, isActive)], gloss, size))
                     return ordered[index..];
                 top += height + size * 0.45f;
             }
             return [];
         }
+
+        private Fragment MakeFragment(PdfPageTranslationRow row, int start, int end, bool isActive) =>
+            new(row, start, end, isActive, isActive && query is not null && row.Text is { } text
+                ? DocumentFind.SourceMatch(text, query, start) : null);
 
         private RectF? Bounds(PdfPageTranslationRow row, RectF page)
         {
@@ -900,6 +931,18 @@ public partial class ReadingPage
                     ActiveBounds = ActiveBounds is { } previous ? Union(previous, bounds) : bounds;
                     canvas.FillColor = Color.FromArgb("#FFF1CF");
                     canvas.FillRectangle(bounds);
+                    if (fragment.Match is { } match)
+                    {
+                        var matchStart = Math.Max(match.StartUtf16 - range.Start, start);
+                        var matchEnd = Math.Min(match.StartUtf16 + match.LengthUtf16 - range.Start, end);
+                        if (matchStart < matchEnd)
+                        {
+                            var matchBounds = BoundsFor(matchStart, matchEnd);
+                            MatchBounds = MatchBounds is { } previousMatch ? Union(previousMatch, matchBounds) : matchBounds;
+                            canvas.FillColor = PdfSearchMatchColor;
+                            canvas.FillRectangle(matchBounds);
+                        }
+                    }
                     if (!HasPdfTranslation(fragment.Source) || string.IsNullOrWhiteSpace(gloss)) continue;
                     var search = start;
                     while (search <= end - gloss.Length)
