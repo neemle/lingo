@@ -41,4 +41,7 @@ public sealed record DetachedPdfPassageRow(int Position, int SentenceCount, stri
 public sealed record PdfPageTranslationRow(int StartUtf16, int EndUtf16, string? Text,
     string? SourceText = null, string? PivotLanguage = null, string? SourceSentenceId = null);
 public sealed record PdfTextOrderEdit(int StartUtf16, int EndUtf16, string Replacement);
+public readonly record struct PdfLayoutWord(int Start, int End, double Left, double Right, double CenterY, double Height);
+public sealed record PdfLayoutSlice(int Start, int End, string Separator);
+public sealed record PdfLayoutEdit(int Start, int End, PdfLayoutSlice[] Slices);
 public sealed record DetachedPdfFindPage(DetachedPdfFindHit[] Matches, DetachedPdfFindCursor? Next);

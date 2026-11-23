@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using Reader.Contracts;
+using Client = Reader.CoreClient.CoreClient;
 
 namespace Reader.Presentation;
 
@@ -11,6 +12,7 @@ public sealed class PdfOrderedText
     private readonly record struct Edit(int Start, int End, int? MovedWord);
     private static readonly Regex IsolatedAccent = new(@"(?m)^[ \t]*(à)[ \t\r]*$");
     private static readonly Regex Tokens = new(@"\S+");
+    private static readonly Regex TextTokens = new(@"[^\s\uFFFC]+");
     private readonly SourceSlice[] slices;
 
     public string Text { get; }
@@ -40,8 +42,13 @@ public sealed class PdfOrderedText
 
     public PdfOrderedText SeparateBlocks(Func<int, int, WordBounds?> bounds, double pageWidth)
     {
-        var edits = PdfTextBlocks.Separate(Text, (start, length) =>
-            OriginalOffset(start, length) is { } original ? bounds(original, length) : null, pageWidth);
+        if (Text.Length == 0 || Text.Length > 24000 || pageWidth <= 0) return this;
+        var words = new List<PdfLayoutWord>();
+        foreach (Match token in TextTokens.Matches(Text))
+            if (OriginalOffset(token.Index, token.Length) is { } original && bounds(original, token.Length) is { } box)
+                words.Add(new(token.Index, token.Index + token.Length, box.Left, box.Right, -box.MidY, box.Height));
+        if (words.Count == 0) return this;
+        var edits = Client.SeparatePdfBlocks(Text, words.ToArray(), pageWidth);
         if (edits.Length == 0) return this;
         var output = new StringBuilder(Text.Length + edits.Length);
         var sources = new List<SourceSlice>();

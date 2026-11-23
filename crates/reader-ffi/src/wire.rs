@@ -24,6 +24,12 @@ pub enum Command {
         height: usize,
         boxes: Vec<reader_core::pdf_appearance::SampleBox>,
     },
+    SeparatePdfBlocks {
+        text: String,
+        words: Vec<reader_core::pdf_text_blocks::PositionedWord>,
+        #[serde(rename = "pageWidth")]
+        page_width: f64,
+    },
     StorageUsage,
     ClearStorage {
         scope: reader_core::storage_management::StorageScope,
