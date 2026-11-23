@@ -21,7 +21,21 @@ trap 'rm -rf -- "$staging"' EXIT
 payload="$staging/payload"
 components="$staging/components.plist"
 mkdir "$payload"
-ditto "$app" "$payload/Lingo.app"
+staged_app="$payload/Lingo.app"
+ditto "$app" "$staged_app"
+
+# The linker's ad-hoc signature covers only the executable. Seal the staged bundle for Finder.
+if ! codesign --verify --deep --strict "$staged_app" 2>"$staging/verify.log"; then
+  signature="$(codesign --display --verbose=2 "$staged_app" 2>&1)" || true
+  if [[ "$signature" == *linker-signed* || "$signature" == *'code object is not signed at all'* ]]; then
+    codesign --force --sign - "$staged_app"
+  else
+    cat "$staging/verify.log" >&2
+    exit 1
+  fi
+  codesign --verify --deep --strict "$staged_app"
+fi
+
 pkgbuild --analyze --root "$payload" "$components"
 # Keep the installer from relocating to an indexed build copy of the bundle.
 plutil -replace 0.BundleIsRelocatable -bool false "$components"
