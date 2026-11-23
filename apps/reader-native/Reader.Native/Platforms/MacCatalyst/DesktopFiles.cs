@@ -25,14 +25,31 @@ internal static class DesktopFiles
     internal static bool QueueFiles(IEnumerable<NSUrl> urls)
     {
         var inputs = new List<(string Name, Func<Task<ShareInboxItem>> Stage)>();
+        var scopedUrls = new List<NSUrl>();
         foreach (var url in urls)
         {
-            if (FileName(url) is { } name)
-                inputs.Add((name, () => StageUrlAsync(url, name)));
+            if (FileName(url) is not { } name) continue;
+            if (url.StartAccessingSecurityScopedResource()) scopedUrls.Add(url);
+            inputs.Add((name, () => StageFileAsync(url, name)));
         }
         if (inputs.Count == 0) return false;
-        _ = DesktopImport.ReceiveBatchAsync(inputs);
+        _ = ReceiveFileUrlsAsync(inputs, scopedUrls);
         return true;
+    }
+
+    private static async Task ReceiveFileUrlsAsync(
+        List<(string Name, Func<Task<ShareInboxItem>> Stage)> inputs, List<NSUrl> scopedUrls)
+    {
+        // Finder can end its temporary access when the native open callback returns.
+        // All URLs acquire their scope there, even if an earlier file is still copying.
+        try
+        {
+            await DesktopImport.ReceiveBatchAsync(inputs).ConfigureAwait(false);
+        }
+        finally
+        {
+            foreach (var url in scopedUrls) url.StopAccessingSecurityScopedResource();
+        }
     }
 
     private static string? FileName(NSUrl url) => url.IsFileUrl && url.Path is { } path
@@ -43,13 +60,18 @@ internal static class DesktopFiles
         var scoped = url.StartAccessingSecurityScopedResource();
         try
         {
-            await using var stream = File.OpenRead(url.Path ?? throw new IOException("Не вдалося відкрити файл."));
-            return await ShareInbox.StageAsync("file", name, stream).ConfigureAwait(false);
+            return await StageFileAsync(url, name).ConfigureAwait(false);
         }
         finally
         {
             if (scoped) url.StopAccessingSecurityScopedResource();
         }
+    }
+
+    private static async Task<ShareInboxItem> StageFileAsync(NSUrl url, string name)
+    {
+        await using var stream = File.OpenRead(url.Path ?? throw new IOException("Не вдалося відкрити файл."));
+        return await ShareInbox.StageAsync("file", name, stream).ConfigureAwait(false);
     }
 
     internal static async Task<ShareInboxItem?> StageClipboardImageAsync()
