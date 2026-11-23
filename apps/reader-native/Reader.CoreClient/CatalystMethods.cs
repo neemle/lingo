@@ -15,4 +15,6 @@ internal static class CatalystMethods
     internal static extern uint reader_close(ulong handle);
     [DllImport("__Internal", CallingConvention = CallingConvention.Cdecl)]
     internal static extern uint reader_release(ulong allocation);
+    [DllImport("__Internal", CallingConvention = CallingConvention.Cdecl)]
+    internal static extern NativeBuffer reader_rotate_ocr_png(byte[] input, ulong length, ushort angle);
 }

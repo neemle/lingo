@@ -76,6 +76,8 @@ internal static class TesseractOcr
                 }
                 cancellation.ThrowIfCancellationRequested();
                 var lines = RustCoreClient.ParseOcrTsv(output, width, height, sparse);
+                lines = await RecoverQuarterTurnsAsync(executable, language, image.Bytes, lines, cancellation)
+                    .ConfigureAwait(false);
                 if (lines.Length > 0)
                 {
                     if (recoverRotatedText is null) return lines;
@@ -108,6 +110,34 @@ internal static class TesseractOcr
         {
             throw new InvalidOperationException($"{error.Message} Tesseract: {portableFailure.Message}", error);
         }
+    }
+
+    private static async Task<OcrLine[]> RecoverQuarterTurnsAsync(Installation executable, string language,
+        byte[] input, OcrLine[] lines, CancellationToken cancellation)
+    {
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        budget.CancelAfter(TimeSpan.FromSeconds(12));
+        try
+        {
+            foreach (ushort angle in new ushort[] { 180, 90, 270 })
+            {
+                budget.Token.ThrowIfCancellationRequested();
+                var image = RustCoreClient.RotateOcrPng(input, angle);
+                var (width, height) = ReadPngSize(image);
+                var output = await ExecuteAsync(executable,
+                    ["stdin", "stdout", "-l", Languages[language], "--oem", "1", "--psm", "11", "tsv"],
+                    image, 16 * 1024 * 1024, TimeSpan.FromSeconds(5), budget.Token).ConfigureAwait(false);
+                var recovered = RustCoreClient.ParseOcrTsv(output, width, height, imageRotation: angle);
+                if (recovered.Length > 0) lines = RustCoreClient.MergeRotatedOcr(lines, recovered);
+            }
+        }
+        catch (Exception error) when (CanFallback(error) ||
+            error is OperationCanceledException && budget.IsCancellationRequested)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            Debug.WriteLine(error.Message);
+        }
+        return lines;
     }
 
     private static (int Width, int Height) ReadPngSize(byte[] bytes)

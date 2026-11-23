@@ -41,6 +41,10 @@ internal static class NativeMethods
     internal static uint reader_release(ulong allocation) => OperatingSystem.IsMacCatalyst()
         ? CatalystMethods.reader_release(allocation) : DesktopRelease(allocation);
 
+    internal static NativeBuffer RotateOcrPng(byte[] input, ulong length, ushort angle) =>
+        OperatingSystem.IsMacCatalyst() ? CatalystMethods.reader_rotate_ocr_png(input, length, angle)
+            : DesktopRotateOcrPng(input, length, angle);
+
     [DllImport(Library, EntryPoint = "reader_abi_version", CallingConvention = CallingConvention.Cdecl)]
     private static extern uint DesktopVersion();
     [DllImport(Library, EntryPoint = "reader_call", CallingConvention = CallingConvention.Cdecl)]
@@ -52,4 +56,6 @@ internal static class NativeMethods
     private static extern uint DesktopClose(ulong handle);
     [DllImport(Library, EntryPoint = "reader_release", CallingConvention = CallingConvention.Cdecl)]
     private static extern uint DesktopRelease(ulong allocation);
+    [DllImport(Library, EntryPoint = "reader_rotate_ocr_png", CallingConvention = CallingConvention.Cdecl)]
+    private static extern NativeBuffer DesktopRotateOcrPng(byte[] input, ulong length, ushort angle);
 }

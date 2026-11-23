@@ -17,6 +17,8 @@ ReaderBuffer reader_call(uint64_t handle, const uint8_t *input, uint64_t len);
 typedef float (*ReaderMeasureFont)(void *context, uint32_t start, uint32_t length, float size);
 ReaderBuffer reader_fit_pdf_text(const uint8_t *input, uint64_t len, float width, float height,
     float preferred, float minimum, void *context, ReaderMeasureFont measure);
+/* Returns raw PNG bytes, or an empty buffer on failure. */
+ReaderBuffer reader_rotate_ocr_png(const uint8_t *input, uint64_t len, uint16_t clockwise_angle);
 uint32_t reader_close(uint64_t handle);
 uint32_t reader_release(uint64_t allocation);
 #endif

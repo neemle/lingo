@@ -24,6 +24,8 @@ pub enum Command {
         height: u32,
         #[serde(default, rename = "sparseTsv")]
         sparse_tsv: Option<String>,
+        #[serde(default, rename = "imageRotation")]
+        image_rotation: Option<u16>,
     },
     MergeRotatedOcr {
         primary: Vec<reader_core::ocr::OcrLine>,

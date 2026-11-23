@@ -5,9 +5,11 @@ use crate::{Result, MAX_IMPORT};
 
 mod tesseract;
 mod orientation;
+mod quarter_turn;
 pub use orientation::merge_rotated_lines;
+pub use quarter_turn::rotate_ocr_png;
 pub(crate) use orientation::reading_box;
-pub use tesseract::{parse_tesseract_tsv, recover_tesseract_lines};
+pub use tesseract::{parse_tesseract_quarter_turn, parse_tesseract_tsv, recover_tesseract_lines};
 pub(crate) use tesseract::merge_missing_lines;
 
 /// Coordinates use the upright image, with the origin in its upper left corner.

@@ -131,8 +131,21 @@ public sealed class CoreClient : IDisposable
     }
     public static PdfLigatureJoin[] FindPdfLigatureJoins(string text, PdfLayoutWord[] words) =>
         Invoke<PdfLigatureJoin[]>(0, new { version = 1, operation = "find_pdf_ligature_joins", text, words });
-    public static OcrLine[] ParseOcrTsv(string tsv, int width, int height, string? sparseTsv = null) =>
-        Invoke<OcrLine[]>(0, new { version = 1, operation = "parse_ocr_tsv", tsv, width, height, sparseTsv });
+    public static OcrLine[] ParseOcrTsv(string tsv, int width, int height, string? sparseTsv = null, int? imageRotation = null) =>
+        Invoke<OcrLine[]>(0, new { version = 1, operation = "parse_ocr_tsv", tsv, width, height, sparseTsv, imageRotation });
+    public static byte[] RotateOcrPng(byte[] input, ushort angle)
+    {
+        var result = NativeMethods.RotateOcrPng(input, (ulong)input.Length, angle);
+        try
+        {
+            if (result.Data == 0 || result.Length is 0 or > 64 * 1024 * 1024)
+                throw new InvalidDataException("Не вдалося повернути зображення для OCR.");
+            var bytes = new byte[(int)result.Length];
+            Marshal.Copy(result.Data, bytes, 0, bytes.Length);
+            return bytes;
+        }
+        finally { if (result.Allocation != 0) NativeMethods.reader_release(result.Allocation); }
+    }
     public static OcrLine[] MergeRotatedOcr(OcrLine[] primary, OcrLine[] native) =>
         Invoke<OcrLine[]>(0, new { version = 1, operation = "merge_rotated_ocr", primary, native });
     public Backup Export() => Call<Backup>(new { version = 1, operation = "export" });

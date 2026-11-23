@@ -30,6 +30,10 @@ fn publish(result: Result<serde_json::Value>) -> Result<ReaderBuffer> {
             "Response exceeds 256MiB wire bound",
         )));
     }
+    publish_bytes(bytes)
+}
+
+fn publish_bytes(bytes: Box<[u8]>) -> Result<ReaderBuffer> {
     let mut state = registry::lock()?;
     let allocation = state.next_id()?;
     let result = ReaderBuffer {
@@ -54,7 +58,10 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         unsafe { std::slice::from_raw_parts(input, len as usize) }
     };
     let command = validation::decode(bytes)?;
-    if let Command::ParseOcrTsv { tsv, width, height, sparse_tsv } = command {
+    if let Command::ParseOcrTsv { tsv, width, height, sparse_tsv, image_rotation } = command {
+        if let Some(angle) = image_rotation {
+            return encode_job(reader_core::ocr::parse_tesseract_quarter_turn(&tsv, width, height, angle));
+        }
         let lines = reader_core::ocr::parse_tesseract_tsv(&tsv, width, height);
         return encode_job(lines.map(|lines| match sparse_tsv {
             Some(tsv) => reader_core::ocr::recover_tesseract_lines(lines, &tsv, width, height),
@@ -687,6 +694,21 @@ pub unsafe extern "C" fn reader_fit_pdf_text(
         )))
     })).unwrap_or_else(|_| Err(Error::new("internal_error", "PDF text fitting panicked")));
     catch_unwind(AssertUnwindSafe(|| publish(result).unwrap_or_default())).unwrap_or_default()
+}
+
+/// # Safety
+/// The input should point to `len` readable bytes for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn reader_rotate_ocr_png(input: *const u8, len: u64, angle: u16) -> ReaderBuffer {
+    catch_unwind(|| {
+        if input.is_null() || len == 0 || len > 64 * 1024 * 1024 {
+            return ReaderBuffer::default();
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(input, len as usize) };
+        reader_core::ocr::rotate_ocr_png(bytes, angle).ok()
+            .and_then(|png| publish_bytes(png.into_boxed_slice()).ok())
+            .unwrap_or_default()
+    }).unwrap_or_default()
 }
 
 #[no_mangle]

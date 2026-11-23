@@ -7,6 +7,32 @@ pub fn parse_tesseract_tsv(tsv: &str, width: u32, height: u32) -> Result<Vec<Ocr
     parse_lines(tsv, width, height, false)
 }
 
+/// Recover lines that read left to right in the rotated image and map their
+/// bounds back to the original page, keeping the original reading direction.
+pub fn parse_tesseract_quarter_turn(
+    tsv: &str, width: u32, height: u32, angle: u16,
+) -> Result<Vec<OcrLine>> {
+    if !matches!(angle, 90 | 180 | 270) {
+        return Err("Некоректний кут повороту OCR.".into());
+    }
+    let lines = parse_lines(tsv, width, height, true)?;
+    let to_original = |x, y, w, h| super::orientation::reading_box((x, y, w, h), angle);
+    Ok(lines.into_iter().filter_map(|mut line| {
+        if line.width * f64::from(width) <= line.height * f64::from(height)
+            || line.confidence.is_none_or(|score| score < 0.85)
+            || line.words.first()?.x > line.words.last()?.x
+        {
+            return None;
+        }
+        (line.x, line.y, line.width, line.height) = to_original(line.x, line.y, line.width, line.height);
+        for word in &mut line.words {
+            (word.x, word.y, word.width, word.height) = to_original(word.x, word.y, word.width, word.height);
+        }
+        line.rotation = Some(360 - angle);
+        Some(line)
+    }).collect())
+}
+
 fn parse_lines(tsv: &str, width: u32, height: u32, sparse: bool) -> Result<Vec<OcrLine>> {
     if tsv.len() > 16 * 1024 * 1024 || !(1..=4096).contains(&width) || !(1..=4096).contains(&height)
     {
