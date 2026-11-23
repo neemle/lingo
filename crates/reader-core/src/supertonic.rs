@@ -87,14 +87,15 @@ impl MultilingualSpeechJob {
     }
 
     fn render(self, priority: InferencePriority, canceled: Option<&dyn Fn() -> bool>) -> Result<RenderedSpeech> {
-        let spoken = if self.language == "uk" {
-            ukrainian_stress(&self.text)
-        } else {
-            self.text.as_str().into()
+        let spoken = match self.language.as_str() {
+            "uk" => ukrainian_stress(&self.text),
+            "fr" => crate::tts::french::expand(&self.text),
+            _ => self.text.as_str().into(),
         };
         let synthesis_rate = crate::tts::model_synthesis_rate(self.rate);
+        let narration = if self.language == "fr" { "supertonic-3-narration-v7" } else { "supertonic-3-narration-v6" };
         let cache = SpeechCacheKey::new(
-            "supertonic-3-narration-v6",
+            narration,
             self.model.revision(),
             &self.language,
             self.voice,

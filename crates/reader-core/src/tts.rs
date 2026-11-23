@@ -13,6 +13,7 @@ use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
 pub(crate) mod cache;
+pub(crate) mod french;
 pub(crate) mod uk_numbers;
 
 const MODEL: &str = "piper-uk";

@@ -10,6 +10,62 @@ const HYPHENS: [char; 3] = ['-', '‐', '‑'];
 const MAX_WORDS: usize = 13;
 pub(crate) const NORMALIZATION_REVISION: &str = "fr-uk-cardinals-v2";
 
+pub(crate) fn spoken_cardinal(number: usize) -> Option<String> {
+    if number > 999_999 {
+        return None;
+    }
+    let mut words = Vec::new();
+    let thousands = number / 1000;
+    if thousands > 0 {
+        if thousands > 1 {
+            spell_group(thousands, false, &mut words);
+        }
+        words.push("mille");
+    }
+    let remainder = number % 1000;
+    if remainder > 0 || number == 0 {
+        spell_group(remainder, true, &mut words);
+    }
+    Some(words.join(" "))
+}
+
+fn spell_group(number: usize, final_group: bool, words: &mut Vec<&'static str>) {
+    let hundreds = number / 100;
+    let tail = number % 100;
+    if hundreds > 0 {
+        if hundreds > 1 {
+            words.push(SMALL[hundreds]);
+        }
+        words.push(if hundreds > 1 && tail == 0 && final_group { "cents" } else { "cent" });
+        if tail == 0 {
+            return;
+        }
+    }
+    let units = if tail >= 80 {
+        words.push(if tail == 80 && final_group { "quatre-vingts" } else { "quatre-vingt" });
+        tail - 80
+    } else if tail >= 20 {
+        let tens = (tail / 10).min(6);
+        words.push(TENS[tens - 2]);
+        let units = tail - tens * 10;
+        if matches!(units, 1 | 11) {
+            words.push("et");
+        }
+        units
+    } else {
+        if tail == 0 {
+            words.push(SMALL[0]);
+        }
+        tail
+    };
+    match units {
+        0 => {}
+        1..=16 => words.push(SMALL[units]),
+        17..=19 => words.push(["dix-sept", "dix-huit", "dix-neuf"][units - 17]),
+        _ => unreachable!("French cardinal remainder below twenty"),
+    }
+}
+
 fn small(word: &str) -> Option<usize> {
     if word == "une" { Some(1) } else { SMALL.iter().position(|&value| value == word) }
 }
