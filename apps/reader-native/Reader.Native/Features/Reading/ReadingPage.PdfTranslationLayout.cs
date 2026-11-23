@@ -761,7 +761,7 @@ public partial class ReadingPage
         (double Left, double Right) visibleWidth, IReadOnlyDictionary<int, PdfBoxAppearance>? appearance) : IDrawable
     {
         private sealed record Region(RectF Bounds, float LineHeight, List<PdfPageTranslationRow> Rows,
-            PdfBoxAppearance? Appearance);
+            PdfBoxAppearance? Appearance, int? SourceBlockIndex);
         private readonly record struct Fragment(PdfPageTranslationRow Source, int Start, int End, bool Active, TextSelection? Match);
         private readonly record struct WrappedLine(int Start, int End);
         private readonly List<(RectF Bounds, PdfPageTranslationRow Source)> hitTargets = [];
@@ -800,9 +800,8 @@ public partial class ReadingPage
                 }
                 var grouped = new List<PdfPageTranslationRow> { row };
                 var styleStart = row.StartUtf16;
-                while (regions.FindLastIndex(region =>
-                    region.Bounds.Top + 1 < rect.Bottom && rect.Top + 1 < region.Bounds.Bottom &&
-                    region.Bounds.Left < rect.Right && rect.Left < region.Bounds.Right) is var index && index >= 0)
+                while (regions.FindLastIndex(region => FitsRegion(region, rect, lineHeight, row.SourceBlockIndex))
+                    is var index && index >= 0)
                 {
                     var previous = regions[index];
                     if (previous.Appearance is not null && (style is null || previous.Rows[0].StartUtf16 < styleStart))
@@ -816,7 +815,7 @@ public partial class ReadingPage
                     regions.RemoveAt(index);
                 }
                 grouped.Sort((left, right) => left.StartUtf16.CompareTo(right.StartUtf16));
-                regions.Add(new(rect, lineHeight, grouped, style));
+                regions.Add(new(rect, lineHeight, grouped, style, row.SourceBlockIndex));
             }
 
             if (rows.Length > 0 && regions.Count == 0)
@@ -876,6 +875,19 @@ public partial class ReadingPage
                 canvas.FillRectangle(page.X + (float)x * page.Width - 1, page.Y + (float)y * page.Height - 1,
                     (float)width * page.Width + 2, (float)height * page.Height + 2);
             }
+        }
+
+        private static bool FitsRegion(Region region, RectF bounds, float lineHeight, int? sourceBlockIndex)
+        {
+            if (region.SourceBlockIndex != sourceBlockIndex) return false;
+            var horizontalOverlap = Math.Min(region.Bounds.Right, bounds.Right) - Math.Max(region.Bounds.Left, bounds.Left);
+            if (horizontalOverlap <= 0) return false;
+            var verticalGap = Math.Max(region.Bounds.Top, bounds.Top) - Math.Min(region.Bounds.Bottom, bounds.Bottom);
+            if (verticalGap < -1) return true;
+            // Several sentences in one paragraph can occupy consecutive physical rows.
+            return sourceBlockIndex is not null &&
+                horizontalOverlap >= 0.4f * Math.Min(region.Bounds.Width, bounds.Width) &&
+                verticalGap <= 0.9f * Math.Min(region.LineHeight, lineHeight);
         }
 
         private PdfPageTranslationRow[] DrawReflowedPage(ICanvas canvas, RectF page)

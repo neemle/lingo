@@ -41,6 +41,8 @@ pub struct PdfPageTranslationRow {
     start_utf16: usize,
     end_utf16: usize,
     source_sentence_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_block_index: Option<usize>,
     pub(crate) text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     source_text: Option<String>,
@@ -126,6 +128,16 @@ impl Store {
             let first = local.next()?;
             Some((first, local.last().unwrap_or(first)))
         };
+        let row = |first: usize, last: usize, text, source_text, pivot_language| {
+            let source = &document.sentences[physical.start + first];
+            let end = &document.sentences[physical.start + last];
+            PdfPageTranslationRow {
+                start_utf16: offsets[first].0, end_utf16: offsets[last].1,
+                source_sentence_id: source.id.clone(),
+                source_block_index: source_block_index(&document, source, end),
+                text, source_text, pivot_language,
+            }
+        };
         let mut generation_error = None;
         if !cached_only {
             match self.translate_document_page(&document, physical.clone(), target, boundaries, background, canceled) {
@@ -134,12 +146,7 @@ impl Store {
                 {
                     return Ok(generated.into_iter().filter_map(|unit| {
                         let (first, last) = page_range(&unit.sentence_ids)?;
-                        Some(PdfPageTranslationRow {
-                            start_utf16: offsets[first].0, end_utf16: offsets[last].1,
-                            source_sentence_id: document.sentences[physical.start + first].id.clone(),
-                            source_text: unit.translation.as_ref().and(unit.pdf_source), text: unit.translation,
-                            pivot_language: unit.pivot_language,
-                        })
+                        Some(row(first, last, unit.translation, unit.pdf_source, unit.pivot_language))
                     }).collect());
                 }
                 Ok(_) => {}
@@ -166,21 +173,13 @@ impl Store {
                 let Some((first, last)) = page_range(&unit.sentence_ids) else { continue; };
                 if covered[first..=last].contains(&true) { continue; }
                 covered[first..=last].fill(true);
-                rows.insert(first, PdfPageTranslationRow {
-                    start_utf16: offsets[first].0, end_utf16: offsets[last].1, text: unit.translation,
-                    source_sentence_id: document.sentences[physical.start + first].id.clone(),
-                    source_text: unit.pdf_source, pivot_language: unit.pivot_language,
-                });
+                rows.insert(first, row(first, last, unit.translation, unit.pdf_source, unit.pivot_language));
             }
         }
         if let Some(error) = generation_error.filter(|_| rows.is_empty()) { return Err(error); }
-        for (local, sentence) in document.sentences[physical].iter().enumerate() {
+        for (local, sentence) in document.sentences[physical.clone()].iter().enumerate() {
             if !covered[local] && !document_layout::skip_in_translation(&document, sentence) {
-                let (start_utf16, end_utf16) = offsets[local];
-                rows.insert(local, PdfPageTranslationRow {
-                    start_utf16, end_utf16, source_sentence_id: sentence.id.clone(),
-                    text: None, source_text: Some(sentence.text.clone()), pivot_language: None,
-                });
+                rows.insert(local, row(local, local, None, Some(sentence.text.clone()), None));
             }
         }
         Ok(rows.into_values().collect())
@@ -360,6 +359,13 @@ impl Store {
     }
 }
 
+fn source_block_index(document: &Document, first: &Sentence, last: &Sentence) -> Option<usize> {
+    let first_letter = first.start_utf8 + first.text.find(char::is_alphanumeric)?;
+    let last_letter = last.start_utf8 + last.text.rfind(char::is_alphanumeric)?;
+    let index = document.blocks.partition_point(|block| block.start_utf8 <= first_letter).checked_sub(1)?;
+    (last_letter < document.blocks[index].end_utf8).then_some(index)
+}
+
 fn project_ocr_lines(
     lines: Vec<ocr::OcrLine>, (center, center_utf16): (Range<usize>, usize),
     (start_utf8, start_utf16): (usize, usize), virtual_page: u16,
@@ -448,6 +454,29 @@ mod tests {
     use crate::translation::sentence_source;
     use super::*;
     use crate::{file_originals, pdf_detached_pages};
+
+    #[test]
+    fn scanned_translation_rows_keep_heading_body_and_caption_blocks() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let line = |text: &str, y, height| ocr::OcrLine {
+            page: 0, text: text.into(), x: 0.1, y, width: 0.8, height,
+            confidence: None, correction: None, block_start: false, words: Vec::new(), source_span: None,
+        };
+        let document = store.import_scanned_pdf("scan.pdf", b"%PDF-1.4\n", "fr", vec![
+            line("Un capitaine de vingt ans", 0.1, 0.045),
+            line("Le marin entre.", 0.16, 0.025),
+            line("Il attend à quai.", 0.19, 0.025),
+            line("Illustration du port", 0.55, 0.025),
+        ], 1).unwrap();
+        let rows = store.pdf_page_translation(&document.id, 0, "uk", true).unwrap();
+        assert_eq!(rows.iter().map(|row| row.source_block_index).collect::<Vec<_>>(),
+            [Some(0), Some(1), Some(1), Some(2)]);
+        for (row, sentence) in rows.iter().zip(&document.sentences) {
+            assert_eq!(row.source_sentence_id, sentence.id);
+            assert_eq!((row.start_utf16, row.end_utf16), (sentence.start_utf16, sentence.end_utf16));
+        }
+    }
 
     #[test]
     fn projected_page_joins_a_split_word_without_translating_small_glossary_notes() {
