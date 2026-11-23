@@ -502,19 +502,15 @@ impl Store {
                 for (line, _) in page_lines.iter().zip(was_raw)
                     .filter(|(line, was_raw)| *was_raw && line.correction.is_some())
                 {
-                    use crate::document_tokens::word_parts;
                     let span = line.source_span.ok_or("Розпізнаний рядок не має позиції в тексті.")?;
-                    for ((_, offset, raw), (_, _, corrected)) in
-                        word_parts(line.text.trim()).zip(word_parts(line.reading_text()))
-                    {
-                        if raw != corrected {
-                            edits.push(ocr::TranscriptEdit {
-                                start_utf16: span.start_utf16 + offset,
-                                old_len: raw.encode_utf16().count(),
-                                new_len: corrected.encode_utf16().count(),
-                            });
-                        }
-                    }
+                    let old = line.text.trim();
+                    let new = line.reading_text();
+                    edits.extend(ocr::word_replacement_edits(span.start_utf16, old, new)
+                        .unwrap_or_else(|| vec![ocr::TranscriptEdit {
+                            start_utf16: span.start_utf16,
+                            old_len: old.encode_utf16().count(),
+                            new_len: new.encode_utf16().count(),
+                        }]));
                 }
                 reflow_pdf_document_with_edits(tx, document, pages, &edits)?;
             }

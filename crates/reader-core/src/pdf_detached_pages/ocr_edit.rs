@@ -92,13 +92,13 @@ impl Store {
             .source_span
             .ok_or("Розпізнаний рядок не має позиції в тексті.")?
             .start_utf16;
-        let edit = Edit::between(
+        let edits = Edit::for_line(
             line_start,
             line.reading_text(),
             correction.as_deref().unwrap_or(line.text.trim()),
         );
         line.correction = correction;
-        let updated = save_ocr_edits(&tx, id, page, &old_text, previous.lines, &[edit])?;
+        let updated = save_ocr_edits(&tx, id, page, &old_text, previous.lines, &edits)?;
         tx.commit().map_err(database_error)?;
         Ok(updated)
     }
@@ -123,12 +123,13 @@ impl Store {
         if !reconcile(&mut previous.lines)? {
             return Ok(false);
         }
-        let edits = previous.lines.iter().zip(uncorrected)
+        let mut edits = Vec::new();
+        for (line, _) in previous.lines.iter().zip(uncorrected)
             .filter(|(line, was_raw)| *was_raw && line.correction.is_some())
-            .map(|(line, _)| {
-                let start = line.source_span.ok_or("Розпізнаний рядок не має позиції в тексті.")?.start_utf16;
-                Ok(Edit::between(start, line.text.trim(), line.reading_text()))
-            }).collect::<Result<Vec<_>>>()?;
+        {
+            let start = line.source_span.ok_or("Розпізнаний рядок не має позиції в тексті.")?.start_utf16;
+            edits.extend(Edit::for_line(start, line.text.trim(), line.reading_text()));
+        }
         save_ocr_edits(&tx, id, page, &old_text, previous.lines, &edits)?;
         tx.commit().map_err(database_error)?;
         Ok(true)
@@ -179,6 +180,17 @@ struct Edit {
 }
 
 impl Edit {
+    fn for_line(start: usize, old: &str, new: &str) -> Vec<Self> {
+        ocr::word_replacement_edits(start, old, new).map_or_else(
+            || vec![Self::between(start, old, new)],
+            |edits| edits.into_iter().map(|edit| Self {
+                start: edit.start_utf16,
+                old_end: edit.start_utf16 + edit.old_len,
+                new_end: edit.start_utf16 + edit.new_len,
+            }).collect(),
+        )
+    }
+
     fn between(line_start: usize, old: &str, new: &str) -> Self {
         let prefix: usize = old
             .chars()
@@ -317,4 +329,42 @@ fn move_sentence_anchors(
     )
     .map_err(database_error)?;
     annotations::merge(db, id, page, &moved.into_values().collect::<Vec<_>>())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{file_originals, pdf_detached_pages::DetachedPdfAnnotationChange};
+
+    #[test]
+    fn several_word_repairs_keep_the_saved_sentence_and_its_note() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&directory.path().join("reader.db")).unwrap();
+        let original = directory.path().join("scan.pdf");
+        std::fs::write(&original, "%PDF-1.4\n").unwrap();
+        let prepared = file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "scan.pdf", &original, "en", vec![String::new()], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let line = ocr::OcrLine {
+            page: 0, text: "A magc book has a magc cover. A rnagic story follows.".into(),
+            x: 0.1, y: 0.1, width: 0.8, height: 0.1, confidence: Some(0.6),
+            correction: None, words: vec![], source_span: None,
+        };
+        super::super::write_ocr(&store.connection, &document.id, 0, "en", &[line], 1).unwrap();
+        let selected = store.select_detached_pdf_sentence(&document.id, 0, Some(1), None).unwrap().unwrap();
+        assert_eq!(selected.sentence.text, "A rnagic story follows.");
+        store.update_detached_pdf_annotation(
+            &document.id, 0, &selected.sentence.id,
+            DetachedPdfAnnotationChange::Note { text: "Remember this sentence".into() },
+        ).unwrap();
+        let frame = store.detached_pdf_ocr(&document.id, 0).unwrap().unwrap();
+        store.reconcile_detached_pdf_ocr(&document.id, 0, &frame.revision, "en", |lines| {
+            lines[0].correction = Some("A magic book has a magic cover. A magic story follows.".into());
+            Ok(true)
+        }).unwrap();
+        let saved = store.detached_pdf_sentence(&document.id, 0, None).unwrap().unwrap();
+        assert_eq!(saved.sentence.text, "A magic story follows.");
+        assert_eq!(saved.note.as_deref(), Some("Remember this sentence"));
+    }
 }

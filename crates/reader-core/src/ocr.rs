@@ -419,6 +419,35 @@ pub(crate) struct TranscriptEdit {
     pub new_len: usize,
 }
 
+pub(crate) fn word_replacement_edits(start: usize, old: &str, new: &str) -> Option<Vec<TranscriptEdit>> {
+    use crate::document_tokens::word_parts;
+    let mut old_words = word_parts(old);
+    let mut new_words = word_parts(new);
+    let mut old_end = 0;
+    let mut new_end = 0;
+    let mut edits = Vec::new();
+    loop {
+        match (old_words.next(), new_words.next()) {
+            (Some((old_byte, offset, raw)), Some((new_byte, _, corrected))) => {
+                if old[old_end..old_byte] != new[new_end..new_byte] {
+                    return None;
+                }
+                if raw != corrected {
+                    edits.push(TranscriptEdit {
+                        start_utf16: start + offset,
+                        old_len: raw.encode_utf16().count(),
+                        new_len: corrected.encode_utf16().count(),
+                    });
+                }
+                old_end = old_byte + raw.len();
+                new_end = new_byte + corrected.len();
+            }
+            (None, None) => return (old[old_end..] == new[new_end..]).then_some(edits),
+            _ => return None,
+        }
+    }
+}
+
 fn map_transcript_offset(offset: usize, edits: &[TranscriptEdit]) -> Option<usize> {
     let mut mapped = offset;
     for edit in edits.iter().take_while(|edit| edit.start_utf16 < offset) {
