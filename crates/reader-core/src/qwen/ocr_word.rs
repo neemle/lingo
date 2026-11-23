@@ -23,6 +23,23 @@ replacement ::= "null" | "\"" [A-Za-zÀ-ÖØ-öø-ÿĀ-ɏА-Яа-яІіЇїЄє�
 ws ::= [ \t]{0,2}
 "#;
 
+const LINE_SYSTEM: &str = concat!(
+    "<|im_start|>system\n",
+    "Check a line of OCR text in the given language. Keep its wording and punctuation. ",
+    "Fix only visually plausible spelling errors. Do not translate, rewrite, or correct grammar. ",
+    "The words array is numbered from zero. Return at most four edits with a zero-based word index. ",
+    "If no clear mistakes exist, return {\"edits\":[]}.\n<|im_end|>\n",
+    "<|im_start|>user\n{\"language\":\"en\",\"text\":\"A rnagic b0ok.\",\"words\":[\"A\",\"rnagic\",\"b0ok\"]}<|im_end|>\n",
+    "<|im_start|>assistant\n{\"edits\":[{\"index\":1,\"replacement\":\"magic\"},{\"index\":2,\"replacement\":\"book\"}]}<|im_end|>\n",
+    "<|im_start|>user\n",
+);
+
+const LINE_GRAMMAR: &str = r#"
+root ::= "{" ws "\"edits\"" ws ":" ws "[" ws (edit (ws "," ws edit){0,3})? ws "]" ws "}"
+edit ::= "{" ws "\"index\"" ws ":" ws ("0" | [1-9] [0-9]?) ws "," ws "\"replacement\"" ws ":" ws "\"" [A-Za-zÀ-ÖØ-öø-ÿĀ-ɏА-Яа-яІіЇїЄєҐґ]{2,32} "\"" ws "}"
+ws ::= [ \t]{0,2}
+"#;
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct OcrSpelling {
@@ -31,7 +48,7 @@ struct OcrSpelling {
 }
 
 #[derive(Serialize)]
-pub struct OcrWordReview {
+pub struct OcrReview {
     replacement: Option<String>,
     cached: bool,
 }
@@ -39,6 +56,24 @@ pub struct OcrWordReview {
 pub struct ReviewOcrWordJob {
     work: HintWork<OcrSpelling>,
     word: String,
+}
+
+pub struct ReviewOcrLineJob {
+    work: HintWork<OcrSpelling>,
+    text: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LineEdits {
+    edits: Vec<LineEdit>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LineEdit {
+    index: usize,
+    replacement: String,
 }
 
 impl Store {
@@ -59,24 +94,7 @@ impl Store {
         {
             return Err("Виберіть одне розпізнане слово.".into());
         }
-        let (language, lines) = if let Some(page) = page {
-            let cached = self
-                .detached_pdf_ocr(id, page)?
-                .ok_or("Розпізнана сторінка недоступна.")?;
-            let text = self
-                .detached_pdf_sentences(id, page)?
-                .ok_or("Розпізнана сторінка недоступна.")?;
-            if cached.revision != revision {
-                return Err("Розпізнаний текст змінився. Виберіть слово знову.".into());
-            }
-            (text.language, cached.lines)
-        } else {
-            let document = self.translation_document(id)?;
-            if document.current_revision_id.as_deref() != Some(revision) {
-                return Err("Розпізнаний текст змінився. Виберіть слово знову.".into());
-            }
-            (document.language, document.ocr_lines.unwrap_or_default())
-        };
+        let (language, lines) = self.ocr_review_lines(id, page, revision)?;
         let (before, after) = word_context(&lines, start_utf16, word)
             .ok_or("Слово не відповідає збереженій позиції OCR.")?;
         let example = serde_json::to_string(&PositionedWordExample {
@@ -94,10 +112,76 @@ impl Store {
             example,
             cached_only.into(),
         )?;
-        Ok(ReviewOcrWordJob {
-            work,
-            word: word.to_owned(),
-        })
+        Ok(ReviewOcrWordJob { work, word: word.to_owned() })
+    }
+
+    pub fn prepare_ocr_line_review(
+        &self, id: &str, page: Option<u16>, revision: &str, index: usize, cached_only: bool,
+    ) -> Result<ReviewOcrLineJob> {
+        let (language, lines) = self.ocr_review_lines(id, page, revision)?;
+        let line = lines.get(index).ok_or("Розпізнаний рядок не знайдено.")?;
+        let text = line.reading_text();
+        let words: Vec<_> = crate::document_tokens::word_parts(text).map(|(_, _, word)| word).collect();
+        if text.len() > 600 || words.len() > 48 {
+            return Err("Розпізнаний рядок задовгий для перевірки Qwen.".into());
+        }
+        if words.is_empty() {
+            return Err("У цьому рядку немає слів для перевірки.".into());
+        }
+        let example = serde_json::json!({ "language": language, "text": text, "words": words }).to_string();
+        let work = self.prepare_hint_work(
+            HINT_GENERATION_MODEL, id, "qwen-ocr-line-v1", LINE_SYSTEM, example, cached_only.into(),
+        )?;
+        Ok(ReviewOcrLineJob { work, text: text.to_owned() })
+    }
+
+    fn ocr_review_lines(&self, id: &str, page: Option<u16>, revision: &str) -> Result<(String, Vec<OcrLine>)> {
+        if let Some(page) = page {
+            let cached = self
+                .detached_pdf_ocr(id, page)?
+                .ok_or("Розпізнана сторінка недоступна.")?;
+            let text = self
+                .detached_pdf_sentences(id, page)?
+                .ok_or("Розпізнана сторінка недоступна.")?;
+            if cached.revision != revision {
+                return Err("Розпізнаний текст змінився. Виберіть слово знову.".into());
+            }
+            Ok((text.language, cached.lines))
+        } else {
+            let document = self.translation_document(id)?;
+            if document.current_revision_id.as_deref() != Some(revision) {
+                return Err("Розпізнаний текст змінився. Виберіть слово знову.".into());
+            }
+            Ok((document.language, document.ocr_lines.unwrap_or_default()))
+        }
+    }
+}
+
+fn apply_line_edits(text: &str, mut edits: Vec<LineEdit>) -> Option<String> {
+    if edits.is_empty() || edits.len() > 4 { return None; }
+    edits.sort_unstable_by_key(|edit| edit.index);
+    if edits.windows(2).any(|pair| pair[0].index == pair[1].index) { return None; }
+    let words: Vec<_> = crate::document_tokens::word_parts(text).collect();
+    let mut output = text.to_owned();
+    for edit in edits.into_iter().rev() {
+        let Some(&(start, _, word)) = words.get(edit.index) else { continue; };
+        if plausible_replacement(word, &edit.replacement) {
+            output.replace_range(start..start + word.len(), &edit.replacement);
+        }
+    }
+    (output != text).then_some(output)
+}
+
+impl ReviewOcrLineJob {
+    pub fn run(self) -> Result<Option<OcrReview>> {
+        let text = self.text;
+        let result = self.work.run(LINE_SYSTEM, LINE_GRAMMAR, |output| {
+            let error = "Qwen не повернув перевірку рядка у правильному форматі.";
+            let edits: LineEdits = serde_json::from_str(super::json_output(output).ok_or(error)?)
+                .map_err(|_| error)?;
+            Ok(OcrSpelling { replacement: apply_line_edits(&text, edits.edits) })
+        })?;
+        Ok(result.map(|(hint, cached)| OcrReview { replacement: hint.replacement, cached }))
     }
 }
 
@@ -169,7 +253,7 @@ fn plausible_replacement(word: &str, replacement: &str) -> bool {
 }
 
 impl ReviewOcrWordJob {
-    pub fn run(self) -> Result<Option<OcrWordReview>> {
+    pub fn run(self) -> Result<Option<OcrReview>> {
         let word = self.word;
         let result = self.work.run(SYSTEM, GRAMMAR, |output| {
             let error = "Qwen не повернув перевірку слова у правильному форматі.";
@@ -182,7 +266,7 @@ impl ReviewOcrWordJob {
                     hint
                 })
         })?;
-        Ok(result.map(|(hint, cached)| OcrWordReview {
+        Ok(result.map(|(hint, cached)| OcrReview {
             replacement: hint
                 .replacement
                 .filter(|replacement| plausible_replacement(&word, replacement)),
@@ -194,6 +278,20 @@ impl ReviewOcrWordJob {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_review_keeps_spacing_and_punctuation_and_rejects_unrelated_edits() {
+        let text = "A rnagic  b0ok, vraiment.";
+        let edits: LineEdits = serde_json::from_str(r#"{"edits":[
+            {"index":2,"replacement":"book"},
+            {"index":1,"replacement":"magic"},
+            {"index":3,"replacement":"autre"},
+            {"index":42,"replacement":"fin"}
+        ]}"#).unwrap();
+        assert_eq!(apply_line_edits(text, edits.edits).as_deref(), Some("A magic  book, vraiment."));
+        let edit = || LineEdit { index: 1, replacement: "magic".into() };
+        assert!(apply_line_edits(text, vec![edit(), edit()]).is_none());
+    }
 
     #[test]
     fn accepts_ocr_like_edits_and_rejects_rewrites_or_mixed_scripts() {

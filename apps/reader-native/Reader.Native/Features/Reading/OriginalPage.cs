@@ -41,6 +41,7 @@ internal sealed class OriginalPage : ContentPage
     private int selectedLineChoice = -1;
     private readonly Button edit = new() { Text = "Виправити" };
     private readonly Button suggest = new() { Text = "Підказки" };
+    private readonly Button reviewOcrLine = new() { Text = "Звірити рядок із Qwen" };
     private readonly Button reset = new() { Text = "Скинути" };
     private readonly Label editStatus = new();
     private int[] currentLineIndices = [];
@@ -118,8 +119,14 @@ internal sealed class OriginalPage : ContentPage
         SemanticProperties.SetDescription(reset, "Відновити початковий результат OCR для рядка");
         edit.Clicked += async (_, _) => await CorrectAsync(LineAction.Edit);
         suggest.Clicked += async (_, _) => await CorrectAsync(LineAction.Suggest);
+        reviewOcrLine.Clicked += async (_, _) => await ReviewOcrLineAsync();
         reset.Clicked += async (_, _) => await CorrectAsync(LineAction.Reset);
-        var editButtons = new HorizontalStackLayout { Spacing = 8, Children = { suggest, edit, reset } };
+        var editButtons = new FlexLayout { Wrap = Microsoft.Maui.Layouts.FlexWrap.Wrap };
+        foreach (var button in new[] { suggest, reviewOcrLine, edit, reset })
+        {
+            button.Margin = new Thickness(0, 0, 8, 5);
+            editButtons.Children.Add(button);
+        }
         editor = new Grid { ColumnSpacing = 8, ColumnDefinitions = new ColumnDefinitionCollection
         {
             new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Auto),
@@ -589,6 +596,7 @@ internal sealed class OriginalPage : ContentPage
             (HasPhysicalPageAddress(document) || DocumentPages.SentencePosition(document, pageIndex).HasValue);
         edit.IsEnabled = canInteract && index >= 0;
         suggest.IsEnabled = edit.IsEnabled;
+        reviewOcrLine.IsEnabled = edit.IsEnabled && !session.Busy;
         reset.IsEnabled = edit.IsEnabled && lines[index].Correction is not null;
     }
 
@@ -611,25 +619,13 @@ internal sealed class OriginalPage : ContentPage
 
         editing = true;
         UpdateEditButtons();
-        editStatus.Text = "Шукаємо збережену перевірку…";
         try
         {
-            var hint = await session.ReviewOcrWordAsync(documentId, page, revision, active.Selection, cachedOnly: true);
-            if (!IsCurrent()) return;
-            if (hint is null)
-            {
-                var model = (await session.OptionalModelsAsync()).FirstOrDefault(item => item.CanGenerateLanguageHints);
-                if (!IsCurrent()) return;
-                if (model is not { FilesPresent: true })
-                {
-                    editStatus.Text = "Установіть Qwen 2B у налаштуваннях.";
-                    return;
-                }
-                editStatus.Text = "Qwen перевіряє слово…";
-                hint = await session.ReviewOcrWordAsync(documentId, page, revision, active.Selection);
-            }
-            if (!IsCurrent()) return;
-            if (hint?.Replacement is not { } replacement)
+            var hint = await ReadOcrReviewAsync(
+                cachedOnly => session.ReviewOcrWordAsync(documentId, page, revision, active.Selection, cachedOnly),
+                IsCurrent, "Qwen перевіряє слово…");
+            if (hint is null || !IsCurrent()) return;
+            if (hint.Replacement is not { } replacement)
             {
                 editStatus.Text = "Qwen не запропонував виправлення для цього слова.";
                 return;
@@ -658,6 +654,68 @@ internal sealed class OriginalPage : ContentPage
             editing = false;
             UpdateEditButtons();
         }
+    }
+
+    private async Task ReviewOcrLineAsync()
+    {
+        var index = LineIndex();
+        if (!reviewOcrLine.IsEnabled || index < 0 || session.Document is not { } document ||
+            document.Id != documentId) return;
+        var cached = detachedOcr;
+        var line = lines[index];
+        var revision = cached?.Revision ?? document.CurrentRevisionId;
+        if (revision is null) return;
+        bool IsCurrent() => visible && LineIndex() == index && index < lines.Length && lines[index] == line &&
+            session.Document is { } current && current.Id == documentId &&
+            (detachedOcr?.Revision ?? current.CurrentRevisionId) == revision;
+
+        editing = true;
+        UpdateEditButtons();
+        try
+        {
+            var hint = await ReadOcrReviewAsync(
+                cachedOnly => session.ReviewOcrLineAsync(documentId, cached is null ? null : line.Page, revision, index, cachedOnly),
+                IsCurrent, "Qwen перевіряє рядок…");
+            if (hint is null || !IsCurrent()) return;
+            if (hint.Replacement is not { } correction)
+            {
+                editStatus.Text = "Qwen не запропонував виправлень для цього рядка.";
+                return;
+            }
+            var apply = await DisplayAlertAsync("Застосувати виправлення OCR?",
+                $"{(line.Correction ?? line.Text).Trim()}\n\n{correction}", "Застосувати", "Залишити");
+            if (!IsCurrent()) return;
+            if (!apply)
+            {
+                editStatus.Text = "";
+                return;
+            }
+            if (await SaveOcrCorrectionAsync(index, line, cached, correction, revision))
+                editStatus.Text = "Виправлення збережено в тексті для читання.";
+        }
+        catch (Exception error) { if (IsCurrent()) editStatus.Text = error.Message; }
+        finally
+        {
+            editing = false;
+            UpdateEditButtons();
+        }
+    }
+
+    private async Task<OcrReview?> ReadOcrReviewAsync(Func<bool, Task<OcrReview?>> review, Func<bool> isCurrent,
+        string loadingMessage)
+    {
+        editStatus.Text = "Шукаємо збережену перевірку…";
+        var hint = await review(true);
+        if (hint is not null || !isCurrent()) return hint;
+        var model = (await session.OptionalModelsAsync()).FirstOrDefault(item => item.CanGenerateLanguageHints);
+        if (!isCurrent()) return null;
+        if (model is not { FilesPresent: true })
+        {
+            editStatus.Text = "Установіть Qwen 2B у налаштуваннях.";
+            return null;
+        }
+        editStatus.Text = loadingMessage;
+        return await review(false);
     }
 
     private async Task ProofreadPhotoAsync()

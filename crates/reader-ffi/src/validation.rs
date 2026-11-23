@@ -232,11 +232,16 @@ fn validate(command: &Command) -> Result<()> {
         {
             Err(Error::new("invalid_argument", "Invalid local sentence review request"))
         }
-        Command::ReviewOcrWord { id, revision_id, word, .. }
-            if !valid_token_address(id, revision_id) || word.len() > 128
+        Command::ReviewOcrWord { word, .. }
+            if word.len() > 128 =>
+        {
+            Err(Error::new("invalid_argument", "Invalid OCR word length"))
+        }
+        Command::ReviewOcrWord { id, revision_id, .. } | Command::ReviewOcrLine { id, revision_id, .. }
+            if !valid_token_address(id, revision_id)
                 || revision_id.len() != 64 || !revision_id.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
         {
-            Err(Error::new("invalid_argument", "Invalid OCR word review address"))
+            Err(Error::new("invalid_argument", "Invalid OCR review address"))
         }
         Command::ExplainWord { model, document, sentence, word, start_utf16, revision_id, .. }
             if model.len() > 32 || document.len() > 128 || sentence.len() > 128 || word.len() > 320

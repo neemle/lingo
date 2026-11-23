@@ -272,6 +272,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         | Command::ExplainDetachedWord { .. }
         | Command::ReviewSentence { .. }
         | Command::ReviewOcrWord { .. }
+        | Command::ReviewOcrLine { .. }
         | Command::TranslateWithModel { .. }
         | Command::CancelModelTranslation { .. }
         | Command::CancelPdfPageTranslation { .. }
