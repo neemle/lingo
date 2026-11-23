@@ -89,7 +89,8 @@ fn valid_pdf_order_edit(original: &str, replacement: &str) -> bool {
             && moved.starts_with(char::is_whitespace) && moved.ends_with(char::is_whitespace);
     }
     if replacement == "\n\n" {
-        return !original.is_empty() && !original.contains(['\r', '\n']) && original.chars().all(char::is_whitespace);
+        return !original.is_empty() && original.lines().count() <= 2 &&
+            original.matches('\n').count() <= 1 && original.chars().all(char::is_whitespace);
     }
     let line_count = original.lines().count();
     if original.len() > 8192 || !(4..=48).contains(&line_count) ||
@@ -689,6 +690,7 @@ impl Store {
                 "SELECT json_extract(body,'$.language') FROM documents WHERE id=?1", [id], |row| row.get(0),
             ).map_err(database_error)?;
             ocr::recognized_lines(&lines, page.checked_add(1).ok_or("Некоректна сторінка PDF.")?)?;
+            crate::ocr_layout::reconstruct_blocks(&mut lines);
             if self.repair_pdf_ocr(&language, &mut lines).is_err() {
                 lines.iter_mut().for_each(|line| line.correction = None);
             }
@@ -823,7 +825,7 @@ impl Store {
             }
 
             if !lines.is_empty() && !has_ocr_lines(document, page) {
-                let bytes = 1 + lines.iter().map(|line| line.reading_text().len() + 1).sum::<usize>();
+                let bytes = 1 + lines.iter().map(ocr_page_line_bytes).sum::<usize>();
                 if bytes > remaining {
                     let page_count = u16::try_from(pages.len()).map_err(database_error)?;
                     pdf_detached_pages::write_ocr(tx, id, page, &document.language, &lines, page_count)?;
@@ -1193,7 +1195,7 @@ pub(crate) fn merge_cached_pages(
         {
             continue;
         }
-        let bytes = 1 + lines.iter().map(|line| line.reading_text().len() + 1).sum::<usize>();
+        let bytes = 1 + lines.iter().map(ocr_page_line_bytes).sum::<usize>();
         if bytes > available {
             if cache.pending.is_none() {
                 return Ok(false);
@@ -1367,6 +1369,10 @@ fn reading_context(pages: &[PdfReadPage], center: usize) -> Option<ocr::OcrSpan>
     })
 }
 
+fn ocr_page_line_bytes(line: &ocr::OcrLine) -> usize {
+    line.reading_text().len() + 1 + usize::from(line.block_start)
+}
+
 fn has_ocr_lines(document: &Document, page: u16) -> bool {
     document
         .ocr_lines
@@ -1414,6 +1420,7 @@ mod drop_cap_tests {
             ).unwrap();
         }
         let revised = store.cache_pdf_ocr_page(&document.id, 8, vec![ocr::OcrLine {
+            block_start: false,
             page: 8, text: "Le marin part.".into(), x: 0.1, y: 0.1, width: 0.5, height: 0.05,
             confidence: None, correction: None, words: Vec::new(), source_span: None,
         }]).unwrap();
@@ -1515,6 +1522,7 @@ mod drop_cap_tests {
     fn repairs_drop_cap_with_geometry_and_unique_text_layer_context() {
         let reference = "Le 15 février 1815, à Marseille.\nentre dans le port. Il revient.";
         let make_line = |text: &str, x, y, height| ocr::OcrLine {
+            block_start: false,
             page: 0, text: text.to_owned(), x, y, width: 0.7, height,
             confidence: None, correction: None, words: vec![], source_span: None,
         };
@@ -1555,6 +1563,7 @@ mod note_punctuation_tests {
             "Avez-vous vu cette grande chaloupe?",
             "Parlez-vous souvent de cette autre chaloupe?",
         ].into_iter().map(|text| ocr::OcrLine {
+            block_start: false,
             page: 0, text: text.to_owned(), x: 0.1, y: 0.2, width: 0.7, height: 0.02,
             confidence: None, correction: None, words: vec![], source_span: None,
         }).collect();

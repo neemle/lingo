@@ -4,26 +4,26 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PositionedWord {
-    start: usize,
-    end: usize,
-    left: f64,
-    right: f64,
-    center_y: f64,
-    height: f64,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) left: f64,
+    pub(crate) right: f64,
+    pub(crate) center_y: f64,
+    pub(crate) height: f64,
 }
 
 #[derive(Serialize)]
 pub struct SourcePiece {
-    start: usize,
-    end: usize,
-    separator: &'static str,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) separator: &'static str,
 }
 
 #[derive(Serialize)]
 pub struct BlockEdit {
-    start: usize,
-    end: usize,
-    slices: Vec<SourcePiece>,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) slices: Vec<SourcePiece>,
 }
 
 /// Finds page-layout boundaries in UTF-16 text. Geometry uses a top-left coordinate system.
@@ -86,9 +86,59 @@ pub fn separate_blocks(text: &str, words: &[PositionedWord], page_width: f64) ->
                 edits.push(BlockEdit { start: left.end, end: right.start, slices: Vec::new() });
             }
         }
+        if let Some(next) = lines.get(index + 1).filter(|next| next.len() >= 2) {
+            if line.len() >= 2 {
+                let left = *line.last().expect("line has text");
+                let right = next[0];
+                let gap = &units[left.end..right.start];
+                if whitespace(gap) && gap.iter().filter(|&&unit| unit == 10).count() == 1 &&
+                    (same_baseline(left, right) && wide_gap(left, right, page_width) ||
+                     column_transition(&lines, index, page_width))
+                {
+                    edits.push(BlockEdit { start: left.end, end: right.start, slices: Vec::new() });
+                }
+            }
+        }
         index += 1;
     }
     Ok(edits)
+}
+
+// Some OCR providers already emit all lines in the left column before the right column.
+fn column_transition(lines: &[&[PositionedWord]], index: usize, width: f64) -> bool {
+    let left_end = lines[index];
+    let right_start = lines[index + 1];
+    if right_start[0].center_y >= left_end[0].center_y ||
+        !wide_gap(*left_end.last().expect("nonempty column"), right_start[0], width) {
+        return false;
+    }
+
+    let next_line = |upper: PositionedWord, lower: PositionedWord| {
+        let step = lower.center_y - upper.center_y;
+        step > 0.0 && step <= 2.5 * upper.height.max(lower.height)
+    };
+    let mut lower = left_end[0];
+    let mut has_top = false;
+    for line in lines[..index].iter().rev().take(23) {
+        if line.len() < 2 || !aligned(left_end[0], line[0]) || !next_line(line[0], lower) { break; }
+        if same_baseline(line[0], right_start[0]) &&
+            wide_gap(*line.last().expect("nonempty column"), right_start[0], width) {
+            has_top = true;
+            break;
+        }
+        lower = line[0];
+    }
+    if !has_top { return false; }
+    let mut upper = right_start[0];
+    for line in lines[index + 2..].iter().take(23) {
+        if line.len() < 2 || !aligned(right_start[0], line[0]) || !next_line(upper, line[0]) { break; }
+        if same_baseline(left_end[0], line[0]) &&
+            wide_gap(*left_end.last().expect("nonempty column"), line[0], width) {
+            return true;
+        }
+        upper = line[0];
+    }
+    false
 }
 
 fn parallel_lines(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) -> Option<(BlockEdit, usize)> {

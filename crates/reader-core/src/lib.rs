@@ -39,6 +39,7 @@ pub mod optional_models;
 pub mod pdf_layers;
 pub mod pdf_appearance;
 pub mod pdf_text_blocks;
+mod ocr_layout;
 mod pdf_page_ocr;
 mod pdf_detached_pages;
 pub use pdf_detached_pages::{DetachedPdfAnnotationChange, DetachedPdfAnnotationItem, DetachedPdfFindCursor, DetachedPdfFindPage, DetachedPdfOcrPage, DetachedPdfPassage, DetachedPdfSentence, DetachedPdfTranslation};
@@ -693,6 +694,10 @@ impl Store {
                 (Some(lines), pages, mixed)
             });
         valid_language(language)?;
+        if let Some(lines) = ocr_lines.as_mut() {
+            ocr::recognized_lines(lines, ocr_pdf_pages.unwrap_or(1))?;
+            ocr_layout::reconstruct_blocks(lines);
+        }
         let parsed = match (ocr_lines.as_deref_mut(), ocr_pdf_pages, mixed) {
             (Some(lines), pages, mixed) => Some(self.read_ocr_import(name, bytes, language, lines, pages, mixed)?),
             (None, None, false) => None,
@@ -2172,6 +2177,7 @@ mod tests {
                 b"\x89PNG\r\n\x1a\n",
                 "en",
                 vec![ocr::OcrLine {
+                    block_start: false,
                     page: 0,
                     text: "This is the original sentence.".into(),
                     x: 0.0,

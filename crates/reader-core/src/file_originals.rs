@@ -109,7 +109,7 @@ fn prepare_pdf(
     path: &Path,
     language: &str,
     page_text: Vec<String>,
-    lines: Vec<ocr::OcrLine>,
+    mut lines: Vec<ocr::OcrLine>,
     mut empty_pages: Vec<u16>,
     staged_intake: bool,
 ) -> Result<PreparedPdfImport> {
@@ -123,6 +123,10 @@ fn prepare_pdf(
     empty_pages.sort_unstable();
     empty_pages.dedup();
     let page_text_json = serde_json::to_string(&page_text).map_err(storage_error)?;
+    if !lines.is_empty() {
+        ocr::recognized_lines(&lines, page_count)?;
+        crate::ocr_layout::reconstruct_blocks(&mut lines);
+    }
     let (text, starts) = pdf_layers::merge_page_text(page_text, &lines)?;
     let extracted = document_layout::from_transcript(text, Some(starts));
     let (input, expected_size) = open_pdf_source(path)?;
@@ -644,6 +648,7 @@ mod tests {
         drop(input);
         let mut store = Store::open(&database).unwrap();
         let lines = vec![ocr::OcrLine {
+            block_start: false,
             page: 1,
             text: "Deuxième page.".into(),
             x: 0.1,

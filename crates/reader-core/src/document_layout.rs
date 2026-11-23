@@ -479,7 +479,7 @@ pub(crate) fn from_ocr(
     let mut previous = None;
     for line in lines {
         if let Some(page) = previous {
-            utf16 += if page == line.page { 1 } else { 2 };
+            utf16 += if page == line.page && !line.block_start { 1 } else { 2 };
         }
         if previous != Some(line.page) {
             page_starts[usize::from(line.page)] = Some(utf16);
@@ -923,6 +923,7 @@ mod tests {
             let end = start + text.len();
             offset = end + 1;
             OcrLine {
+                block_start: false,
                 page: 5, text: text.into(), x: 0.12, y, width: 0.72, height,
                 confidence: None, correction: None, words: Vec::new(),
                 source_span: Some(OcrSpan {
@@ -970,6 +971,7 @@ mod tests {
             *offset += line.len();
             let last = first + line.trim_end().len();
             Some(OcrLine {
+                block_start: false,
                 page: 0,
                 text: raw[first..last].into(),
                 x: 0.1,

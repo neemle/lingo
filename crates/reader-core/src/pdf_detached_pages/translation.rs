@@ -460,6 +460,7 @@ mod tests {
         ).unwrap();
         let document = store.import_pdf_file(prepared).unwrap();
         let line = |page, text: &str, y, height| ocr::OcrLine {
+            block_start: false,
             page, text: text.into(), x: 0.1, y, width: 0.8, height,
             confidence: None, correction: None, words: vec![], source_span: None,
         };

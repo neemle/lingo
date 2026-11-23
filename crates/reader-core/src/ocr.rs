@@ -17,6 +17,8 @@ pub struct OcrLine {
     pub confidence: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correction: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub block_start: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub words: Vec<OcrWord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -278,7 +280,7 @@ pub(crate) fn recognized_lines(lines: &[OcrLine], pages: u16) -> Result<String> 
         }
         if !text.is_empty() {
             text.push('\n');
-            if line.page != previous_page {
+            if line.page != previous_page || line.block_start {
                 text.push('\n');
             }
         }
@@ -329,7 +331,7 @@ pub(crate) fn refresh_line_provenance(
                 utf16 = start;
             }
         } else if had_previous_page && page_aligned {
-            let separator = if new_page { "\n\n" } else { "\n" };
+            let separator = if new_page || line.block_start { "\n\n" } else { "\n" };
             page_aligned = canonical[byte..].starts_with(separator);
             if page_aligned {
                 byte += separator.len();
@@ -755,6 +757,7 @@ mod tests {
     #[test]
     fn reviewed_page_rejects_the_entire_batch_if_one_line_changed() {
         let line = |text: &str, y| OcrLine {
+            block_start: false,
             page: 0, text: text.into(), x: 0.1, y, width: 0.8, height: 0.04,
             confidence: Some(0.5), correction: None, words: vec![], source_span: None,
         };
@@ -781,6 +784,7 @@ mod tests {
     #[test]
     fn ocr_word_spans_track_scanned_pages_corrections_and_restored_provenance() {
         let line = |page, text: &str, words: &[(&str, usize)]| OcrLine {
+            block_start: false,
             page,
             text: text.into(),
             x: 0.1,

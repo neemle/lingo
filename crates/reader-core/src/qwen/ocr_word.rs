@@ -434,6 +434,7 @@ mod tests {
     fn page_review_limits_work_to_the_six_least_confident_unedited_lines() {
         let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
         let lines = (0..9).map(|index| OcrLine {
+            block_start: false,
             page: 0, text: format!("A rnagic line {index}."), x: 0.1, y: 0.05 + f64::from(index) * 0.07,
             width: 0.8, height: 0.04,
             confidence: Some(0.9 - f64::from(index) * 0.03),
@@ -486,6 +487,7 @@ mod tests {
         let lines = ["A rnagic book.", "An ordinary page.", "A b0ok on the table."];
         let document = store.import_image("scan.png", b"\x89PNG\r\n\x1a\n", "en",
             lines.iter().enumerate().map(|(index, text)| OcrLine {
+                block_start: false,
                 page: 0, text: (*text).into(), x: 0.1, y: 0.1 + index as f64 * 0.1,
                 width: 0.8, height: 0.05, confidence: Some(0.5), correction: None,
                 words: vec![], source_span: None,
@@ -511,6 +513,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut store = Store::open(&root.path().join("reader.db")).unwrap();
         let lines = (0..8).map(|index| OcrLine {
+            block_start: false,
             page: 0, text: format!("A rnagic line {index}."), x: 0.1, y: 0.05 + f64::from(index) * 0.08,
             width: 0.8, height: 0.04, confidence: Some(0.4 + f64::from(index) * 0.03),
             correction: None, words: vec![], source_span: None,
@@ -576,6 +579,7 @@ mod tests {
         .unwrap();
         let document = store.import_pdf_file(prepared).unwrap();
         let line = OcrLine {
+            block_start: false,
             page: 1,
             text: "A rnagic book.".into(),
             x: 0.1,

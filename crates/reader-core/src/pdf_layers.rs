@@ -82,6 +82,7 @@ pub(crate) fn merge_page_text(
         let page = &mut pages[usize::from(line.page)];
         if prior == Some(line.page) {
             page.push('\n');
+            if line.block_start { page.push('\n'); }
         } else if !page.is_empty() {
             return Err(
                 "Розпізнані рядки збігаються зі сторінкою, яка вже містить текстовий шар".into(),
