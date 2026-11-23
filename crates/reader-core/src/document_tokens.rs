@@ -133,8 +133,18 @@ impl Store {
             let end = end - sentence.start_utf16;
             let offset = word_parts(&sentence.text).take_while(|(_, offset, _)| *offset < end)
                 .find_map(|(_, offset, word)| (offset + word.encode_utf16().count() > start).then_some(offset));
+            // The selection can be punctuation or part of a word in a continuing
+            // sentence. Its physical page may differ from the start of the token.
+            let absolute = start_utf16.max(sentence.start_utf16);
+            let selected_page = pdf_reading_position::page_for_offset(document, absolute)
+                .and_then(|page| pdf_reading_position::page_bounds(document, page).map(|bounds| (page, bounds)))
+                .filter(|&(_, (left, right))| left <= absolute && absolute < right);
+            let offset = offset.filter(|offset| selected_page.is_none_or(|(_, (left, right))| {
+                let token = sentence.start_utf16 + offset;
+                left <= token && token < right
+            }));
             cursor = Some(reading_cursor(revision, sentence, position, offset));
-            apply_cursor(document, tx, position, offset, None)
+            apply_cursor(document, tx, position, offset, selected_page.map(|(page, _)| page))
         })?;
         Ok(cursor)
     }
@@ -405,6 +415,14 @@ mod tests {
         assert_eq!(selected.sentence_id, sentence.id);
         assert_eq!(store.pdf_reading_page(&document.id).unwrap(), Some(1));
         assert!(store.set_reading_cursor_for_page(&document.id, &sentence.id, revision, None, Some(2)).is_err());
+        assert_eq!(store.pdf_reading_page(&document.id).unwrap(), Some(1));
+
+        // There is no word boundary for the period, but its page still wins.
+        store.set_pdf_reading_page(&document.id, 0).unwrap();
+        let anchored = store.anchor_reading_selection(&document.id, revision, sentence.end_utf16 - 1, 1)
+            .unwrap().unwrap();
+        assert_eq!(anchored.sentence_id, sentence.id);
+        assert_eq!(anchored.sentence_start_utf16, None);
         assert_eq!(store.pdf_reading_page(&document.id).unwrap(), Some(1));
 
         drop(store);

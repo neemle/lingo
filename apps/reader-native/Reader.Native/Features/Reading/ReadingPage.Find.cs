@@ -88,6 +88,18 @@ public partial class ReadingPage
             if (current.CurrentRevisionId != document.CurrentRevisionId ||
                 position < 0 || position >= current.Sentences.Length || position >= document.Sentences.Length ||
                 current.Sentences[position] != document.Sentences[position]) return;
+            if (!match.Translation && current.Format == "pdf" && current.CurrentRevisionId is { } revision &&
+                match.Query is { } sourceQuery &&
+                DocumentFind.SourceMatch(current.Sentences[position], sourceQuery) is { } sourceMatch)
+            {
+                StopSpeech();
+                var cursor = await session.AnchorReadingSelectionAsync(current.Id, revision, sourceMatch);
+                if (cursor is not null && readingPageActive && session.Document is { } selected &&
+                    selected.Id == current.Id && selected.CurrentRevisionId == revision &&
+                    session.Sentence?.Id == cursor.SentenceId)
+                    RevealCanonicalFindSpan(current.Id, revision, cursor.SentenceId, sourceMatch);
+                return;
+            }
 #if MACCATALYST
             if (current.Format == "pdf" && position == current.Position)
             {
@@ -121,6 +133,13 @@ public partial class ReadingPage
         if (query is null || DocumentFind.SourceMatch(sentence, query) is not { } span) return null;
         documentFindFocus = new(document, revision, page, sentence.Id, span);
         return span;
+    }
+
+    private void RevealCanonicalFindSpan(string document, string revision, string sentence, TextSelection span)
+    {
+        documentFindFocus = new(document, revision, null, sentence, span);
+        UpdateHighlight();
+        SourceText.RevealOffset(span.StartUtf16);
     }
 
     private TextSelection? FindSourceFocus(string document, string? revision, Sentence sentence, int? page) =>
@@ -184,9 +203,7 @@ public partial class ReadingPage
                     current.Id != document.Id || current.CurrentRevisionId != revision || pdfWindow?.Center != find.Page ||
                     session.Sentence is not { } sentence || sentence.Id != cursor.SentenceId)
                     return;
-                documentFindFocus = new(document.Id, revision, null, sentence.Id, original);
-                UpdateHighlight();
-                SourceText.RevealOffset(original.StartUtf16);
+                RevealCanonicalFindSpan(document.Id, revision, sentence.Id, original);
             }
             catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
         });
