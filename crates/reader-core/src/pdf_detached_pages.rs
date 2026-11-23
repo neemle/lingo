@@ -357,8 +357,10 @@ pub(crate) fn repair_cached_text_order(
     ).optional().map_err(database_error)?;
     let Some((saved, layout)) = current else { return Ok(false); };
     let layout = Layout::from_storage(layout);
-    let before = layout.segment(reference, "");
-    let after = layout.segment(corrected, "");
+    let old_revision = page_revision(reference);
+    let new_revision = page_revision(corrected);
+    let before = layout.segment(reference, &sentence_prefix(id, page, &old_revision));
+    let after = layout.segment(corrected, &sentence_prefix(id, page, &new_revision));
     let find = |start, end| {
         let start = ocr::map_transcript_offset(start, edits)?;
         let end = ocr::map_transcript_offset(end, edits)?;
@@ -375,6 +377,16 @@ pub(crate) fn repair_cached_text_order(
     if anchors.windows(2).any(|pair| pair[0].start_utf16 >= pair[1].start_utf16) {
         return Ok(false);
     }
+    crate::dictionary_transfer::reanchor_detached_selections(
+        db, (id, page, &old_revision, &new_revision), &before, &after,
+        |start, length| {
+            let end = start.checked_add(length)?;
+            if edits.iter().any(|edit| edit.start_utf16 < end && edit.start_utf16 + edit.old_len > start) {
+                return None;
+            }
+            ocr::map_transcript_offset(start, edits)
+        },
+    )?;
     write_text_layer(db, id, page, corrected)?;
     if !anchors.is_empty() { annotations::replace_page(db, id, page, &anchors)?; }
     if let Some(sentence) = saved.and_then(|position| before.get(position as usize)) {

@@ -241,8 +241,17 @@ fn move_sentence_anchors(
 ) -> Result<()> {
     let map_start = |offset| edits.iter().rev().fold(offset, |offset, edit| edit.map_start(offset));
     let layout = super::page_layout(db, id, page)?;
-    let old_sentences = layout.segment(old, "");
-    let new_sentences = layout.segment(new, "");
+    let old_revision = page_revision(old);
+    let new_revision = page_revision(new);
+    let old_sentences = layout.segment(old, &super::sentence_prefix(id, page, &old_revision));
+    let new_sentences = layout.segment(new, &super::sentence_prefix(id, page, &new_revision));
+    crate::dictionary_transfer::reanchor_detached_selections(
+        db, (id, page, &old_revision, &new_revision), &old_sentences, &new_sentences,
+        |start, length| {
+            let end = start.checked_add(length)?;
+            (!edits.iter().any(|edit| edit.start < end && edit.old_end > start)).then(|| map_start(start))
+        },
+    )?;
     let saved: Option<usize> = db
         .query_row(
             "SELECT sentence FROM pdf_detached_positions WHERE document_id=?1 AND page=?2",
@@ -346,8 +355,10 @@ mod tests {
             store.pdf_original_root(), "scan.pdf", &original, "en", vec![String::new()], vec![],
         ).unwrap();
         let document = store.import_pdf_file(prepared).unwrap();
+        let initial = "A magc book has a magc cover and a story. A rnagic story follows.";
+        let corrected = "A magic book has a magic cover and a story. A magic story follows.";
         let line = ocr::OcrLine {
-            page: 0, text: "A magc book has a magc cover. A rnagic story follows.".into(),
+            page: 0, text: initial.into(),
             x: 0.1, y: 0.1, width: 0.8, height: 0.1, confidence: Some(0.6),
             correction: None, words: vec![], source_span: None,
         };
@@ -358,13 +369,25 @@ mod tests {
             &document.id, 0, &selected.sentence.id,
             DetachedPdfAnnotationChange::Note { text: "Remember this sentence".into() },
         ).unwrap();
+        let mut save = |text| store.save_detached_pdf_word(&document.id, 0,
+            serde_json::from_value(serde_json::json!({
+                "startUtf16": initial.rfind(text).unwrap(), "selectedText": text,
+                "revisionId": selected.revision_id, "translation": "переклад", "target": "uk",
+            })).unwrap()).unwrap();
+        let unchanged = save("story");
+        let altered = save("rnagic");
         let frame = store.detached_pdf_ocr(&document.id, 0).unwrap().unwrap();
         store.reconcile_detached_pdf_ocr(&document.id, 0, &frame.revision, "en", |lines| {
-            lines[0].correction = Some("A magic book has a magic cover. A magic story follows.".into());
+            lines[0].correction = Some(corrected.into());
             Ok(true)
         }).unwrap();
         let saved = store.detached_pdf_sentence(&document.id, 0, None).unwrap().unwrap();
         assert_eq!(saved.sentence.text, "A magic story follows.");
         assert_eq!(saved.note.as_deref(), Some("Remember this sentence"));
+        let links = serde_json::to_value(store.dictionary_source_locations(&unchanged.id).unwrap()).unwrap();
+        assert_eq!(links.as_array().unwrap().len(), 1);
+        assert_eq!(links[0]["sentenceId"], saved.sentence.id);
+        assert_eq!(links[0]["selection"]["startUtf16"], corrected.rfind("story").unwrap());
+        assert!(store.dictionary_source_locations(&altered.id).unwrap().is_empty());
     }
 }

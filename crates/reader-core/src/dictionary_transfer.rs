@@ -190,6 +190,55 @@ fn location_in_revision(
         .then(|| (position, sentence.id.clone(), revision.to_owned(), None))
 }
 
+pub(crate) fn reanchor_detached_selections(
+    db: &Connection,
+    (id, page, before_revision, after_revision): (&str, u16, &str, &str),
+    before: &[crate::Sentence],
+    after: &[crate::Sentence],
+    map: impl Fn(usize, usize) -> Option<usize>,
+) -> Result<()> {
+    let mut query = db.prepare(
+        "SELECT card_id, surface, sentence, anchor FROM dictionary_context_anchors
+         WHERE document_id=?1 AND json_extract(anchor,'$.page')=?2
+           AND json_extract(anchor,'$.revisionId')=?3
+           AND json_type(anchor,'$.selection')='object'",
+    ).map_err(error)?;
+    let rows = query.query_map(params![id, page, before_revision], |row| Ok((
+        row.get::<_, String>(0)?, row.get::<_, String>(1)?,
+        row.get::<_, String>(2)?, row.get::<_, String>(3)?,
+    ))).map_err(error)?.collect::<rusqlite::Result<Vec<_>>>().map_err(error)?;
+    for (card, surface, text, encoded) in rows {
+        let old: DictionarySentenceAnchor = serde_json::from_str(&encoded).map_err(error)?;
+        let Some((_, _, _, Some(mut selection))) = location_in_revision(
+            &old, &text, before_revision, before, None,
+        ) else { continue; };
+        let length = selection.text.encode_utf16().count();
+        let Some(start) = map(selection.start_utf16, length) else { continue; };
+        let Some(sentence) = after.get(after.partition_point(|sentence| sentence.end_utf16 <= start))
+            else { continue; };
+        let matched = start.checked_sub(sentence.start_utf16)
+            .and_then(|relative| crate::ocr::byte_at_utf16(&sentence.text, relative))
+            .and_then(|byte| sentence.text.get(byte..))
+            .is_some_and(|tail| tail.starts_with(&selection.text));
+        if !matched || !valid_example(&surface, &sentence.text) { continue; }
+        selection.start_utf16 = start;
+        let updated = DictionarySentenceAnchor {
+            sentence_id: sentence.id.clone(),
+            revision_id: after_revision.to_owned(),
+            page: Some(page),
+            sentence_start_utf16: sentence.start_utf16,
+            selection: Some(selection),
+        };
+        write_context(db, &card, id, &surface, &sentence.text, &[updated])?;
+        db.execute(
+            "DELETE FROM dictionary_context_anchors
+             WHERE card_id=?1 AND document_id=?2 AND surface=?3 AND sentence=?4 AND anchor=?5",
+            params![card, id, surface, text, encoded],
+        ).map_err(error)?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DictionaryImport {
