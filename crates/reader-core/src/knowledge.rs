@@ -365,17 +365,33 @@ impl Store {
     }
 
     pub(crate) fn repair_pdf_ocr(&self, language: &str, lines: &mut [crate::ocr::OcrLine]) -> Result<()> {
+        if let Some(db) = self.pdf_ocr_corpus(language)? {
+            Self::repair_pdf_ocr_with_corpus(&db, language, lines)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn pdf_ocr_corpus(&self, language: &str) -> Result<Option<Connection>> {
         let index = self.open_knowledge_index(language)?;
-        let Some((_, db, version)) = versioned_index(&index)? else { return Ok(()); };
-        if version < 2 { return Ok(()); }
-        for line in lines.iter_mut().filter(|line| line.confidence.is_some_and(|value| value < 0.92)) {
+        let usable = versioned_index(&index)?.is_some_and(|(_, _, version)| version >= 2);
+        Ok(index.filter(|_| usable).map(|(_, db)| db))
+    }
+
+    pub(crate) fn repair_pdf_ocr_with_corpus(
+        db: &Connection, language: &str, lines: &mut [crate::ocr::OcrLine],
+    ) -> Result<bool> {
+        let mut changed = false;
+        for line in lines.iter_mut().filter(|line| {
+            line.correction.is_none() && line.confidence.is_some_and(|value| value < 0.92)
+        }) {
             if let Some(revised) = ocr_suggestions::revise_line(db, language, &line.text)? {
                 if revised.len() <= 8192 {
                     line.correction = Some(revised);
+                    changed = true;
                 }
             }
         }
-        Ok(())
+        Ok(changed)
     }
 
     pub(crate) fn has_dictionary(&self, language: &str) -> bool {
@@ -848,6 +864,47 @@ mod tests {
         assert_eq!(first["lengthUtf16"], 6);
         assert_eq!(changes[1]["replacement"], "Book");
         assert!(store.suggest_ocr("fr", text).unwrap().is_none());
+    }
+
+    #[test]
+    fn recheck_scan_without_text_layer_uses_corpus_on_canonical_and_detached_pages() {
+        use crate::{file_originals, ocr::OcrLine, pdf_detached_pages};
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&directory.path().join("reader.db")).unwrap();
+        let original = directory.path().join("scan.pdf");
+        fs::write(&original, "%PDF-1.4\n").unwrap();
+        let prepared = file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "scan.pdf", &original, "en", vec![String::new(); 2], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let raw = "A rnagic book.";
+        let line = |page| OcrLine {
+            page, text: raw.into(), x: 0.1, y: 0.1, width: 0.8, height: 0.1,
+            confidence: Some(0.8), correction: None, words: vec![], source_span: None,
+        };
+        let document = store.cache_pdf_ocr_page(&document.id, 0, vec![line(0)]).unwrap();
+        pdf_detached_pages::write_ocr(&store.connection, &document.id, 1, "en", &[line(1)], 2).unwrap();
+        let detached = serde_json::to_value(store.detached_pdf_ocr(&document.id, 1).unwrap()).unwrap();
+        let path = PACKS[0].path(&store.knowledge_directory);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        build_pack(&path, concat!(
+            "1\tA\ta\tDET\t_\t_\n",
+            "2\tmagic\tmagic\tADJ\t_\t_\n",
+            "3\tbook\tbook\tNOUN\t_\t_\n",
+        ).as_bytes()).unwrap();
+        assert!(store.reconcile_pdf_ocr_page(
+            &document.id, 0, document.current_revision_id.as_deref().unwrap(), "en", "", false,
+        ).unwrap());
+        assert!(store.reconcile_pdf_ocr_page(
+            &document.id, 1, detached["revision"].as_str().unwrap(), "en", "", true,
+        ).unwrap());
+        let snapshot = store.snapshot().unwrap();
+        let canonical = &snapshot.documents[0].ocr_lines.as_ref().unwrap()[0];
+        let detached = store.detached_pdf_ocr(&document.id, 1).unwrap().unwrap();
+        for line in [canonical, &detached.lines[0]] {
+            assert_eq!(line.text, raw);
+            assert_eq!(line.reading_text(), "A magic book.");
+        }
     }
 
     #[test]

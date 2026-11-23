@@ -509,13 +509,11 @@ public partial class ReadingPage
                 }
                 var reference = await PdfScan.ReadPageTextAsync(original.Path, window.Center, window.PageCount, run.Token);
                 run.Token.ThrowIfCancellationRequested();
-                var changed = reference.Length > 0 && await session.ReconcilePdfOcrPageAsync(
+                var changed = await session.ReconcilePdfOcrPageAsync(
                     document.Id, window.Center, revision, document.Language, reference, isDetached);
                 if (!changed && readingPageActive && !run.IsCancellationRequested && session.Document?.Id == document.Id)
                 {
-                    var message = reference.Length == 0 ? "Ця сторінка не має текстового шару."
-                        : "Не знайдено розбіжностей, які можна впевнено виправити.";
-                    await DisplayAlertAsync("Звірка OCR", message, "Гаразд");
+                    await DisplayAlertAsync("Звірка OCR", "Не знайдено розбіжностей, які можна впевнено виправити.", "Гаразд");
                     return;
                 }
             }

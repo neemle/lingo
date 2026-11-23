@@ -467,8 +467,19 @@ impl Store {
         if reference.len() > crate::MAX_IMPORT || reference.contains('\0') {
             return Err("Некоректний текстовий шар сторінки PDF.".into());
         }
+        let corpus = if reference.trim().is_empty() {
+            Some(self.pdf_ocr_corpus(language)?.ok_or(
+                "У цього скану немає текстового шару. Встановіть пакет аналізу мови, щоб звірити OCR.",
+            )?)
+        } else {
+            None
+        };
+        let reconcile = |lines: &mut [ocr::OcrLine]| match &corpus {
+            Some(db) => Self::repair_pdf_ocr_with_corpus(db, language, lines),
+            None => Ok(reconcile_ocr_with_layer(reference, lines)),
+        };
         if detached {
-            return self.reconcile_detached_pdf_ocr(id, page, revision, language, reference);
+            return self.reconcile_detached_pdf_ocr(id, page, revision, language, reconcile);
         }
         let mut changed = false;
         self.edit_document(id, |document, tx| {
@@ -485,7 +496,7 @@ impl Store {
             let end = lines.partition_point(|line| line.page <= page);
             let page_lines = &mut lines[start..end];
             let was_raw: Vec<_> = page_lines.iter().map(|line| line.correction.is_none()).collect();
-            changed = reconcile_ocr_with_layer(reference, page_lines);
+            changed = reconcile(page_lines)?;
             if changed {
                 let mut edits = Vec::new();
                 for (line, _) in page_lines.iter().zip(was_raw)

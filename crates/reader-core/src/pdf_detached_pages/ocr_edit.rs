@@ -1,5 +1,5 @@
 use super::{annotations, database_error, page_revision, sqlite_offset};
-use crate::{ocr, pdf_page_ocr::reconcile_ocr_with_layer, Result, Sentence, Store};
+use crate::{ocr, Result, Sentence, Store};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -104,7 +104,8 @@ impl Store {
     }
 
     pub(crate) fn reconcile_detached_pdf_ocr(
-        &mut self, id: &str, page: u16, revision: &str, language: &str, reference: &str,
+        &mut self, id: &str, page: u16, revision: &str, language: &str,
+        reconcile: impl FnOnce(&mut [ocr::OcrLine]) -> Result<bool>,
     ) -> Result<bool> {
         let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(database_error)?;
@@ -119,7 +120,7 @@ impl Store {
             return Err("Текст або мова PDF змінилися. Відкрийте сторінку знову.".into());
         }
         let uncorrected: Vec<_> = previous.lines.iter().map(|line| line.correction.is_none()).collect();
-        if !reconcile_ocr_with_layer(reference, &mut previous.lines) {
+        if !reconcile(&mut previous.lines)? {
             return Ok(false);
         }
         let edits = previous.lines.iter().zip(uncorrected)
