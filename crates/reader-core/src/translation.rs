@@ -2780,10 +2780,12 @@ fn cache_key(
             .unwrap_or(4)
     };
     let version = match route {
+        _ if segments.iter().any(|text| crate::protected_translation::contains_protected(text.as_ref()))
+            || context.is_some_and(crate::protected_translation::contains_protected) => 13,
         Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" && segments.iter().any(|text|
             crate::marian_target_uk::publication_term(text.as_ref()).is_some()) => 12,
         Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" && segments.iter().any(|text|
-            crate::marian_target_uk::french_reply_to_monsieur(text.as_ref()).is_some()) => 11,
+            crate::marian_target_uk::french_dialogue_formula(text.as_ref()).is_some()) => 11,
         _ if settings.beam_size > 1 && segments.iter().any(|text|
             crate::marian_provider::may_recover_group(text.as_ref())) => 10,
         Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" &&

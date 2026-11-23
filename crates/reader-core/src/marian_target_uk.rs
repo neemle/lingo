@@ -3,7 +3,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use whatlang::{Detector, Lang};
 
 const FRENCH_MANNER_OF_WALKING: &str = " de son pas souple et fort";
-pub(crate) const INSTRUCTION_REVISION: &str = "fr-uk-instructions-v3";
+pub(crate) const INSTRUCTION_REVISION: &str = "fr-uk-instructions-v4";
 
 /// Established Ukrainian forms for complete publication labels and names.
 pub(crate) fn publication_term(source: &str) -> Option<String> {
@@ -169,17 +169,88 @@ pub(super) fn repair_french_affirmative(source: &str, target: &str) -> Option<St
     (!clearly_russian(&repaired)).then_some(repaired)
 }
 
-pub(super) fn french_reply_to_monsieur(source: &str) -> Option<String> {
-    let source = source.trim();
-    let opening = source.trim_start_matches(|ch: char| ch.is_whitespace() || matches!(ch, '–' | '—' | '-'));
-    let (answer, address) = opening.split_once(',')?;
-    let answer = if answer.eq_ignore_ascii_case("oui") { "Так" }
-        else if answer.eq_ignore_ascii_case("non") { "Ні" }
-        else { return None; };
-    let address = address.trim();
-    let name = address.trim_end_matches(['.', '!', '?', '…']);
-    if !name.eq_ignore_ascii_case("monsieur") { return None; }
-    Some(format!("{}{answer}, пане{}", &source[..source.len() - opening.len()], &address[name.len()..]))
+struct DialogueFrame<'a> {
+    prefix: &'a str,
+    body: &'a str,
+    suffix: &'a str,
+}
+
+impl<'a> DialogueFrame<'a> {
+    fn new(source: &'a str) -> Self {
+        let source = source.trim();
+        let opening = source.trim_start_matches(|ch: char| ch.is_whitespace()
+            || matches!(ch, '–' | '—' | '-' | '«' | '“' | '„' | '"'));
+        let body = opening.trim_end_matches(|ch: char| ch.is_whitespace()
+            || matches!(ch, '.' | '!' | '?' | '…' | '»' | '”' | '"'));
+        Self { prefix: &source[..source.len() - opening.len()], body, suffix: &opening[body.len()..] }
+    }
+
+    fn restore(&self, target: &str) -> String {
+        let target = target.trim();
+        let target = if self.prefix.is_empty() { target } else {
+            target.trim_start_matches(|ch: char| ch.is_whitespace() || matches!(ch, '–' | '—' | '-' | '«' | '“' | '„' | '"'))
+        };
+        let target = if self.suffix.is_empty() { target } else {
+            target.trim_end_matches(['.', '!', '?', '…', '»', '”', '"']).trim_end()
+        };
+        format!("{}{target}{}", self.prefix, self.suffix)
+    }
+}
+
+/// Standalone polite formulas have a direct rendering without a model guess.
+pub(super) fn french_dialogue_formula(source: &str) -> Option<String> {
+    let frame = DialogueFrame::new(source);
+    let body = frame.body.to_lowercase();
+    let forms: Vec<_> = body.split(',').map(str::trim).collect();
+    let address = |name| match name {
+        "monsieur" => Some("пане"),
+        "madame" => Some("пані"),
+        _ => None,
+    };
+    let translated = match forms.as_slice() {
+        [answer @ ("oui" | "non"), name, tail @ ..] if tail.is_empty() || *tail == ["mais"] => {
+            let answer = if *answer == "oui" { "Так" } else { "Ні" };
+            let conjunction = if tail.is_empty() { "" } else { ", але" };
+            format!("{answer}, {}{conjunction}", address(*name)?)
+        }
+        ["je suis à vos ordres"] => "Я у вашому розпорядженні".into(),
+        ["je suis à vos ordres", name] => format!("Я у вашому розпорядженні, {}", address(*name)?),
+        _ => return None,
+    };
+    Some(frame.restore(&translated))
+}
+
+pub(super) struct FrenchDialogueRetry<'a> {
+    frame: DialogueFrame<'a>,
+    pub input: String,
+}
+
+impl FrenchDialogueRetry<'_> {
+    pub(super) fn restore(&self, target: &str) -> String {
+        self.frame.restore(target)
+    }
+}
+
+pub(super) fn french_dialogue_retry(source: &str) -> Option<FrenchDialogueRetry<'_>> {
+    let frame = DialogueFrame::new(source);
+    if frame.body.is_empty() { return None; }
+    let rewritten = frame.body.replace(" vient à la rencontre de ", " s'avance vers ");
+    let mut words = rewritten.split_whitespace().peekable();
+    let mut input = String::with_capacity(rewritten.len());
+    while let Some(word) = words.next() {
+        let word = if words.peek().is_some_and(|next| next.starts_with(char::is_uppercase)) {
+            match word { "M." => "monsieur", "Mme" | "Mme." => "madame", "Mlle" | "Mlle." => "mademoiselle", _ => word }
+        } else { word };
+        if !input.is_empty() { input.push(' '); }
+        input.push_str(word);
+    }
+    if input != frame.body && matches!(frame.suffix, "." | "!" | "?") {
+        input.push_str(frame.suffix);
+    }
+    if input == source || crate::pdf_sentences::Layout::ClosingQuotes.segment(&input, "").len() != 1 {
+        return None;
+    }
+    Some(FrenchDialogueRetry { frame, input })
 }
 
 fn distinguish(sample: &str) -> Option<Lang> {
@@ -338,8 +409,20 @@ mod tests {
         assert!(!clearly_russian("Так, в узурпатора."));
         assert!(!clearly_russian("Давня історія."));
         assert!(!clearly_russian("«Да!» — відповів він."));
-        assert_eq!(french_reply_to_monsieur("— Oui, monsieur.").as_deref(), Some("— Так, пане."));
-        assert!(french_reply_to_monsieur("Oui, monsieur travaille.").is_none());
+        assert_eq!(french_dialogue_formula("— Oui, monsieur.").as_deref(), Some("— Так, пане."));
+        assert!(french_dialogue_formula("Oui, monsieur travaille.").is_none());
+    }
+
+    #[test]
+    fn preserves_french_dialogue_frames_and_only_rewrites_complete_formulas() {
+        assert_eq!(french_dialogue_formula("— « Oui, monsieur, mais... »").as_deref(), Some("— « Так, пане, але... »"));
+        assert_eq!(french_dialogue_formula("« Je suis à vos ordres, madame.").as_deref(), Some("« Я у вашому розпорядженні, пані."));
+        assert!(french_dialogue_formula("Oui, monsieur, mais nous arrivons.").is_none());
+        assert!(french_dialogue_formula("Je suis à vos ordres, monsieur. Il descend.").is_none());
+        let retry = french_dialogue_retry("Un homme vient à la rencontre de M. Dupont.").unwrap();
+        assert_eq!(retry.input, "Un homme s'avance vers monsieur Dupont.");
+        assert_eq!(retry.restore("Чоловік наближається до пана Дюпона!"), "Чоловік наближається до пана Дюпона.");
+        assert!(french_dialogue_retry("Une porte se ferme. Il part.").is_none());
     }
 
     #[test]

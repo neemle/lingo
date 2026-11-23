@@ -46,6 +46,7 @@ mod pdf_detached_pages;
 pub use pdf_detached_pages::{DetachedPdfAnnotationChange, DetachedPdfAnnotationItem, DetachedPdfFindCursor, DetachedPdfFindPage, DetachedPdfOcrPage, DetachedPdfPassage, DetachedPdfSentence, DetachedPdfTranslation};
 mod pdf_reading_position;
 mod pdf_sentences;
+mod protected_translation;
 pub use pdf_page_ocr::{PdfReadPage, PdfReadPageState, PdfReadWindow, PdfTextOrderEdit};
 pub mod practice;
 pub mod qwen;

@@ -1430,11 +1430,19 @@ impl MarianProvider<'_> {
         'segments: for segment in segments {
             checkpoint()?;
             if package.source == "fr" && package.target == "uk" {
-                if let Some(text) = crate::marian_target_uk::publication_term(segment) {
+                if let Some(text) = crate::marian_target_uk::publication_term(segment)
+                    .or_else(|| crate::marian_target_uk::french_dialogue_formula(segment))
+                {
                     results.push(Ok(text));
                     continue;
                 }
             }
+            let protected = crate::protected_translation::ProtectedText::new(segment, package.target);
+            if protected.only_protected() {
+                results.push(protected.restore(protected.input().to_owned()));
+                continue;
+            }
+            let segment = protected.input();
             let source_pieces = input
                 .encode(normalized_translation_input(package, segment).as_ref())
                 .map_err(model_error)?;
@@ -1617,8 +1625,7 @@ impl MarianProvider<'_> {
                 if package.source == "fr" && package.target == "uk" &&
                     start == 0 && end == source_pieces.len() && units.len() == 1
                 {
-                    if let Some(text) = crate::marian_target_uk::french_reply_to_monsieur(segment)
-                        .or_else(|| crate::marian_target_uk::repair_french_affirmative(segment, &translated)) {
+                    if let Some(text) = crate::marian_target_uk::repair_french_affirmative(segment, &translated) {
                         translated = text;
                     }
                 }
@@ -1627,37 +1634,36 @@ impl MarianProvider<'_> {
                         .into_iter()
                         .chain(decoded.filter_map(|tokens| decode_text(&tokens).ok()))
                         .find(|text| crate::marian_target_uk::clearly_ukrainian(text));
+                    let french_retry = if candidate.is_none() && ukrainian_retry_budget > 0 && package.source == "fr"
+                        && start == 0 && end == source_pieces.len() && segment.len() <= 768
+                    {
+                        crate::marian_target_uk::french_dialogue_retry(segment)
+                    } else {
+                        None
+                    };
                     let candidate = match candidate {
                         Some(text) => Some(text),
                         None if ukrainian_retry_budget > 0
                             && start == 0
                             && end == source_pieces.len()
                             && segment.len() <= 768
-                            && units.len() == 1 =>
+                            && (units.len() == 1 || french_retry.is_some()) =>
                         {
                             ukrainian_retry_budget -= 1;
                             let sentence = segment.trim_end();
-                            let retry = match sentence.chars().last() {
-                                Some(mark @ ('.' | '!' | '?')) => {
-                                    let source =
-                                        sentence[..sentence.len() - mark.len_utf8()].trim_end();
-                                    reference(source, settings.beam_size)
-                                        .ok()
-                                        .filter(|text| {
-                                            crate::marian_target_uk::clearly_ukrainian(text)
-                                        })
-                                        .map(|text| {
-                                            format!(
-                                                "{}{mark}",
-                                                text.trim_end_matches(['.', '!', '?'])
-                                            )
-                                        })
-                                }
-                                _ => reference(segment, 1).ok().filter(|text| {
-                                    crate::marian_target_uk::clearly_ukrainian(text)
-                                }),
-                            };
-                            retry
+                            if let Some(retry) = french_retry {
+                                reference(&retry.input, settings.beam_size).ok()
+                                    .filter(|text| crate::marian_target_uk::clearly_ukrainian(text))
+                                    .map(|text| retry.restore(&text))
+                            } else if let Some(mark @ ('.' | '!' | '?')) = sentence.chars().last() {
+                                let source = sentence[..sentence.len() - mark.len_utf8()].trim_end();
+                                reference(source, settings.beam_size).ok()
+                                    .filter(|text| crate::marian_target_uk::clearly_ukrainian(text))
+                                    .map(|text| format!("{}{mark}", text.trim_end_matches(['.', '!', '?'])))
+                            } else {
+                                reference(segment, 1).ok()
+                                    .filter(|text| crate::marian_target_uk::clearly_ukrainian(text))
+                            }
                         }
                         None => None,
                     };
@@ -1679,7 +1685,7 @@ impl MarianProvider<'_> {
             if package.source == "fr" && package.target == "uk" {
                 crate::translation_dates::preserve_french_dates(segment, &mut translated);
             }
-            results.push(Ok(translated));
+            results.push(protected.restore(translated));
         }
         checkpoint()?;
         Ok(())

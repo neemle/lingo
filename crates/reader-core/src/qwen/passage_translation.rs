@@ -3,6 +3,7 @@ use super::{
     HintCache, HintCacheMode, HintWork, GENERATION_INPUT_TOO_LONG, GENERATION_TIMEOUT, HINT_GENERATION_MODEL,
 };
 use crate::{pdf_sentences::Layout, translation_passage::{join_translated_chunks, passage_chunks}, Result, Store};
+use crate::protected_translation::{self, ProtectedText, MARKER_ERROR};
 use llama_cpp_2::{context::LlamaContext, model::LlamaModel};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -113,6 +114,9 @@ impl Store {
                     };
                     (HINT_GENERATION_MODEL, SYSTEM, example, cache_kind)
                 };
+                let cache_kind = if protected_translation::contains_protected(prompt_text) {
+                    "passage-protected-spans-v1"
+                } else { cache_kind };
                 self.prepare_hint_work(
                     model,
                     id,
@@ -195,17 +199,19 @@ impl TranslatePassageJob {
                                         .ok_or("Модель не отримала текст уривка.")?;
                                     let chunk_deadline = Instant::now() + if self.use_hy { Duration::from_secs(120) } else { CHUNK_TIMEOUT };
                                     let render = |fragment: &str, regenerate| {
+                                        let protected = ProtectedText::new(fragment, &self.target);
                                         context.clear_kv_cache();
                                         if self.use_hy {
-                                            let text = hy_translation::translate(model, context, fragment, regenerate,
+                                            let text = hy_translation::translate(model, context, protected.input(), regenerate,
                                                 || prompt_checkpoint(should_yield, chunk_deadline))?;
+                                            let text = protected.restore(text)?;
                                             return serde_json::to_vec(&TranslationChunk { text }).map_err(|error| error.to_string());
                                         }
-                                        let prompt = format!("{instruction}\n{fragment}");
+                                        let prompt = format!("{instruction}\n{}", protected.input());
                                         let seconds = if fragment == source_text { 25 } else { 16 };
                                         let finish = chunk_deadline.min(Instant::now() + Duration::from_secs(seconds));
                                         prompt_checkpoint(should_yield, finish)?;
-                                        generate_in_mode(
+                                        let bytes = generate_in_mode(
                                             model,
                                             context,
                                             SYSTEM,
@@ -213,7 +219,12 @@ impl TranslatePassageJob {
                                             GRAMMAR,
                                             GenerationMode::Passage { regenerate },
                                             || prompt_checkpoint(should_yield, finish),
-                                        )
+                                        )?;
+                                        if protected.is_empty() { return Ok(bytes); }
+                                        let result: TranslationChunk = serde_json::from_str(json_output(&bytes).ok_or(MARKER_ERROR)?)
+                                            .map_err(|_| MARKER_ERROR)?;
+                                        let text = protected.restore(result.text)?;
+                                        serde_json::to_vec(&TranslationChunk { text }).map_err(|error| error.to_string())
                                     };
                                     let value = translate_chunk(
                                         source_text,
@@ -273,12 +284,16 @@ fn recover_chunk(
     if !input.chars().any(char::is_alphabetic) {
         return Ok(TranslationChunk { text: input.to_owned() });
     }
+    let protected = ProtectedText::new(input, target);
+    if protected.only_protected() {
+        return Ok(TranslationChunk { text: protected.restore(protected.input().to_owned())? });
+    }
     let error = match render(input, regenerate) {
         Ok(bytes) => match parse(&bytes, target, input) {
             Ok(translated) => return Ok(translated),
             Err(error) => error,
         },
-        Err(error) if error == GENERATION_TIMEOUT || error == GENERATION_INPUT_TOO_LONG => error,
+        Err(error) if error == GENERATION_TIMEOUT || error == GENERATION_INPUT_TOO_LONG || error == MARKER_ERROR => error,
         Err(error) => return Err(error),
     };
     if attempts >= 3 {
@@ -343,13 +358,14 @@ fn parse(bytes: &[u8], target: &str, source_text: &str) -> Result<TranslationChu
     let result: TranslationChunk =
         serde_json::from_str(json_output(bytes).ok_or(error)?).map_err(|_| error)?;
     let text = result.text.trim();
-    let letters = text.chars().filter(|ch| ch.is_alphabetic()).count();
-    let cyrillic = text
+    let sample = protected_translation::without_identifiers(text);
+    let letters = sample.chars().filter(|ch| ch.is_alphabetic()).count();
+    let cyrillic = sample
         .chars()
         .filter(|ch| matches!(ch, '\u{0400}'..='\u{052f}') && ch.is_alphabetic())
         .count();
     let wrong_script = target == "uk" && letters > 0 && cyrillic * 5 < letters * 3;
-    let source_letters = source_text.chars().filter(|ch| ch.is_alphabetic()).count();
+    let source_letters = protected_translation::without_identifiers(source_text).chars().filter(|ch| ch.is_alphabetic()).count();
     let missing_numbers = source_text
         .split(|ch: char| !ch.is_ascii_digit())
         .filter(|number| !number.is_empty())
@@ -367,9 +383,9 @@ fn parse(bytes: &[u8], target: &str, source_text: &str) -> Result<TranslationChu
     if letters == 0
         || text.eq_ignore_ascii_case(source_text.trim())
         || wrong_script
-        || (target == "uk" && mixed_cyrillic_word(text))
-        || (target == "uk" && crate::marian_target_uk::clearly_russian(text))
-        || crate::language_detection::detect(text).is_some_and(|language| language != target)
+        || (target == "uk" && mixed_cyrillic_word(&sample))
+        || (target == "uk" && crate::marian_target_uk::clearly_russian(&sample))
+        || crate::language_detection::detect(&sample).is_some_and(|language| language != target)
     {
         return Err("Модель не повернула перекладу вибраною мовою.".into());
     }
