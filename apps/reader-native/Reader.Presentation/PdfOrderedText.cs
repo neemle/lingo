@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using Reader.Contracts;
 
 namespace Reader.Presentation;
 
@@ -13,6 +14,8 @@ public sealed class PdfOrderedText
     private readonly SourceSlice[] slices;
 
     public string Text { get; }
+    public PdfTextOrderEdit[] Corrections { get; } = [];
+    public static bool MayNeedRepair(string text) => IsolatedAccent.IsMatch(text);
 
     public PdfOrderedText(string text)
     {
@@ -20,10 +23,11 @@ public sealed class PdfOrderedText
         slices = [];
     }
 
-    private PdfOrderedText(string text, SourceSlice[] slices)
+    private PdfOrderedText(string text, SourceSlice[] slices, PdfTextOrderEdit[] corrections)
     {
         Text = text;
         this.slices = slices;
+        Corrections = corrections;
     }
 
     public int? OriginalOffset(int start, int length)
@@ -41,6 +45,7 @@ public sealed class PdfOrderedText
         if (accents.Count == 0) return new(text);
         var words = Tokens.Matches(text).ToArray();
         var edits = new List<Edit>();
+        var corrections = new List<PdfTextOrderEdit>();
         var lastEdit = 0;
         var index = 0;
 
@@ -67,7 +72,9 @@ public sealed class PdfOrderedText
             edits.Add(new(leftEnd, words[insertion].Index, letter.Index));
             var previous = words[index - 1];
             lastEdit = letter.Index + letter.Length;
-            edits.Add(new(previous.Index + previous.Length, lastEdit, null));
+            var previousEnd = previous.Index + previous.Length;
+            edits.Add(new(previousEnd, lastEdit, null));
+            corrections.Add(new(leftEnd, lastEdit, " à " + text[words[insertion].Index..previousEnd]));
         }
 
         if (edits.Count == 0) return new(text);
@@ -86,7 +93,7 @@ public sealed class PdfOrderedText
             cursor = edit.End;
         }
         AppendSource(cursor, text.Length - cursor);
-        return new(output.ToString(), sources.ToArray());
+        return new(output.ToString(), sources.ToArray(), corrections.ToArray());
 
         void AppendSource(int start, int length)
         {

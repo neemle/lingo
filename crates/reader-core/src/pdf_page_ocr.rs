@@ -46,6 +46,46 @@ pub struct PdfReadWindow {
     pub context_span: Option<ocr::OcrSpan>,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PdfTextOrderEdit {
+    start_utf16: usize,
+    end_utf16: usize,
+    replacement: String,
+}
+
+fn repair_text_order(old: &str, changes: &[PdfTextOrderEdit]) -> Result<(String, Vec<ocr::TranscriptEdit>)> {
+    let invalid = || "Некоректні виправлення порядку слів PDF.".to_owned();
+    let mut cursor = 0;
+    let mut offset = 0;
+    let mut text = String::with_capacity(old.len());
+    let mut edits = Vec::new();
+    for change in changes {
+        let skip = change.start_utf16.checked_sub(offset).ok_or_else(invalid)?;
+        let length = change.end_utf16.checked_sub(change.start_utf16).ok_or_else(invalid)?;
+        let start = cursor + ocr::byte_at_utf16(&old[cursor..], skip).ok_or_else(invalid)?;
+        let end = start + ocr::byte_at_utf16(&old[start..], length).ok_or_else(invalid)?;
+        let original = old.get(start..end).ok_or_else(invalid)?;
+        let moved = original.strip_suffix('à').ok_or_else(invalid)?;
+        let replacement = change.replacement.strip_prefix(" à ").ok_or_else(invalid)?;
+        if moved.trim() != replacement || replacement.is_empty()
+            || !moved.starts_with(char::is_whitespace) || !moved.ends_with(char::is_whitespace) {
+            return Err(invalid());
+        }
+        text.push_str(&old[cursor..start]);
+        text.push_str(&change.replacement);
+        edits.push(ocr::TranscriptEdit {
+            start_utf16: change.start_utf16,
+            old_len: length,
+            new_len: change.replacement.encode_utf16().count(),
+        });
+        cursor = end;
+        offset = change.end_utf16;
+    }
+    text.push_str(&old[cursor..]);
+    Ok((text, edits))
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PdfOcrRequest {
@@ -498,6 +538,40 @@ impl Store {
             return Err("Розпізнавання не знайшло тексту на сторінці.".into());
         }
         self.commit_pdf_page(id, page, lines, None, None, Some((revision, language)))
+    }
+
+    pub fn repair_stored_pdf_text_order(
+        &mut self, id: &str, page: u16, revision: &str, reference: &str, changes: &[PdfTextOrderEdit],
+    ) -> Result<bool> {
+        if changes.is_empty() { return Ok(false); }
+        if reference.len() > crate::MAX_IMPORT || reference.contains('\0') {
+            return Err("Некоректний текстовий шар сторінки PDF.".into());
+        }
+        let (corrected, mut edits) = repair_text_order(reference, changes)?;
+        let mut changed = false;
+        self.edit_document(id, |document, tx| {
+            if document.current_revision_id.as_deref() != Some(revision)
+                || has_ocr_lines(document, page) {
+                return Ok(false);
+            }
+            let Some(mut pages) = file_originals::native_pdf_page_text(tx, id)? else { return Ok(false); };
+            let Some(old) = pages.get_mut(usize::from(page)) else { return Ok(false); };
+            if old.trim().is_empty() {
+                changed = pdf_detached_pages::repair_cached_text_order(tx, id, page, reference, &corrected, &edits)?;
+                return Ok(false);
+            }
+            if old.trim() != reference { return Ok(false); }
+            let Some((start, _)) = crate::pdf_reading_position::page_bounds(document, page) else { return Ok(false); };
+            for edit in &mut edits { edit.start_utf16 += start; }
+            *old = corrected;
+            let page_text = serde_json::to_string(&pages).map_err(database_error)?;
+            reflow_pdf_document_with_edits(tx, document, pages, &edits)?;
+            tx.execute("UPDATE file_originals SET pdf_page_text=?2 WHERE document_id=?1",
+                params![id, page_text]).map_err(database_error)?;
+            changed = true;
+            Ok(true)
+        })?;
+        Ok(changed)
     }
 
     pub fn reconcile_pdf_ocr_page(
@@ -1259,6 +1333,50 @@ fn database_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod drop_cap_tests {
     use super::*;
+
+    #[test]
+    fn stored_pdf_order_repair_preserves_canonical_and_detached_annotations() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("library.db")).unwrap();
+        let original = root.path().join("library.pdf");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let old = "Il est mort\n  Naples\nà\noù nous avons marché. Le marin repart.";
+        let edits = [PdfTextOrderEdit {
+            start_utf16: "Il est mort".len(),
+            end_utf16: "Il est mort\n  Naples\nà".encode_utf16().count(),
+            replacement: " à Naples".into(),
+        }];
+        let prepared = file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "library.pdf", &original, "fr", vec![old.into(), "".into()], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let revision = document.current_revision_id.as_deref().unwrap();
+        let sentence = &document.sentences[0];
+        store.set_sentence_note(&document.id, &sentence.id, "keep this note").unwrap();
+        store.set_bookmark(&document.id, &sentence.id, true).unwrap();
+        assert!(store.repair_stored_pdf_text_order(&document.id, 0, revision, old, &edits).unwrap());
+        let updated = store.translation_document(&document.id).unwrap();
+        let sentence = &updated.sentences[0];
+        assert!(sentence.text.contains("mort à Naples"));
+        assert_eq!(updated.notes[&sentence.id], "keep this note");
+        assert!(updated.bookmarks.contains(&sentence.id));
+        assert!(!store.repair_stored_pdf_text_order(&document.id, 0, revision, old, &edits).unwrap());
+
+        pdf_detached_pages::write_text_layer(&store.connection, &document.id, 1, old).unwrap();
+        let page = store.detached_pdf_sentences(&document.id, 1).unwrap().unwrap();
+        store.select_detached_pdf_sentence(&document.id, 1, Some(1), None).unwrap();
+        store.update_detached_pdf_annotation(
+            &document.id, 1, &page.sentences[1].id,
+            crate::DetachedPdfAnnotationChange::Note { text: "keep detached".into() },
+        ).unwrap();
+        let revision = updated.current_revision_id.as_deref().unwrap();
+        assert!(store.repair_stored_pdf_text_order(&document.id, 1, revision, old, &edits).unwrap());
+        let page = store.detached_pdf_sentences(&document.id, 1).unwrap().unwrap();
+        assert!(page.text.contains("mort à Naples"));
+        assert_eq!(page.saved, 1);
+        let detached = serde_json::to_value(store.detached_pdf_sentence(&document.id, 1, None).unwrap()).unwrap();
+        assert_eq!(detached["note"], "keep detached");
+    }
 
     #[test]
     fn repairs_drop_cap_with_geometry_and_unique_text_layer_context() {

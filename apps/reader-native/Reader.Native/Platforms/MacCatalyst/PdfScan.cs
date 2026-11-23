@@ -104,6 +104,16 @@ internal static class PdfScan
             return TextLayer(page, out _).Text;
         }, cancellation);
 
+    internal static Task<PdfTextOrderEdit[]> ReadStoredTextOrderFixesAsync(string path, int index, string storedText) =>
+        Task.Run(() =>
+        {
+            using var pool = new NSAutoreleasePool();
+            using var document = Open(path);
+            using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
+            if (!string.Equals(page.Text?.Trim(), storedText, StringComparison.Ordinal)) return [];
+            return TextLayer(page, out _).Corrections;
+        });
+
     internal static Task<string[]> ReadLanguageSamplesAsync(string path, bool optical, int skip = 0, int count = 5) => Task.Run(() =>
     {
         using var pool = new NSAutoreleasePool();

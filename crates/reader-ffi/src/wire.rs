@@ -313,6 +313,14 @@ pub enum Command {
         #[serde(default)]
         detached: bool,
     },
+    RepairStoredPdfTextOrder {
+        id: String,
+        page: u16,
+        #[serde(rename = "revisionId")]
+        revision_id: String,
+        reference: String,
+        changes: Vec<reader_core::PdfTextOrderEdit>,
+    },
     ReconcilePhotoOcr {
         id: String,
         #[serde(rename = "revisionId")]

@@ -346,6 +346,56 @@ pub(crate) fn write_text_layer(db: &Connection, id: &str, page: u16, text: &str)
     write(db, id, page, text, None, None, Layout::ClosingQuotes)
 }
 
+pub(crate) fn repair_cached_text_order(
+    db: &Connection, id: &str, page: u16, reference: &str, corrected: &str, edits: &[ocr::TranscriptEdit],
+) -> Result<bool> {
+    let current: Option<(Option<i64>, u8)> = db.query_row(
+        "SELECT saved.sentence, p.soft_lines FROM pdf_detached_pages p
+         LEFT JOIN pdf_detached_positions saved ON saved.document_id=p.document_id AND saved.page=p.page
+         WHERE p.document_id=?1 AND p.page=?2 AND p.ocr_language IS NULL AND p.lines IS NULL AND p.text=?3",
+        params![id, page, reference], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional().map_err(database_error)?;
+    let Some((saved, layout)) = current else { return Ok(false); };
+    let layout = Layout::from_storage(layout);
+    let before = layout.segment(reference, "");
+    let after = layout.segment(corrected, "");
+    let find = |start, end| {
+        let start = ocr::map_transcript_offset(start, edits)?;
+        let end = ocr::map_transcript_offset(end, edits)?;
+        let index = after.binary_search_by_key(&start, |sentence| sentence.start_utf16).ok()?;
+        (after[index].end_utf16 == end).then_some(index)
+    };
+    let mut anchors = annotations::list(db, id, page)?;
+    for anchor in &mut anchors {
+        let Ok(old) = before.binary_search_by_key(&anchor.start_utf16, |sentence| sentence.start_utf16)
+            else { return Ok(false); };
+        let Some(index) = find(before[old].start_utf16, before[old].end_utf16) else { return Ok(false); };
+        anchor.start_utf16 = after[index].start_utf16;
+    }
+    if anchors.windows(2).any(|pair| pair[0].start_utf16 >= pair[1].start_utf16) {
+        return Ok(false);
+    }
+    write_text_layer(db, id, page, corrected)?;
+    if !anchors.is_empty() { annotations::replace_page(db, id, page, &anchors)?; }
+    if let Some(sentence) = saved.and_then(|position| before.get(position as usize)) {
+        let offset = ocr::map_transcript_offset(sentence.start_utf16, edits).unwrap_or(sentence.start_utf16);
+        write_position(db, id, page, crate::pdf_sentences::position_at(&after, offset))?;
+    }
+    if let Some(mut checkpoint) = speech_resume::read(db, id, page)? {
+        let mapped = before.get(checkpoint.position).and_then(|sentence| {
+            find(sentence.start_utf16, sentence.end_utf16).filter(|&index| after[index].text == sentence.text)
+        });
+        if let Some(position) = mapped {
+            checkpoint.position = position;
+            speech_resume::write(db, id, page, &checkpoint)?;
+        } else {
+            db.execute("DELETE FROM pdf_detached_speech_resume WHERE document_id=?1 AND page=?2",
+                params![id, page]).map_err(database_error)?;
+        }
+    }
+    Ok(true)
+}
+
 pub(crate) fn write_ocr(
     db: &Connection, id: &str, page: u16, language: &str, lines: &[ocr::OcrLine], page_count: u16,
 ) -> Result<()> {

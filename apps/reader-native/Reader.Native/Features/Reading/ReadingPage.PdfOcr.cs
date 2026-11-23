@@ -87,6 +87,7 @@ public partial class ReadingPage
         CancelDetachedSpeechTravel();
 #if MACCATALYST
         pdfSnapshot = null;
+        attemptedPdfTextOrderRepair = null;
         pdfWindow = null;
         pdfWindowLoading = false;
         pdfOcrFocus = null;
@@ -113,6 +114,7 @@ public partial class ReadingPage
     private bool pdfWindowLoading;
     private bool pdfPagePromptOpen;
     private CancellationTokenSource? repairingPdfText;
+    private (string Document, int Page, string Text)? attemptedPdfTextOrderRepair;
 
     private async void BackgroundPdfTextCached(string id, int page)
     {
@@ -157,6 +159,12 @@ public partial class ReadingPage
                 if (!IsCurrentPdfSnapshot(session, document)) return;
             }
             var window = await session.PdfReadWindowAsync(document.Id, page);
+            if (!IsCurrentPdfSnapshot(session, document)) return;
+            if (await RepairStoredPdfTextOrderAsync(session, document, window))
+            {
+                if (IsCurrentPdfSnapshot(session, document)) await session.RefreshAsync();
+                return;
+            }
             if (!IsCurrentPdfSnapshot(session, document)) return;
             var pageChanged = pdfWindow?.Center != window.Center;
             pdfWindow = window;
@@ -205,6 +213,32 @@ public partial class ReadingPage
 
     private bool IsCurrentPdfSnapshot(ReaderSession session, Document document) =>
         readingPageActive && ReferenceEquals(pdfSnapshot, document) && ReferenceEquals(session.Document, document);
+
+    private async Task<bool> RepairStoredPdfTextOrderAsync(ReaderSession session, Document document, PdfReadWindow window)
+    {
+        var page = window.Pages.FirstOrDefault(candidate => candidate.Page == window.Center);
+        if (document.CurrentRevisionId is not { } revision ||
+            page is not { HasOcr: false, State: "textLayer" or "detached" } ||
+            !PdfOrderedText.MayNeedRepair(page.Text))
+            return false;
+
+        var attempt = (document.Id, page.Page, page.Text);
+        if (attemptedPdfTextOrderRepair == attempt) return false;
+        attemptedPdfTextOrderRepair = attempt;
+        try
+        {
+            if (await session.OriginalFileAsync(document.Id) is not { } original ||
+                !IsCurrentPdfSnapshot(session, document)) return false;
+            var corrections = await PdfScan.ReadStoredTextOrderFixesAsync(original.Path, page.Page, page.Text);
+            return corrections.Length > 0 && IsCurrentPdfSnapshot(session, document) &&
+                await session.RepairStoredPdfTextOrderAsync(document.Id, page.Page, revision, page.Text, corrections);
+        }
+        catch (Exception error)
+        {
+            System.Diagnostics.Debug.WriteLine(error.Message);
+            return false;
+        }
+    }
 
     private async Task OpenPdfPageAsync(int page, CancellationTokenSource? narration = null)
     {

@@ -212,6 +212,7 @@ fn validate(command: &Command) -> Result<()> {
         | Command::OpenPdfReadingPage { id, revision_id: Some(revision_id), .. }
         | Command::ReplacePdfTextLayer { id, revision_id, .. }
         | Command::ReconcilePdfOcrPage { id, revision_id, .. }
+        | Command::RepairStoredPdfTextOrder { id, revision_id, .. }
         | Command::ReconcilePhotoOcr { id, revision_id }
         | Command::AnchorReadingSelection { id, revision_id, .. }
             if !valid_token_address(id, revision_id)

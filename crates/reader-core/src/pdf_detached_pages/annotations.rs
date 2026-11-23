@@ -212,6 +212,14 @@ pub(super) fn merge(db: &Connection, id: &str, page: u16, annotations: &[Archive
     Ok(())
 }
 
+pub(super) fn replace_page(db: &Connection, id: &str, page: u16, entries: &[ArchivedAnnotation]) -> Result<()> {
+    for table in ["pdf_detached_annotations", "pdf_detached_translations", "pdf_detached_speech_text"] {
+        db.execute(&format!("DELETE FROM {table} WHERE document_id=?1 AND page=?2"),
+            params![id, page]).map_err(database_error)?;
+    }
+    merge(db, id, page, entries)
+}
+
 impl Store {
     pub fn update_detached_pdf_annotation(
         &self, id: &str, page: u16, sentence_id: &str, change: DetachedPdfAnnotationChange,

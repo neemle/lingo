@@ -563,7 +563,7 @@ pub(crate) fn word_replacement_edits(start: usize, old: &str, new: &str) -> Opti
     }
 }
 
-fn map_transcript_offset(offset: usize, edits: &[TranscriptEdit]) -> Option<usize> {
+pub(crate) fn map_transcript_offset(offset: usize, edits: &[TranscriptEdit]) -> Option<usize> {
     let mut mapped = offset;
     for edit in edits.iter().take_while(|edit| edit.start_utf16 < offset) {
         if offset < edit.start_utf16 + edit.old_len {

@@ -323,6 +323,14 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         return changed;
     }
 
+    public async Task<bool> RepairStoredPdfTextOrderAsync(string id, int page, string revisionId,
+        string reference, PdfTextOrderEdit[] changes)
+    {
+        var changed = await Task.Run(() => client.RepairStoredPdfTextOrder(id, page, revisionId, reference, changes));
+        if (changed) PdfOcrUpdated?.Invoke(id, page);
+        return changed;
+    }
+
     public async Task CachePdfOcrPageAsync(string id, PdfOcrRequest claim, OcrLine[] lines, string? textLayer = null)
     {
         await Task.Run(() => client.CachePdfOcrPage(id, claim, lines, textLayer));
