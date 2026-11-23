@@ -504,8 +504,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     });
 
     public Task<SentenceReview?> ReviewSentenceAsync(string model, string document, int? page, string? sentence,
-        object? focus = null, string? revisionId = null, bool cachedOnly = false) =>
-        Task.Run(() => client.ReviewSentence(model, document, page, sentence, focus, revisionId, cachedOnly));
+        object? focus = null, string? revisionId = null, bool cachedOnly = false, bool explainSyntax = false) =>
+        Task.Run(() => client.ReviewSentence(model, document, page, sentence, focus, revisionId, cachedOnly, explainSyntax));
 
     public Task<WordExplanation?> ExplainWordAsync(string model, string document, string sentence, string word,
         bool cachedOnly = false, int? startUtf16 = null, string? revisionId = null) =>

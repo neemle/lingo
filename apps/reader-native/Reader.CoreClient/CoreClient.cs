@@ -379,10 +379,10 @@ public sealed class CoreClient : IDisposable
     public void SetReviewedTranslation(string id, string sentenceId, string target, string text) =>
         Call<JsonElement>(new { version = 1, operation = "set_reviewed_translation", id, sentenceId, target, text });
     public SentenceReview? ReviewSentence(string model, string document, int? page, string? sentence,
-        object? focus = null, string? revisionId = null, bool cachedOnly = false) =>
+        object? focus = null, string? revisionId = null, bool cachedOnly = false, bool explainSyntax = false) =>
         CallIndependent<SentenceReview?>(new
         {
-            version = 1, operation = "review_sentence", model, document, page, sentence, focus, revisionId, cachedOnly,
+            version = 1, operation = "review_sentence", model, document, page, sentence, focus, revisionId, cachedOnly, explainSyntax,
         });
 
     public WordExplanation? ExplainWord(string model, string document, string sentence, string word,

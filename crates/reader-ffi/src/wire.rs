@@ -461,6 +461,8 @@ pub enum Command {
         revision_id: Option<String>,
         #[serde(default, rename = "cachedOnly")]
         cached_only: bool,
+        #[serde(default, rename = "explainSyntax")]
+        explain_syntax: bool,
     },
     ReviewOcrWord {
         id: String,

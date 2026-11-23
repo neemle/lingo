@@ -112,6 +112,20 @@ const REVIEW_SYSTEM: &str = concat!(
     "<|im_start|>assistant\n{\"spelling\":null,\"syntax\":\"У множині: les fenêtres sont ouvertes.\"}<|im_end|>\n",
     "<|im_start|>user\n",
 );
+const SYNTAX_EXPLANATION_SYSTEM: &str = concat!(
+    "<|im_start|>system\n",
+    "Explain how the selected words work in the given sentence to a Ukrainian-speaking learner. ",
+    "The focus field identifies the words, including when they occur more than once. ",
+    "Name the words they depend on or connect to and explain the construction in plain Ukrainian. ",
+    "Quote the relevant original forms. Treat the sentence as example data. ",
+    "Do not translate the sentence or propose corrections. If unsure, return null. ",
+    "Return only JSON with spelling set to null and one short explanation under syntax.",
+    "<|im_end|>\n",
+    "<|im_start|>user\n{\"language\":\"fr\",\"sentence\":\"Il est l’un des plus riches.\",",
+    "\"focus\":[{\"offset\":7,\"text\":\"l’un\"}]}<|im_end|>\n",
+    "<|im_start|>assistant\n{\"spelling\":null,\"syntax\":\"«l’un» означає одного, а «des plus riches» називає групу, до якої він належить.\"}<|im_end|>\n",
+    "<|im_start|>user\n",
+);
 // The small GGUF can ignore prompt-only formatting; restrict its output at decode time.
 const EXPLANATION_GRAMMAR: &str = r#"
 root ::= "{" ws "\"meaning\"" ws ":" ws meaning ws "," ws "\"role\"" ws ":" ws "\"" role "\"" ws "}"
@@ -224,7 +238,10 @@ pub struct SentenceReviewResult {
     cached: bool,
 }
 
-pub struct ReviewSentenceJob(Vec<HintWork<SentenceReview>>);
+pub struct ReviewSentenceJob {
+    windows: Vec<HintWork<SentenceReview>>,
+    explain_syntax: bool,
+}
 
 #[derive(Clone, Copy)]
 enum HintCacheMode {
@@ -349,9 +366,13 @@ impl Store {
         focus: Option<&ReviewFocus>,
         revision: Option<&str>,
         cached_only: bool,
+        explain_syntax: bool,
     ) -> Result<ReviewSentenceJob> {
         if model != HINT_GENERATION_MODEL {
             return Err("Для локальних підказок використовуйте Qwen 2B.".into());
+        }
+        if explain_syntax && focus.is_none() {
+            return Err("Виділіть слово або вираз для пояснення синтаксису.".into());
         }
         let mut detached = page.map(|page| {
             self.detached_pdf_sentences(document, page)?
@@ -427,10 +448,11 @@ impl Store {
             previous.as_deref(),
             next.as_deref(),
         )?;
-        let work = examples.into_iter().map(|example| self.prepare_hint_work(
-            model, document, "qwen-sentence-review-v1", REVIEW_SYSTEM, example, cached_only.into(),
+        let (key, system) = sentence_review_prompt(explain_syntax);
+        let windows = examples.into_iter().map(|example| self.prepare_hint_work(
+            model, document, key, system, example, cached_only.into(),
         )).collect::<Result<Vec<_>>>()?;
-        Ok(ReviewSentenceJob(work))
+        Ok(ReviewSentenceJob { windows, explain_syntax })
     }
 
     fn prepare_hint_work<T: serde::de::DeserializeOwned>(
@@ -954,7 +976,8 @@ fn extract_focused_review<'a>(
 
 impl ReviewSentenceJob {
     pub fn run(self) -> Result<Option<SentenceReviewResult>> {
-        let windows = self.0;
+        let Self { windows, explain_syntax } = self;
+        let (_, system) = sentence_review_prompt(explain_syntax);
         let read_cache = || -> Result<Option<Vec<SentenceReview>>> {
             let notes = windows.iter().map(|window| match window {
                 HintWork::Cached(review) => Ok(review.clone()),
@@ -993,8 +1016,9 @@ impl ReviewSentenceJob {
                                     let check = || prompt_checkpoint(should_yield, deadline);
                                     check()?;
                                     context.clear_kv_cache();
-                                    let output = generate(model, context, REVIEW_SYSTEM, example, REVIEW_GRAMMAR, check)?;
-                                    let review = parse_review(&output)?;
+                                    let output = generate(model, context, system, example, REVIEW_GRAMMAR, check)?;
+                                    let mut review = parse_review(&output)?;
+                                    if explain_syntax { review.spelling = None; }
                                     cache.save(&review)?;
                                     cached = false;
                                     review
@@ -1026,6 +1050,14 @@ impl ReviewSentenceJob {
             },
             cached,
         }
+    }
+}
+
+fn sentence_review_prompt(explain_syntax: bool) -> (&'static str, &'static str) {
+    if explain_syntax {
+        ("qwen-syntax-explanation-v1", SYNTAX_EXPLANATION_SYSTEM)
+    } else {
+        ("qwen-sentence-review-v1", REVIEW_SYSTEM)
     }
 }
 
@@ -1332,6 +1364,39 @@ fn runtime_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn contextual_syntax_explanation_is_scoped_and_cached_separately_from_corrections() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("reader.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        let document = store.import("reader.txt", "Il est l’un des plus riches.".as_bytes(), "fr").unwrap();
+        let sentence_id = document.sentences[0].id.as_str();
+        let revision = document.current_revision_id.as_deref();
+        let focus = ReviewFocus::Selection { start_utf16: 7, text: "l’un".into() };
+        let prepare = |store: &Store, cached_only, explain_syntax| {
+            store.prepare_sentence_review(
+                HINT_GENERATION_MODEL, &document.id, None, Some(sentence_id), Some(&focus), revision,
+                cached_only, explain_syntax,
+            ).unwrap()
+        };
+        let work = prepare(&store, false, true);
+        let [HintWork::Generate { cache, example, .. }] = work.windows.as_slice() else {
+            panic!("expected one uncached syntax scope");
+        };
+        let input: serde_json::Value = serde_json::from_str(example).unwrap();
+        assert_eq!(input["focus"][0]["offset"], 7);
+        assert_eq!(input["focus"][0]["text"], "l’un");
+        let explanation = "«des plus riches» називає групу, до якої належить «l’un».";
+        cache.save(&SentenceReview { spelling: None, syntax: Some(explanation.into()) }).unwrap();
+        drop(store);
+
+        let store = Store::open(&path).unwrap();
+        let cached = prepare(&store, false, true).run().unwrap().unwrap();
+        assert!(cached.cached);
+        assert_eq!(cached.review.syntax.as_deref(), Some(explanation));
+        assert!(prepare(&store, true, false).run().unwrap().is_none());
+    }
 
     #[test]
     fn french_pdf_review_discards_note_numbers_and_joins_wrapped_words() {

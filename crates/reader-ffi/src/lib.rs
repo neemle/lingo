@@ -332,10 +332,11 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             let result = if request_id.is_some() { job.run_until_canceled(canceled) } else { job.run() };
             return if canceled() { Err(canceled_error()) } else { encode_job(result) };
         }
-        Command::ReviewSentence { model, document, page, sentence, focus, revision_id, cached_only } => {
+        Command::ReviewSentence { model, document, page, sentence, focus, revision_id, cached_only, explain_syntax } => {
             let job = registry::lock()?
                 .store(handle)?
-                .prepare_sentence_review(model, document, *page, sentence.as_deref(), focus.as_ref(), revision_id.as_deref(), *cached_only)
+                .prepare_sentence_review(model, document, *page, sentence.as_deref(), focus.as_ref(), revision_id.as_deref(),
+                    *cached_only, *explain_syntax)
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }

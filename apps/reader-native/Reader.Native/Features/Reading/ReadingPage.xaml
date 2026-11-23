@@ -515,6 +515,11 @@
       <Button Text="Перекласти виділення…" Style="{StaticResource PlayerButton}" Clicked="TranslateSelectionClicked" />
      </FlexLayout>
      <Label x:Name="WordSyntaxDetails" Style="{StaticResource ReaderMeta}" IsVisible="False" />
+     <VerticalStackLayout x:Name="WordSyntaxModelPanel" IsVisible="False" Spacing="5">
+      <Button Text="Пояснити синтаксис з Qwen" Clicked="ExplainSyntaxClicked"
+       Style="{StaticResource PlayerButton}" HorizontalOptions="Start" />
+      <Label x:Name="WordSyntaxModelText" Style="{StaticResource ReaderMeta}" LineBreakMode="WordWrap" />
+     </VerticalStackLayout>
      <Grid x:Name="SelectedSenseRow" ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="False">
       <Label x:Name="SelectedSense" Style="{StaticResource ReaderMeta}" LineBreakMode="WordWrap"
        VerticalOptions="Center" />
@@ -581,6 +586,11 @@
         SemanticProperties.Description="Поширити виділений уривок сторінки PDF" />
      </FlexLayout>
      <Label x:Name="DetachedSyntaxDetails" Style="{StaticResource ReaderMeta}" IsVisible="False" />
+     <VerticalStackLayout x:Name="DetachedSyntaxModelPanel" IsVisible="False" Spacing="5">
+      <Button x:Name="DetachedExplainSyntax" Text="Пояснити синтаксис з Qwen" Clicked="ExplainSyntaxClicked"
+       Style="{StaticResource PlayerButton}" HorizontalOptions="Start" />
+      <Label x:Name="DetachedSyntaxModelText" Style="{StaticResource ReaderMeta}" LineBreakMode="WordWrap" />
+     </VerticalStackLayout>
      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="7">
       <ActivityIndicator x:Name="DetachedWordExplanationBusy" IsVisible="False" WidthRequest="18" HeightRequest="18"
        VerticalOptions="Start" Color="{StaticResource Sage}" />

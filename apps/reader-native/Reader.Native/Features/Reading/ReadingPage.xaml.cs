@@ -517,7 +517,7 @@ public partial class ReadingPage : ContentPage
         VocabularyReading.IsVisible = false;
         SelectedWord.Text = selected.ReadingText;
         ShowMeanings(null);
-        ShowLocalSyntax(null);
+        ShowLocalSyntax(null, loading: true);
         OpenSpelling.IsVisible = !selected.Text.Any(char.IsWhiteSpace);
         ShowExpressionOptions(null, selected);
         KnowledgeAnalysis.Text = "Пошук у мовному пакеті…";
