@@ -35,5 +35,9 @@ rustix = { version = "1.1", features = ["fs"] }
 [target.'cfg(target_vendor = "apple")'.dependencies]
 libc = "0.2"
 
+[target.'cfg(all(target_vendor = "apple", target_arch = "aarch64"))'.dependencies]
+# On Apple Silicon, SHA-256 uses the CPU instructions for streaming model verification.
+sha2 = { version = "0.10", features = ["asm"] }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_SystemInformation"] }
