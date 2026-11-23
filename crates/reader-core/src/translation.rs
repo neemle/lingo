@@ -8,6 +8,9 @@ use std::{cmp::Ordering, collections::{BTreeMap, HashMap, HashSet}, ops::{Range,
 use unicode_normalization::UnicodeNormalization;
 
 const MAX_BATCH_BYTES: usize = 64 * 1024;
+const MAX_BATCH_SEGMENTS: usize = 32;
+// Leave room for target-language expansion in the provider response.
+const PAGE_BATCH_BYTES: usize = MAX_BATCH_BYTES / 4;
 const CACHE_ROWS: i64 = 128;
 const LIVE_CACHE_ROWS: i64 = 100_000;
 
@@ -634,25 +637,13 @@ pub(crate) fn translate_pdf_page(
         }
     }
 
-    // Length expansion in the target language must fit within the provider's response limit.
-    const PAGE_BATCH_BYTES: usize = MAX_BATCH_BYTES / 4;
-    let mut pending = pending.into_iter().peekable();
-    while pending.peek().is_some() {
+    let mut pending = pending.into_iter();
+    while !pending.as_slice().is_empty() {
         if canceled() {
             return Err(TranslationBatchError::deferred("Переклад сторінки скасовано.".into()));
         }
-        let mut batch = Vec::new();
-        let mut indices = Vec::new();
-        let mut bytes = 0;
-        while let Some((_, text)) = pending.peek() {
-            if !batch.is_empty() && (batch.len() == 32 || bytes + text.len() > PAGE_BATCH_BYTES) {
-                break;
-            }
-            let (index, text) = pending.next().expect("pending page input");
-            bytes += text.len();
-            batch.push(text);
-            indices.push(index);
-        }
+        let count = page_batch_len(pending.as_slice(), |(_, text)| text.len());
+        let (indices, batch): (Vec<_>, Vec<_>) = pending.by_ref().take(count).unzip();
         let translated = match store.translate_units(provider, &document.id, &document.language, target, &batch) {
             Ok(translated) => translated,
             Err(TranslationBatchError::Failed(failure)) => {
@@ -676,13 +667,29 @@ pub(crate) fn translate_pdf_page(
     Ok(units)
 }
 
+fn page_batch_len<T>(pending: &[T], size: impl Fn(&T) -> usize) -> usize {
+    let mut total = 0;
+    let mut count = 0;
+    for item in pending.iter().take(MAX_BATCH_SEGMENTS) {
+        let bytes = size(item);
+        if count > 0 && total + bytes > PAGE_BATCH_BYTES { break; }
+        total += bytes;
+        count += 1;
+    }
+    count
+}
+
 pub(crate) fn regenerate_pdf_sentences(
     store: &mut Store, provider: &mut impl TranslationProvider, document: &Document,
-    selected: Range<usize>, target: &str, boundaries: PageBoundaries,
+    selected: Range<usize>, target: &str, boundaries: PageBoundaries, canceled: &dyn Fn() -> bool,
 ) -> Result<()> {
+    let checkpoint = || {
+        if canceled() { Err("Повторний переклад скасовано.".to_owned()) } else { Ok(()) }
+    };
     let mut segments = Vec::new();
     let mut seen = HashSet::new();
     for position in selected {
+        checkpoint()?;
         let plan = paragraph_plan(store, document, position, target, boundaries, UnitGrouping::Sentence)?;
         let id = &document.sentences[position].id;
         let (_, input) = plan.pending.into_iter()
@@ -690,13 +697,24 @@ pub(crate) fn regenerate_pdf_sentences(
             .ok_or("Для цього фрагмента повторний переклад недоступний.")?;
         if seen.insert(input.clone()) { segments.push(input); }
     }
-    if !valid_segments(&segments) {
+    if segments.is_empty() {
         return Err("Некоректний обсяг тексту для повторного перекладу.".into());
     }
     let route = ranked_routes(&provider.installed_models()?, &document.language, target)?
         .into_iter().next().ok_or("Мовний пакет для повторного перекладу недоступний.")?;
-    let output = infer_route(provider, &route, &segments, None, TranslationSettings { beam_size: 6 })?;
     let keys = segments.iter().map(|text| unit_cache_key(&route, text)).collect::<Result<Vec<_>>>()?;
+    let mut pending = segments.as_slice();
+    let mut output = Vec::with_capacity(segments.len());
+    while !pending.is_empty() {
+        checkpoint()?;
+        let (batch, rest) = pending.split_at(page_batch_len(pending, String::len));
+        if !valid_segments(batch) {
+            return Err("Некоректний обсяг тексту для повторного перекладу.".into());
+        }
+        output.extend(infer_route(provider, &route, batch, None, TranslationSettings { beam_size: 6 })?);
+        pending = rest;
+    }
+    checkpoint()?;
     store.save_cached_segments(keys.iter().cloned().zip(output.iter().map(std::slice::from_ref)))?;
     store.link_translation_cache_keys(&document.id, keys.iter().map(String::as_str))
 }
@@ -1633,10 +1651,10 @@ mod tests {
             assert!(rows.iter().all(|row| row.translation.is_some()));
         }
         assert_eq!(provider.batches, [vec!["Le marin part.".to_owned(), "Le port est ouvert.".to_owned()]]);
-        assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, 0..1, "uk", PageBoundaries::Canonical).is_err());
-        regenerate_pdf_sentences(&mut store, &mut provider, &document, 1..2, "uk", PageBoundaries::Canonical).unwrap();
+        assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, 0..1, "uk", PageBoundaries::Canonical, &|| false).is_err());
+        regenerate_pdf_sentences(&mut store, &mut provider, &document, 1..2, "uk", PageBoundaries::Canonical, &|| false).unwrap();
         provider.fail = true;
-        assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, 1..2, "uk", PageBoundaries::Canonical).is_err());
+        assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, 1..2, "uk", PageBoundaries::Canonical, &|| false).is_err());
         let rows = translate_pdf_page(&mut store, &mut provider, &document, 0..3,
             "uk", PageBoundaries::Canonical, &|| false).unwrap();
         assert_eq!(rows[0].translation.as_deref(), Some("Корабель прибуває."));
@@ -1661,13 +1679,75 @@ mod tests {
         assert_eq!(document.sentences.len(), 3);
         provider.fail = false;
         translate_pdf_page(&mut store, &mut provider, &document, 0..3, "uk", PageBoundaries::Canonical, &|| false).unwrap();
-        regenerate_pdf_sentences(&mut store, &mut provider, &document, 0..2, "uk", PageBoundaries::Canonical).unwrap();
+        regenerate_pdf_sentences(&mut store, &mut provider, &document, 0..2, "uk", PageBoundaries::Canonical, &|| false).unwrap();
         assert_eq!(provider.batches.last().unwrap(), &["Le phare de Calvi est ouvert", "et le gardien allume la lampe."]);
         provider.fail = true;
         let rows = translate_pdf_page(&mut store, &mut provider, &document, 0..3,
             "uk", PageBoundaries::Canonical, &|| false).unwrap();
         assert!(rows[..2].iter().all(|row| row.translation.as_deref() == Some("Оновлене речення.")));
         assert_eq!(rows[2].translation.as_deref(), Some("Збережене речення."));
+    }
+
+    #[test]
+    fn pdf_regeneration_batches_long_selections_and_commits_only_after_success() {
+        use std::cell::Cell;
+
+        struct Provider<'a> {
+            edge: ModelEdge,
+            calls: &'a Cell<usize>,
+            fail_second: bool,
+            sizes: Vec<usize>,
+        }
+        impl TranslationProvider for Provider<'_> {
+            fn installed_models(&self) -> Result<Vec<ModelEdge>> { Ok(vec![self.edge.clone()]) }
+            fn translate(&mut self, _: &ModelEdge, segments: &[String], _: Option<&str>,
+                _: TranslationSettings) -> Result<Vec<String>> {
+                self.sizes.push(segments.len());
+                self.calls.set(self.calls.get() + 1);
+                if self.fail_second && self.calls.get() == 2 { return Err("Модель не завершила переклад.".into()); }
+                Ok(segments.iter().map(|_| "Новий переклад.".into()).collect())
+            }
+        }
+
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let input = (1..=MAX_BATCH_SEGMENTS + 3).map(|number| format!("Le marin attend au quai {number}."))
+            .collect::<Vec<_>>().join("\n\n");
+        let document = store.import("Fragments.txt", input.as_bytes(), "fr").unwrap();
+        assert_eq!(document.sentences.len(), MAX_BATCH_SEGMENTS + 3);
+        let calls = Cell::new(0);
+        let mut provider = Provider {
+            edge: ModelEdge { source: "fr".into(), target: "uk".into(), revision: "test".into(), quality: None },
+            calls: &calls, fail_second: true, sizes: Vec::new(),
+        };
+        let route = Route::Direct(provider.edge.clone());
+        let keys = document.sentences.iter().enumerate().map(|(position, _)| {
+            let (input, _) = sentence_input(&store, &document, position, "uk", PageBoundaries::Canonical).unwrap();
+            unit_cache_key(&route, &input).unwrap()
+        }).collect::<Vec<_>>();
+        let old = ["Попередній переклад.".to_owned()];
+        store.save_cached_segments(keys.iter().cloned().map(|key| (key, old.as_slice()))).unwrap();
+        let assert_cached = |store: &Store, expected: &str| {
+            for key in &keys {
+                assert_eq!(store.cached_segments(key, 1, "uk").unwrap().unwrap(), [expected]);
+            }
+        };
+        let selection = 0..document.sentences.len();
+        assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, selection.clone(),
+            "uk", PageBoundaries::Canonical, &|| false).is_err());
+        assert_cached(&store, &old[0]);
+
+        calls.set(0);
+        provider.fail_second = false;
+        assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, selection.clone(),
+            "uk", PageBoundaries::Canonical, &|| calls.get() == 2).is_err());
+        assert_cached(&store, &old[0]);
+
+        calls.set(0);
+        provider.sizes.clear();
+        regenerate_pdf_sentences(&mut store, &mut provider, &document, selection,
+            "uk", PageBoundaries::Canonical, &|| false).unwrap();
+        assert_eq!(provider.sizes, [MAX_BATCH_SEGMENTS, 3]);
+        assert_cached(&store, "Новий переклад.");
     }
 
     #[test]
@@ -2973,7 +3053,7 @@ fn cache_key(
 
 fn valid_segments(segments: &[String]) -> bool {
     !segments.is_empty()
-        && segments.len() <= 32
+        && segments.len() <= MAX_BATCH_SEGMENTS
         && segments.iter().all(|segment| !segment.trim().is_empty())
         && segments.iter().map(String::len).sum::<usize>() <= MAX_BATCH_BYTES
 }

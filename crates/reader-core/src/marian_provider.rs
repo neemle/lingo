@@ -860,7 +860,7 @@ impl Store {
         let directory = self.model_directory.clone();
         let mut provider = self.reader_translation_provider(&directory, &document.language, target, false, canceled)?;
         regenerate_pdf_sentences(self, &mut provider,
-            document, selected, target, boundaries)
+            document, selected, target, boundaries, canceled)
     }
 
     pub fn find_translation_page(
