@@ -1,6 +1,6 @@
 use super::{
     generate_in_mode, json_output, prompt_checkpoint, with_prompt_context, GenerationMode,
-    HintCache, HintCacheMode, HintWork, GENERATION_TIMEOUT, HINT_GENERATION_MODEL,
+    HintCache, HintCacheMode, HintWork, GENERATION_INPUT_TOO_LONG, GENERATION_TIMEOUT, HINT_GENERATION_MODEL,
 };
 use crate::{pdf_sentences::Layout, translation_passage::{join_translated_chunks, passage_chunks}, Result, Store};
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,10 @@ const CHUNK_TIMEOUT: Duration = Duration::from_secs(55);
 #[serde(deny_unknown_fields)]
 struct TranslationChunk {
     text: String,
+}
+
+pub(super) fn complete_output(bytes: &[u8]) -> bool {
+    bytes.last() == Some(&b'}') && serde_json::from_slice::<TranslationChunk>(bytes).is_ok()
 }
 
 #[derive(Serialize)]
@@ -248,11 +252,11 @@ fn recover_chunk(
             Ok(translated) => return Ok(translated),
             Err(error) => error,
         },
-        Err(error) if error == GENERATION_TIMEOUT => error,
+        Err(error) if error == GENERATION_TIMEOUT || error == GENERATION_INPUT_TOO_LONG => error,
         Err(error) => return Err(error),
     };
     if attempts >= 3 {
-        if let Some((left, right)) = split_for_retry(input) {
+        if let Some((left, right)) = split_for_retry(input, error == GENERATION_INPUT_TOO_LONG) {
             let left_attempts = (attempts - 1) / 2;
             let right_attempts = attempts - 1 - left_attempts;
             let left = recover_chunk(left, target, !regenerate, left_attempts, render)?;
@@ -260,13 +264,14 @@ fn recover_chunk(
             return Ok(TranslationChunk { text: format!("{} {}", left.text, right.text) });
         }
     }
-    if attempts > 1 {
+    if attempts > 1 && error != GENERATION_INPUT_TOO_LONG {
         return parse(&render(input, !regenerate)?, target, input);
     }
     Err(error)
 }
 
-fn split_for_retry(input: &str) -> Option<(&str, &str)> {
+fn split_for_retry(input: &str, context_overflow: bool) -> Option<(&str, &str)> {
+    let input = input.trim();
     let middle = input.len() / 2;
     let nearest = |position: &usize| position.abs_diff(middle);
     let offset = Layout::ClosingQuotes.segment(input, "").iter().skip(1)
@@ -277,6 +282,16 @@ fn split_for_retry(input: &str) -> Option<(&str, &str)> {
                 .map(|(offset, mark)| offset + mark.len())
                 .filter(|&offset| input[..offset].chars().count() >= 32 &&
                     input[offset..].trim_start().chars().count() >= 32)
+                .min_by_key(nearest)
+        })
+        .or_else(|| {
+            if !context_overflow {
+                return None;
+            }
+            input.char_indices()
+                .filter_map(|(offset, ch)| {
+                    ch.is_whitespace().then_some(offset)
+                })
                 .min_by_key(nearest)
         })?;
     Some((input[..offset].trim_end(), input[offset..].trim_start()))
@@ -357,6 +372,41 @@ fn language_name(language: &str) -> Result<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stops_only_after_the_passage_json_object_closes() {
+        let response = br#"{"text":"A literal } inside the translation."}"#;
+        for end in 0..response.len() {
+            assert!(!complete_output(&response[..end]));
+        }
+        assert!(complete_output(response));
+        assert!(!complete_output(br#"{"unexpected":"text"}"#));
+    }
+
+    #[test]
+    fn context_overflow_splits_at_a_word_boundary_without_resending_the_same_prompt() {
+        let source = "Le jeune marin revient à la maison après son long voyage";
+        let mut requests = Vec::new();
+        let translated = translate_chunk(source, "uk", false, |fragment, _| {
+            requests.push(fragment.to_owned());
+            let text = match fragment {
+                "Le jeune marin revient à la" => "Молодий моряк повертається",
+                "maison après son long voyage" => "додому після довгої подорожі",
+                _ => return Err(GENERATION_INPUT_TOO_LONG.into()),
+            };
+            Ok(serde_json::to_vec(&TranslationChunk { text: text.into() }).unwrap())
+        }).unwrap();
+        assert_eq!(requests, [source, "Le jeune marin revient à la", "maison après son long voyage"]);
+        assert_eq!(translated.text, "Молодий моряк повертається додому після довгої подорожі");
+
+        let mut calls = 0;
+        let error = translate_chunk("𐐷𐐷𐐷", "uk", false, |_, _| {
+            calls += 1;
+            Err(GENERATION_INPUT_TOO_LONG.into())
+        }).err().unwrap();
+        assert_eq!(error, GENERATION_INPUT_TOO_LONG);
+        assert_eq!(calls, 1);
+    }
 
     #[test]
     fn incomplete_chunk_retries_both_sentences_in_order() {

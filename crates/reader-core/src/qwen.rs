@@ -1167,6 +1167,7 @@ fn run_prompt<T: Serialize + serde::de::DeserializeOwned>(
 }
 
 const GENERATION_TIMEOUT: &str = "Qwen не завершив локальний аналіз вчасно.";
+const GENERATION_INPUT_TOO_LONG: &str = "Текст задовгий для локальної моделі.";
 
 fn prompt_checkpoint(should_yield: &dyn Fn() -> bool, deadline: Instant) -> Result<()> {
     if should_yield() {
@@ -1314,7 +1315,7 @@ fn generate_in_mode(
     tokens.extend(vocab.tokenize(example.as_bytes(), false, false));
     tokens.extend(vocab.tokenize(END.as_bytes(), false, true));
     let response_tokens = mode.response_budget(tokens.len())
-        .ok_or("Текст задовгий для локальної моделі.")?;
+        .ok_or(GENERATION_INPUT_TOO_LONG)?;
     let mut batch = LlamaBatch::new(BATCH, 1);
     for (offset, chunk) in tokens.chunks(BATCH).enumerate() {
         check()?;
@@ -1351,7 +1352,8 @@ fn generate_in_mode(
             break;
         }
         vocab.token_to_piece_into(token, &mut output, false, None);
-        if output.len() > RESPONSE_BYTES {
+        if output.len() > RESPONSE_BYTES ||
+            (matches!(mode, GenerationMode::Passage { .. }) && passage_translation::complete_output(&output)) {
             break;
         }
         batch.clear();
