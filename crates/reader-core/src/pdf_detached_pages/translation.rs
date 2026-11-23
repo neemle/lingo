@@ -1,6 +1,6 @@
 use super::{annotations, word_break, CachedSentences};
 use crate::translation::{sentence_input, sentence_source, CacheRoutes, PageBoundaries, ParagraphTranslation};
-use crate::{document_layout, Document, Result, Sentence, Store};
+use crate::{document_layout, ocr, Document, Result, Sentence, Store};
 use serde::Serialize;
 use std::{collections::BTreeMap, ops::Range};
 
@@ -294,19 +294,25 @@ impl Store {
         }
         let physical_start = usize::from(previous.is_some());
         let physical = physical_start..physical_start + sentences.len();
-        let (text, page_starts) = if previous.is_some() || next.is_some() {
-            let (joined, starts) =
-                include_neighbors(id, page, &text, &mut sentences, previous, next);
-            (joined, Some(starts))
+        let lines = self.detached_pdf_ocr(id, page)?.map(|ocr| ocr.lines);
+        let layout = if previous.is_some() || next.is_some() {
+            let (joined, starts, center) = include_neighbors(id, page, &text, &mut sentences, previous, next);
+            let local = (center.clone(), text[..center.start].encode_utf16().count());
+            let projected = if physical_start == 0 { (0, 0) } else {
+                let first = &sentences[physical_start];
+                (first.start_utf8, first.start_utf16)
+            };
+            let mut layout = Document {
+                text: joined,
+                format: "pdf".into(),
+                pdf_page_starts: Some(starts),
+                ocr_lines: lines.map(|lines| project_ocr_lines(lines, local, projected, physical_start as u16)),
+                ..Document::default()
+            };
+            document_layout::reflow_ocr_paragraphs(&mut layout);
+            layout
         } else {
-            (text, None)
-        };
-        let layout = if let Some(starts) = page_starts {
-            let extracted = document_layout::from_transcript(text, Some(starts));
-            Document { text: extracted.text, blocks: extracted.blocks, pdf_page_starts: extracted.pdf_page_starts, ..Document::default() }
-        } else {
-            document_layout::detached_pdf_document(text, &language,
-                self.detached_pdf_ocr(id, page)?.map(|ocr| ocr.lines))
+            document_layout::detached_pdf_document(text, &language, lines)
         };
         let document = Document {
             id: id.to_owned(),
@@ -320,6 +326,31 @@ impl Store {
     }
 }
 
+fn project_ocr_lines(
+    lines: Vec<ocr::OcrLine>, (center, center_utf16): (Range<usize>, usize),
+    (start_utf8, start_utf16): (usize, usize), virtual_page: u16,
+) -> Vec<ocr::OcrLine> {
+    let shift = |span: ocr::OcrSpan| {
+        if span.start_utf8 < center.start || span.end_utf8 > center.end || span.start_utf16 < center_utf16 {
+            return None;
+        }
+        Some(ocr::OcrSpan {
+            start_utf8: span.start_utf8 - center.start + start_utf8,
+            end_utf8: span.end_utf8 - center.start + start_utf8,
+            start_utf16: span.start_utf16 - center_utf16 + start_utf16,
+            end_utf16: span.end_utf16 - center_utf16 + start_utf16,
+        })
+    };
+    lines.into_iter().filter_map(|mut line| {
+        line.source_span = Some(shift(line.source_span?)?);
+        line.page = virtual_page;
+        for word in &mut line.words {
+            word.source_span = word.source_span.and_then(shift);
+        }
+        Some(line)
+    }).collect()
+}
+
 fn include_neighbors(
     id: &str,
     page: u16,
@@ -327,7 +358,7 @@ fn include_neighbors(
     sentences: &mut Vec<Sentence>,
     previous: Option<String>,
     next: Option<String>,
-) -> (String, Vec<Option<usize>>) {
+) -> (String, Vec<Option<usize>>, Range<usize>) {
     let center_end = if next.is_some() {
         sentences
             .last()
@@ -375,7 +406,55 @@ fn include_neighbors(
     } else {
         joined.push_str(&text[center_byte..]);
     }
-    (joined, starts)
+    (joined, starts, center_byte..center_end)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{file_originals, pdf_detached_pages};
+
+    #[test]
+    fn projected_page_joins_a_split_word_without_translating_small_glossary_notes() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let source = root.path().join("scan.pdf");
+        std::fs::write(&source, b"%PDF-1.4\n").unwrap();
+        let prepared = file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "scan.pdf", &source, "fr", vec![String::new(); 2], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let line = |page, text: &str, y, height| ocr::OcrLine {
+            page, text: text.into(), x: 0.1, y, width: 0.8, height,
+            confidence: None, correction: None, words: vec![], source_span: None,
+        };
+        pdf_detached_pages::write_ocr(&store.connection, &document.id, 0, "fr",
+            &[line(0, "C'était un voyage extraordi-", 0.2, 0.04)], 2).unwrap();
+        pdf_detached_pages::write_ocr(&store.connection, &document.id, 1, "fr", &[
+            line(1, "naire. Le marin s'approcha du quai.", 0.1, 0.04),
+            line(1, "Le vent soufflait fort.", 0.15, 0.04),
+            line(1, "Les mouettes criaient.", 0.2, 0.04),
+            line(1, "Il attendit le bateau.", 0.25, 0.04),
+            line(1, "Quai : lieu où les bateaux accostent.", 0.8, 0.015),
+            line(1, "Vent : mouvement de l'air.", 0.82, 0.015),
+            line(1, "Mouette : oiseau de mer.", 0.84, 0.015),
+        ], 2).unwrap();
+
+        let cached = store.detached_pdf_sentences(&document.id, 1).unwrap().unwrap();
+        let glossary_start = cached.text.find("Quai :").unwrap();
+        let glossary_start = cached.text[..glossary_start].encode_utf16().count();
+        let projection = store.project_pdf_translation_page(
+            &document.id, 1, "uk", cached.text, cached.sentences, cached.language,
+        ).unwrap();
+        assert_eq!(projection.physical.start, 1);
+        let (joined, _) = sentence_source(&store, &projection.document, projection.physical.start,
+            "uk", PageBoundaries::Projected).unwrap();
+        assert!(joined.contains("extraordinaire."), "{joined}");
+        assert_eq!(projection.document.blocks.iter().filter(|block| block.footnote).count(), 3);
+        let rows = store.pdf_page_translation(&document.id, 1, "uk", true).unwrap();
+        assert!(!rows.is_empty());
+        assert!(rows.iter().all(|row| row.end_utf16 <= glossary_start));
+    }
 }
 
 pub(super) fn cached_page_translation(
