@@ -13,6 +13,14 @@ pub enum ReaderLayout {
     Translation,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PdfFit {
+    PageWidth,
+    TextWidth,
+    WholePage,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReaderPreferences {
@@ -22,6 +30,8 @@ pub struct ReaderPreferences {
     pub pdf_translation_layout: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pdf_fit_width: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdf_fit: Option<PdfFit>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pdf_show_original: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -44,6 +54,7 @@ pub enum ReaderPreferenceChange {
     Layout { value: ReaderLayout },
     PdfTranslationLayout { value: bool },
     PdfFitWidth { value: bool },
+    PdfFit { value: PdfFit },
     PdfShowOriginal { value: bool },
     AutoTranslate { value: bool },
     BackgroundTranslation { value: bool },
@@ -67,6 +78,7 @@ impl ReaderPreferences {
         self.layout.is_none()
             && self.pdf_translation_layout.is_none()
             && self.pdf_fit_width.is_none()
+            && self.pdf_fit.is_none()
             && self.pdf_show_original.is_none()
             && self.auto_translate.is_none()
             && self.background_translation.is_none()
@@ -104,7 +116,14 @@ impl ReaderPreferences {
         match change {
             ReaderPreferenceChange::Layout { value } => self.layout = Some(value),
             ReaderPreferenceChange::PdfTranslationLayout { value } => self.pdf_translation_layout = Some(value),
-            ReaderPreferenceChange::PdfFitWidth { value } => self.pdf_fit_width = Some(value),
+            ReaderPreferenceChange::PdfFitWidth { value } => {
+                self.pdf_fit_width = Some(value);
+                self.pdf_fit = None;
+            }
+            ReaderPreferenceChange::PdfFit { value } => {
+                self.pdf_fit = Some(value);
+                self.pdf_fit_width = None;
+            }
             ReaderPreferenceChange::PdfShowOriginal { value } => self.pdf_show_original = Some(value),
             ReaderPreferenceChange::AutoTranslate { value } => self.auto_translate = Some(value),
             ReaderPreferenceChange::BackgroundTranslation { value } => self.background_translation = Some(value),
@@ -178,7 +197,10 @@ pub(crate) fn restore(db: &Connection, incoming: ReaderPreferences) -> Result<()
     let mut local = read(db)?;
     local.layout = local.layout.or(incoming.layout);
     local.pdf_translation_layout = local.pdf_translation_layout.or(incoming.pdf_translation_layout);
-    local.pdf_fit_width = local.pdf_fit_width.or(incoming.pdf_fit_width);
+    if local.pdf_fit.is_none() && local.pdf_fit_width.is_none() {
+        local.pdf_fit = incoming.pdf_fit;
+        local.pdf_fit_width = incoming.pdf_fit_width;
+    }
     local.pdf_show_original = local.pdf_show_original.or(incoming.pdf_show_original);
     local.auto_translate = local.auto_translate.or(incoming.auto_translate);
     local.background_translation = local.background_translation.or(incoming.background_translation);

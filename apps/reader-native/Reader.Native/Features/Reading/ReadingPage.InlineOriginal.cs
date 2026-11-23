@@ -9,9 +9,11 @@ public partial class ReadingPage
 {
     private sealed record InlinePdfAddress(string Document, int Page, string? Revision, string? DetachedText);
     private sealed record PdfWordAnchor(VisualElement View, InlinePdfAddress Address, Rect Bounds);
+    private enum PdfFit { PageWidth, TextWidth, WholePage }
     private bool showInlineOriginal;
     private string? inlineOriginalDocumentId;
-    private bool inlinePdfFitWidth = true;
+    private PdfFit inlinePdfFit;
+    private bool PdfFollowsScroll => inlinePdfFit != PdfFit.WholePage;
     private (string Document, int Page, int Start, int End, double SurfaceHeight, double ViewportHeight)? lastInlinePdfFollow;
     private int followingInlinePdf;
     private int inlinePdfRequest;
@@ -55,8 +57,16 @@ public partial class ReadingPage
         if (showInlineOriginal) _ = ShowInlineOriginalAsync();
     }
 
-    private void UpdateInlinePdfFitLabel() =>
-        InlinePdfFitToggle.Text = inlinePdfFitWidth ? "Ціла сторінка" : "За шириною";
+    private void UpdateInlinePdfFitLabel()
+    {
+        InlinePdfFitToggle.Text = inlinePdfFit switch
+        {
+            PdfFit.TextWidth when AppState.Session.Document?.Format == "pdf" => "За шириною тексту",
+            PdfFit.WholePage => "Ціла сторінка",
+            _ => "За шириною сторінки"
+        };
+        SemanticProperties.SetDescription(InlinePdfFitToggle, $"Масштаб. {InlinePdfFitToggle.Text}. Натисніть, щоб змінити.");
+    }
 
     private void ClearInlineOriginal()
     {
@@ -162,6 +172,7 @@ public partial class ReadingPage
             inlineNativeText = nativeText;
             lastInlinePdfFollow = null;
             InlinePdfFitToggle.IsVisible = true;
+            UpdateInlinePdfFitLabel();
             ResizeInlinePdf();
             await ActiveInlinePdf().Viewport.ScrollToAsync(0, 0, animated: false);
             if (request != inlinePdfRequest) return;
@@ -179,10 +190,21 @@ public partial class ReadingPage
 
     private void ToggleInlinePdfFitClicked(object? sender, EventArgs args)
     {
-        inlinePdfFitWidth = !inlinePdfFitWidth;
-        SaveReaderPreference(ReaderPreferenceChange.PdfFitWidth(inlinePdfFitWidth));
+        inlinePdfFit = inlinePdfFit switch
+        {
+            PdfFit.PageWidth when AppState.Session.Document?.Format == "pdf" => PdfFit.TextWidth,
+            PdfFit.WholePage => PdfFit.PageWidth,
+            _ => PdfFit.WholePage
+        };
+        SaveReaderPreference(ReaderPreferenceChange.PdfFit(inlinePdfFit switch
+        {
+            PdfFit.TextWidth => "textWidth",
+            PdfFit.WholePage => "wholePage",
+            _ => "pageWidth"
+        }));
         UpdateInlinePdfFitLabel();
         lastInlinePdfFollow = null;
+        lastPdfTranslationFollow = null;
         ResizeInlinePdf();
         UpdateInlinePdfHighlight();
     }
@@ -202,19 +224,65 @@ public partial class ReadingPage
 
     private void ResizeInlinePdf()
     {
-        if (!showInlineOriginal || inlinePdfPreview is not { Width: > 0, Height: > 0 } preview) return;
+        if (!showInlineOriginal) return;
         var (viewport, surface) = ActiveInlinePdf();
-        if (viewport.Width <= 0 || viewport.Height <= 0) return;
-        var widthScale = viewport.Width / preview.Width;
-        var scale = inlinePdfFitWidth ? widthScale : Math.Min(widthScale, viewport.Height / preview.Height);
-        surface.WidthRequest = Math.Floor(preview.Width * scale);
-        surface.HeightRequest = Math.Floor(preview.Height * scale);
+        ResizePdfPaper(viewport, surface);
         ResizePdfTranslationLayout();
+    }
+
+    private void ResizePdfPaper(ScrollView viewport, Grid paper)
+    {
+        if (inlinePdfPreview is not { Width: > 0, Height: > 0 } preview ||
+            paper.Parent is not AbsoluteLayout frame || viewport.Width < 1 || viewport.Height < 1) return;
+        var width = Math.Floor(viewport.Width);
+        var scale = width / preview.Width;
+        var center = 0.5;
+        if (inlinePdfFit == PdfFit.WholePage)
+            scale = Math.Min(scale, viewport.Height / preview.Height);
+        else
+        {
+            var (left, right) = PdfReadingHorizontalBounds();
+            scale /= right - left;
+            center = (left + right) / 2;
+        }
+
+        var paperWidth = Math.Floor(preview.Width * scale);
+        var paperHeight = Math.Floor(preview.Height * scale);
+        var bounds = new Rect(width / 2 - paperWidth * center, 0, paperWidth, paperHeight);
+        if (AbsoluteLayout.GetLayoutBounds(paper) != bounds)
+            AbsoluteLayout.SetLayoutBounds(paper, bounds);
+        frame.WidthRequest = width;
+        frame.HeightRequest = paperHeight;
+    }
+
+    private (double Left, double Right) PdfReadingHorizontalBounds() =>
+        inlinePdfFit == PdfFit.TextWidth && AppState.Session.Document?.Format == "pdf" &&
+        pdfSourceLayout is { } source && source.Page == inlinePdfAddress
+            ? PdfTextBounds(source.Lines) : (0, 1);
+
+    private static (double Left, double Right) PdfTextBounds(OcrLine[] lines)
+    {
+        var left = 1d;
+        var right = 0d;
+        foreach (var line in lines)
+        {
+            if (string.IsNullOrWhiteSpace(line.Text) || !double.IsFinite(line.X) ||
+                !double.IsFinite(line.Width) || line.Width <= 0) continue;
+            left = Math.Min(left, Math.Clamp(line.X, 0, 1));
+            right = Math.Max(right, Math.Clamp(line.X + line.Width, 0, 1));
+        }
+
+        if (right <= left) return (0, 1);
+        const double padding = 0.025;
+        // A short line on a sparse title page should not cause extreme zoom.
+        var center = Math.Clamp((left + right) / 2, 0.25, 0.75);
+        return (Math.Max(0, Math.Min(left - padding, center - 0.25)),
+            Math.Min(1, Math.Max(right + padding, center + 0.25)));
     }
 
     private void FollowInlinePdf(PdfReadingHighlight drawing, string document, int page, int start, int end)
     {
-        if (!inlinePdfFitWidth || drawing.FocusBounds() is not { } bounds) return;
+        if (!PdfFollowsScroll || drawing.FocusBounds() is not { } bounds) return;
         var (viewport, surface) = ActiveInlinePdf();
         if (surface.Height <= 0 || viewport.Height <= 0) return;
         var key = (document, page, start, end, surface.Height, viewport.Height);
@@ -227,7 +295,7 @@ public partial class ReadingPage
         var target = Math.Clamp(top - margin, 0, Math.Max(0, surface.Height - viewport.Height));
         Dispatcher.Dispatch(async () =>
         {
-            if (lastInlinePdfFollow != key || !showInlineOriginal || !inlinePdfFitWidth) return;
+            if (lastInlinePdfFollow != key || !showInlineOriginal || !PdfFollowsScroll) return;
             followingInlinePdf++;
             try { await viewport.ScrollToAsync(0, target, animated: false); }
             catch (Exception error) when (error is InvalidOperationException or OperationCanceledException) { }
@@ -268,7 +336,7 @@ public partial class ReadingPage
     {
         var (viewport, surface) = ActiveInlinePdf();
         var overlay = DetachedPdfReader.IsVisible ? DetachedInlinePdfHighlight : InlinePdfHighlight;
-        if (!inlinePdfFitWidth || !viewport.IsVisible || surface.Height <= 0 ||
+        if (!PdfFollowsScroll || !viewport.IsVisible || surface.Height <= 0 ||
             overlay.Drawable is not PdfReadingHighlight drawing) return null;
         var top = viewport.ScrollY / surface.Height;
         return drawing.VisibleOffsets(top, top + viewport.Height / surface.Height);
@@ -301,6 +369,7 @@ public partial class ReadingPage
             if (!wordOnly)
             {
                 pdfSourceLayout = null;
+                if (inlinePdfFit == PdfFit.TextWidth) ResizeInlinePdf();
                 DrawPdfTranslationLayout();
             }
             return;
@@ -332,6 +401,7 @@ public partial class ReadingPage
 
         overlay.IsVisible = lines.Length > 0 && sentence is not null;
         pdfSourceLayout = new(address, lines, offset, sentence);
+        if (inlinePdfFit == PdfFit.TextWidth) ResizeInlinePdf();
         DrawPdfTranslationLayout();
         if (!overlay.IsVisible || sentence is null)
         {

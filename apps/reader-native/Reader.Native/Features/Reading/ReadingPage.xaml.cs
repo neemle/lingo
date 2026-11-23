@@ -82,7 +82,13 @@ public partial class ReadingPage : ContentPage
             InvalidateModelPassageCache();
         }
         LoadReaderPreferences();
-        inlinePdfFitWidth = readerPreferences.PdfFitWidth ?? true;
+        inlinePdfFit = readerPreferences.PdfFit switch
+        {
+            "textWidth" => PdfFit.TextWidth,
+            "wholePage" => PdfFit.WholePage,
+            "pageWidth" => PdfFit.PageWidth,
+            _ => readerPreferences.PdfFitWidth == false ? PdfFit.WholePage : PdfFit.PageWidth
+        };
         pdfTranslationLayout = readerPreferences.PdfTranslationLayout ?? true;
         UpdateInlinePdfFitLabel();
         readingLayout = Enum.TryParse<ReaderLayout>(readerPreferences.Layout, ignoreCase: true, out var storedLayout)

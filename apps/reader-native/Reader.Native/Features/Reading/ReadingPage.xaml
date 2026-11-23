@@ -79,7 +79,7 @@
     <Button x:Name="InlinePdfToggle" Text="Сторінка PDF" Style="{StaticResource OutlineButton}"
      IsVisible="{Binding CanViewOriginal}" Clicked="ToggleInlineOriginalClicked"
      SemanticProperties.Description="Перемкнути оригінал і розпізнаний текст" />
-    <Button x:Name="InlinePdfFitToggle" Text="Ціла сторінка" Style="{StaticResource OutlineButton}"
+    <Button x:Name="InlinePdfFitToggle" Text="За шириною сторінки" Style="{StaticResource OutlineButton}"
      IsVisible="False" Clicked="ToggleInlinePdfFitClicked" />
     <Button Text="Відкрити окремо" Style="{StaticResource OutlineButton}" IsVisible="{Binding CanViewOriginal}"
      Clicked="ViewOriginalClicked" SemanticProperties.Description="Переглянути оригінал документа" />
@@ -164,15 +164,16 @@
        </controls:NativeReaderView.Triggers>
       </controls:NativeReaderView>
       <ScrollView Grid.Row="1" x:Name="InlinePdfViewport" IsVisible="False" SizeChanged="InlinePdfViewportChanged" Scrolled="InlinePdfViewportScrolled">
-       <Grid x:Name="InlinePdfSurface" HorizontalOptions="Center" VerticalOptions="Start" SizeChanged="InlinePdfSurfaceChanged">
-        <Image x:Name="InlinePdfImage" Aspect="AspectFit"
-       SemanticProperties.Description="Оригінал документа">
-       <Image.GestureRecognizers>
-        <TapGestureRecognizer Tapped="InlinePdfTapped" />
-       </Image.GestureRecognizers>
-      </Image>
-      <GraphicsView x:Name="InlinePdfHighlight" IsVisible="False" InputTransparent="True" />
-       </Grid>
+       <AbsoluteLayout IsClippedToBounds="True" VerticalOptions="Start">
+        <Grid x:Name="InlinePdfSurface" SizeChanged="InlinePdfSurfaceChanged">
+         <Image x:Name="InlinePdfImage" Aspect="AspectFit" SemanticProperties.Description="Оригінал документа">
+          <Image.GestureRecognizers>
+           <TapGestureRecognizer Tapped="InlinePdfTapped" />
+          </Image.GestureRecognizers>
+         </Image>
+         <GraphicsView x:Name="InlinePdfHighlight" IsVisible="False" InputTransparent="True" />
+        </Grid>
+       </AbsoluteLayout>
       </ScrollView>
      </Grid>
 
@@ -209,14 +210,16 @@
       <ScrollView Grid.Row="1" x:Name="PdfTranslationViewport" IsVisible="False"
        SizeChanged="PdfTranslationViewportChanged" Scrolled="PdfTranslationViewportScrolled">
        <VerticalStackLayout>
-        <Grid x:Name="PdfTranslationPaper" HorizontalOptions="Center" VerticalOptions="Start">
-         <Image x:Name="PdfTranslationBackground" Aspect="AspectFit" InputTransparent="True" />
-         <GraphicsView x:Name="PdfTranslationSurface">
-          <GraphicsView.GestureRecognizers>
-           <TapGestureRecognizer Tapped="TranslatedPdfTapped" />
-          </GraphicsView.GestureRecognizers>
-         </GraphicsView>
-        </Grid>
+        <AbsoluteLayout IsClippedToBounds="True" VerticalOptions="Start">
+         <Grid x:Name="PdfTranslationPaper">
+          <Image x:Name="PdfTranslationBackground" Aspect="AspectFit" InputTransparent="True" />
+          <GraphicsView x:Name="PdfTranslationSurface">
+           <GraphicsView.GestureRecognizers>
+            <TapGestureRecognizer Tapped="TranslatedPdfTapped" />
+           </GraphicsView.GestureRecognizers>
+          </GraphicsView>
+         </Grid>
+        </AbsoluteLayout>
         <VerticalStackLayout x:Name="PdfTranslationOverflow" Padding="20,12" Spacing="10" IsVisible="False" />
        </VerticalStackLayout>
       </ScrollView>
@@ -258,10 +261,12 @@
     </Grid>
     <Grid Grid.Row="2" x:Name="PdfPageNotice" IsVisible="False">
      <ScrollView x:Name="PendingInlinePdfViewport" IsVisible="False" SizeChanged="InlinePdfViewportChanged">
-       <Grid x:Name="PendingInlinePdfSurface" HorizontalOptions="Center" VerticalOptions="Start" SizeChanged="InlinePdfSurfaceChanged">
-        <Image x:Name="PendingInlinePdfImage" Aspect="AspectFit"
-      SemanticProperties.Description="Оригінальна сторінка PDF" />
-       </Grid>
+       <AbsoluteLayout IsClippedToBounds="True" VerticalOptions="Start">
+        <Grid x:Name="PendingInlinePdfSurface" SizeChanged="InlinePdfSurfaceChanged">
+         <Image x:Name="PendingInlinePdfImage" Aspect="AspectFit"
+          SemanticProperties.Description="Оригінальна сторінка PDF" />
+        </Grid>
+       </AbsoluteLayout>
       </ScrollView>
      <Label x:Name="PdfPageMessage" Margin="18" Style="{StaticResource ReaderMeta}"
       HorizontalTextAlignment="Center" VerticalOptions="Center" />
@@ -274,14 +279,16 @@
          BackgroundColor="{StaticResource Panel}" SourceSelected="DetachedPdfSelected"
          SemanticProperties.Description="Текст поточної сторінки PDF" />
         <ScrollView Grid.Row="1" x:Name="DetachedInlinePdfViewport" IsVisible="False" SizeChanged="InlinePdfViewportChanged" Scrolled="InlinePdfViewportScrolled">
-         <Grid x:Name="DetachedInlinePdfSurface" HorizontalOptions="Center" VerticalOptions="Start" SizeChanged="InlinePdfSurfaceChanged">
-          <Image x:Name="DetachedInlinePdfImage" Aspect="AspectFit" SemanticProperties.Description="Оригінальна сторінка PDF">
-           <Image.GestureRecognizers>
-            <TapGestureRecognizer Tapped="InlinePdfTapped" />
-           </Image.GestureRecognizers>
-          </Image>
-          <GraphicsView x:Name="DetachedInlinePdfHighlight" IsVisible="False" InputTransparent="True" />
-         </Grid>
+         <AbsoluteLayout IsClippedToBounds="True" VerticalOptions="Start">
+          <Grid x:Name="DetachedInlinePdfSurface" SizeChanged="InlinePdfSurfaceChanged">
+           <Image x:Name="DetachedInlinePdfImage" Aspect="AspectFit" SemanticProperties.Description="Оригінальна сторінка PDF">
+            <Image.GestureRecognizers>
+             <TapGestureRecognizer Tapped="InlinePdfTapped" />
+            </Image.GestureRecognizers>
+           </Image>
+           <GraphicsView x:Name="DetachedInlinePdfHighlight" IsVisible="False" InputTransparent="True" />
+          </Grid>
+         </AbsoluteLayout>
         </ScrollView>
        </Grid>
        <Grid Grid.Column="1" x:Name="DetachedTargetPane" RowDefinitions="Auto,*,Auto" BackgroundColor="{StaticResource Panel}">
@@ -314,14 +321,16 @@
         <ScrollView Grid.Row="1" x:Name="DetachedPdfTranslationViewport" IsVisible="False"
          SizeChanged="PdfTranslationViewportChanged" Scrolled="PdfTranslationViewportScrolled">
          <VerticalStackLayout>
-          <Grid x:Name="DetachedPdfTranslationPaper" HorizontalOptions="Center" VerticalOptions="Start">
-           <Image x:Name="DetachedPdfTranslationBackground" Aspect="AspectFit" InputTransparent="True" />
-           <GraphicsView x:Name="DetachedPdfTranslationSurface">
-            <GraphicsView.GestureRecognizers>
-             <TapGestureRecognizer Tapped="TranslatedPdfTapped" />
-            </GraphicsView.GestureRecognizers>
-           </GraphicsView>
-          </Grid>
+          <AbsoluteLayout IsClippedToBounds="True" VerticalOptions="Start">
+           <Grid x:Name="DetachedPdfTranslationPaper">
+            <Image x:Name="DetachedPdfTranslationBackground" Aspect="AspectFit" InputTransparent="True" />
+            <GraphicsView x:Name="DetachedPdfTranslationSurface">
+             <GraphicsView.GestureRecognizers>
+              <TapGestureRecognizer Tapped="TranslatedPdfTapped" />
+             </GraphicsView.GestureRecognizers>
+            </GraphicsView>
+           </Grid>
+          </AbsoluteLayout>
           <VerticalStackLayout x:Name="DetachedPdfTranslationOverflow" Padding="20,12" Spacing="10" IsVisible="False" />
          </VerticalStackLayout>
         </ScrollView>

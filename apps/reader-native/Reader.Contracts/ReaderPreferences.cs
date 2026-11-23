@@ -7,6 +7,7 @@ public sealed record ReaderPreferences
     public string? Layout { get; init; }
     public bool? PdfShowOriginal { get; init; }
     public bool? PdfFitWidth { get; init; }
+    public string? PdfFit { get; init; }
     public bool? PdfTranslationLayout { get; init; }
     public bool? AutoTranslate { get; init; }
     public bool? BackgroundTranslation { get; init; }
@@ -31,7 +32,7 @@ public sealed record ReaderPreferenceChange(string Field)
 
     public static ReaderPreferenceChange Layout(string value) => new("layout") { Value = value };
     public static ReaderPreferenceChange PdfShowOriginal(bool value) => new("pdfShowOriginal") { Value = value };
-    public static ReaderPreferenceChange PdfFitWidth(bool value) => new("pdfFitWidth") { Value = value };
+    public static ReaderPreferenceChange PdfFit(string value) => new("pdfFit") { Value = value };
     public static ReaderPreferenceChange PdfTranslationLayout(bool value) => new("pdfTranslationLayout") { Value = value };
     public static ReaderPreferenceChange AutoTranslate(bool value) => new("autoTranslate") { Value = value };
     public static ReaderPreferenceChange BackgroundTranslation(bool value) => new("backgroundTranslation") { Value = value };

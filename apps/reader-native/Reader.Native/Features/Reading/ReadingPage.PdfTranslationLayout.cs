@@ -476,14 +476,10 @@ public partial class ReadingPage
 
     private void ResizePdfTranslationLayout()
     {
-        if (inlinePdfPreview is not { Width: > 0, Height: > 0 } preview) return;
         var (viewport, _) = ActivePdfTranslationLayout();
-        if (!viewport.IsVisible || viewport.Width <= 0 || viewport.Height <= 0) return;
-        var scale = viewport.Width / preview.Width;
-        if (!inlinePdfFitWidth) scale = Math.Min(scale, viewport.Height / preview.Height);
+        if (!viewport.IsVisible) return;
         var paper = DetachedPdfReader.IsVisible ? DetachedPdfTranslationPaper : PdfTranslationPaper;
-        paper.WidthRequest = Math.Floor(preview.Width * scale);
-        paper.HeightRequest = Math.Floor(preview.Height * scale);
+        ResizePdfPaper(viewport, paper);
     }
 
     private async void PdfTranslationViewportScrolled(object? sender, ScrolledEventArgs args)
@@ -547,7 +543,7 @@ public partial class ReadingPage
     {
         var (original, originalSurface) = ActiveInlinePdf();
         var (translated, translatedSurface) = ActivePdfTranslationLayout();
-        if (!inlinePdfFitWidth || syncingPdfTranslationScroll || !original.IsVisible || !translated.IsVisible ||
+        if (!PdfFollowsScroll || syncingPdfTranslationScroll || !original.IsVisible || !translated.IsVisible ||
             originalSurface.Height <= 0 || translatedSurface.Height <= 0) return;
 
         var source = fromOriginal ? original : translated;
@@ -595,7 +591,7 @@ public partial class ReadingPage
         var gloss = (detached ? DetachedWordCard : WordCard).IsVisible ? PopupGloss(detached) : null;
         var query = PdfTranslationFindQuery();
         var drawing = new TranslatedPdfDrawing(pdfLayoutRows, source?.Lines ?? [], source?.Offset ?? 0,
-            pdfLayoutSentence, gloss, background.IsVisible, query);
+            pdfLayoutSentence, gloss, background.IsVisible, query, PdfReadingHorizontalBounds());
         var overflow = detached ? DetachedPdfTranslationOverflow : PdfTranslationOverflow;
         drawing.OverflowChanged = rows => Dispatcher.Dispatch(() =>
         {
@@ -620,7 +616,7 @@ public partial class ReadingPage
 
     private async Task FollowRenderedPdfSentenceAsync(ScrollView viewport, GraphicsView surface, Sentence active, RectF bounds)
     {
-        if (!inlinePdfFitWidth || syncingPdfTranslationScroll || viewport.Height <= 0 ||
+        if (!PdfFollowsScroll || syncingPdfTranslationScroll || viewport.Height <= 0 ||
             pdfLayoutRequest is not { } address) return;
         var key = (address, active.Id, bounds, viewport.Height);
         if (lastPdfTranslationFollow == key) return;
@@ -712,7 +708,7 @@ public partial class ReadingPage
             if (label is null)
             {
                 if (viewport.ScrollY <= Math.Max(0, surface.Height - viewport.Height) + 1) return;
-                if (inlinePdfFitWidth)
+                if (PdfFollowsScroll)
                 {
                     await FollowPdfTranslationScrollAsync(fromOriginal: true);
                     return;
@@ -731,7 +727,8 @@ public partial class ReadingPage
     }
 
     private sealed class TranslatedPdfDrawing(PdfPageTranslationRow[] rows, OcrLine[] geometry, int offset,
-        Sentence? active, string? gloss, bool preserveArtwork, string? query = null) : IDrawable
+        Sentence? active, string? gloss, bool preserveArtwork, string? query,
+        (double Left, double Right) visibleWidth) : IDrawable
     {
         private sealed record Region(RectF Bounds, List<PdfPageTranslationRow> Rows);
         private readonly record struct Fragment(PdfPageTranslationRow Source, int Start, int End, bool Active, TextSelection? Match);
@@ -800,7 +797,9 @@ public partial class ReadingPage
             if (rows.Length > 0 && regions.Count == 0)
             {
                 canvas.FillRectangle(page);
-                var reflowOverflow = DrawReflowedPage(canvas, page);
+                var reflowBounds = new RectF(page.X + (float)visibleWidth.Left * page.Width, page.Y,
+                    (float)(visibleWidth.Right - visibleWidth.Left) * page.Width, page.Height);
+                var reflowOverflow = DrawReflowedPage(canvas, reflowBounds);
                 OverflowChanged?.Invoke(reflowOverflow);
                 return;
             }
