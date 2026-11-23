@@ -101,8 +101,7 @@ internal static class ShareInbox
     private static string Initialize()
     {
         var root = Path.Combine(FileSystem.AppDataDirectory, "share-inbox");
-        if (OperatingSystem.IsWindows()) Directory.CreateDirectory(root);
-        else Directory.CreateDirectory(root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        CreateStorage(root);
         foreach (var folder in Directory.EnumerateDirectories(root))
         {
             var name = Path.GetFileName(folder);
@@ -114,8 +113,19 @@ internal static class ShareInbox
         return root;
     }
 
-    private static IEnumerable<string> EntryFolders() => Directory.EnumerateDirectories(Storage.Value)
-        .Where(path => Guid.TryParseExact(Path.GetFileName(path), "N", out _));
+    private static IEnumerable<string> EntryFolders()
+    {
+        var root = Storage.Value;
+        // Reset can remove the directory while the cached path remains valid.
+        CreateStorage(root);
+        return Directory.EnumerateDirectories(root).Where(path => Guid.TryParseExact(Path.GetFileName(path), "N", out _));
+    }
+
+    private static void CreateStorage(string path)
+    {
+        if (OperatingSystem.IsWindows()) Directory.CreateDirectory(path);
+        else Directory.CreateDirectory(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
 
     private static string Folder(Guid id) => Path.Combine(Storage.Value, id.ToString("N"));
 
