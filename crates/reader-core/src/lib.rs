@@ -516,6 +516,20 @@ pub struct Store {
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         let mut connection = Connection::open(path).map_err(|e| e.to_string())?;
+        Self::initialize_database(&mut connection)?;
+        let file_original_directory = file_originals::directory(path);
+        file_originals::cleanup_orphans(&mut connection, &file_original_directory);
+        Ok(Self {
+            connection,
+            model_directory: path.with_file_name("translation-models"),
+            optional_model_directory: path.with_file_name("optional-models"),
+            knowledge_directory: path.with_file_name("languages"),
+            file_original_directory,
+            active_pdf_ocr: None,
+        })
+    }
+
+    fn initialize_database(connection: &mut Connection) -> Result<()> {
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, body TEXT NOT NULL, source_hash TEXT UNIQUE NOT NULL); CREATE TABLE IF NOT EXISTS originals (document_id TEXT PRIMARY KEY REFERENCES documents(id), name TEXT NOT NULL, bytes BLOB NOT NULL); CREATE TABLE IF NOT EXISTS vocabulary (id TEXT PRIMARY KEY, word_key TEXT UNIQUE NOT NULL, body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS review_events (id INTEGER PRIMARY KEY, entry_id TEXT NOT NULL, direction TEXT NOT NULL, grade INTEGER NOT NULL, reviewed_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS translation_cache (key TEXT PRIMARY KEY, body TEXT NOT NULL);").map_err(|e| e.to_string())?;
         connection.execute("CREATE TABLE IF NOT EXISTS speech_resume (document_id TEXT PRIMARY KEY REFERENCES documents(id), body TEXT NOT NULL)", [])
             .map_err(|e| e.to_string())?;
@@ -528,31 +542,21 @@ impl Store {
                 [],
             )
             .map_err(|error| error.to_string())?;
-        review_schedule::initialize(&mut connection)?;
-        dictionary_transfer::initialize(&connection)?;
-        reading_history::initialize(&connection)?;
-        ocr_jobs::initialize(&connection)?;
-        document_revisions::initialize(&mut connection)?;
-        file_originals::initialize(&connection)?;
-        intake::initialize(&connection)?;
-        pdf_page_ocr::initialize(&connection)?;
-        pdf_detached_pages::initialize(&mut connection)?;
-        pdf_reading_position::initialize(&connection)?;
-        reader_preferences::initialize(&connection)?;
-        translation_queue::initialize(&connection)?;
-        translation::initialize_cache_ownership(&mut connection)?;
-        knowledge::annotation_cache::initialize(&connection)?;
-        pdf_sentences::upgrade_documents(&mut connection)?;
-        let file_original_directory = file_originals::directory(path);
-        file_originals::cleanup_orphans(&mut connection, &file_original_directory);
-        Ok(Self {
-            connection,
-            model_directory: path.with_file_name("translation-models"),
-            optional_model_directory: path.with_file_name("optional-models"),
-            knowledge_directory: path.with_file_name("languages"),
-            file_original_directory,
-            active_pdf_ocr: None,
-        })
+        review_schedule::initialize(connection)?;
+        dictionary_transfer::initialize(connection)?;
+        reading_history::initialize(connection)?;
+        ocr_jobs::initialize(connection)?;
+        document_revisions::initialize(connection)?;
+        file_originals::initialize(connection)?;
+        intake::initialize(connection)?;
+        pdf_page_ocr::initialize(connection)?;
+        pdf_detached_pages::initialize(connection)?;
+        pdf_reading_position::initialize(connection)?;
+        reader_preferences::initialize(connection)?;
+        translation_queue::initialize(connection)?;
+        translation::initialize_cache_ownership(connection)?;
+        knowledge::annotation_cache::initialize(connection)?;
+        pdf_sentences::upgrade_documents(connection)
     }
     pub fn snapshot(&self) -> Result<Snapshot> {
         fn rows<T: serde::de::DeserializeOwned>(

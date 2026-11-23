@@ -1,5 +1,8 @@
 use crate::{Result, Store};
-use rusqlite::TransactionBehavior;
+use rusqlite::{
+    backup::{Backup, StepResult},
+    Connection, TransactionBehavior,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     fs, io,
@@ -111,40 +114,46 @@ impl Store {
                 }
                 tx.commit().map_err(storage_error)?;
                 clear_audio_cache(&self.optional_model_directory)?;
+                self.connection.execute_batch("VACUUM;").map_err(storage_error)?;
+                self.checkpoint_storage()?;
             }
             StorageScope::Downloads => self.clear_downloads()?,
             StorageScope::All => {
-                let tx = self
-                    .connection
-                    .transaction_with_behavior(TransactionBehavior::Immediate)
-                    .map_err(storage_error)?;
-                tx.pragma_update(None, "defer_foreign_keys", true)
-                    .map_err(storage_error)?;
-                let tables = {
-                    let mut query = tx.prepare(
-                        "SELECT name FROM sqlite_schema WHERE type='table' AND substr(name,1,7)<>'sqlite_'",
-                    ).map_err(storage_error)?;
-                    let rows = query
-                        .query_map([], |row| row.get::<_, String>(0))
-                        .map_err(storage_error)?;
-                    rows.collect::<rusqlite::Result<Vec<_>>>()
-                        .map_err(storage_error)?
-                };
-                for table in tables {
-                    let table = table.replace('"', "\"\"");
-                    tx.execute(&format!("DELETE FROM \"{table}\""), [])
-                        .map_err(storage_error)?;
-                }
-                tx.commit().map_err(storage_error)?;
+                self.reset_database()?;
                 self.active_pdf_ocr = None;
                 remove(&self.file_original_directory)?;
                 self.clear_downloads()?;
+                self.checkpoint_storage()?;
             }
         }
-        if !matches!(scope, StorageScope::Downloads) {
-            self.connection
-                .execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")
-                .map_err(storage_error)?;
+        Ok(())
+    }
+
+    fn reset_database(&mut self) -> Result<()> {
+        // A SQLite backup replaces the main database transactionally while keeping
+        // the existing path and open connections valid.
+        let page_size: u32 = self
+            .connection
+            .pragma_query_value(None, "page_size", |row| row.get(0))
+            .map_err(storage_error)?;
+        let mut fresh = Connection::open_in_memory().map_err(storage_error)?;
+        fresh
+            .pragma_update(None, "page_size", page_size)
+            .map_err(storage_error)?;
+        Self::initialize_database(&mut fresh)?;
+        let backup = Backup::new(&fresh, &mut self.connection).map_err(storage_error)?;
+        match backup.step(-1).map_err(storage_error)? {
+            StepResult::Done => Ok(()),
+            _ => Err(storage_error("База зайнята. Спробуйте ще раз.")),
+        }
+    }
+
+    fn checkpoint_storage(&self) -> Result<()> {
+        let busy: bool = self.connection
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))
+            .map_err(storage_error)?;
+        if busy {
+            return Err(storage_error("Дані очищено, але база зайнята. Спробуйте ще раз, щоб звільнити місце."));
         }
         Ok(())
     }
@@ -296,9 +305,22 @@ mod tests {
         assert_eq!(store.snapshot().unwrap().documents.len(), 1);
         assert_eq!(store.storage_usage().unwrap().download_bytes, 0);
 
+        store.connection.execute_batch(
+            "CREATE TABLE retired_feature (value TEXT); INSERT INTO retired_feature VALUES ('old');"
+        ).unwrap();
+        fs::create_dir_all(&model).unwrap();
+        fs::write(model.join("model.onnx"), [0; 128]).unwrap();
+        let other_store = Store::open(&path).unwrap();
         store.clear_storage(StorageScope::All).unwrap();
         assert!(store.snapshot().unwrap().documents.is_empty());
         assert!(store.reader_preferences().unwrap().is_empty());
+        assert_eq!(store.storage_usage().unwrap().download_bytes, 0);
+        assert!(other_store.snapshot().unwrap().documents.is_empty());
+        assert!(!store.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='retired_feature')",
+            [],
+            |row| row.get::<_, bool>(0),
+        ).unwrap());
         assert!(root.path().join("unrelated.txt").is_file());
         drop(store);
         assert!(Store::open(&path)
@@ -307,5 +329,8 @@ mod tests {
             .unwrap()
             .documents
             .is_empty());
+        let mut reopened = Store::open(&path).unwrap();
+        reopened.import("new.txt", b"A new document.", "en").unwrap();
+        assert_eq!(reopened.snapshot().unwrap().documents.len(), 1);
     }
 }
