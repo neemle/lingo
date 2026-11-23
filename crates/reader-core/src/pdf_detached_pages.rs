@@ -377,15 +377,9 @@ pub(crate) fn repair_cached_text_order(
     if anchors.windows(2).any(|pair| pair[0].start_utf16 >= pair[1].start_utf16) {
         return Ok(false);
     }
-    crate::dictionary_transfer::reanchor_detached_selections(
-        db, (id, page, &old_revision, &new_revision), &before, &after,
-        |start, length| {
-            let end = start.checked_add(length)?;
-            if edits.iter().any(|edit| edit.start_utf16 < end && edit.start_utf16 + edit.old_len > start) {
-                return None;
-            }
-            ocr::map_transcript_offset(start, edits)
-        },
+    crate::dictionary_transfer::reanchor_selections(
+        db, (id, Some(page), &old_revision, &new_revision), &before, &after,
+        |start, length| ocr::map_unchanged_range_start(start, length, edits),
     )?;
     write_text_layer(db, id, page, corrected)?;
     if !anchors.is_empty() { annotations::replace_page(db, id, page, &anchors)?; }

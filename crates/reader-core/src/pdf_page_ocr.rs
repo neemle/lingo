@@ -1241,7 +1241,7 @@ fn reflow_pdf_document(
     let parsed = document_layout::from_transcript(text, Some(starts));
     let changed = parsed.text != document.text;
     document.speech_resume = Store::read_speech_resume(db, &document.id)?;
-    ocr::update_transcript_with_edits(
+    let before = ocr::update_transcript_with_edits(
         document,
         parsed.text,
         parsed.pdf_page_starts.as_deref(),
@@ -1252,6 +1252,9 @@ fn reflow_pdf_document(
     ocr::refresh_provenance(document);
     if changed {
         document_revisions::append(document, db)?;
+        crate::dictionary_transfer::reanchor_canonical_selections(
+            db, previous_revision.as_deref(), document, &before, edits,
+        )?;
     }
     if let (Some(previous), Some(revision)) = (previous_revision.as_deref(), document.current_revision_id.as_deref()) {
         crate::translation_queue::revise_pdf_checkpoint(db, &document.id, previous, revision, first_changed)?;
@@ -1395,7 +1398,7 @@ mod drop_cap_tests {
         let mut store = Store::open(&root.path().join("library.db")).unwrap();
         let original = root.path().join("library.pdf");
         std::fs::write(&original, b"%PDF-1.4\n").unwrap();
-        let old = "Il est mort\n  Naples\nà\noù nous avons marché. Le marin repart.";
+        let old = "Il est mort\n  Naples\nà\noù nous avons marché avec un marin. Le marin repart.";
         let edits = [PdfTextOrderEdit {
             start_utf16: "Il est mort".len(),
             end_utf16: "Il est mort\n  Naples\nà".encode_utf16().count(),
@@ -1409,12 +1412,30 @@ mod drop_cap_tests {
         let sentence = &document.sentences[0];
         store.set_sentence_note(&document.id, &sentence.id, "keep this note").unwrap();
         store.set_bookmark(&document.id, &sentence.id, true).unwrap();
+        let mut save = |word: &str| store.save_selected_word(crate::Vocabulary {
+            id: String::new(), word: word.into(), document_id: document.id.clone(),
+            language: "fr".into(), target_language: "uk".into(), translation: "переклад".into(),
+            context: String::new(), forward: Default::default(), reverse: Default::default(),
+            analysis: None, expression: None, sense: None, accepted_translations: Vec::new(),
+        }, crate::dictionary_transfer::DictionarySelection {
+            revision_id: revision.to_owned(),
+            start_utf16: old[..old.rfind(word).unwrap()].encode_utf16().count(),
+            reconstructed_text: None,
+        }).unwrap();
+        let unchanged = save("marin");
+        let moved_inside_edit = save("Naples");
         assert!(store.repair_stored_pdf_text_order(&document.id, 0, revision, old, &edits).unwrap());
         let updated = store.translation_document(&document.id).unwrap();
         let sentence = &updated.sentences[0];
         assert!(sentence.text.contains("mort à Naples"));
         assert_eq!(updated.notes[&sentence.id], "keep this note");
         assert!(updated.bookmarks.contains(&sentence.id));
+        let links = serde_json::to_value(store.dictionary_source_locations(&unchanged.id).unwrap()).unwrap();
+        assert_eq!(links.as_array().unwrap().len(), 1);
+        assert_eq!(links[0]["sentenceId"], updated.sentences[1].id);
+        assert_eq!(links[0]["selection"]["startUtf16"],
+            updated.text[..updated.text.rfind("marin").unwrap()].encode_utf16().count());
+        assert!(store.dictionary_source_locations(&moved_inside_edit.id).unwrap().is_empty());
         assert!(!store.repair_stored_pdf_text_order(&document.id, 0, revision, old, &edits).unwrap());
 
         pdf_detached_pages::write_text_layer(&store.connection, &document.id, 1, old).unwrap();

@@ -190,16 +190,27 @@ fn location_in_revision(
         .then(|| (position, sentence.id.clone(), revision.to_owned(), None))
 }
 
-pub(crate) fn reanchor_detached_selections(
+pub(crate) fn reanchor_canonical_selections(
+    db: &Connection, previous_revision: Option<&str>, document: &Document,
+    before: &[crate::Sentence], edits: &[crate::ocr::TranscriptEdit],
+) -> Result<()> {
+    let Some((previous, current)) = previous_revision.zip(document.current_revision_id.as_deref())
+        .filter(|(previous, current)| previous != current && !edits.is_empty())
+        else { return Ok(()); };
+    reanchor_selections(db, (&document.id, None, previous, current), before, &document.sentences,
+        |start, length| crate::ocr::map_unchanged_range_start(start, length, edits))
+}
+
+pub(crate) fn reanchor_selections(
     db: &Connection,
-    (id, page, before_revision, after_revision): (&str, u16, &str, &str),
+    (id, page, before_revision, after_revision): (&str, Option<u16>, &str, &str),
     before: &[crate::Sentence],
     after: &[crate::Sentence],
     map: impl Fn(usize, usize) -> Option<usize>,
 ) -> Result<()> {
     let mut query = db.prepare(
         "SELECT card_id, surface, sentence, anchor FROM dictionary_context_anchors
-         WHERE document_id=?1 AND json_extract(anchor,'$.page')=?2
+         WHERE document_id=?1 AND json_extract(anchor,'$.page') IS ?2
            AND json_extract(anchor,'$.revisionId')=?3
            AND json_type(anchor,'$.selection')='object'",
     ).map_err(error)?;
@@ -225,7 +236,7 @@ pub(crate) fn reanchor_detached_selections(
         let updated = DictionarySentenceAnchor {
             sentence_id: sentence.id.clone(),
             revision_id: after_revision.to_owned(),
-            page: Some(page),
+            page,
             sentence_start_utf16: sentence.start_utf16,
             selection: Some(selection),
         };

@@ -129,10 +129,14 @@ impl crate::Store {
             }
             let edits = line_transcript_edits(lines, &previous)?;
             let parsed = crate::document_layout::from_ocr(recognized_lines(lines, 1)?, lines, None);
-            update_transcript_with_edits(document, parsed.text, None, &edits)?;
+            let previous_revision = document.current_revision_id.clone();
+            let before = update_transcript_with_edits(document, parsed.text, None, &edits)?;
             document.blocks = parsed.blocks;
             refresh_provenance(document);
             crate::document_revisions::append(document, tx)?;
+            crate::dictionary_transfer::reanchor_canonical_selections(
+                tx, previous_revision.as_deref(), document, &before, &edits,
+            )?;
             Self::discard_changed_speech_resume(tx, document)?;
             Ok(true)
         })?;
@@ -534,7 +538,7 @@ pub(crate) fn update_transcript_with_page_starts(
     text: String,
     starts: Option<&[Option<usize>]>,
 ) -> Result<()> {
-    update_transcript_with_edits(document, text, starts, &[])
+    update_transcript_with_edits(document, text, starts, &[]).map(drop)
 }
 
 pub(crate) struct TranscriptEdit {
@@ -601,12 +605,22 @@ pub(crate) fn map_transcript_offset(offset: usize, edits: &[TranscriptEdit]) -> 
     Some(mapped)
 }
 
+pub(crate) fn map_unchanged_range_start(start: usize, length: usize, edits: &[TranscriptEdit]) -> Option<usize> {
+    let end = start.checked_add(length)?;
+    let mut mapped = start;
+    for edit in edits.iter().take_while(|edit| edit.start_utf16 < end) {
+        if edit.start_utf16.checked_add(edit.old_len)? > start { return None; }
+        mapped = mapped.checked_sub(edit.old_len)?.checked_add(edit.new_len)?;
+    }
+    Some(mapped)
+}
+
 pub(crate) fn update_transcript_with_edits(
     document: &mut crate::Document,
     text: String,
     starts: Option<&[Option<usize>]>,
     edits: &[TranscriptEdit],
-) -> Result<()> {
+) -> Result<Vec<crate::Sentence>> {
     use std::collections::HashMap;
 
     let sentences = crate::pdf_sentences::segment_document(document, &text);
@@ -721,9 +735,9 @@ pub(crate) fn update_transcript_with_edits(
     }
     document.position = position;
     document.text = text;
-    document.sentences = sentences;
+    let before = std::mem::replace(&mut document.sentences, sentences);
     document.speech_resume = speech_resume.filter(|resume| document.matches_speech_resume(resume));
-    Ok(())
+    Ok(before)
 }
 
 #[cfg(test)]

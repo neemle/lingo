@@ -1000,16 +1000,17 @@ impl Store {
                 }
             };
             let text_changed = document.text != parsed.text;
-            if edits.is_empty() {
-                ocr::update_transcript(document, parsed.text)?;
-            } else {
-                ocr::update_transcript_with_edits(document, parsed.text, parsed.pdf_page_starts.as_deref(), &edits)?;
-            }
+            let previous_revision = document.current_revision_id.clone();
+            let starts = if edits.is_empty() { None } else { parsed.pdf_page_starts.as_deref() };
+            let before = ocr::update_transcript_with_edits(document, parsed.text, starts, &edits)?;
             document.pdf_page_starts = parsed.pdf_page_starts;
             document.blocks = parsed.blocks;
             ocr::refresh_provenance(document);
             if text_changed {
                 document_revisions::append(document, tx)?;
+                dictionary_transfer::reanchor_canonical_selections(
+                    tx, previous_revision.as_deref(), document, &before, &edits,
+                )?;
             }
             Self::discard_changed_speech_resume(tx, document)?;
             Ok(true)
