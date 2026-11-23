@@ -23,7 +23,7 @@ use crate::{
     space::{ensure_capacity, PACKAGE_OVERHEAD},
     translation::{
         cached_translation, route_readiness, search_cached_translation, sentence_input,
-        translate_paragraph, translate_pdf_page, AlignedTranslation, CachedTranslation, ModelEdge,
+        regenerate_pdf_sentence, translate_paragraph, translate_pdf_page, AlignedTranslation, CachedTranslation, ModelEdge,
         PageBoundaries, ParagraphTranslation, ParagraphUnit, SelectedTranslation, TranslationBatchError, TranslationProvider, TranslationReadiness, TranslationRequest,
         TranslationRouteStatus, TranslationSearchPage, TranslationSelection, TranslationSettings,
     },
@@ -470,9 +470,10 @@ impl StoreWorker {
         document_id: &str,
         sentence_id: &str,
         target: &str,
+        regenerate: bool,
     ) -> Result<Option<AlignedTranslation>> {
         self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?
-            .translate_installed_sentence(document_id, sentence_id, target)
+            .translate_installed_sentence_with_refresh(document_id, sentence_id, target, regenerate)
     }
 
     pub fn translate_dictionary_gloss_to(
@@ -555,15 +556,16 @@ impl StoreWorker {
     pub fn pdf_page_translation_with_priority(
         self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
     ) -> Result<Vec<crate::pdf_detached_pages::PdfPageTranslationRow>> {
-        self.pdf_page_translation_until_canceled(id, page, target, cached_only, background, &|| false)
+        self.pdf_page_translation_until_canceled(id, page, target, cached_only, background, None, &|| false)
     }
 
     pub fn pdf_page_translation_until_canceled(
         self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
+        refresh_at: Option<usize>,
         canceled: &dyn Fn() -> bool,
     ) -> Result<Vec<crate::pdf_detached_pages::PdfPageTranslationRow>> {
         let flags = if cached_only { OpenFlags::SQLITE_OPEN_READ_ONLY } else { OpenFlags::SQLITE_OPEN_READ_WRITE };
-        self.open(flags)?.pdf_page_translation_until_canceled(id, page, target, cached_only, background, canceled)
+        self.open(flags)?.pdf_page_translation_until_canceled(id, page, target, cached_only, background, refresh_at, canceled)
     }
 
     pub fn translate_detached_pdf_sentence(
@@ -756,16 +758,26 @@ impl Store {
         sentence_id: &str,
         target: &str,
     ) -> Result<Option<AlignedTranslation>> {
+        self.translate_installed_sentence_with_refresh(document_id, sentence_id, target, false)
+    }
+
+    pub fn translate_installed_sentence_with_refresh(
+        &mut self, document_id: &str, sentence_id: &str, target: &str, regenerate: bool,
+    ) -> Result<Option<AlignedTranslation>> {
         let (document, selected) = self.translation_selection(document_id, sentence_id)?;
+        if regenerate && (crate::document_layout::skip_in_translation(&document, &document.sentences[selected]) ||
+            document.reviewed_translations.get(target).is_some_and(|entries| entries.contains_key(sentence_id))) {
+            return Err("Для цього речення повторний переклад недоступний.".into());
+        }
         let (text, sentence_ids) = sentence_input(self, &document, selected, target, PageBoundaries::Canonical)?;
-        self.translate_machine_sentence(document_id, &document.language, target, text, sentence_ids)
+        self.translate_machine_sentence(document_id, &document.language, target, text, sentence_ids, regenerate)
     }
 
     pub fn translate_detached_pdf_sentence(
         &mut self, id: &str, page: u16, sentence_id: &str, target: &str,
     ) -> Result<Option<AlignedTranslation>> {
         let (language, input) = self.detached_sentence_input(id, page, sentence_id, target)?;
-        self.translate_machine_sentence(id, &language, target, input, vec![sentence_id.to_owned()])
+        self.translate_machine_sentence(id, &language, target, input, vec![sentence_id.to_owned()], false)
     }
 
     pub fn translate_installed_paragraph(
@@ -840,6 +852,15 @@ impl Store {
         let directory = self.model_directory.clone();
         translate_pdf_page(self, &mut MarianProvider { directory: &directory, background, canceled },
             document, physical, target, boundaries, canceled)
+    }
+
+    pub(crate) fn regenerate_document_pdf_sentence(
+        &mut self, document: &crate::Document, selected: usize, target: &str,
+        boundaries: PageBoundaries, canceled: &dyn Fn() -> bool,
+    ) -> Result<()> {
+        let directory = self.model_directory.clone();
+        regenerate_pdf_sentence(self, &mut MarianProvider { directory: &directory, background: false, canceled },
+            document, selected, target, boundaries)
     }
 
     pub fn find_translation_page(
@@ -947,7 +968,7 @@ impl Store {
         {
             return Err("Документ не знайдено.".into());
         }
-        self.translate_machine_sentence(id, source, target, gloss.to_owned(), Vec::new())
+        self.translate_machine_sentence(id, source, target, gloss.to_owned(), Vec::new(), false)
     }
 
     pub fn translate_dictionary_glosses(
@@ -1099,11 +1120,12 @@ impl Store {
         target: &str,
         text: String,
         sentence_ids: Vec<String>,
+        regenerate: bool,
     ) -> Result<Option<AlignedTranslation>> {
         if text.trim().is_empty() { return Ok(None); }
         let directory = self.model_directory.clone();
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
-        let result = self.translate_aligned_with_catalog(
+        let result = self.translate_aligned_with_cache_policy(
             &mut MarianProvider::interactive(&directory),
             TranslationRequest {
                 source,
@@ -1114,6 +1136,7 @@ impl Store {
             },
             &catalog,
             Some(document_id),
+            regenerate,
         )?;
         Ok(result.map(|mut translation| {
             translation.attach_source_sentences(sentence_ids);

@@ -302,8 +302,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     }
 
     public Task<PdfPageTranslationRow[]> PdfPageTranslationAsync(string id, int page, string target, bool cachedOnly,
-        CancellationToken cancellationToken = default) =>
-        Task.Run(() => client.PdfPageTranslation(id, page, target, cachedOnly, cancellationToken: cancellationToken),
+        CancellationToken cancellationToken = default, int? refreshAtUtf16 = null) =>
+        Task.Run(() => client.PdfPageTranslation(id, page, target, cachedOnly,
+            cancellationToken: cancellationToken, refreshAtUtf16: refreshAtUtf16),
             cancellationToken);
 
     public async Task<bool> PrefetchVisiblePdfTranslationAsync(BackgroundTranslatedPage address, CancellationToken cancellationToken)
@@ -680,8 +681,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
             return client.RunTranslationWindow(id, sentenceId, revisionId, target);
         });
 
-    public Task<MachineTranslation?> TranslateSentenceAsync(string id, string sentenceId, string target) =>
-        Task.Run(() => client.TranslateSentence(id, sentenceId, target));
+    public Task<MachineTranslation?> TranslateSentenceAsync(string id, string sentenceId, string target, bool regenerate = false) =>
+        Task.Run(() => client.TranslateSentence(id, sentenceId, target, regenerate));
     public Task<ModelPassageTranslation> TranslateWithModelAsync(string id, int? page, string sentenceId, string target,
         bool regenerate, CancellationToken cancellationToken = default) =>
         Task.Run(() => client.TranslateWithModel(id, page, sentenceId, target, regenerate, cancellationToken), cancellationToken);

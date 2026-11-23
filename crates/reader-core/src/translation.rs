@@ -656,6 +656,21 @@ pub(crate) fn translate_pdf_page(
     Ok(units)
 }
 
+pub(crate) fn regenerate_pdf_sentence(
+    store: &mut Store, provider: &mut impl TranslationProvider, document: &Document,
+    selected: usize, target: &str, boundaries: PageBoundaries,
+) -> Result<()> {
+    let plan = paragraph_plan(store, document, selected, target, boundaries, UnitGrouping::Sentence)?;
+    let id = &document.sentences[selected].id;
+    let (_, input) = plan.pending.into_iter().find(|(index, _)| plan.result.units[*index].sentence_ids.contains(id))
+        .ok_or("Для цього фрагмента повторний переклад недоступний.")?;
+    store.translate_aligned_with_cache_policy(provider, TranslationRequest {
+        source: &document.language, target, segments: std::slice::from_ref(&input), context: None,
+        settings: TranslationSettings::default(),
+    }, &[], Some(&document.id), true)?.ok_or_else(|| "Мовний пакет для повторного перекладу недоступний.".into())
+        .map(|_| ())
+}
+
 pub(crate) fn cached_translation(
     store: &Store,
     installed: &[ModelEdge],
@@ -1539,9 +1554,9 @@ mod tests {
     }
 
     #[test]
-    fn pdf_page_batches_missing_units_across_paragraphs_and_reuses_the_cache() {
+    fn pdf_page_batches_missing_units_and_regenerates_only_the_requested_sentence() {
         #[derive(Default)]
-        struct Provider(Vec<Vec<String>>);
+        struct Provider { batches: Vec<Vec<String>>, fail: bool }
 
         impl TranslationProvider for Provider {
             fn installed_models(&self) -> Result<Vec<ModelEdge>> {
@@ -1551,9 +1566,11 @@ mod tests {
             }
 
             fn translate(&mut self, _: &ModelEdge, segments: &[String], _: Option<&str>,
-                _: TranslationSettings) -> Result<Vec<String>> {
-                self.0.push(segments.to_vec());
-                Ok(segments.iter().map(|_| "Збережене речення.".into()).collect())
+                settings: TranslationSettings) -> Result<Vec<String>> {
+                self.batches.push(segments.to_vec());
+                if self.fail { return Err("Переклад не завершено.".into()); }
+                let text = if settings.beam_size == 6 { "Оновлене речення." } else { "Збережене речення." };
+                Ok(segments.iter().map(|_| text.into()).collect())
             }
         }
 
@@ -1570,7 +1587,17 @@ mod tests {
             assert_eq!(rows[0].translation.as_deref(), Some("Корабель прибуває."));
             assert!(rows.iter().all(|row| row.translation.is_some()));
         }
-        assert_eq!(provider.0, [vec!["Le marin part.".to_owned(), "Le port est ouvert.".to_owned()]]);
+        assert_eq!(provider.batches, [vec!["Le marin part.".to_owned(), "Le port est ouvert.".to_owned()]]);
+        assert!(regenerate_pdf_sentence(&mut store, &mut provider, &document, 0, "uk", PageBoundaries::Canonical).is_err());
+        regenerate_pdf_sentence(&mut store, &mut provider, &document, 1, "uk", PageBoundaries::Canonical).unwrap();
+        provider.fail = true;
+        assert!(regenerate_pdf_sentence(&mut store, &mut provider, &document, 1, "uk", PageBoundaries::Canonical).is_err());
+        let rows = translate_pdf_page(&mut store, &mut provider, &document, 0..3,
+            "uk", PageBoundaries::Canonical, &|| false).unwrap();
+        assert_eq!(rows[0].translation.as_deref(), Some("Корабель прибуває."));
+        assert_eq!(rows[1].translation.as_deref(), Some("Оновлене речення."));
+        assert_eq!(rows[2].translation.as_deref(), Some("Збережене речення."));
+        assert_eq!(provider.batches[1..], [vec!["Le marin part.".to_owned()], vec!["Le marin part.".to_owned()]]);
     }
 
     #[test]
@@ -2456,6 +2483,17 @@ impl Store {
         catalog: &[ModelEdge],
         document: Option<&str>,
     ) -> Result<Option<AlignedTranslation>> {
+        self.translate_aligned_with_cache_policy(provider, request, catalog, document, false)
+    }
+
+    pub(crate) fn translate_aligned_with_cache_policy(
+        &mut self,
+        provider: &mut impl TranslationProvider,
+        request: TranslationRequest<'_>,
+        catalog: &[ModelEdge],
+        document: Option<&str>,
+        regenerate: bool,
+    ) -> Result<Option<AlignedTranslation>> {
         let TranslationRequest {
             source,
             target,
@@ -2471,17 +2509,20 @@ impl Store {
         }
         let context = context.filter(|text| !text.trim().is_empty());
         let routes = CacheRoutes::resolve(&provider.installed_models()?, catalog, source, target)?;
-        if let Some((translation, key)) = routes.cached_aligned(self, segments, context, target, settings)? {
-            if let Some(document) = document {
-                self.link_translation_cache_keys(document, std::iter::once(key.as_str()))?;
+        if !regenerate {
+            if let Some((translation, key)) = routes.cached_aligned(self, segments, context, target, settings)? {
+                if let Some(document) = document {
+                    self.link_translation_cache_keys(document, std::iter::once(key.as_str()))?;
+                }
+                return Ok(Some(translation));
             }
-            return Ok(Some(translation));
         }
 
-        let attempts = if provider.allow_alternative_routes() { routes.installed_count } else { 1.min(routes.installed_count) };
+        let attempts = if !regenerate && provider.allow_alternative_routes() { routes.installed_count } else { 1.min(routes.installed_count) };
+        let decode_settings = if regenerate { TranslationSettings { beam_size: 6 } } else { settings };
         let mut first_failure = None;
         for route in routes.candidates.into_iter().take(attempts) {
-            match infer_route(provider, &route, segments, context, settings) {
+            match infer_route(provider, &route, segments, context, decode_settings) {
                 Ok(output) => {
                     let key = cache_key(&route, segments, context, settings)?;
                     self.save_cached_segments([(key.clone(), output.as_slice())])?;

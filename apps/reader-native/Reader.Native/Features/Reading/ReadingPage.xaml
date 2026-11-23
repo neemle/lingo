@@ -23,6 +23,11 @@
    <Setter Property="MinimumHeightRequest" Value="34" />
    <Setter Property="Padding" Value="9,5" />
   </Style>
+  <Style x:Key="TranslationIconButton" TargetType="Button" BasedOn="{StaticResource PlayerButton}">
+   <Setter Property="FontFamily" Value="FontAwesomeSolid" />
+   <Setter Property="FontSize" Value="14" />
+   <Setter Property="MinimumWidthRequest" Value="36" />
+  </Style>
  </ContentPage.Resources>
  <ContentPage.MenuBarItems>
   <MenuBarItem Text="Читання">
@@ -179,16 +184,19 @@
      </Grid>
 
      <Grid Grid.Column="1" x:Name="TranslationPane" RowDefinitions="Auto,*,Auto,Auto" BackgroundColor="{StaticResource Panel}">
-      <Grid x:Name="TranslationPaneHeader" Padding="16,10" ColumnDefinitions="*,Auto,Auto,Auto" RowDefinitions="Auto,Auto"
+      <Grid x:Name="TranslationPaneHeader" Padding="16,10" ColumnDefinitions="*,Auto,Auto,Auto,Auto" RowDefinitions="Auto,Auto"
        ColumnSpacing="6" BackgroundColor="#F8F9F3" SizeChanged="PdfTranslationViewportChanged">
        <Label Text="ПЕРЕКЛАД" Style="{StaticResource ReaderColumnCaption}" VerticalOptions="Center" />
-       <Button Grid.Column="1" x:Name="AutoTranslate" Text="Автопереклад"
-        Style="{StaticResource PlayerButton}" Clicked="AutoTranslateClicked" />
-       <Button Grid.Column="2" x:Name="PdfTranslationMode" Text="Верстка" IsVisible="False"
-        Style="{StaticResource PlayerButton}" Clicked="TogglePdfTranslationLayout" />
-       <Button Grid.Column="3" x:Name="TranslatePdfPage" Text="Перекласти сторінку" IsVisible="False"
-        Style="{StaticResource PlayerButton}" Clicked="TranslatePdfPageClicked" />
-       <Label Grid.Row="1" Grid.ColumnSpan="4" x:Name="PdfLayoutStatusLabel" IsVisible="False"
+       <Button Grid.Column="1" x:Name="AutoTranslate" Text="&#xF204;"
+        Style="{StaticResource TranslationIconButton}" Clicked="AutoTranslateClicked" />
+       <Button Grid.Column="2" x:Name="PdfTranslationMode" Text="&#xF0DB;" IsVisible="False"
+        Style="{StaticResource TranslationIconButton}" Clicked="TogglePdfTranslationLayout" />
+       <Button Grid.Column="3" x:Name="TranslatePdfPage" Text="&#xF15C;" IsVisible="False"
+        Style="{StaticResource TranslationIconButton}" Clicked="TranslatePdfPageClicked" />
+       <Button Grid.Column="4" x:Name="RefreshSentenceTranslation" Text="&#xF021;" IsEnabled="False"
+        Style="{StaticResource TranslationIconButton}" Clicked="RefreshSentenceTranslationClicked"
+        ToolTipProperties.Text="Перекласти речення заново" SemanticProperties.Description="Перекласти речення заново" />
+       <Label Grid.Row="1" Grid.ColumnSpan="5" x:Name="PdfLayoutStatusLabel" IsVisible="False"
         Style="{StaticResource ReaderMeta}" LineBreakMode="WordWrap" />
       </Grid>
       <ScrollView Grid.Row="1" x:Name="TranslationViewport" SizeChanged="TranslationViewportReady"
@@ -250,8 +258,9 @@
         Style="{StaticResource PlayerButton}" Clicked="EditTranslationClicked" />
        <Button x:Name="TranslateOffline" Text="Перекласти абзац офлайн" Margin="0,3,5,0"
         Style="{StaticResource PlayerButton}" Clicked="TranslateOfflineClicked" />
-       <Button x:Name="TranslateSentence" Text="Перекласти речення" Margin="0,3,5,0"
-        Style="{StaticResource PlayerButton}" Clicked="TranslateSentenceClicked" />
+       <Button x:Name="TranslateSentence" Text="&#xF1AB;" Margin="0,3,5,0"
+        Style="{StaticResource TranslationIconButton}" Clicked="TranslateSentenceClicked"
+        ToolTipProperties.Text="Перекласти речення" SemanticProperties.Description="Перекласти речення" />
        <Button x:Name="TranslateWithModel" Text="Перекласти моделлю" Margin="0,3,5,0"
         Style="{StaticResource PlayerButton}" Clicked="TranslateWithModelClicked" />
        <Button x:Name="ShareTranslationPair" Text="Поширити пару" Margin="0,3,5,0"
@@ -297,14 +306,17 @@
         </ScrollView>
        </Grid>
        <Grid Grid.Column="1" x:Name="DetachedTargetPane" RowDefinitions="Auto,*,Auto" BackgroundColor="{StaticResource Panel}">
-        <Grid x:Name="DetachedTranslationPaneHeader" Padding="14,5" ColumnDefinitions="*,Auto,Auto"
+        <Grid x:Name="DetachedTranslationPaneHeader" Padding="14,5" ColumnDefinitions="*,Auto,Auto,Auto"
          RowDefinitions="Auto,Auto" ColumnSpacing="6" SizeChanged="PdfTranslationViewportChanged">
          <Label Text="ПЕРЕКЛАД" Style="{StaticResource ReaderColumnCaption}" VerticalOptions="Center" />
-         <Button Grid.Column="1" x:Name="DetachedPdfTranslationMode" Text="Верстка" IsVisible="False"
-          Style="{StaticResource PlayerButton}" Clicked="TogglePdfTranslationLayout" />
-         <Button Grid.Column="2" x:Name="DetachedTranslatePdfPage" Text="Перекласти сторінку" IsVisible="False"
-          Style="{StaticResource PlayerButton}" Clicked="TranslatePdfPageClicked" />
-         <Label Grid.Row="1" Grid.ColumnSpan="3" x:Name="DetachedPdfLayoutStatusLabel" IsVisible="False"
+         <Button Grid.Column="1" x:Name="DetachedPdfTranslationMode" Text="&#xF0DB;" IsVisible="False"
+          Style="{StaticResource TranslationIconButton}" Clicked="TogglePdfTranslationLayout" />
+         <Button Grid.Column="2" x:Name="DetachedTranslatePdfPage" Text="&#xF15C;" IsVisible="False"
+          Style="{StaticResource TranslationIconButton}" Clicked="TranslatePdfPageClicked" />
+         <Button Grid.Column="3" x:Name="DetachedRefreshSentenceTranslation" Text="&#xF021;" IsEnabled="False"
+          Style="{StaticResource TranslationIconButton}" Clicked="RefreshSentenceTranslationClicked"
+          ToolTipProperties.Text="Перекласти речення заново" SemanticProperties.Description="Перекласти речення заново" />
+         <Label Grid.Row="1" Grid.ColumnSpan="4" x:Name="DetachedPdfLayoutStatusLabel" IsVisible="False"
           Style="{StaticResource ReaderMeta}" LineBreakMode="WordWrap" />
         </Grid>
         <ScrollView Grid.Row="1" x:Name="DetachedTranslationViewport" SizeChanged="DetachedTranslationViewportReady"
@@ -382,8 +394,8 @@
         Margin="5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedTranslateWithModel" Text="Перекласти моделлю"
         Style="{StaticResource PlayerButton}" Clicked="TranslateWithModelClicked" Margin="0,0,5,0" />
-       <Button x:Name="DetachedAutoTranslate" Text="Автопереклад" Clicked="AutoTranslateClicked"
-        Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
+       <Button x:Name="DetachedAutoTranslate" Text="&#xF204;" Clicked="AutoTranslateClicked"
+        Margin="0,0,5,0" Style="{StaticResource TranslationIconButton}" />
        <Button x:Name="DetachedOpenTranslationPackages" Text="Мовні пакети" IsVisible="False"
         Clicked="OpenTranslationPackagesClicked" Margin="0,0,5,0" Style="{StaticResource PlayerButton}" />
        <Button x:Name="DetachedEditTranslation" Text="Свій переклад…" Clicked="DetachedEditTranslationClicked"

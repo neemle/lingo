@@ -23,6 +23,7 @@ public partial class ReadingPage
     private bool syncingPdfTranslationScroll;
     private PdfLayoutAddress? pdfLayoutRequest;
     private PdfLayoutAddress? translatingPdfLayout;
+    private bool refreshingPdfSentence;
     private CancellationTokenSource? pdfLayoutTranslationCancellation;
     private PdfPageTranslationRow[] pdfLayoutRows = [];
     private PhotoPreview? pdfTranslationBackgroundPreview;
@@ -104,6 +105,50 @@ public partial class ReadingPage
             await LoadPdfPageLayoutAsync(address, cachedOnly: false);
     }
 
+    private async void RefreshSentenceTranslationClicked(object? sender, EventArgs args)
+    {
+        if (sender is not Button { IsEnabled: true }) return;
+        if (PdfUsesPageTranslation)
+        {
+            if (pdfLayoutRequest is { } address && pdfLayoutSentence is { } sentence)
+            {
+                var row = pdfLayoutRows.FirstOrDefault(value =>
+                    value.StartUtf16 <= sentence.StartUtf16 && sentence.StartUtf16 < value.EndUtf16);
+                await LoadPdfPageLayoutAsync(address, cachedOnly: false, refreshAtUtf16: row?.StartUtf16 ?? sentence.StartUtf16);
+            }
+        }
+        else if (DetachedPdfReader.IsVisible)
+            await RefreshDetachedSentenceTranslationAsync();
+        else
+        {
+            lastAutoTranslation = ActiveTranslationKey();
+            await TranslateOfflineAsync(useContext: false, regenerate: true);
+        }
+    }
+
+    private void UpdateSentenceRefreshButtons()
+    {
+        var session = AppState.Session;
+        var ready = readingPageActive && TranslationVisible && !session.Busy && !translating &&
+            !translatingDetachedSentence && translatingPdfLayout is null && readiness?.Ready == true;
+        var detached = DetachedPdfReader.IsVisible;
+        var hasSource = !PdfUsesPageTranslation || pdfLayoutSentence is not null && pdfLayoutRequest is not null;
+        RefreshSentenceTranslation.IsEnabled = ready && hasSource && !detached &&
+            ActiveTranslationKey() is { } key && readinessPair == (key.Source, key.Target) &&
+            session.Document is { } document && session.Sentence is { } sentence && !IsFootnote(document, sentence) &&
+            session.ReviewedTranslation(key.Target) is null;
+        DetachedRefreshSentenceTranslation.IsEnabled = ready && hasSource && detached && !loadingDetachedSentence &&
+            detachedSentence is { Footnote: false } current && TargetCode is { } target &&
+            readinessPair == (current.Language, target) && ReviewedDetachedTranslation() is null;
+    }
+
+    private static void LabelTranslationIcon(Button button, string glyph, string label)
+    {
+        button.Text = glyph;
+        ToolTipProperties.SetText(button, label);
+        SemanticProperties.SetDescription(button, label);
+    }
+
     private bool PdfPageRouteReady(PdfLayoutAddress address) =>
         readiness is { Ready: true } && AppState.Session.Document is { } document &&
         readinessPair == (document.Language, address.Target);
@@ -155,7 +200,10 @@ public partial class ReadingPage
             pdfLayoutTranslationCancellation?.Cancel();
         PdfTranslationMode.IsVisible = available && !detached;
         DetachedPdfTranslationMode.IsVisible = available && detached;
-        PdfTranslationMode.Text = DetachedPdfTranslationMode.Text = shown ? "Список" : "Верстка";
+        var modeGlyph = shown ? "\uf03a" : "\uf0db";
+        var modeLabel = shown ? "Показати переклад списком" : "Показати переклад у верстці сторінки";
+        LabelTranslationIcon(PdfTranslationMode, modeGlyph, modeLabel);
+        LabelTranslationIcon(DetachedPdfTranslationMode, modeGlyph, modeLabel);
         PdfTranslationViewport.IsVisible = TranslatePdfPage.IsVisible = shown && !detached;
         DetachedPdfTranslationViewport.IsVisible = DetachedTranslatePdfPage.IsVisible = shown && detached;
         TranslationViewport.IsVisible = !waitingForPreview && !PdfTranslationViewport.IsVisible;
@@ -184,6 +232,7 @@ public partial class ReadingPage
         else if (shown && address is not null && pdfLayoutRows.Length == 0 && pdfLayoutStatus is null)
             _ = LoadPdfPageLayoutAsync(address, cachedOnly: true);
         UpdatePdfTranslationStatus(shown ? address : null, detached, translatingPage);
+        UpdateSentenceRefreshButtons();
         AlignPdfViewports();
         UpdateTranslationPackageActions();
         var hasRows = pdfLayoutRows.Length > 0;
@@ -209,12 +258,16 @@ public partial class ReadingPage
         TranslatePdfPage.IsEnabled = DetachedTranslatePdfPage.IsEnabled =
             (ready || needsPackages) && translatingPdfLayout is null && !AppState.Session.Busy;
         var photo = AppState.Session.Document is { Format: not "pdf" };
-        TranslatePdfPage.Text = DetachedTranslatePdfPage.Text = translatingPage ? "Перекладаємо…"
-            : needsPackages ? "Мовні пакети" : photo ? "Перекласти фото" : "Перекласти сторінку";
+        var pageLabel = translatingPage ? "Перекладаємо…" : needsPackages ? "Мовні пакети"
+            : photo ? "Перекласти фото" : "Перекласти сторінку";
+        var pageGlyph = needsPackages ? "\uf019" : "\uf15c";
+        LabelTranslationIcon(TranslatePdfPage, pageGlyph, pageLabel);
+        LabelTranslationIcon(DetachedTranslatePdfPage, pageGlyph, pageLabel);
         string? text = null;
         if (address is not null)
         {
-            if (translatingPage) text = photo ? "Перекладаємо фото…" : "Перекладаємо сторінку…";
+            if (translatingPage) text = refreshingPdfSentence ? "Перекладаємо речення заново…"
+                : photo ? "Перекладаємо фото…" : "Перекладаємо сторінку…";
             else if (!ready && AppState.Session.Document is { } document)
                 text = readinessPair == (document.Language, address.Target)
                     ? ReadinessMessage() : "Перевіряємо мовні пакети…";
@@ -405,7 +458,7 @@ public partial class ReadingPage
         return label;
     }
 
-    private async Task LoadPdfPageLayoutAsync(PdfLayoutAddress address, bool cachedOnly)
+    private async Task LoadPdfPageLayoutAsync(PdfLayoutAddress address, bool cachedOnly, int? refreshAtUtf16 = null)
     {
         var request = ++pdfLayoutRequestId;
         using var cancellation = cachedOnly ? null : new CancellationTokenSource();
@@ -413,6 +466,7 @@ public partial class ReadingPage
         if (!cachedOnly)
         {
             translatingPdfLayout = address;
+            refreshingPdfSentence = refreshAtUtf16.HasValue;
             pdfLayoutTranslationCancellation = cancellation;
             var attempt = new PdfAutoTranslation(address, readinessRequest);
             pdfAutoAttempts = (attempt, PdfAttemptCount(attempt) + 1);
@@ -421,8 +475,8 @@ public partial class ReadingPage
         try
         {
             var translation = AppState.Session.PdfPageTranslationAsync(address.Document, address.Page,
-                address.Target, cachedOnly, cancellation?.Token ?? default);
-            if (!cachedOnly) _ = FollowPdfTranslationBatchesAsync(address, request, translation);
+                address.Target, cachedOnly, cancellation?.Token ?? default, refreshAtUtf16);
+            if (!cachedOnly && refreshAtUtf16 is null) _ = FollowPdfTranslationBatchesAsync(address, request, translation);
             var rows = await translation;
             if (request != pdfLayoutRequestId || CurrentPdfLayoutAddress() != address) return;
             if (cachedOnly)
@@ -435,6 +489,7 @@ public partial class ReadingPage
             }
             pdfLayoutRows = rows;
             pdfLayoutStatus = rows.Length == 0 ? "На сторінці немає тексту для перекладу."
+                : refreshAtUtf16.HasValue ? "Речення перекладено заново."
                 : !cachedOnly && rows.All(row => row.Text is null) ? "Переклад сторінки поки недоступний." : "";
         }
         catch (OperationCanceledException) when (cancellation?.IsCancellationRequested == true)
@@ -450,6 +505,7 @@ public partial class ReadingPage
             if (!cachedOnly && translatingPdfLayout == address)
             {
                 translatingPdfLayout = null;
+                refreshingPdfSentence = false;
                 pdfLayoutTranslationCancellation = null;
             }
             RefreshPdfTranslationLayout();

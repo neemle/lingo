@@ -39,6 +39,8 @@
     <MauiImage Include="Resources/Images/Navigation/*.svg" />
     <MauiSplashScreen Include="Resources/Splash/splash.svg" Color="#F6F3EC" BaseSize="128,128" />
     <MauiAsset Include="Resources/InferenceLicenses.txt" LogicalName="InferenceLicenses.txt" />
+    <MauiFont Include="Resources/Fonts/fa-solid-900.ttf" />
+    <MauiAsset Include="Resources/FontAwesomeLicense.txt" LogicalName="FontAwesomeLicense.txt" />
     <PackageDownload Include="Microsoft.ML.OnnxRuntime" Version="[$(OnnxRuntimeVersion)]" />
     <MauiAsset Include="$(OnnxRuntimePath)/LICENSE" LogicalName="OnnxRuntimeLicense.txt" />
     <MauiAsset Include="$(OnnxRuntimePath)/ThirdPartyNotices.txt" LogicalName="OnnxRuntimeThirdPartyNotices.txt" />

@@ -244,7 +244,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 return encode_job(worker.detached_pdf_passage(id, *page, sentence_id, target, *cached_only, *background));
             }
         }
-        Command::PdfPageTranslation { id, page, target, cached_only, background, request_id } => {
+        Command::PdfPageTranslation { id, page, target, cached_only, background, refresh_at, request_id } => {
             let kind = if *background { ModelRequestKind::BackgroundTranslation } else { ModelRequestKind::PdfPageTranslation };
             let canceled = request_cancellation(handle, *request_id, kind)?;
             let canceled_error = || Error::new("canceled", "Переклад сторінки скасовано.");
@@ -252,7 +252,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             let worker = registry::lock()?.store(handle)?.prepare_translation_worker();
             if let Some(worker) = worker {
                 let result = worker.pdf_page_translation_until_canceled(
-                    id, *page, target, *cached_only, *background, &canceled,
+                    id, *page, target, *cached_only, *background, *refresh_at, &canceled,
                 );
                 return if canceled() { Err(canceled_error()) } else { encode_job(result) };
             }
@@ -299,6 +299,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             id,
             sentence_id,
             target,
+            ..
         } => {
             let worker = registry::lock()?
                 .store(handle)?
@@ -306,12 +307,15 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             if let Some(worker) = worker {
                 return if let Command::TranslateParagraph { background, .. } = &command {
                     encode_job(worker.translate_paragraph(id, sentence_id, target, *background))
-                } else {
+                } else if let Command::TranslateSentence { regenerate, .. } = &command {
                     dispatch::sentence_translation(worker.translate_sentence(
                         id,
                         sentence_id,
                         target,
+                        *regenerate,
                     ))
+                } else {
+                    unreachable!("translation command matched above")
                 };
             }
         }

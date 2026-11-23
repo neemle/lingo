@@ -383,7 +383,7 @@ public partial class ReadingPage : ContentPage
             : searchHit is not null ? "Збіг у збереженому перекладі PDF"
             : translating && currentStatus is not null ? currentStatus
             : text is not null ? "Ваш переклад активного речення"
-            : machine is not null ? machineLabel
+            : machine is not null ? currentStatus ?? machineLabel
             : currentStatus ?? ReadinessMessage();
         var newTranslation = footnote ? "" : searchHit?.Target ?? text ?? machine?.Text ?? "";
         var hasNewActiveTranslation = newTranslation.Length > 0 && SegmentTranslation.Text != newTranslation;
@@ -399,6 +399,7 @@ public partial class ReadingPage : ContentPage
                 || alignment is not null && !ReferenceEquals(unit, alignment.Value.Unit)
                 || document is not null && HasUntranslatedUnits(document, window));
         TranslateSentence.IsEnabled = active && !session.Busy && !translating && readiness?.Ready == true && text is null;
+        UpdateSentenceRefreshButtons();
         if (DetachedPdfReader.IsVisible) UpdateDetachedControls();
         else UpdateSentenceMenu();
         TargetLanguage.IsEnabled = (active || DetachedPdfReader.IsVisible) && !session.Busy;

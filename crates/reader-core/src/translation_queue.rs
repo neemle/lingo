@@ -588,6 +588,7 @@ impl Store {
                 target,
                 false,
                 true,
+                None,
                 canceled,
             );
             if canceled() { return Err(canceled_error()); }

@@ -788,6 +788,8 @@ pub enum Command {
         cached_only: bool,
         #[serde(default)]
         background: bool,
+        #[serde(rename = "refreshAtUtf16")]
+        refresh_at: Option<usize>,
         #[serde(rename = "requestId")]
         request_id: Option<u64>,
     },
@@ -830,6 +832,8 @@ pub enum Command {
         #[serde(rename = "sentenceId")]
         sentence_id: String,
         target: String,
+        #[serde(default)]
+        regenerate: bool,
     },
     TranslateDictionaryGloss {
         id: String,

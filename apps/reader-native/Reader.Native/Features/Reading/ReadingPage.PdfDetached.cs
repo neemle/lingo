@@ -401,6 +401,35 @@ public partial class ReadingPage
         await TranslateDetachedAsync(background: false);
     }
 
+    private async Task RefreshDetachedSentenceTranslationAsync()
+    {
+        if (detachedAddress is not { } address || detachedSentence is not { } current || TargetCode is not { } target) return;
+        var run = ++detachedTranslationRun;
+        translatingDetachedSentence = true;
+        UpdateDetachedControls();
+        try
+        {
+            await AppState.Session.PdfPageTranslationAsync(address.Document, address.Page, target,
+                cachedOnly: false, refreshAtUtf16: current.Sentence.StartUtf16);
+            if (run != detachedTranslationRun) return;
+            ClearPdfFragmentFocus();
+        }
+        catch (Exception error)
+        {
+            if (run == detachedTranslationRun) await DisplayAlertAsync("Переклад речення", error.Message, "Гаразд");
+            return;
+        }
+        finally
+        {
+            if (run == detachedTranslationRun)
+            {
+                translatingDetachedSentence = false;
+                UpdateDetachedControls();
+            }
+        }
+        if (run == detachedTranslationRun) await RestoreDetachedTranslationAsync(allowAutoTranslate: false);
+    }
+
     private async Task TranslateDetachedAsync(bool background)
     {
         if (!DetachedTranslate.IsEnabled || detachedAddress is not { } address ||
@@ -868,6 +897,7 @@ public partial class ReadingPage
             && readinessPair == (loaded.Language, target);
         DetachedTranslate.IsEnabled = available && detachedSentence?.Footnote == false && !translatingDetachedSentence && routeSelected
             && readiness?.Ready == true;
+        UpdateSentenceRefreshButtons();
         DetachedReadiness.IsVisible = available && routeSelected && !translatingDetachedSentence
             && CurrentDetachedTranslation() is null;
         if (DetachedReadiness.IsVisible)

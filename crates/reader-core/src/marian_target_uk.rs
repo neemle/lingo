@@ -2,10 +2,27 @@ use unicode_segmentation::UnicodeSegmentation;
 use whatlang::Lang;
 
 const FRENCH_MANNER_OF_WALKING: &str = " de son pas souple et fort";
-pub(crate) const INSTRUCTION_REVISION: &str = "fr-uk-instructions-v1";
+pub(crate) const INSTRUCTION_REVISION: &str = "fr-uk-instructions-v2";
 
 /// Established Ukrainian forms for complete publication labels and names.
 pub(crate) fn publication_term(source: &str) -> Option<String> {
+    if let Some((label, name)) = source.split_once(':') {
+        let credit = match label.trim().to_lowercase().as_str() {
+            "adaptation" => Some("Адаптація"),
+            "illustrations" => Some("Ілюстрації"),
+            "traduction" => Some("Переклад"),
+            _ => None,
+        };
+        if let Some(credit) = credit {
+            let parts: Vec<_> = name.split_whitespace().collect();
+            if (2..=6).contains(&parts.len()) && parts.first()?.starts_with(char::is_uppercase)
+                && parts.last()?.starts_with(char::is_uppercase) && parts.iter().all(|part|
+                    part.chars().all(|ch| ch.is_alphabetic() || matches!(ch, '-' | '\'' | '’' | '.')))
+            {
+                return Some(format!("{credit}: {}", parts.join(" ")));
+            }
+        }
+    }
     let normalized = source.split_whitespace().collect::<Vec<_>>().join(" ")
         .to_lowercase().replace('’', "'");
     let (volume, title) = normalized.split_once(':').map_or((None, normalized.as_str()), |(prefix, title)| {

@@ -205,10 +205,10 @@ public partial class ReadingPage
 
     private void UpdateAutoTranslateButton()
     {
-        AutoTranslate.Text = DetachedAutoTranslate.Text = autoTranslate ? "Автопереклад ✓" : "Автопереклад";
-        SemanticProperties.SetDescription(AutoTranslate, autoTranslate
-            ? "Вимкнути автоматичний офлайн-переклад абзаців"
-            : "Увімкнути автоматичний офлайн-переклад абзаців");
+        var glyph = autoTranslate ? "\uf205" : "\uf204";
+        var label = autoTranslate ? "Вимкнути автопереклад" : "Увімкнути автопереклад";
+        LabelTranslationIcon(AutoTranslate, glyph, label);
+        LabelTranslationIcon(DetachedAutoTranslate, glyph, label);
     }
 
     private void AutoTranslateClicked(object? sender, EventArgs args)
@@ -539,7 +539,7 @@ public partial class ReadingPage
         await TranslateOfflineAsync(false);
     }
 
-    private async Task TranslateOfflineAsync(bool useContext)
+    private async Task TranslateOfflineAsync(bool useContext, bool regenerate = false)
     {
         var session = AppState.Session;
         if (translating || session.Busy || readiness?.Ready != true || ActiveTranslationKey() is not { } key
@@ -547,7 +547,8 @@ public partial class ReadingPage
 
         translating = true;
         statusKey = key;
-        machineStatus = useContext ? "Перекладаємо абзац…" : "Перекладаємо речення…";
+        machineStatus = regenerate ? "Перекладаємо речення заново…"
+            : useContext ? "Перекладаємо абзац…" : "Перекладаємо речення…";
         UpdateTranslation();
         var scope = new TranslationScope(key.Document, key.Source, key.Target);
         try
@@ -581,10 +582,14 @@ public partial class ReadingPage
                 return;
             }
 
-            var sentence = await session.TranslateSentenceAsync(key.Document, key.Sentence, key.Target);
-            if (sentence is not null) RememberWindow(BuildSentenceWindow(document, scope, sentence));
+            var sentence = await session.TranslateSentenceAsync(key.Document, key.Sentence, key.Target, regenerate);
+            if (sentence is not null)
+            {
+                RememberWindow(BuildSentenceWindow(document, scope, sentence));
+                if (regenerate && ActiveTranslationKey() == key) ClearPdfFragmentFocus();
+            }
             else readinessPair = null;
-            machineStatus = null;
+            machineStatus = regenerate ? sentence is null ? "Повторний переклад недоступний." : "Речення перекладено заново." : null;
         }
         catch (Exception error) { machineStatus = error.Message; }
         finally

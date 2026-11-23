@@ -86,14 +86,15 @@ impl Store {
     pub fn pdf_page_translation_with_priority(
         &mut self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
     ) -> Result<Vec<PdfPageTranslationRow>> {
-        self.pdf_page_translation_until_canceled(id, page, target, cached_only, background, &|| false)
+        self.pdf_page_translation_until_canceled(id, page, target, cached_only, background, None, &|| false)
     }
 
-    pub(crate) fn pdf_page_translation_until_canceled(
+    pub fn pdf_page_translation_until_canceled(
         &mut self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
+        refresh_at: Option<usize>,
         canceled: &dyn Fn() -> bool,
     ) -> Result<Vec<PdfPageTranslationRow>> {
-        match self.pdf_page_translation_result_interruptible(id, page, target, cached_only, background, canceled) {
+        match self.pdf_page_translation_result_interruptible(id, page, target, cached_only, background, refresh_at, canceled) {
             Err(TranslationBatchError::Deferred { .. }) if background && !cached_only && !canceled() =>
                 self.pdf_page_translation_result(id, page, target, true, background).map_err(String::from),
             result => result.map_err(String::from),
@@ -103,16 +104,20 @@ impl Store {
     pub(crate) fn pdf_page_translation_result(
         &mut self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
     ) -> std::result::Result<Vec<PdfPageTranslationRow>, TranslationBatchError> {
-        self.pdf_page_translation_result_interruptible(id, page, target, cached_only, background, &|| false)
+        self.pdf_page_translation_result_interruptible(id, page, target, cached_only, background, None, &|| false)
     }
 
     pub(crate) fn pdf_page_translation_result_interruptible(
         &mut self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
+        refresh_at: Option<usize>,
         canceled: &dyn Fn() -> bool,
     ) -> std::result::Result<Vec<PdfPageTranslationRow>, TranslationBatchError> {
         const CANCELED: &str = "Переклад сторінки скасовано.";
         if canceled() {
             return Err(TranslationBatchError::deferred(CANCELED.into()));
+        }
+        if refresh_at.is_some() && (cached_only || background) {
+            return Err(TranslationBatchError::Failed("Повторний переклад потребує активного запиту.".into()));
         }
         let (mut document, physical, bounds, projected_offset, boundaries) = if let Some(cached) = self.detached_pdf_sentences(id, page)? {
             let local_start = cached.sentences.first().map_or(0, |sentence| sentence.start_utf16);
@@ -160,7 +165,12 @@ impl Store {
         };
         let mut generation_error = None;
         let mut failures = BTreeMap::new();
-        if !cached_only {
+        if let Some(offset) = refresh_at {
+            let local = offsets.iter().position(|&(start, end)| start <= offset && offset < end)
+                .ok_or("Виділене речення вже відсутнє на сторінці.")
+                .map_err(str::to_owned)?;
+            self.regenerate_document_pdf_sentence(&document, physical.start + local, target, boundaries, canceled)?;
+        } else if !cached_only {
             match self.translate_document_page(&document, physical.clone(), target, boundaries, background, canceled) {
                 Ok(generated) if generated.iter().any(|unit| !unit.reviewed && unit.translation.is_some())
                     && generated.iter().all(|unit| unit.translation.is_some()) =>
