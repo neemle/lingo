@@ -7,8 +7,10 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage
 {
     private int popupTranslationRequest;
-    private (string Document, string Revision, TextSelection Selection, string Target, string Text, string Source, bool Saved)? wordTranslation;
-    private (string Target, string Text, string Source, bool Saved)? detachedWordTranslation;
+    private sealed record PopupTranslation(string Document, int? Page, string Revision, TextSelection Selection,
+        string Target, string Text, string Source, bool Saved);
+    private PopupTranslation? wordTranslation;
+    private PopupTranslation? detachedWordTranslation;
     private sealed record GlossAlignment(string Target, string Gloss)
     {
         internal readonly Dictionary<string, OcrSpan[]> Resolved = new(StringComparer.Ordinal);
@@ -35,7 +37,8 @@ public partial class ReadingPage
         var source = detached ? address?.Language : document?.Language;
         if (!detached) wordTranslation = null;
         else detachedWordTranslation = null;
-        if (selected is null || document is null || revision is null || target is null || target == source)
+        if (selected is null || document is null || revision is null || source is null ||
+            target is null || target == source || (detached && address?.Document != document.Id))
         {
             UpdatePopupGloss(detached, "Виберіть мову перекладу.");
             return;
@@ -61,11 +64,12 @@ public partial class ReadingPage
                 return;
             }
 
-            var original = result.SourceText ?? selected.Text.Trim();
-            if (detached) detachedWordTranslation = (target, result.Text, original, result.PersonalDictionary);
+            var draft = new PopupTranslation(document.Id, detached ? address?.Page : null, revision, selected,
+                target, result.Text, result.SourceText ?? selected.Text.Trim(), result.PersonalDictionary);
+            if (detached) detachedWordTranslation = draft;
             else
             {
-                wordTranslation = (document.Id, revision, selected, target, result.Text, original, result.PersonalDictionary);
+                wordTranslation = draft;
                 if (canonicalSense is null && string.IsNullOrWhiteSpace(Translation.Text)) Translation.Text = result.Text;
             }
             UpdatePopupGloss(detached);
@@ -76,21 +80,22 @@ public partial class ReadingPage
         }
     }
 
-    private string? PopupMachineGloss(bool detached)
+    private PopupTranslation? CurrentPopupTranslation(bool detached)
     {
-        var target = TargetCode;
-        if (detached)
-            return detachedWordTranslation is { } pdf && pdf.Target == target ? pdf.Text : null;
-        return wordTranslation is { } word && word.Target == target && word.Selection == selection &&
-            AppState.Session.Document is { } document && document.Id == word.Document &&
-            document.CurrentRevisionId == word.Revision ? word.Text : null;
+        var draft = detached ? detachedWordTranslation : wordTranslation;
+        var document = AppState.Session.Document;
+        return draft is not null && draft.Target == TargetCode && draft.Document == document?.Id &&
+            draft.Selection == (detached ? detachedSelection : selection) &&
+            draft.Page == (detached ? detachedAddress?.Page : null) &&
+            draft.Revision == (detached ? detachedSentence?.RevisionId : document?.CurrentRevisionId)
+            ? draft : null;
     }
 
     private string? PopupGloss(bool detached)
     {
         var meaning = detached ? detachedSense : canonicalSense;
         return meaning is not null && meaning.Target == TargetCode
-            ? meaning.Translation : PopupMachineGloss(detached);
+            ? meaning.Translation : CurrentPopupTranslation(detached)?.Text;
     }
 
     private void UpdatePopupGloss(bool detached, string? status = null)
@@ -101,8 +106,7 @@ public partial class ReadingPage
         var listen = detached ? DetachedSpeakWordTranslation : SpeakWordTranslation;
         label.Text = gloss ?? status;
         var chosen = detached ? detachedSense : canonicalSense;
-        origin.IsVisible = chosen?.Target != TargetCode && PopupMachineGloss(detached) is not null &&
-            (detached ? detachedWordTranslation?.Saved : wordTranslation?.Saved) == true;
+        origin.IsVisible = chosen?.Target != TargetCode && CurrentPopupTranslation(detached)?.Saved == true;
         listen.IsEnabled = !string.IsNullOrWhiteSpace(gloss);
         UpdatePopupTranslationHighlights();
     }

@@ -41,15 +41,16 @@ public partial class ReadingPage
         if (DetachedWordCard.IsVisible)
         {
             SetDetachedSense(null);
-            if (PopupMachineGloss(detached: true) is null)
+            if (CurrentPopupTranslation(detached: true) is null)
                 _ = LoadPopupTranslationAsync(detached: true);
             return;
         }
         var previous = canonicalSense;
         SetSelectedSense(null);
+        var draft = CurrentPopupTranslation(detached: false);
         if (previous is not null && Translation.Text == previous.Translation)
-            Translation.Text = PopupMachineGloss(detached: false);
-        if (PopupMachineGloss(detached: false) is null)
+            Translation.Text = draft?.Text;
+        if (draft is null)
             _ = LoadPopupTranslationAsync(detached: false);
     }
 

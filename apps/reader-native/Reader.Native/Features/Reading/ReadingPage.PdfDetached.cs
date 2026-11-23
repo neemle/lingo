@@ -13,6 +13,8 @@ public partial class ReadingPage
     private TextSelection? detachedSelection;
     private bool loadingDetachedSentence;
     private int detachedSentenceRequest;
+    private (Task Work, int Request)? detachedWordSentenceLoad;
+    private int detachedWordSelectionRequest;
     private bool changingDetachedAnnotation;
     private bool savingDetachedWord;
     private bool translatingDetachedSentence;
@@ -117,12 +119,28 @@ public partial class ReadingPage
     private async Task ShowDetachedSelectionAsync(TextSelection selected,
         PdfWordAnchor? pdfAnchor = null)
     {
-        if (detachedAddress is not { } address || loadingDetachedSentence ||
+        if (detachedAddress is not { } address ||
+            (loadingDetachedSentence && detachedWordSentenceLoad?.Request != detachedSentenceRequest) ||
             SourceRanges.TrimFootnoteReference(selected, DetachedPdfText.Blocks) is not { } lexical) return;
         selected = lexical;
-        if (detachedSentence?.Sentence is not { } active || selected.StartUtf16 < active.StartUtf16 ||
+        var selectionRequest = ++detachedWordSelectionRequest;
+        if (detachedWordSentenceLoad is { } pending)
+        {
+            // Loading a sentence also writes its reading position. Finish the older write first.
+            await pending.Work;
+            if (selectionRequest != detachedWordSelectionRequest || pending.Request != detachedSentenceRequest ||
+                !ReferenceEquals(detachedAddress, address)) return;
+        }
+        if (loadingDetachedSentence || detachedSentence?.Sentence is not { } active || selected.StartUtf16 < active.StartUtf16 ||
             selected.StartUtf16 >= active.EndUtf16)
-            await LoadDetachedSentenceAsync(address, position: null, sourceOffset: selected.StartUtf16);
+        {
+            var load = LoadDetachedSentenceAsync(address, position: null, sourceOffset: selected.StartUtf16);
+            var request = detachedSentenceRequest;
+            detachedWordSentenceLoad = (load, request);
+            await load;
+            if (detachedWordSentenceLoad?.Request == request) detachedWordSentenceLoad = null;
+            if (selectionRequest != detachedWordSelectionRequest || request != detachedSentenceRequest) return;
+        }
         if (ReferenceEquals(detachedAddress, address) && detachedSentence?.Sentence is { } hit &&
             selected.StartUtf16 >= hit.StartUtf16 && selected.StartUtf16 < hit.EndUtf16)
             await ShowDetachedWordAsync(selected, pdfAnchor);
@@ -190,7 +208,7 @@ public partial class ReadingPage
         var session = AppState.Session;
         savingDetachedWord = true;
         UpdateDetachedControls();
-        var draft = detachedWordTranslation?.Target == target ? detachedWordTranslation : null;
+        var draft = CurrentPopupTranslation(detached: true);
         var reconstructed = draft is { } result && result.Source != selected.Text.Trim() ? result.Source : null;
         try
         {
