@@ -55,6 +55,9 @@
       <Label x:Name="BackgroundStatusText" Grid.Column="1" Style="{StaticResource ResourceDetail}"
        VerticalOptions="Center" />
      </Grid>
+     <Button x:Name="BackgroundRequiredPackages" Text="Відкрити потрібні мовні пакети"
+      Clicked="OpenBackgroundPackagesClicked" IsVisible="False" HorizontalOptions="Start"
+      Style="{StaticResource OutlineButton}" />
      <BoxView HeightRequest="1" Color="{StaticResource BorderTone}" />
      <Label x:Name="StorageTotal" Text="Обчислюємо зайняте місце…" FontAttributes="Bold" />
      <Label x:Name="StorageBreakdown" Style="{StaticResource ResourceDetail}" />

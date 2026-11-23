@@ -29,14 +29,17 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
     public void ApplyQueryAttributes(IDictionary<string, object> query)
     {
         if (query.TryGetValue("translationPackages", out var value) && value is TranslationPair[] packages)
-        {
-            requestedPackages = packages.Distinct().ToArray();
-            focusTranslationPending = requestedPackages.Length > 0;
-            var index = RequestedPackageIndex();
-            if (index >= 0) ModelChoice.SelectedIndex = index;
-            UpdateTranslationControls();
-            TranslationLayoutChanged(this, EventArgs.Empty);
-        }
+            FocusTranslationPackages(packages);
+    }
+
+    private void FocusTranslationPackages(IEnumerable<TranslationPair> packages)
+    {
+        requestedPackages = packages.Distinct().ToArray();
+        focusTranslationPending = requestedPackages.Length > 0;
+        var index = RequestedPackageIndex();
+        if (index >= 0) ModelChoice.SelectedIndex = index;
+        UpdateTranslationControls();
+        TranslationLayoutChanged(this, EventArgs.Empty);
     }
 
     private int RequestedPackageIndex() => requestedPackages.Select(pair => Array.FindIndex(downloadChoices,
@@ -270,6 +273,7 @@ public partial class SettingsPage : ContentPage, IQueryAttributable
 
     private void UpdateTranslationControls()
     {
+        ShowBackgroundTranslationStatus();
         var busy = activeDownload is not null || changingTranslationFiles;
         var requested = RequestedMissingPackages(requestedPackages, translationInventory ?? []);
         RequestedTranslation.IsVisible = requested.Length > 0;

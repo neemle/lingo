@@ -33,6 +33,18 @@ public partial class SettingsPage
         BackgroundStatusText.Text = status;
         BackgroundStatus.IsVisible = status.Length > 0;
         BackgroundActivity.IsVisible = BackgroundActivity.IsRunning = monitoredWorker?.Running == true;
+        BackgroundRequiredPackages.IsVisible = RequiredBackgroundPackages().Length > 0;
+    }
+
+    private TranslationPair[] RequiredBackgroundPackages() =>
+        (monitoredWorker?.RequiredPackages ?? []).Where(pair => translationInventory is null ||
+            translationInventory.Any(package => !package.FilesPresent &&
+                package.Source == pair.Source && package.Target == pair.Target)).ToArray();
+
+    private void OpenBackgroundPackagesClicked(object? sender, EventArgs args)
+    {
+        var missing = RequiredBackgroundPackages();
+        if (missing.Length > 0) FocusTranslationPackages(missing);
     }
 
     private static readonly string[] TemporaryDownloads =

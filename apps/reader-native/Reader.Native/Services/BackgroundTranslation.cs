@@ -14,6 +14,7 @@ internal sealed class BackgroundTranslation
     private bool paused;
     internal string Status { get; private set; } = "";
     internal bool Running { get; private set; }
+    internal IReadOnlyList<TranslationPair> RequiredPackages { get; private set; } = [];
     internal event Action? StatusChanged;
 
     private sealed record JobKey(string Document, string Revision, string Target);
@@ -30,7 +31,11 @@ internal sealed class BackgroundTranslation
     internal void SetEnabled(bool value)
     {
         enabled = value;
-        if (!value) jobs.Clear();
+        if (!value)
+        {
+            jobs.Clear();
+            UpdateRequiredPackages();
+        }
         UpdateTimer();
         SetStatus(value ? "Перевіряємо чергу перекладу…" : "");
     }
@@ -48,6 +53,7 @@ internal sealed class BackgroundTranslation
         if (clearProgress)
         {
             jobs.Clear();
+            UpdateRequiredPackages();
             retryAt = default;
         }
         paused = false;
@@ -80,8 +86,23 @@ internal sealed class BackgroundTranslation
         if (!enabled || paused || session.Busy || !pending.IsCompleted || retryAt > DateTimeOffset.UtcNow)
             return;
         if (session.Snapshot.Documents.Length == 0)
+        {
+            jobs.Clear();
+            UpdateRequiredPackages();
             SetStatus("У бібліотеці ще немає документів.");
+        }
         else pending = RunStepAsync();
+    }
+
+    private void UpdateRequiredPackages()
+    {
+        var current = session.Document?.Id;
+        var packages = jobs.OrderByDescending(job => job.Key.Document == current)
+            .Select(job => job.Value.MissingPackages)
+            .FirstOrDefault(packages => packages is { Length: > 0 }) ?? [];
+        if (RequiredPackages.SequenceEqual(packages)) return;
+        RequiredPackages = packages;
+        StatusChanged?.Invoke();
     }
 
     private static string PairName(string source, string target) =>
@@ -116,6 +137,7 @@ internal sealed class BackgroundTranslation
                     waiting = true;
             }
             foreach (var key in jobs.Keys.Where(key => !live.Contains(key)).ToArray()) jobs.Remove(key);
+            UpdateRequiredPackages();
             if (candidate is not { } work)
             {
                 SetStatus(missing ?? (waiting ? "Очікує на доступний текст PDF або повторну спробу."
@@ -127,6 +149,7 @@ internal sealed class BackgroundTranslation
             var progress = await session.AdvanceBackgroundTranslationAsync(work.Key.Document, work.Key.Revision, work.Key.Target);
             if (!enabled || paused) return;
             jobs[work.Key] = progress;
+            UpdateRequiredPackages();
             SetStatus(progress.MissingPackages is not null
                 ? $"Для «{work.Title}» бракує офлайн-маршруту."
                 : progress.TranslatedPage is int page
