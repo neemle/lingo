@@ -1881,6 +1881,8 @@ fn cache_key(
     };
     let version = match route {
         Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" &&
+            segments.iter().any(|text| crate::translation_dates::contains_french_date(text.as_ref())) => 9,
+        Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" &&
             segments.iter().any(|text| {
                 crate::marian_target_uk::french_manner_of_walking(text.as_ref()).is_some()
             }) => 8,

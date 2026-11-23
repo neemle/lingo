@@ -28,6 +28,7 @@ pub mod language_detection;
 mod marian_deadline;
 mod marian_provider;
 mod marian_target_uk;
+mod translation_dates;
 mod french_cardinals;
 mod model_storage;
 pub mod model_transfer;

@@ -1471,7 +1471,11 @@ impl MarianProvider<'_> {
                 }
                 start = end;
             }
-            results.push(translated_parts.join(" "));
+            let mut translated = translated_parts.join(" ");
+            if package.source == "fr" && package.target == "uk" {
+                crate::translation_dates::preserve_french_dates(segment, &mut translated);
+            }
+            results.push(translated);
         }
         Ok(results)
     }

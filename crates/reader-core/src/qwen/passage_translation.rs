@@ -8,17 +8,6 @@ use std::{
     ops::Range,
     time::{Duration, Instant},
 };
-use unicode_segmentation::UnicodeSegmentation;
-
-const FRENCH_MONTHS: [&str; 12] = [
-    "janvier", "février", "mars", "avril", "mai", "juin",
-    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
-];
-const UKRAINIAN_MONTHS: [&str; 12] = [
-    "січня", "лютого", "березня", "квітня", "травня", "червня",
-    "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",
-];
-
 const SYSTEM: &str = concat!(
     "<|im_start|>system\n",
     "You are a translator. Translate every sentence into the requested language. ",
@@ -323,7 +312,7 @@ impl TranslatePassageJob {
     fn combine(&self, chunks: Vec<TranslationChunk>, cached: bool) -> PassageTranslation {
         let mut text = chunks.into_iter().map(|chunk| chunk.text).collect::<Vec<_>>().join(" ");
         if self.source == "fr" && self.target == "uk" {
-            restore_french_date_months(&self.source_text, &mut text);
+            crate::translation_dates::preserve_french_dates(&self.source_text, &mut text);
         }
         PassageTranslation { text, source_text: self.source_text.clone(), cached }
     }
@@ -417,49 +406,6 @@ fn parse(bytes: &[u8], target: &str, source_text: &str) -> Result<TranslationChu
     Ok(TranslationChunk { text: text.into() })
 }
 
-struct DatedMonth {
-    day: u8,
-    year: u16,
-    month: usize,
-    span: Range<usize>,
-}
-
-fn dated_months(text: &str, months: &[&str; 12]) -> Vec<DatedMonth> {
-    let words: Vec<_> = text.unicode_word_indices().collect();
-    words.windows(3).filter_map(|date| {
-        let [(day_start, day), (month_start, month), (year_start, year)] = *date else {
-            return None;
-        };
-        let month_end = month_start + month.len();
-        if !text[day_start + day.len()..month_start].chars().all(char::is_whitespace) ||
-            !text[month_end..year_start].chars().all(char::is_whitespace)
-        {
-            return None;
-        }
-        let day: u8 = day.parse().ok().filter(|day| (1..=31).contains(day))?;
-        let year: u16 = year.parse().ok().filter(|year| (1000..=9999).contains(year))?;
-        let month_name = month.to_lowercase();
-        let month = months.iter().position(|&name| name == month_name)?;
-        Some(DatedMonth { day, year, month, span: month_start..month_end })
-    }).collect()
-}
-
-fn restore_french_date_months(source: &str, target: &mut String) {
-    let original = dated_months(source, &FRENCH_MONTHS);
-    if original.is_empty() {
-        return;
-    }
-    for date in dated_months(target, &UKRAINIAN_MONTHS).into_iter().rev() {
-        let mut candidates = original.iter()
-            .filter(|candidate| candidate.day == date.day && candidate.year == date.year);
-        if let Some(expected) = candidates.next() {
-            if expected.month != date.month && candidates.all(|other| other.month == expected.month) {
-                target.replace_range(date.span, UKRAINIAN_MONTHS[expected.month]);
-            }
-        }
-    }
-}
-
 fn language_name(language: &str) -> Result<&'static str> {
     Ok(match language {
         "uk" => "Ukrainian",
@@ -542,10 +488,10 @@ mod tests {
     fn french_to_ukrainian_passage_preserves_the_month_anchored_by_day_and_year() {
         let source = "Le 15 février 1815, un grand bateau entre dans le port.";
         let mut text = "15 березня 1815 року великий корабель заходить до порту.".to_owned();
-        restore_french_date_months(source, &mut text);
+        crate::translation_dates::preserve_french_dates(source, &mut text);
         assert_eq!(text, "15 лютого 1815 року великий корабель заходить до порту.");
         let mut ambiguous = "15 березня 1815".to_owned();
-        restore_french_date_months("Le 15 février 1815 et le 15 avril 1815", &mut ambiguous);
+        crate::translation_dates::preserve_french_dates("Le 15 février 1815 et le 15 avril 1815", &mut ambiguous);
         assert_eq!(ambiguous, "15 березня 1815");
     }
 
