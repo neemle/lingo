@@ -1015,6 +1015,7 @@ public partial class ReadingPage : ContentPage
         speech.Rate = ratePercent / 100f;
         var receivedCue = false;
         var systemUsesSpeechOverride = false;
+        var lastUsedSystemVoice = false;
         string? status = LocalSpeech.CompletedStatus;
         (int Page, string CompletedSentenceId)? pdfContinuation = null;
 
@@ -1039,25 +1040,24 @@ public partial class ReadingPage : ContentPage
             SpeechStatus.Text = modelVoice ? "Готуємо локальне озвучення…" : "Озвучення поточного речення…";
 
             RecordReadingActivity();
-            if (speechText.Length == 0)
-                status = LocalSpeech.CompletedStatus;
-            else if (modelVoice)
+            status = LocalSpeech.CompletedStatus;
+            if (speechText.Length > 0 && modelVoice)
             {
+                lastUsedSystemVoice = false;
                 status = await PlayModelAsync(session, doc, sentence, voice!, ratePercent, startAtMs, textHash, request,
                     singleSentence, token);
-                if (request != speechRequest) return;
-                if (status is not null && status != LocalSpeech.CompletedStatus)
-                {
-                    CancelModelSpeech();
-                    modelVoice = false;
-                    SetVoiceStatus("Локальний голос недоступний. Використовуємо системний голос.");
-                    PauseSpeech.IsEnabled = true;
-                    SpeechStatus.Text = "Озвучення поточного речення…";
-                }
+                if (request != speechRequest || token.IsCancellationRequested) return;
             }
-            if (!modelVoice && speechText.Length > 0)
+            var fallbackReason = status is not null && status != LocalSpeech.CompletedStatus ? status : null;
+            if (speechText.Length > 0 && (!modelVoice || fallbackReason is not null))
             {
-                var fallbackReason = status != LocalSpeech.CompletedStatus ? status : null;
+                lastUsedSystemVoice = true;
+                receivedCue = false;
+                if (fallbackReason is not null)
+                {
+                    PauseSpeech.IsEnabled = true;
+                    SpeechStatus.Text = "Це речення озвучує системний голос.";
+                }
                 systemUsesSpeechOverride = hasSpeechOverride;
                 var pronounced = await LocalSpeech.PrepareSystemSpeechAsync(session, doc.Language, ReadingPronunciation(doc, sentence, speechText));
                 if (request != speechRequest || activeSpeechSource is not { } active ||
@@ -1089,12 +1089,7 @@ public partial class ReadingPage : ContentPage
             if (status != LocalSpeech.CompletedStatus || singleSentence || !ContinueSpeech.IsChecked) break;
 
             int? boundary;
-            try
-            {
-                // A completed system fallback can outlive the cancelled model job.
-                var boundaryToken = token.IsCancellationRequested && !modelVoice ? CancellationToken.None : token;
-                boundary = await PdfNarrationBoundaryAsync(documentId, sentence, boundaryToken);
-            }
+            try { boundary = await PdfNarrationBoundaryAsync(documentId, sentence, token); }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
             if (request != speechRequest) return;
             if (!ContinueSpeech.IsChecked) break;
@@ -1125,7 +1120,7 @@ public partial class ReadingPage : ContentPage
         if (status is not null)
         {
             SpeechStatus.Text = status;
-            if (status == LocalSpeech.CompletedStatus && !modelVoice)
+            if (status == LocalSpeech.CompletedStatus && lastUsedSystemVoice)
             {
                 if (systemUsesSpeechOverride) SpeechStatus.Text += " Застосовано текст вимови.";
                 else if (!receivedCue) SpeechStatus.Text += " Межі слів від голосу не отримано.";
