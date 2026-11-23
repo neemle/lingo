@@ -77,11 +77,27 @@ pub(super) fn clarify_french_manner_of_walking(text: &str) -> Option<String> {
 }
 
 pub(super) fn clearly_russian(text: &str) -> bool {
-    distinguish(text) == Some(Lang::Rus)
+    let sample = outside_quotes(text);
+    distinguish(&sample) == Some(Lang::Rus) || contains_russian_clause(&sample)
 }
 
 pub(super) fn clearly_ukrainian(text: &str) -> bool {
-    distinguish(text) == Some(Lang::Ukr)
+    let sample = outside_quotes(text);
+    distinguish(&sample) == Some(Lang::Ukr) && !contains_russian_clause(&sample)
+}
+
+fn contains_russian_clause(sample: &str) -> bool {
+    // Words that distinguish ordinary Russian prose even when it uses only shared letters.
+    // Require two independent cues in the same unquoted sentence to avoid flagging names.
+    sample.split_sentence_bounds().any(|clause| {
+        let lowercase = clause.to_lowercase();
+        let mut cues = lowercase.unicode_words().filter(|word| matches!(*word,
+            "она" | "они" | "оно" | "этот" | "этого" | "эти" | "это" | "будет" |
+            "будут" | "будешь" | "будем" | "сейчас" | "чтобы" | "очень" | "только" |
+            "который" | "которая" | "которые" | "сказал" | "потому" | "сегодня"
+        ));
+        cues.next().is_some_and(|first| cues.any(|word| word != first))
+    })
 }
 
 pub(super) fn repair_french_affirmative(source: &str, target: &str) -> Option<String> {
@@ -108,8 +124,20 @@ pub(super) fn repair_french_affirmative(source: &str, target: &str) -> Option<St
     (!clearly_russian(&repaired)).then_some(repaired)
 }
 
-fn distinguish(text: &str) -> Option<Lang> {
-    let sample = outside_quotes(text);
+pub(super) fn french_reply_to_monsieur(source: &str) -> Option<String> {
+    let source = source.trim();
+    let opening = source.trim_start_matches(|ch: char| ch.is_whitespace() || matches!(ch, '–' | '—' | '-'));
+    let (answer, address) = opening.split_once(',')?;
+    let answer = if answer.eq_ignore_ascii_case("oui") { "Так" }
+        else if answer.eq_ignore_ascii_case("non") { "Ні" }
+        else { return None; };
+    let address = address.trim();
+    let name = address.trim_end_matches(['.', '!', '?', '…']);
+    if !name.eq_ignore_ascii_case("monsieur") { return None; }
+    Some(format!("{}{answer}, пане{}", &source[..source.len() - opening.len()], &address[name.len()..]))
+}
+
+fn distinguish(sample: &str) -> Option<Lang> {
     // An independent affirmative is distinctive even when the rest is made
     // up of shared vocabulary. Keep ambiguous words and quotations untouched.
     let opening = sample.trim_start_matches(|ch: char| ch.is_whitespace() || matches!(ch, '–' | '—' | '-'));
@@ -139,7 +167,7 @@ fn distinguish(text: &str) -> Option<Lang> {
         (false, true) => Lang::Ukr,
         _ => return None,
     };
-    let detected = whatlang::detect(&sample)?;
+    let detected = whatlang::detect(sample)?;
     // Whatlang's generic reliability threshold misses short but distinctive sentences.
     (detected.lang() == expected && detected.confidence() >= 0.45).then_some(expected)
 }
@@ -205,12 +233,23 @@ mod tests {
     }
 
     #[test]
+    fn detects_unquoted_russian_even_with_ukrainian_elsewhere() {
+        let mixed = "Она будет настоящей женой капитана. Давай, сейчас. Ви мене більше не нудить.";
+        assert!(clearly_russian(mixed));
+        assert!(!clearly_ukrainian(mixed));
+        assert!(!clearly_russian("Він процитував: «Она будет женой капитана»."));
+        assert!(!clearly_russian("Вона буде дружиною капітана. Тепер можна йти."));
+    }
+
+    #[test]
     fn rejects_russian_affirmatives_in_short_ukrainian_translations() {
         assert!(clearly_russian("Да, в узурпаторе."));
         assert!(clearly_russian("— ДА!"));
         assert!(!clearly_russian("Так, в узурпатора."));
         assert!(!clearly_russian("Давня історія."));
         assert!(!clearly_russian("«Да!» — відповів він."));
+        assert_eq!(french_reply_to_monsieur("— Oui, monsieur.").as_deref(), Some("— Так, пане."));
+        assert!(french_reply_to_monsieur("Oui, monsieur travaille.").is_none());
     }
 
     #[test]

@@ -233,7 +233,14 @@ pub(crate) fn ranked_routes(installed: &[ModelEdge], source: &str, target: &str)
 
     let mut routes: Vec<_> = catalog_routes(installed, source, target).collect();
     routes.sort_by(|left, right| compare_routes(right, left));
+    if direct_french_ukrainian(source, target, routes.first()) {
+        routes.retain(|route| matches!(route, Route::Direct(_)));
+    }
     Ok(routes)
+}
+
+fn direct_french_ukrainian(source: &str, target: &str, preferred: Option<&Route>) -> bool {
+    source == "fr" && target == "uk" && matches!(preferred, Some(Route::Direct(_)))
 }
 
 fn compare_routes(left: &Route, right: &Route) -> Ordering {
@@ -663,8 +670,10 @@ impl CacheRoutes {
         let preferred = candidates.first().cloned();
         let installed_identities: Vec<_> = candidates.iter().map(Route::without_quality).collect();
         candidates.extend(
-            catalog_routes(catalog, source, target)
-                .filter(|route| !installed_identities.contains(route)),
+            catalog_routes(catalog, source, target).filter(|route| {
+                !installed_identities.contains(route) &&
+                    (!direct_french_ukrainian(source, target, preferred.as_ref()) || matches!(route, Route::Direct(_)))
+            }),
         );
         Ok(Self {
             preferred,
@@ -1499,6 +1508,29 @@ mod tests {
     }
 
     #[test]
+    fn installed_french_ukrainian_route_supersedes_old_pivot_cache() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let edge = |source: &str, target: &str| ModelEdge {
+            source: source.into(), target: target.into(), revision: "test".into(), quality: None,
+        };
+        let first = edge("fr", "en");
+        let second = edge("en", "uk");
+        let direct = edge("fr", "uk");
+        let pivot = Route::Pivot { first: first.clone(), second: second.clone() };
+        let text = "Le bateau arrive.";
+        let key = unit_cache_key(&pivot, text).unwrap();
+        store.save_cached_segments([(key.clone(), &["Корабель прибуває.".into()][..])]).unwrap();
+        let models = [first, second, direct];
+        let fallback = CacheRoutes::resolve(&models[..2], &models, "fr", "uk").unwrap();
+        assert_eq!(fallback.cached_sentence(&store, text, "uk").unwrap().unwrap().route.pivot_language(), Some("en"));
+        let preferred = CacheRoutes::resolve(&models, &models, "fr", "uk").unwrap();
+        assert_eq!(preferred.candidates.len(), 1);
+        assert!(preferred.cached_sentence(&store, text, "uk").unwrap().is_none());
+        store.save_cached_segments([(key.clone(), &["Она будет женой капитана. Ви мене почули.".into()][..])]).unwrap();
+        assert!(store.cached_segments(&key, 1, "uk").unwrap().is_none());
+    }
+
+    #[test]
     fn paragraph_keeps_direct_sentences_and_reuses_only_the_needed_pivot() {
         #[derive(Default)]
         struct Provider {
@@ -1510,9 +1542,9 @@ mod tests {
         impl TranslationProvider for Provider {
             fn installed_models(&self) -> Result<Vec<ModelEdge>> {
                 let pairs = if self.pivot_installed {
-                    &[("fr", "uk"), ("fr", "en"), ("en", "uk")][..]
+                    &[("fr", "pl"), ("fr", "en"), ("en", "pl")][..]
                 } else {
-                    &[("fr", "uk")][..]
+                    &[("fr", "pl")][..]
                 };
                 Ok(pairs.iter().map(|&(source, target)| ModelEdge {
                     source: source.into(),
@@ -1534,11 +1566,11 @@ mod tests {
                     return Err(TranslationBatchError::deferred("foreground is waiting".into()));
                 }
                 Ok(input.iter().map(|text| match (edge.source.as_str(), edge.target.as_str(), text.as_str()) {
-                    ("fr", "uk", "Le bateau arrive.") => Ok("Корабель прибуває.".into()),
-                    ("fr", "uk", "Le marin part.") => Err("invalid target language".into()),
-                    ("fr", "uk", "Le port est ouvert.") => Ok("Порт відкритий.".into()),
+                    ("fr", "pl", "Le bateau arrive.") => Ok("Statek przybywa.".into()),
+                    ("fr", "pl", "Le marin part.") => Err("invalid target language".into()),
+                    ("fr", "pl", "Le port est ouvert.") => Ok("Port jest otwarty.".into()),
                     ("fr", "en", "Le marin part.") => Ok("The sailor leaves.".into()),
-                    ("en", "uk", "The sailor leaves.") => Ok("Моряк вирушає.".into()),
+                    ("en", "pl", "The sailor leaves.") => Ok("Marynarz wyrusza.".into()),
                     (_, _, text) => panic!("unexpected model input: {text}"),
                 }).collect())
             }
@@ -1549,28 +1581,28 @@ mod tests {
         let mut store = Store::open(&database).unwrap();
         let document = store.import("reader.txt", b"Le bateau arrive. Le marin part. Le port est ouvert.", "fr").unwrap();
         let mut provider = Provider::default();
-        let partial = translate_paragraph(&mut store, &mut provider, &document, 1, "uk", PageBoundaries::Canonical).unwrap();
+        let partial = translate_paragraph(&mut store, &mut provider, &document, 1, "pl", PageBoundaries::Canonical).unwrap();
         assert_eq!(partial.units.iter().map(|unit| unit.translation.as_deref()).collect::<Vec<_>>(),
-            [Some("Корабель прибуває."), None, Some("Порт відкритий.")]);
+            [Some("Statek przybywa."), None, Some("Port jest otwarty.")]);
         assert_eq!(provider.calls.len(), 1);
         provider.calls.clear();
         provider.pivot_installed = true;
         provider.deferred = true;
-        let deferred = translate_paragraph(&mut store, &mut provider, &document, 1, "uk", PageBoundaries::Canonical);
+        let deferred = translate_paragraph(&mut store, &mut provider, &document, 1, "pl", PageBoundaries::Canonical);
         assert!(matches!(deferred, Err(TranslationBatchError::Deferred { message, .. }) if message == "foreground is waiting"));
-        assert_eq!(provider.calls, [("fr-uk".into(), vec!["Le marin part.".into()])]);
+        assert_eq!(provider.calls, [("fr-pl".into(), vec!["Le marin part.".into()])]);
         provider.calls.clear();
         provider.deferred = false;
 
-        let full = translate_paragraph(&mut store, &mut provider, &document, 1, "uk", PageBoundaries::Canonical).unwrap();
+        let full = translate_paragraph(&mut store, &mut provider, &document, 1, "pl", PageBoundaries::Canonical).unwrap();
         assert_eq!(full.pivot_language.as_deref(), Some("en"));
-        assert_eq!(full.units[1].translation.as_deref(), Some("Моряк вирушає."));
+        assert_eq!(full.units[1].translation.as_deref(), Some("Marynarz wyrusza."));
         assert_eq!(full.units.iter().map(|unit| unit.pivot_language.as_deref()).collect::<Vec<_>>(),
             [None, Some("en"), None]);
         assert_eq!(provider.calls, [
-            ("fr-uk".into(), vec!["Le marin part.".into()]),
+            ("fr-pl".into(), vec!["Le marin part.".into()]),
             ("fr-en".into(), vec!["Le marin part.".into()]),
-            ("en-uk".into(), vec!["The sailor leaves.".into()]),
+            ("en-pl".into(), vec!["The sailor leaves.".into()]),
         ]);
         assert_eq!(store.connection.query_row(
             "SELECT count(*) FROM translation_cache_owners WHERE document_id=?1",
@@ -1581,10 +1613,10 @@ mod tests {
         let mut reopened = Store::open(&database).unwrap();
         provider.calls.clear();
         let models = provider.installed_models().unwrap();
-        let cached = cached_translation(&reopened, &models, &models, &document, 1, "uk").unwrap();
+        let cached = cached_translation(&reopened, &models, &models, &document, 1, "pl").unwrap();
         let full = serde_json::to_value(full).unwrap();
         assert_eq!(serde_json::to_value(cached.paragraph).unwrap(), full);
-        let fresh_request = translate_paragraph(&mut reopened, &mut provider, &document, 1, "uk", PageBoundaries::Canonical).unwrap();
+        let fresh_request = translate_paragraph(&mut reopened, &mut provider, &document, 1, "pl", PageBoundaries::Canonical).unwrap();
         assert_eq!(serde_json::to_value(fresh_request).unwrap(), full);
         assert!(provider.calls.is_empty());
     }
@@ -1665,7 +1697,7 @@ mod tests {
             revision: "test".into(),
             quality: None,
         };
-        let catalog = [model("fr", "uk"), model("fr", "en"), model("en", "uk")];
+        let catalog = [model("fr", "pl"), model("fr", "en"), model("en", "pl")];
         let fallback = Route::Pivot { first: catalog[1].clone(), second: catalog[2].clone() };
         let mut provider = Provider { installed: catalog.to_vec(), calls: 0 };
         let mut store = Store::open(Path::new(":memory:")).unwrap();
@@ -1673,21 +1705,21 @@ mod tests {
         let input = ["la page".to_owned()];
         let request = |context| TranslationRequest {
             source: "fr",
-            target: "uk",
+            target: "pl",
             segments: &input,
             context: Some(context),
             settings: TranslationSettings::default(),
         };
         let context = "Il prend la page.";
         let key = cache_key(&fallback, &input, Some(context), TranslationSettings::default()).unwrap();
-        store.save_cached_segments([(key.clone(), &["сторінка".into()][..])]).unwrap();
+        store.save_cached_segments([(key.clone(), &["strona".into()][..])]).unwrap();
         for installed in [catalog.len(), 1, 0] {
             provider.installed.truncate(installed);
             let result = store.translate_aligned_with_catalog(
                 &mut provider, request(context), &catalog, Some(&document.id),
             ).unwrap().unwrap();
             assert_eq!(result.route, fallback);
-            assert_eq!(result.segments, ["сторінка"]);
+            assert_eq!(result.segments, ["strona"]);
         }
         assert_eq!(provider.calls, 0);
         let owner: String = store.connection.query_row(
@@ -1719,7 +1751,7 @@ mod tests {
     }
 
     #[test]
-    fn pdf_page_translation_reports_the_pivot_of_the_cached_row() {
+    fn pdf_page_translation_refreshes_pivot_rows_when_direct_french_package_is_present() {
         let root = tempfile::tempdir().unwrap();
         let mut store = Store::open(&root.path().join("library.sqlite")).unwrap();
         let document = store.import_scanned_pdf(
@@ -1753,9 +1785,9 @@ mod tests {
         assert_eq!(rows[0]["text"], "Корабель прибуває.");
         assert_eq!(rows[0]["sourceSentenceId"], document.sentences[0].id);
         assert!(rows[0].get("pivotLanguage").is_none());
-        assert_eq!(rows[1]["text"], "Моряк вирушає.");
+        assert!(rows[1]["text"].is_null());
         assert_eq!(rows[1]["sourceSentenceId"], document.sentences[1].id);
-        assert_eq!(rows[1]["pivotLanguage"], "en");
+        assert!(rows[1].get("pivotLanguage").is_none());
     }
 
     #[test]
@@ -1876,7 +1908,7 @@ mod tests {
         assert_eq!(rows[0]["startUtf16"], first.start_utf16);
         assert_eq!(rows[0]["endUtf16"], first.end_utf16);
         assert!(rows[1]["text"].is_null());
-        assert!(rows[1].get("sourceText").is_none());
+        assert_eq!(rows[1]["sourceText"], document.sentences[1].text);
         let background = store.pdf_page_translation_with_priority(&document.id, 0, "uk", false, true).unwrap();
         assert_eq!(background[0].text.as_deref(), Some("Корабель прибуває."));
         assert!(background[1].text.is_none());
@@ -2636,6 +2668,8 @@ fn cache_key(
             .unwrap_or(4)
     };
     let version = match route {
+        Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" && segments.iter().any(|text|
+            crate::marian_target_uk::french_reply_to_monsieur(text.as_ref()).is_some()) => 11,
         _ if settings.beam_size > 1 && segments.iter().any(|text|
             crate::marian_provider::may_recover_group(text.as_ref())) => 10,
         Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" &&
@@ -2671,6 +2705,9 @@ fn checked_inference(
     let result = provider.translate(model, source, context, settings)?;
     if result.len() != source.len() || !valid_segments(&result) {
         return Err("Мовний пакет повернув некоректне вирівнювання перекладу".into());
+    }
+    if model.target == "uk" && result.iter().any(|text| crate::marian_target_uk::clearly_russian(text)) {
+        return Err("Мовний пакет повернув російський текст замість українського".into());
     }
     Ok(result)
 }

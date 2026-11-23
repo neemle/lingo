@@ -1588,7 +1588,8 @@ impl MarianProvider<'_> {
                 if package.source == "fr" && package.target == "uk" &&
                     start == 0 && end == source_pieces.len() && units.len() == 1
                 {
-                    if let Some(text) = crate::marian_target_uk::repair_french_affirmative(segment, &translated) {
+                    if let Some(text) = crate::marian_target_uk::french_reply_to_monsieur(segment)
+                        .or_else(|| crate::marian_target_uk::repair_french_affirmative(segment, &translated)) {
                         translated = text;
                     }
                 }
