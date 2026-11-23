@@ -917,6 +917,16 @@ impl Store {
         index: usize,
         correction: Option<String>,
     ) -> Result<()> {
+        self.correct_ocr_line_at_revision(id, index, correction, None)
+    }
+
+    pub fn correct_ocr_line_at_revision(
+        &mut self,
+        id: &str,
+        index: usize,
+        correction: Option<String>,
+        revision: Option<&str>,
+    ) -> Result<()> {
         let native_pages = self.native_pdf_page_text(id)?;
         let original = if native_pages.is_none() {
             Some(self.original(id)?)
@@ -924,6 +934,9 @@ impl Store {
             None
         };
         self.edit_document(id, |document, tx| {
+            if revision.is_some_and(|revision| document.current_revision_id.as_deref() != Some(revision)) {
+                return Err("Розпізнаний текст змінився. Виберіть слово або рядок знову.".into());
+            }
             let lines = document
                 .ocr_lines
                 .as_mut()
@@ -2139,12 +2152,15 @@ mod tests {
         let hash = format!("{:x}", Sha256::digest(sentence.text.as_bytes()));
         db.set_speech_resume(&doc.id, &sentence.id, &hash, Some(5))
             .unwrap();
-        db.correct_ocr_line(&doc.id, 0, Some("This is the corrected sentence.".into()))
+        let revision = doc.current_revision_id.as_deref().unwrap();
+        db.correct_ocr_line_at_revision(&doc.id, 0, Some("This is the corrected sentence.".into()), Some(revision))
             .unwrap();
-        assert_eq!(
-            db.snapshot().unwrap().documents[0].sentences[0].id,
-            sentence.id
-        );
+        assert!(db.correct_ocr_line_at_revision(&doc.id, 0, Some("Stale correction.".into()), Some(revision)).is_err());
+        let updated = db.snapshot().unwrap().documents.remove(0);
+        assert_eq!(updated.sentences[0].id, sentence.id);
+        assert_eq!(updated.text, "This is the corrected sentence.");
+        assert_eq!(updated.ocr_lines.unwrap()[0].text, "This is the original sentence.");
+        assert_eq!(db.original(&doc.id).unwrap().bytes, b"\x89PNG\r\n\x1a\n");
         assert!(db.speech_resume(&doc.id).unwrap().is_none());
         db.correct_ocr_line(&doc.id, 0, None).unwrap();
         assert!(db.speech_resume(&doc.id).unwrap().is_none());

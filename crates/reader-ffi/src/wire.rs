@@ -353,6 +353,7 @@ pub enum Command {
         id: String,
         index: usize,
         correction: Option<String>,
+        revision: Option<String>,
     },
     SetDocumentLanguage {
         id: String,

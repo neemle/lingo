@@ -601,7 +601,9 @@ internal sealed class OriginalPage : ContentPage
             CurrentWord(active.LineIndex, active.Word) != active.Selection)
             return;
         int? page = detachedOcr is null ? null : pageIndex;
-        var revision = detachedOcr?.Revision ?? document.CurrentRevisionId;
+        var cached = detachedOcr;
+        var line = lines[active.LineIndex];
+        var revision = cached?.Revision ?? document.CurrentRevisionId;
         if (revision is null) return;
         bool IsCurrent() => visible && session.Document is { } current && current.Id == documentId &&
             activeWord == active && revision == (detachedOcr?.Revision ?? current.CurrentRevisionId) &&
@@ -626,15 +628,31 @@ internal sealed class OriginalPage : ContentPage
                 editStatus.Text = "Qwen перевіряє слово…";
                 hint = await session.ReviewOcrWordAsync(documentId, page, revision, active.Selection);
             }
-            if (IsCurrent())
-                editStatus.Text = hint?.Replacement is { } replacement
-                    ? $"Можливе виправлення OCR · {active.Selection.Text} → {replacement}"
-                    : "Qwen не запропонував виправлення для цього слова.";
+            if (!IsCurrent()) return;
+            if (hint?.Replacement is not { } replacement)
+            {
+                editStatus.Text = "Qwen не запропонував виправлення для цього слова.";
+                return;
+            }
+            editStatus.Text = $"Можливе виправлення OCR · {active.Selection.Text} → {replacement}";
+            var apply = await DisplayAlertAsync("Виправити розпізнане слово?",
+                $"{active.Selection.Text} → {replacement}", "Застосувати", "Залишити");
+            if (!apply || !IsCurrent() || CurrentWord(active.LineIndex, active.Word) != active.Selection ||
+                line.SourceSpan is not { } lineSpan) return;
+            var reading = (line.Correction ?? line.Text).Trim();
+            var start = active.Selection.StartUtf16 - lineSpan.StartUtf16;
+            var length = active.Selection.LengthUtf16;
+            if (start < 0 || start > reading.Length - length ||
+                !reading.AsSpan(start, length).SequenceEqual(active.Selection.Text))
+            {
+                editStatus.Text = "Позиція слова змінилася. Виберіть його знову.";
+                return;
+            }
+            var corrected = string.Concat(reading.AsSpan(0, start), replacement, reading.AsSpan(start + length));
+            if (await SaveOcrCorrectionAsync(active.LineIndex, line, cached, corrected, revision))
+                editStatus.Text = "Виправлення збережено в тексті для читання.";
         }
-        catch (Exception error)
-        {
-            if (IsCurrent()) editStatus.Text = error.Message;
-        }
+        catch (Exception error) { if (visible && session.Document?.Id == documentId) editStatus.Text = error.Message; }
         finally
         {
             editing = false;
@@ -704,29 +722,8 @@ internal sealed class OriginalPage : ContentPage
                 text = await PickSuggestionAsync(document.Language, line.Correction ?? line.Text);
                 if (text is null) return;
             }
-            if (session.Document?.Id != documentId) return;
-            if (cached is not null)
-            {
-                var updated = await session.CorrectDetachedPdfOcrAsync(documentId, line.Page, cached.Revision, index, text);
-                activeWord = null;
-                ApplyOcrLines(updated);
-            }
-            else
-            {
-                if (session.Document?.OcrLines is not { } current || index >= current.Length ||
-                    current[index].Page != line.Page || current[index].Text != line.Text ||
-                    current[index].Correction != line.Correction) return;
-                await session.CorrectOcrLineAsync(documentId, index, text);
-                if (session.Error.Length != 0)
-                {
-                    editStatus.Text = session.Error;
-                    return;
-                }
-                activeWord = null;
-                focus = SentenceRange();
-                ApplyOcrLines(null);
-            }
-            editStatus.Text = action == LineAction.Reset ? "Початковий текст відновлено." : "Виправлення збережено.";
+            if (await SaveOcrCorrectionAsync(index, line, cached, text, document.CurrentRevisionId))
+                editStatus.Text = action == LineAction.Reset ? "Початковий текст відновлено." : "Виправлення збережено.";
         }
         catch (Exception error) { editStatus.Text = error.Message; }
         finally
@@ -734,6 +731,32 @@ internal sealed class OriginalPage : ContentPage
             editing = false;
             UpdateEditButtons();
         }
+    }
+
+    private async Task<bool> SaveOcrCorrectionAsync(int index, OcrLine line, DetachedPdfOcrPage? cached,
+        string? correction, string? revision)
+    {
+        if (session.Busy || session.Document is not { } document || document.Id != documentId) return false;
+        if (cached is not null)
+        {
+            var updated = await session.CorrectDetachedPdfOcrAsync(documentId, line.Page, cached.Revision, index, correction);
+            activeWord = null;
+            ApplyOcrLines(updated);
+            return true;
+        }
+        if (document.OcrLines is not { } current || index >= current.Length ||
+            current[index].Page != line.Page || current[index].Text != line.Text ||
+            current[index].Correction != line.Correction) return false;
+        await session.CorrectOcrLineAsync(documentId, index, correction, revision);
+        if (session.Error.Length != 0)
+        {
+            editStatus.Text = session.Error;
+            return false;
+        }
+        activeWord = null;
+        focus = SentenceRange();
+        ApplyOcrLines(null);
+        return true;
     }
 
     private async Task<string?> PickSuggestionAsync(string language, string text)

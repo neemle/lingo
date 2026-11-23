@@ -317,8 +317,8 @@ public sealed class CoreClient : IDisposable
             bytes = bytes.Select(value => (int)value).ToArray(), language, lines, pages });
     }
 
-    public void CorrectOcrLine(string id, int index, string? correction) =>
-        Call<JsonElement>(new { version = 1, operation = "correct_ocr_line", id, index, correction });
+    public void CorrectOcrLine(string id, int index, string? correction, string? revision = null) =>
+        Call<JsonElement>(new { version = 1, operation = "correct_ocr_line", id, index, correction, revision });
 
     public void Position(string id, int position) =>
         Call<JsonElement>(new { version = 1, operation = "position", id, position });

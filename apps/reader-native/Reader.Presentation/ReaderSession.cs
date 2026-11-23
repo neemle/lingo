@@ -353,9 +353,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
             return (client.Snapshot(), id);
         });
 
-    public Task CorrectOcrLineAsync(string id, int index, string? correction) => RunAsync(() =>
+    public Task CorrectOcrLineAsync(string id, int index, string? correction, string? revision = null) => RunAsync(() =>
     {
-        client.CorrectOcrLine(id, index, correction);
+        client.CorrectOcrLine(id, index, correction, revision);
         return Read();
     });
 

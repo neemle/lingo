@@ -284,6 +284,7 @@ fn validate(command: &Command) -> Result<()> {
             Err(Error::new("invalid_argument", "Invalid sentence translation address"))
         }
         Command::CorrectDetachedPdfOcr { revision, .. } | Command::FocusDetachedPdfOcrWord { revision, .. }
+        | Command::CorrectOcrLine { revision: Some(revision), .. }
             if revision.len() != 64 || !revision.bytes().all(|ch| ch.is_ascii_hexdigit()) =>
         {
             Err(Error::new("invalid_argument", "Invalid PDF OCR revision"))
