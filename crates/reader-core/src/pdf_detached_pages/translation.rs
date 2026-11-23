@@ -145,7 +145,7 @@ impl Store {
         };
         if document.language == target { return Ok(Vec::new()); }
         let original: Vec<_> = document.sentences[physical.clone()].iter()
-            .map(|sentence| (sentence.end_utf16, sentence.id.clone())).collect();
+            .map(|sentence| (sentence.start_utf16..sentence.end_utf16, sentence.id.clone())).collect();
         let physical = split_page_ocr_units(&mut document, physical, bounds.map(|_| page), target);
         let offsets: Vec<_> = document.sentences[physical.clone()].iter().map(|sentence| {
             bounds.map_or_else(|| (sentence.start_utf16 - projected_offset, sentence.end_utf16 - projected_offset),
@@ -164,7 +164,7 @@ impl Store {
             let end = &document.sentences[physical.start + last];
             PdfPageTranslationRow {
                 start_utf16: offsets[first].0, end_utf16: offsets[last].1,
-                source_sentence_id: original[original.partition_point(|&(end, _)| end <= source.start_utf16)].1.clone(),
+                source_sentence_id: original[original.partition_point(|(span, _)| span.end <= source.start_utf16)].1.clone(),
                 source_block_index: source_block_index(&document, &block_starts, source, end),
                 text: unit.translation, source_text: unit.pdf_source, pivot_language: unit.pivot_language,
                 direct_model_revision: unit.direct_model_revision, reviewed: unit.reviewed,
@@ -174,10 +174,10 @@ impl Store {
         let mut generation_error = None;
         let mut failures = BTreeMap::new();
         if let Some(offset) = refresh_at {
-            let local = offsets.iter().position(|&(start, end)| start <= offset && offset < end)
-                .ok_or("Виділене речення вже відсутнє на сторінці.")
-                .map_err(str::to_owned)?;
-            self.regenerate_document_pdf_sentence(&document, physical.start + local, target, boundaries, canceled)?;
+            let selected = pdf_refresh_range(&original, &offsets, offset, projected_offset, bounds)
+                .ok_or_else(|| "Виділене речення вже відсутнє на сторінці.".to_owned())?;
+            self.regenerate_document_pdf_sentences(&document,
+                physical.start + selected.start..physical.start + selected.end, target, boundaries, canceled)?;
         } else if !cached_only {
             match self.translate_document_page(&document, physical.clone(), target, boundaries, background, canceled) {
                 Ok(generated) if generated.iter().any(|unit| !unit.reviewed && unit.translation.is_some())
@@ -415,6 +415,19 @@ impl Store {
     }
 }
 
+fn pdf_refresh_range(
+    original: &[(Range<usize>, String)], offsets: &[(usize, usize)], offset: usize, projection: usize,
+    bounds: Option<(usize, usize)>,
+) -> Option<Range<usize>> {
+    let projected = offset.checked_add(projection)?;
+    if bounds.is_some_and(|(start, end)| !(start..end).contains(&offset)) { return None; }
+    let index = original.partition_point(|(span, _)| span.end <= projected);
+    let (span, _) = original.get(index).filter(|(span, _)| span.contains(&projected))?;
+    let start = offsets.partition_point(|&(_, end)| end <= span.start.saturating_sub(projection));
+    let end = offsets.partition_point(|&(start, _)| start < span.end - projection);
+    (start < end).then_some(start..end)
+}
+
 // A reading sentence can span several independent visual objects on a cover or
 // worksheet. Split only the translation projection, preserving reading and note IDs.
 fn split_page_ocr_units(
@@ -627,6 +640,21 @@ mod tests {
     use crate::translation::sentence_source;
     use super::*;
     use crate::{file_originals, pdf_detached_pages};
+
+    #[test]
+    fn pdf_refresh_keeps_every_fragment_of_the_selected_sentence_on_the_current_page() {
+        let original = [(20..31, "before".to_owned()), (32..70, "selected".to_owned()),
+            (71..91, "after".to_owned())];
+        let offsets = [(20, 31), (32, 48), (49, 59), (60, 70), (71, 91)];
+        assert_eq!(pdf_refresh_range(&original, &offsets, 54, 0, Some((20, 91))), Some(1..4));
+
+        let detached = [(12, 28), (29, 39), (40, 50), (51, 71)];
+        assert_eq!(pdf_refresh_range(&original[1..], &detached, 30, 20, None), Some(0..3));
+
+        let next_page = [(49, 59), (60, 70), (71, 91)];
+        assert_eq!(pdf_refresh_range(&original[1..], &next_page, 54, 0, Some((49, 91))), Some(0..2));
+        assert_eq!(pdf_refresh_range(&original[1..], &next_page, 32, 0, Some((49, 91))), None);
+    }
 
     #[test]
     fn cover_translation_separates_labels_and_keeps_wrapped_titles_together() {

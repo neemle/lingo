@@ -23,7 +23,7 @@ use crate::{
     space::{ensure_capacity, PACKAGE_OVERHEAD},
     translation::{
         cached_translation, route_readiness, search_cached_translation, sentence_input,
-        regenerate_pdf_sentence, translate_paragraph, translate_pdf_page, AlignedTranslation, CachedTranslation, ModelEdge,
+        regenerate_pdf_sentences, translate_paragraph, translate_pdf_page, AlignedTranslation, CachedTranslation, ModelEdge,
         PageBoundaries, ParagraphTranslation, ParagraphUnit, SelectedTranslation, TranslationBatchError, TranslationProvider, TranslationReadiness, TranslationRequest,
         TranslationRouteStatus, TranslationSearchPage, TranslationSelection, TranslationSettings,
     },
@@ -853,13 +853,13 @@ impl Store {
             document, physical, target, boundaries, canceled)
     }
 
-    pub(crate) fn regenerate_document_pdf_sentence(
-        &mut self, document: &crate::Document, selected: usize, target: &str,
+    pub(crate) fn regenerate_document_pdf_sentences(
+        &mut self, document: &crate::Document, selected: std::ops::Range<usize>, target: &str,
         boundaries: PageBoundaries, canceled: &dyn Fn() -> bool,
     ) -> Result<()> {
         let directory = self.model_directory.clone();
         let mut provider = self.reader_translation_provider(&directory, &document.language, target, false, canceled)?;
-        regenerate_pdf_sentence(self, &mut provider,
+        regenerate_pdf_sentences(self, &mut provider,
             document, selected, target, boundaries)
     }
 

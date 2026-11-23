@@ -118,8 +118,9 @@ public partial class ReadingPage
             if (pdfLayoutRequest is { } address && pdfLayoutSentence is { } sentence)
             {
                 var row = pdfLayoutRows.FirstOrDefault(value =>
-                    value.StartUtf16 <= sentence.StartUtf16 && sentence.StartUtf16 < value.EndUtf16);
-                await LoadPdfPageLayoutAsync(address, cachedOnly: false, refreshAtUtf16: row?.StartUtf16 ?? sentence.StartUtf16);
+                    value.StartUtf16 < sentence.EndUtf16 && value.EndUtf16 > sentence.StartUtf16);
+                var offset = Math.Max(sentence.StartUtf16, row?.StartUtf16 ?? sentence.StartUtf16);
+                await LoadPdfPageLayoutAsync(address, cachedOnly: false, refreshAtUtf16: offset);
             }
         }
         else if (DetachedPdfReader.IsVisible)

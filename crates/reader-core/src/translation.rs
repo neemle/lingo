@@ -676,19 +676,29 @@ pub(crate) fn translate_pdf_page(
     Ok(units)
 }
 
-pub(crate) fn regenerate_pdf_sentence(
+pub(crate) fn regenerate_pdf_sentences(
     store: &mut Store, provider: &mut impl TranslationProvider, document: &Document,
-    selected: usize, target: &str, boundaries: PageBoundaries,
+    selected: Range<usize>, target: &str, boundaries: PageBoundaries,
 ) -> Result<()> {
-    let plan = paragraph_plan(store, document, selected, target, boundaries, UnitGrouping::Sentence)?;
-    let id = &document.sentences[selected].id;
-    let (_, input) = plan.pending.into_iter().find(|(index, _)| plan.result.units[*index].sentence_ids.contains(id))
-        .ok_or("Для цього фрагмента повторний переклад недоступний.")?;
-    store.translate_aligned_with_cache_policy(provider, TranslationRequest {
-        source: &document.language, target, segments: std::slice::from_ref(&input), context: None,
-        settings: TranslationSettings::default(),
-    }, &[], Some(&document.id), true)?.ok_or_else(|| "Мовний пакет для повторного перекладу недоступний.".into())
-        .map(|_| ())
+    let mut segments = Vec::new();
+    let mut seen = HashSet::new();
+    for position in selected {
+        let plan = paragraph_plan(store, document, position, target, boundaries, UnitGrouping::Sentence)?;
+        let id = &document.sentences[position].id;
+        let (_, input) = plan.pending.into_iter()
+            .find(|(index, _)| plan.result.units[*index].sentence_ids.contains(id))
+            .ok_or("Для цього фрагмента повторний переклад недоступний.")?;
+        if seen.insert(input.clone()) { segments.push(input); }
+    }
+    if !valid_segments(&segments) {
+        return Err("Некоректний обсяг тексту для повторного перекладу.".into());
+    }
+    let route = ranked_routes(&provider.installed_models()?, &document.language, target)?
+        .into_iter().next().ok_or("Мовний пакет для повторного перекладу недоступний.")?;
+    let output = infer_route(provider, &route, &segments, None, TranslationSettings { beam_size: 6 })?;
+    let keys = segments.iter().map(|text| unit_cache_key(&route, text)).collect::<Result<Vec<_>>>()?;
+    store.save_cached_segments(keys.iter().cloned().zip(output.iter().map(std::slice::from_ref)))?;
+    store.link_translation_cache_keys(&document.id, keys.iter().map(String::as_str))
 }
 
 pub(crate) fn cached_translation(
@@ -1614,16 +1624,26 @@ mod tests {
             assert!(rows.iter().all(|row| row.translation.is_some()));
         }
         assert_eq!(provider.batches, [vec!["Le marin part.".to_owned(), "Le port est ouvert.".to_owned()]]);
-        assert!(regenerate_pdf_sentence(&mut store, &mut provider, &document, 0, "uk", PageBoundaries::Canonical).is_err());
-        regenerate_pdf_sentence(&mut store, &mut provider, &document, 1, "uk", PageBoundaries::Canonical).unwrap();
+        assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, 0..1, "uk", PageBoundaries::Canonical).is_err());
+        regenerate_pdf_sentences(&mut store, &mut provider, &document, 1..2, "uk", PageBoundaries::Canonical).unwrap();
         provider.fail = true;
-        assert!(regenerate_pdf_sentence(&mut store, &mut provider, &document, 1, "uk", PageBoundaries::Canonical).is_err());
+        assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, 1..2, "uk", PageBoundaries::Canonical).is_err());
         let rows = translate_pdf_page(&mut store, &mut provider, &document, 0..3,
             "uk", PageBoundaries::Canonical, &|| false).unwrap();
         assert_eq!(rows[0].translation.as_deref(), Some("Корабель прибуває."));
         assert_eq!(rows[1].translation.as_deref(), Some("Оновлене речення."));
         assert_eq!(rows[2].translation.as_deref(), Some("Збережене речення."));
         assert_eq!(provider.batches[1..], [vec!["Le marin part.".to_owned()], vec!["Le marin part.".to_owned()]]);
+
+        // A projected PDF sentence can have more than one independent unit.
+        provider.fail = false;
+        regenerate_pdf_sentences(&mut store, &mut provider, &document, 1..3, "uk", PageBoundaries::Canonical).unwrap();
+        assert_eq!(provider.batches.last().unwrap(), &["Le marin part.", "Le port est ouvert."]);
+        provider.fail = true;
+        let rows = translate_pdf_page(&mut store, &mut provider, &document, 0..3,
+            "uk", PageBoundaries::Canonical, &|| false).unwrap();
+        assert_eq!(rows[0].translation.as_deref(), Some("Корабель прибуває."));
+        assert!(rows[1..].iter().all(|row| row.translation.as_deref() == Some("Оновлене речення.")));
     }
 
     #[test]
