@@ -321,6 +321,37 @@ mod tests {
         assert_eq!(lines[0].words[1].raw_start_utf16, Some(3));
     }
 
+    #[test]
+    fn inline_drop_cap_joins_located_words_without_merging_regular_initials() {
+        let mut line = caption_line();
+        line.text = "L e bateau".into();
+        line.words.truncate(3);
+        for (word, (text, start, x)) in line.words.iter_mut().zip([
+            ("L", 0, 0.12), ("e", 2, 0.16), ("bateau", 4, 0.22),
+        ]) {
+            word.text = text.into();
+            word.raw_start_utf16 = Some(start);
+            word.x = x;
+        }
+        line.words[0].width = 0.035;
+        let mut regular = vec![line.clone()];
+        reconstruct_blocks(&mut regular);
+        assert_eq!(regular[0].text, "L e bateau");
+
+        line.words[0].height = 0.045;
+        line.words[0].y = 0.295;
+        let mut lines = vec![line];
+        reconstruct_blocks(&mut lines);
+        assert_eq!(lines[0].text, "Le bateau");
+        crate::ocr::refresh_line_provenance("Le bateau", &mut lines, None);
+        let first = &lines[0].words[0];
+        assert_eq!(first.text, "Le");
+        assert_eq!(first.x, 0.12);
+        assert!(first.x + first.width >= 0.20);
+        assert_eq!(first.source_span.unwrap().end_utf16, 2);
+        assert_eq!(lines[0].words[1].source_span.unwrap().start_utf16, 3);
+    }
+
     fn caption_line() -> OcrLine {
         OcrLine {
             page: 0, text: "Left caption Right caption".into(), x: 0.12, y: 0.3, width: 0.68, height: 0.02,
