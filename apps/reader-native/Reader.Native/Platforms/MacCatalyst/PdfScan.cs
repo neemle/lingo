@@ -26,15 +26,12 @@ internal static partial class PdfScan
         return checked((int)document.PageCount);
     });
 
-    internal static Task<string[]> ExtractTextAsync(string path, CancellationToken cancellation = default) =>
-        Task.Run(() => ReadTextLayers(path, allowDeferred: false, cancellation).PageTexts, cancellation);
-
     internal static Task<(string[] PageTexts, int? DeferredFrom)> ReadTextForIntakeAsync(
         string path, CancellationToken cancellation = default) =>
-        Task.Run(() => ReadTextLayers(path, allowDeferred: true, cancellation), cancellation);
+        Task.Run(() => ReadTextLayers(path, cancellation), cancellation);
 
     private static (string[] PageTexts, int? DeferredFrom) ReadTextLayers(
-        string path, bool allowDeferred, CancellationToken cancellation)
+        string path, CancellationToken cancellation)
     {
         using var pool = new NSAutoreleasePool();
         using var document = Open(path);
@@ -46,8 +43,7 @@ internal static partial class PdfScan
         const int maxImmediatePages = 32;
         const int initialPages = 2;
         // Even a small PDF can require expensive layout extraction across many pages.
-        var deferRemainingPages = allowDeferred &&
-            (count > maxImmediatePages || new FileInfo(path).Length > Client.MaxImportBytes);
+        var deferRemainingPages = count > maxImmediatePages || new FileInfo(path).Length > Client.MaxImportBytes;
         var pageLimit = deferRemainingPages ? Math.Min(count, initialPages) : count;
         long totalBytes = 0;
         var openingPages = 0;
@@ -60,7 +56,6 @@ internal static partial class PdfScan
             if (text.Length > 0) totalBytes += Encoding.UTF8.GetByteCount(text) + 2L;
             if (totalBytes > Client.MaxImportBytes)
             {
-                if (!allowDeferred) throw new InvalidDataException("Текстовий шар PDF перевищує 20 МіБ.");
                 Array.Fill(pages, "", openingPages, count - openingPages);
                 return (pages, openingPages);
             }

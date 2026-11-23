@@ -98,7 +98,7 @@ public partial class LibraryPage
         try
         {
             var path = await Task.Run(job.ReadOriginalPath);
-            var pageTexts = await PdfScan.ExtractTextAsync(path);
+            var (pageTexts, deferredFrom) = await PdfScan.ReadTextForIntakeAsync(path);
             if (pageTexts.Length != job.Pages)
                 throw new InvalidDataException("Кількість сторінок PDF змінилася.");
 
@@ -117,7 +117,7 @@ public partial class LibraryPage
 
             var session = AppState.Session;
             await session.WaitUntilIdleAsync();
-            await session.ImportPdfFileAsync(job.Name, path, job.Language, pageTexts, lines, emptyPages, job.Hash);
+            await session.ImportPdfFileAsync(job.Name, path, job.Language, pageTexts, lines, emptyPages, job.Hash, deferredFrom);
             if (session.Error.Length > 0) throw new InvalidDataException(session.Error);
             if (session.Document is not { } document || document.SourceHash != job.Hash)
                 throw new InvalidDataException("Імпорт PDF не підтверджено.");

@@ -168,6 +168,8 @@ pub enum Command {
         empty_pages: Vec<u16>,
         #[serde(rename = "sourceHash")]
         source_hash: Option<String>,
+        #[serde(rename = "deferredFrom")]
+        deferred_from: Option<u16>,
     },
     ImportImage {
         name: String,

@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fs::{self, File},
     io::{self, Read, Seek, Write},
     path::{Path, PathBuf},
@@ -171,7 +172,7 @@ fn verify_pdf_size(size: u64, expected_size: u64) -> Result<()> {
 }
 
 impl PreparedPdfImport {
-    pub(crate) fn defer_text_layers_from(&mut self, first_page: u16) -> Result<()> {
+    pub fn defer_text_layers_from(&mut self, first_page: u16) -> Result<()> {
         let pages: Vec<String> = serde_json::from_str(&self.page_text).map_err(storage_error)?;
         validate_deferred_text_layers(&pages, first_page)?;
         self.deferred_from = Some(first_page);
@@ -406,6 +407,13 @@ impl Store {
             deferred_from,
             extracted,
         } = prepared;
+        let pending_text_pages = deferred_from.map(|start| {
+            let mut pending: BTreeSet<_> = (start..page_count).collect();
+            for page in lines.iter().map(|line| line.page).chain(empty_pages.iter().copied()) {
+                pending.remove(&page);
+            }
+            pending
+        });
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -424,7 +432,7 @@ impl Store {
                 let merged = crate::pdf_page_ocr::merge_cached_pages(
                     &tx, &hash, &language, crate::pdf_page_ocr::PdfPageCache {
                         pages: &incoming_pages, lines: &lines, completed: &empty_pages,
-                        stale: &Default::default(), pending: None,
+                        stale: &Default::default(), pending: pending_text_pages.as_ref(),
                     },
                 )?;
                 if needs_cache_merge && !merged {
@@ -464,7 +472,7 @@ impl Store {
             ocr_lines: Some(lines),
             ocr_pdf_pages: Some(page_count),
             pdf_ocr_refresh_pages: Default::default(),
-            pdf_pending_text_pages: deferred_from.map_or_else(Default::default, |start| (start..page_count).collect()),
+            pdf_pending_text_pages: pending_text_pages.unwrap_or_default(),
             pdf_page_starts: extracted.pdf_page_starts,
             pdf_soft_lines: true,
             pdf_structured_sentences: true,

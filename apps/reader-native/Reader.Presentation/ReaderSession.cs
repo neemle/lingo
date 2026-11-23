@@ -147,10 +147,10 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         });
 
     public Task ImportPdfFileAsync(string name, string path, string language, string[] pageTexts, OcrLine[] lines,
-        int[]? emptyPages = null, string? sourceHash = null) =>
+        int[]? emptyPages = null, string? sourceHash = null, int? deferredFrom = null) =>
         RunAsync(() =>
         {
-            var id = client.ImportPdfFile(name, path, language, pageTexts, lines, emptyPages, sourceHash).Id;
+            var id = client.ImportPdfFile(name, path, language, pageTexts, lines, emptyPages, sourceHash, deferredFrom).Id;
             return (client.Snapshot(), id);
         });
 

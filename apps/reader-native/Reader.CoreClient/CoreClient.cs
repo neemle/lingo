@@ -368,11 +368,11 @@ public sealed class CoreClient : IDisposable
         });
 
     public Document ImportPdfFile(string name, string path, string language, string[] pageTexts, OcrLine[] lines,
-        int[]? emptyPages = null, string? sourceHash = null) =>
+        int[]? emptyPages = null, string? sourceHash = null, int? deferredFrom = null) =>
         CallIndependent<Document>(new
         {
             version = 1, operation = "import_pdf_file", name, path, language, pageTexts, lines,
-            emptyPages = emptyPages ?? [], sourceHash,
+            emptyPages = emptyPages ?? [], sourceHash, deferredFrom,
         });
 
     public Document Import(string name, ReadOnlySpan<byte> bytes, string language, string? sourceUrl = null)

@@ -115,6 +115,39 @@ fn canceled_word_explanation_leaves_new_queries_available() {
 }
 
 #[test]
+fn recovered_pdf_checkpoint_preserves_saved_pages_without_resolving_the_unread_tail() {
+    let mut store = StoreFixture::new();
+    let original = store.dir.join("checkpoint.pdf");
+    std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+    let request = |lines, empty_pages| json!({
+        "version": 1, "operation": "import_pdf_file", "name": "checkpoint.pdf", "language": "fr",
+        "path": original, "pageTexts": ["Première page.", "", "", ""],
+        "lines": lines, "emptyPages": empty_pages, "deferredFrom": 1,
+    });
+    let first = call(store.handle, request(json!([]), json!([])));
+    assert_eq!(first["ok"], true, "{first}");
+    let id = &first["data"]["id"];
+    let window = |handle| call(handle, json!({
+        "version": 1, "operation": "pdf_read_window", "id": id, "center": 2,
+    }));
+    assert_eq!(window(store.handle)["data"]["pages"][0]["state"], "needsTextLayer");
+
+    let restored = call(store.handle, request(json!([{
+        "page": 1, "text": "Une page déjà reconnue.", "x": 0.1, "y": 0.2, "width": 0.8, "height": 0.1,
+    }]), json!([2])));
+    assert_eq!(restored["ok"], true, "{restored}");
+    assert_eq!(&restored["data"]["id"], id);
+    store.reopen();
+    let window = window(store.handle);
+    assert_eq!(window["ok"], true, "{window}");
+    let pages = &window["data"]["pages"];
+    assert_eq!(pages[0]["state"], "recognized", "{window}");
+    assert_eq!(pages[0]["text"], "Une page déjà reconnue.");
+    assert_eq!(pages[1]["state"], "empty");
+    assert_eq!(pages[2]["state"], "needsTextLayer");
+}
+
+#[test]
 fn manual_pdf_ocr_retry_resumes_only_the_current_window_without_waiting() {
     let store = StoreFixture::new();
     let original = store.dir.join("scan.pdf");

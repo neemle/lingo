@@ -190,6 +190,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         lines,
         empty_pages,
         source_hash,
+        deferred_from,
     } = command
     {
         let root = registry::lock()?
@@ -208,6 +209,9 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         .map_err(gateway::domain)?;
         if let Some(expected) = source_hash {
             prepared.validate_checkpoint_source(&expected).map_err(gateway::domain)?;
+        }
+        if let Some(first_page) = deferred_from {
+            prepared.defer_text_layers_from(first_page).map_err(gateway::domain)?;
         }
         let document = {
             let mut state = registry::lock()?;
