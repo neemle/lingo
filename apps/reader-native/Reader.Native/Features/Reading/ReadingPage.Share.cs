@@ -40,6 +40,7 @@ public partial class ReadingPage
         var selected = DetachedPdfReader.IsVisible
             ? !loadingDetachedSentence && detachedAddress?.Page == address.Page ? detachedSentence?.Sentence : null
             : AppState.Session.Sentence;
+        selected = PdfHighlightSentence(address.Source, selected);
         if (selected is null) return null;
         var row = Array.Find(pdfLayoutRows, candidate => candidate.StartUtf16 < selected.EndUtf16 &&
             candidate.EndUtf16 > selected.StartUtf16 && !string.IsNullOrWhiteSpace(candidate.Text) &&

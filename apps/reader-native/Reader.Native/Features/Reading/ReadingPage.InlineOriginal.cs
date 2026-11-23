@@ -410,11 +410,12 @@ public partial class ReadingPage
             return;
         }
 
+        var highlighted = PdfHighlightSentence(address, sentence);
         if (wordOnly)
         {
-            if (sentence is not null && overlay.IsVisible && overlay.Drawable is PdfReadingHighlight existing &&
-                existing.Matches(sentence.StartUtf16, sentence.EndUtf16))
-                UpdatePdfWordFocus(existing);
+            if (highlighted is not null && overlay.IsVisible && overlay.Drawable is PdfReadingHighlight existing &&
+                existing.Matches(highlighted.StartUtf16, highlighted.EndUtf16))
+                UpdatePdfWordFocus(existing, highlighted);
             return;
         }
 
@@ -439,32 +440,32 @@ public partial class ReadingPage
             inlineNativeBoxes.Length == 0 || ReferenceEquals(lines, inlineNativeBoxes) ? inlinePdfAppearance : null);
         if (inlinePdfFit == PdfFit.TextWidth) ResizeInlinePdf();
         DrawPdfTranslationLayout();
-        if (!overlay.IsVisible || sentence is null)
+        if (!overlay.IsVisible || highlighted is null)
         {
             overlay.Drawable = null;
             return;
         }
         var drawing = new PdfReadingHighlight(preview.Width, preview.Height, lines, offset,
-            sentence.StartUtf16, sentence.EndUtf16, ReferenceEquals(lines, inlineNativeBoxes));
+            highlighted.StartUtf16, highlighted.EndUtf16, ReferenceEquals(lines, inlineNativeBoxes));
         overlay.Drawable = drawing;
-        UpdatePdfWordFocus(drawing);
+        UpdatePdfWordFocus(drawing, highlighted);
 
-        void UpdatePdfWordFocus(PdfReadingHighlight highlight)
+        void UpdatePdfWordFocus(PdfReadingHighlight highlight, Sentence range)
         {
             var selected = detached ? (DetachedWordCard.IsVisible ? detachedSelection : null)
                 : (WordCard.IsVisible ? selection : null);
-            selected ??= DictionaryFocus(document.Id,
+            if (sentence is not null) selected ??= DictionaryFocus(document.Id,
                 detached ? detachedSentence?.RevisionId : document.CurrentRevisionId,
                 sentence, detached ? address.Page : null);
-            selected ??= FindSourceFocus(document.Id,
+            if (sentence is not null) selected ??= FindSourceFocus(document.Id,
                 detached ? detachedSentence?.RevisionId : document.CurrentRevisionId,
                 sentence, detached ? address.Page : null);
             var spoken = view.SpokenWord;
             highlight.SetFocus(spoken, selected);
             overlay.Invalidate();
             var focus = spoken ?? selected;
-            FollowInlinePdf(highlight, document.Id, address.Page, focus?.StartUtf16 ?? sentence.StartUtf16,
-                focus is null ? sentence.EndUtf16 : focus.StartUtf16 + focus.LengthUtf16);
+            FollowInlinePdf(highlight, document.Id, address.Page, focus?.StartUtf16 ?? range.StartUtf16,
+                focus is null ? range.EndUtf16 : focus.StartUtf16 + focus.LengthUtf16);
         }
     }
 

@@ -955,6 +955,7 @@ public partial class ReadingPage : ContentPage
         CancelDetachedSpeechTravel();
         var session = AppState.Session;
         if (PdfPageNotice.IsVisible || session.Busy || session.Document is not { } initial || session.Sentence is not { } sentence) return;
+        ClearPdfFragmentFocus();
         StopWordDetail();
         if ((singleSentence || !ContinueSpeech.IsChecked) && IsFootnote(initial, sentence))
         {

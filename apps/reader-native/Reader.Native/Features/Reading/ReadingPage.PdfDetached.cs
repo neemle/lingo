@@ -576,6 +576,7 @@ public partial class ReadingPage
     {
         CancelDetachedSpeechTravel();
         if (loadingDetachedSentence || detachedAddress is not { } address || detachedSentence is null) return;
+        ClearPdfFragmentFocus();
         StopWordDetail();
         if (speakingDetachedSentence)
         {
