@@ -6,6 +6,8 @@ namespace Reader.Native.Services;
 internal static class PdfPageOcr
 {
     private static readonly SemaphoreSlim Worker = new(1, 1);
+    // A rejected text layer can requeue each of the three pages for optical recognition.
+    private const int MaxClaimsPerWindow = 3 * 2;
 
     internal static async Task ReplaceTextLayerAsync(ReaderSession session, Document document, string path,
         int page, string revision, int pageCount, CancellationToken cancellation)
@@ -33,7 +35,7 @@ internal static class PdfPageOcr
             cancellation.ThrowIfCancellationRequested();
             if (updateFocus) await session.SetPdfReadingPageAsync(document.Id, page);
             Exception? firstFailure = null;
-            for (var attempt = 0; attempt < 3; attempt++)
+            for (var attempt = 0; attempt < MaxClaimsPerWindow; attempt++)
             {
                 cancellation.ThrowIfCancellationRequested();
                 if (await session.ClaimPdfOcrPageAsync(document.Id, page, retryNow && attempt == 0) is not { } claim) break;
