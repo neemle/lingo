@@ -1,7 +1,7 @@
 namespace Reader.Contracts;
 
 public sealed record MachineTranslation(string Text, string? PivotLanguage, bool JoinedLines = false, string? SourceText = null,
-    bool PersonalDictionary = false);
+    bool PersonalDictionary = false, string? DirectModelRevision = null);
 
 public sealed record TranslationFindFragment(int Page, int StartUtf16, int EndUtf16);
 public sealed record TranslationFindHit(int Position, string Text, TranslationFindFragment? PdfFragment = null);

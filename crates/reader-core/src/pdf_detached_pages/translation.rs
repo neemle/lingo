@@ -1,6 +1,6 @@
 use super::{annotations, word_break, CachedSentences};
 use crate::translation::{
-    sentence_input, CacheRoutes, PageBoundaries, ParagraphTranslation, TranslationBatchError, UnitGrouping,
+    sentence_input, CacheRoutes, PageBoundaries, ParagraphTranslation, ParagraphUnit, TranslationBatchError, UnitGrouping,
 };
 use crate::{document_layout, ocr, Document, Result, Sentence, Store};
 use serde::Serialize;
@@ -49,6 +49,10 @@ pub struct PdfPageTranslationRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pivot_language: Option<String>,
     legacy_group: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    direct_model_revision: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    reviewed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     failure: Option<String>,
 }
@@ -153,14 +157,16 @@ impl Store {
             Some((first, local.last().unwrap_or(first)))
         };
         let block_starts = pdf_layout_block_starts(&document, &document.sentences[physical.clone()]);
-        let row = |first: usize, last: usize, text, source_text, pivot_language, legacy_group| {
+        let row = |first: usize, last: usize, unit: ParagraphUnit, legacy_group| {
             let source = &document.sentences[physical.start + first];
             let end = &document.sentences[physical.start + last];
             PdfPageTranslationRow {
                 start_utf16: offsets[first].0, end_utf16: offsets[last].1,
                 source_sentence_id: original[original.partition_point(|&(end, _)| end <= source.start_utf16)].1.clone(),
                 source_block_index: source_block_index(&document, &block_starts, source, end),
-                text, source_text, pivot_language, legacy_group, failure: None,
+                text: unit.translation, source_text: unit.pdf_source, pivot_language: unit.pivot_language,
+                direct_model_revision: unit.direct_model_revision, reviewed: unit.reviewed,
+                legacy_group, failure: unit.translation_failure,
             }
         };
         let mut generation_error = None;
@@ -177,7 +183,7 @@ impl Store {
                 {
                     return Ok(generated.into_iter().filter_map(|unit| {
                         let (first, last) = page_range(&unit.sentence_ids)?;
-                        Some(row(first, last, unit.translation, unit.pdf_source, unit.pivot_language, false))
+                        Some(row(first, last, unit, false))
                     }).collect());
                 }
                 Ok(generated) => {
@@ -213,7 +219,7 @@ impl Store {
                 if covered[first..=last].contains(&true) { continue; }
                 covered[first..=last].fill(true);
                 let legacy_group = grouping == UnitGrouping::LegacyContext && first < last;
-                rows.insert(first, row(first, last, unit.translation, unit.pdf_source, unit.pivot_language, legacy_group));
+                rows.insert(first, row(first, last, unit, legacy_group));
             }
         }
         if rows.is_empty() {
@@ -222,9 +228,12 @@ impl Store {
         }
         for (local, sentence) in document.sentences[physical.clone()].iter().enumerate() {
             if !covered[local] && !document_layout::skip_in_translation(&document, sentence) {
-                let mut pending = row(local, local, None, Some(sentence.text.clone()), None, false);
-                pending.failure = failures.remove(&local);
-                rows.insert(local, pending);
+                let unit = ParagraphUnit {
+                    sentence_ids: Vec::new(), translation: None, reviewed: false, pivot_language: None,
+                    direct_model_revision: None, pdf_source: Some(sentence.text.clone()),
+                    translation_failure: failures.remove(&local), alignment: None,
+                };
+                rows.insert(local, row(local, local, unit, false));
             }
         }
         Ok(rows.into_values().collect())

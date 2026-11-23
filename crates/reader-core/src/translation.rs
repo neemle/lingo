@@ -201,6 +201,13 @@ impl Route {
         }
     }
 
+    pub fn direct_model_revision(&self) -> Option<&str> {
+        match self {
+            Self::Direct(edge) => Some(&edge.revision),
+            Self::Pivot { .. } => None,
+        }
+    }
+
     pub(crate) fn without_quality(&self) -> Self {
         let mut route = self.clone();
         match &mut route {
@@ -286,6 +293,8 @@ pub struct TranslationReadiness {
     pub missing: Vec<TranslationPair>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub direct_upgrade: Option<TranslationPair>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direct_model_revision: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -329,6 +338,7 @@ pub(crate) fn route_readiness(
             pivot_language: route.pivot_language().map(str::to_owned),
             missing: Vec::new(),
             direct_upgrade: direct.filter(|_| route.pivot_language().is_some()).map(pair),
+            direct_model_revision: route.direct_model_revision().map(str::to_owned),
         });
     }
 
@@ -338,6 +348,7 @@ pub(crate) fn route_readiness(
             pivot_language: None,
             missing: vec![pair(edge)],
             direct_upgrade: None,
+            direct_model_revision: None,
         });
     }
     let (pivot_language, missing) = catalog
@@ -371,6 +382,7 @@ pub(crate) fn route_readiness(
         pivot_language,
         missing,
         direct_upgrade: None,
+        direct_model_revision: None,
     })
 }
 
@@ -521,6 +533,8 @@ pub struct ParagraphUnit {
     pub reviewed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pivot_language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direct_model_revision: Option<String>,
     #[serde(skip)]
     pub(crate) pdf_source: Option<String>,
     #[serde(skip)]
@@ -576,6 +590,7 @@ pub(crate) fn translate_paragraph(
                 }
                 unit.set_translation(translation.text);
                 unit.pivot_language = translation.pivot_language;
+                unit.direct_model_revision = translation.direct_model_revision;
             }
         }
     }
@@ -652,6 +667,7 @@ pub(crate) fn translate_pdf_page(
             if let Some(translation) = translation {
                 units[index].set_translation(translation.text);
                 units[index].pivot_language = translation.pivot_language;
+                units[index].direct_model_revision = translation.direct_model_revision;
             } else {
                 units[index].translation_failure = failure;
             }
@@ -739,6 +755,7 @@ impl CacheRoutes {
             translation: aligned.segments.into_iter().next(),
             reviewed: false,
             pivot_language: aligned.route.pivot_language().map(str::to_owned),
+            direct_model_revision: aligned.route.direct_model_revision().map(str::to_owned),
             pdf_source: Some(source),
             translation_failure: None,
             alignment: aligned.alignment,
@@ -874,6 +891,7 @@ fn read_cached_plan(
                 let unit = &mut paragraph.units[*index];
                 unit.set_translation(translation);
                 unit.pivot_language = route.pivot_language().map(str::to_owned);
+                unit.direct_model_revision = route.direct_model_revision().map(str::to_owned);
                 anchored_route = Some(route);
                 break;
             }
@@ -911,6 +929,7 @@ fn read_cached_plan(
                 if let Some(translation) = cached_unit(route, text)? {
                     unit.set_translation(translation);
                     unit.pivot_language = route.pivot_language().map(str::to_owned);
+                    unit.direct_model_revision = route.direct_model_revision().map(str::to_owned);
                 }
             }
         }
@@ -1199,6 +1218,7 @@ fn paragraph_plan(
                 .collect(),
             reviewed: review.is_some(),
             pivot_language: None,
+            direct_model_revision: None,
             translation: None,
             pdf_source,
             translation_failure: None,
@@ -2484,11 +2504,16 @@ pub(crate) struct UnitsTranslation {
 pub(crate) struct UnitTranslation {
     pub(crate) text: String,
     pivot_language: Option<String>,
+    direct_model_revision: Option<String>,
 }
 
 impl UnitTranslation {
     fn from_route(text: String, route: &Route) -> Self {
-        Self { text, pivot_language: route.pivot_language().map(str::to_owned) }
+        Self {
+            text,
+            pivot_language: route.pivot_language().map(str::to_owned),
+            direct_model_revision: route.direct_model_revision().map(str::to_owned),
+        }
     }
 }
 

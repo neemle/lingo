@@ -48,6 +48,9 @@ public partial class ReadingPage
 
     private static bool HasPdfTranslation(PdfPageTranslationRow row) => !string.IsNullOrWhiteSpace(row.Text);
     private static bool NeedsPdfTranslation(PdfPageTranslationRow row) => row.LegacyGroup || !HasPdfTranslation(row);
+    private bool NeedsPreferredPdfTranslation(PdfPageTranslationRow row) =>
+        NeedsPdfTranslation(row) || (!row.Reviewed && readiness is { Ready: true, DirectModelRevision: { } revision }
+            && row.DirectModelRevision != revision);
 
     private (ScrollView Viewport, GraphicsView Surface) ActivePdfTranslationLayout() =>
         DetachedPdfReader.IsVisible
@@ -313,11 +316,12 @@ public partial class ReadingPage
             inlinePdfLoading is not null || translatingPdfLayout is not null ||
             readiness is not { Ready: true } || session.Document is not { } document ||
             pdfLayoutRequest is not { } address || CurrentPdfLayoutAddress() != address ||
-            readinessPair != (document.Language, address.Target) || !pdfLayoutRows.Any(NeedsPdfTranslation))
+            readinessPair != (document.Language, address.Target) || !pdfLayoutRows.Any(NeedsPreferredPdfTranslation))
             return null;
 
         var request = new PdfAutoTranslation(address, readinessRequest);
-        return PdfAttemptCount(request) < 2 ? request : null;
+        var limit = pdfLayoutRows.Any(NeedsPdfTranslation) ? 2 : 1;
+        return PdfAttemptCount(request) < limit ? request : null;
     }
 
     private void SchedulePdfAutoTranslation()
@@ -521,7 +525,7 @@ public partial class ReadingPage
     {
         bool Current() => !translation.IsCompleted && readingPageActive && pdfTranslationLayout &&
             request == pdfLayoutRequestId && CurrentPdfLayoutAddress() == address &&
-            (pdfLayoutRows.Length == 0 || pdfLayoutRows.Any(NeedsPdfTranslation));
+            (pdfLayoutRows.Length == 0 || pdfLayoutRows.Any(NeedsPreferredPdfTranslation));
         while (Current())
         {
             await Task.WhenAny(translation, Task.Delay(1200));

@@ -3,7 +3,7 @@ namespace Reader.Contracts;
 public sealed record TranslationPair(string Source, string Target);
 
 public sealed record TranslationReadiness(bool Ready, string? PivotLanguage, TranslationPair[] Missing,
-    TranslationPair? DirectUpgrade = null);
+    TranslationPair? DirectUpgrade = null, string? DirectModelRevision = null);
 
 public sealed record TranslationRouteStatus(string Source, string Target, bool Ready, string? PivotLanguage);
 

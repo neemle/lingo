@@ -22,6 +22,7 @@ fn sentence_translation_body(result: reader_core::translation::AlignedTranslatio
     serde_json::json!({
         "text": result.segments[0],
         "pivotLanguage": result.route.pivot_language(),
+        "directModelRevision": result.route.direct_model_revision(),
         "joinedLines": result.joined_lines,
         "alignment": result.alignment,
     })
