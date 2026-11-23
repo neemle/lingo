@@ -203,8 +203,9 @@ fn parallel_lines(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) -
     let mut middle = None;
     if !aligned(right, right_next) && right_top.len() >= 3 {
         let next = right_top[1];
-        if right.right - right.left <= 2.5 * next.height &&
-            right.left > left_top.last()?.right && next.left - right.right >= 1.25 * next.height {
+        let character_width = average_character_width(next);
+        if right.right - right.left <= 5.0 * character_width &&
+            right.left > left_top.last()?.right && next.left - right.right >= 2.5 * character_width {
             middle = Some(right);
             right = next;
         }
@@ -264,7 +265,8 @@ fn whitespace(text: &[u16]) -> bool {
 }
 
 fn wide_gap(left: PositionedWord, right: PositionedWord, page_width: f64) -> bool {
-    right.left - left.right >= (page_width * 0.085).max(3.5 * left.height.max(right.height))
+    let character_width = average_character_width(left).max(average_character_width(right));
+    right.left - left.right >= (page_width * 0.085).max(7.0 * character_width)
 }
 
 fn same_baseline(left: PositionedWord, right: PositionedWord) -> bool {
@@ -272,7 +274,12 @@ fn same_baseline(left: PositionedWord, right: PositionedWord) -> bool {
 }
 
 fn aligned(upper: PositionedWord, lower: PositionedWord) -> bool {
-    (upper.left - lower.left).abs() <= upper.height.min(lower.height) * 0.5
+    (upper.left - lower.left).abs() <= average_character_width(upper).min(average_character_width(lower))
+}
+
+// OCR can normalize the axes independently. Compare distances on the same axis.
+fn average_character_width(word: PositionedWord) -> f64 {
+    (word.right - word.left) / (word.end - word.start) as f64
 }
 
 #[cfg(test)]
@@ -309,11 +316,21 @@ mod tests {
                     height: if index == 4 { 3.0 } else { 4.0 },
                 })
             }).collect::<Vec<_>>();
-        let edits = separate_blocks(text, &words, 100.0).unwrap();
-        assert_eq!(edits.len(), 1);
-        let reordered = edits[0].slices.iter()
-            .map(|part| format!("{}{}", part.separator, &text[part.start..part.end])).collect::<String>();
-        assert_eq!(reordered, "Left starts\nLeft ends\n\nRight starts\nRight ends");
+        // The same page can also arrive with each OCR axis independently normalized.
+        let normalized = words.iter().map(|word| PositionedWord {
+            left: word.left / 100.0,
+            right: word.right / 100.0,
+            center_y: word.center_y / 25.0,
+            height: word.height / 25.0,
+            ..*word
+        }).collect::<Vec<_>>();
+        for (geometry, width) in [(&words, 100.0), (&normalized, 1.0)] {
+            let edits = separate_blocks(text, geometry, width).unwrap();
+            assert_eq!(edits.len(), 1);
+            let reordered = edits[0].slices.iter()
+                .map(|part| format!("{}{}", part.separator, &text[part.start..part.end])).collect::<String>();
+            assert_eq!(reordered, "Left starts\nLeft ends\n\nRight starts\nRight ends");
+        }
     }
 
     #[test]
