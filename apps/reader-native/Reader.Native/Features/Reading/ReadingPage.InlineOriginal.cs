@@ -168,6 +168,11 @@ public partial class ReadingPage
 #endif
             {
                 var fileBytes = (await session.OriginalAsync(document.Id)).Bytes.Select(value => checked((byte)value)).ToArray();
+#if MACCATALYST
+                if (!isPdf)
+                    (preview, appearance) = await PhotoOcr.ReadingPreviewAsync(fileBytes, document.OcrLines ?? []);
+                else
+#endif
                 preview = isPdf ? await PdfScan.PreviewAsync(fileBytes, page) : await PhotoOcr.PreviewAsync(fileBytes);
             }
 
@@ -176,8 +181,9 @@ public partial class ReadingPage
                 current.CurrentRevisionId != address.Revision) return;
             var changedPage = inlinePdfAddress is not { } previous ||
                 previous.Document != address.Document || previous.Page != address.Page;
-            var source = ImageSource.FromStream(() => new MemoryStream(preview.Bytes, writable: false));
-            InlinePdfImage.Source = DetachedInlinePdfImage.Source = PendingInlinePdfImage.Source = source;
+            InlinePdfImage.Source = InlinePreviewSource(preview);
+            DetachedInlinePdfImage.Source = InlinePreviewSource(preview);
+            PendingInlinePdfImage.Source = InlinePreviewSource(preview);
             InlinePdfViewport.IsVisible = DetachedInlinePdfViewport.IsVisible = true;
             PendingInlinePdfViewport.IsVisible = PdfPageNotice.IsVisible && !DetachedPdfReader.IsVisible;
             SourceText.IsVisible = DetachedPdfText.IsVisible = false;
@@ -210,6 +216,9 @@ public partial class ReadingPage
             await DisplayAlertAsync(isPdf ? "Сторінка PDF" : "Фото", error.Message, "Гаразд");
         }
     }
+
+    private static ImageSource InlinePreviewSource(PhotoPreview preview) =>
+        ImageSource.FromStream(() => new MemoryStream(preview.Bytes, writable: false));
 
     private void ToggleInlinePdfFitClicked(object? sender, EventArgs args)
     {

@@ -1142,6 +1142,7 @@ fn paragraph_plan(
             active_unit = units.len();
         }
         let review = reviewed(index).cloned();
+        let has_source_layout = document.format == "pdf" || document.ocr_lines.is_some();
         let pdf_source = if review.is_none() {
             let input = inference_span(document, index, next - 1)
                 .ok_or("Межі абзацу пошкоджені.")?;
@@ -1149,12 +1150,12 @@ fn paragraph_plan(
                 PageBoundaries::Canonical => with_adjacent_pdf_text(store, document, index, next - 1, target, input)?,
                 PageBoundaries::Projected => input,
             };
-            let pdf_source = (document.format == "pdf").then(|| input.clone());
+            let pdf_source = has_source_layout.then(|| input.clone());
             let input = prepare_translation_input(&document.language, target, input);
             pending.push((units.len(), input));
             pdf_source
         } else {
-            (document.format == "pdf").then(|| sentences[index].text.clone())
+            has_source_layout.then(|| sentences[index].text.clone())
         };
         let mut unit = ParagraphUnit {
             sentence_ids: sentences[index..next]

@@ -19,13 +19,19 @@ internal static class PhotoOcr
         TesseractOcr.RecognizeAsync(() => Task.FromResult(RecognizeNative(rendered.Bytes, language)),
             () => Task.FromResult(rendered), language, cancellation).GetAwaiter().GetResult();
 
-    internal static Task<PhotoPreview> PreviewAsync(byte[] bytes) => Task.Run(() =>
+    internal static async Task<PhotoPreview> PreviewAsync(byte[] bytes) =>
+        (await ReadingPreviewAsync(bytes, []).ConfigureAwait(false)).Preview;
+
+    internal static Task<(PhotoPreview Preview, Dictionary<int, PdfBoxAppearance> Appearance)> ReadingPreviewAsync(
+        byte[] bytes, OcrLine[] lines) => Task.Run(() =>
     {
         using var pool = new NSAutoreleasePool();
         using var image = Decode(bytes, 2048);
         using var uiImage = UIImage.FromImage(image);
         using var data = uiImage.AsPNG() ?? throw new InvalidDataException("Не вдалося підготувати перегляд фото.");
-        return new PhotoPreview(data.ToArray(), (int)image.Width, (int)image.Height);
+        var appearance = new Dictionary<int, PdfBoxAppearance>();
+        if (lines.Length > 0) new PdfScan.PreviewColors(image).AddColors(lines, appearance);
+        return (new PhotoPreview(data.ToArray(), (int)image.Width, (int)image.Height), appearance);
     });
 
     internal static Task<string> ReadLanguageSampleAsync(byte[] bytes) =>

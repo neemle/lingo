@@ -119,7 +119,13 @@ impl Store {
             (projection.document, projection.physical, None, offset, PageBoundaries::Projected)
         } else {
             let document = self.translation_document(id)?;
-            let Some((start, end)) = crate::pdf_reading_position::page_bounds(&document, page) else { return Ok(Vec::new()); };
+            let bounds = if document.format == "pdf" {
+                crate::pdf_reading_position::page_bounds(&document, page)
+            } else {
+                (page == 0 && document.ocr_lines.as_ref().is_some_and(|lines| !lines.is_empty()))
+                    .then(|| (0, document.text.encode_utf16().count()))
+            };
+            let Some((start, end)) = bounds else { return Ok(Vec::new()); };
             let first = document.sentences.partition_point(|s| s.end_utf16 <= start);
             let last = document.sentences.partition_point(|s| s.start_utf16 < end);
             (document, first..last, Some((start, end)), 0, PageBoundaries::Canonical)

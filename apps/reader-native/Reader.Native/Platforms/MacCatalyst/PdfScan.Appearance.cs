@@ -25,7 +25,7 @@ internal static partial class PdfScan
             traits.HasFlag(UIFontDescriptorSymbolicTraits.Italic), ink, Colors.White);
     }
 
-    private sealed class PreviewColors
+    internal sealed class PreviewColors
     {
         private readonly byte[] pixels;
         private readonly int width;

@@ -25,6 +25,7 @@ public partial class ReadingPage
     private PdfLayoutAddress? translatingPdfLayout;
     private CancellationTokenSource? pdfLayoutTranslationCancellation;
     private PdfPageTranslationRow[] pdfLayoutRows = [];
+    private PhotoPreview? pdfTranslationBackgroundPreview;
     private (PdfPageTranslationRow[] Rows, PdfSourceLayout? Source, bool PreserveArtwork, PdfTranslationLayout Plan)? pdfDrawingPlan;
     private PdfSourceLayout? pdfSourceLayout;
     private (PdfLayoutAddress Address, string SentenceId, int Start, int End)? pdfFragmentFocus;
@@ -51,7 +52,10 @@ public partial class ReadingPage
             : (PdfTranslationViewport, PdfTranslationSurface);
 
     private bool PdfUsesPageTranslation => showInlineOriginal && pdfTranslationLayout && TranslationVisible &&
-        AppState.Session.Document?.Format == "pdf";
+        SupportsOriginalTranslationLayout(AppState.Session.Document);
+
+    private static bool SupportsOriginalTranslationLayout(Document? document) =>
+        document is { Format: "pdf" } or { OcrLines.Length: > 0 };
 
     private bool PdfPapersSideBySide(bool detached) => PdfUsesPageTranslation &&
         (detached
@@ -124,7 +128,8 @@ public partial class ReadingPage
 
     private PdfLayoutAddress? CurrentPdfLayoutAddress() =>
         showInlineOriginal && inlinePdfAddress is { } page && TargetCode is { } target &&
-        AppState.Session.Document is { Format: "pdf" } document && page.Document == document.Id &&
+        AppState.Session.Document is { } document && SupportsOriginalTranslationLayout(document) &&
+        page.Document == document.Id &&
         page.Revision == document.CurrentRevisionId &&
         target != document.Language && (!PdfPageNotice.IsVisible || DetachedPdfReader.IsVisible) &&
         (CurrentNativePdfWindow(document.Id) is not { } window || window.Center == page.Page)
@@ -167,6 +172,7 @@ public partial class ReadingPage
             pdfDrawingPlan = null;
             PdfTranslationSurface.Drawable = DetachedPdfTranslationSurface.Drawable = null;
             PdfTranslationBackground.Source = DetachedPdfTranslationBackground.Source = null;
+            pdfTranslationBackgroundPreview = null;
             PdfTranslationSurface.Invalidate();
             DetachedPdfTranslationSurface.Invalidate();
             pdfLayoutStatus = null;
@@ -202,12 +208,13 @@ public partial class ReadingPage
         var needsPackages = address is not null && PdfPageNeedsPackages;
         TranslatePdfPage.IsEnabled = DetachedTranslatePdfPage.IsEnabled =
             (ready || needsPackages) && translatingPdfLayout is null && !AppState.Session.Busy;
+        var photo = AppState.Session.Document is { Format: not "pdf" };
         TranslatePdfPage.Text = DetachedTranslatePdfPage.Text = translatingPage ? "Перекладаємо…"
-            : needsPackages ? "Мовні пакети" : "Перекласти сторінку";
+            : needsPackages ? "Мовні пакети" : photo ? "Перекласти фото" : "Перекласти сторінку";
         string? text = null;
         if (address is not null)
         {
-            if (translatingPage) text = "Перекладаємо сторінку…";
+            if (translatingPage) text = photo ? "Перекладаємо фото…" : "Перекладаємо сторінку…";
             else if (!ready && AppState.Session.Document is { } document)
                 text = readinessPair == (document.Language, address.Target)
                     ? ReadinessMessage() : "Перевіряємо мовні пакети…";
@@ -219,7 +226,7 @@ public partial class ReadingPage
                 text = text is null ? progress : $"{text} {progress}";
             }
             else if (text is null && translated == 0 && pdfLayoutRows.Length > 0)
-                text = "Сторінка очікує перекладу.";
+                text = photo ? "Фото очікує перекладу." : "Сторінка очікує перекладу.";
             if (PdfPagePivotNotice(address) is { } pivotNotice)
                 text = text is null ? pivotNotice : $"{text} {pivotNotice}";
         }
@@ -356,7 +363,8 @@ public partial class ReadingPage
         }
 #endif
         if (!IsCurrentPdfTranslationSource(address)) return;
-        var page = await session.PdfReadingPageAsync(address.Document) ?? session.OriginalPageIndex();
+        var page = session.Document?.Format == "pdf"
+            ? await session.PdfReadingPageAsync(address.Document) ?? session.OriginalPageIndex() : 0;
         if (page != address.Page || !IsCurrentPdfTranslationSource(address)) return;
 
         if (readingLayout == ReaderLayout.Translation)
@@ -612,7 +620,7 @@ public partial class ReadingPage
         WordCard.IsVisible = false;
         if (position != document.Position || (translated is not null && utteranceActive)) StopSpeech();
         if (position != document.Position)
-            await session.SelectSentenceAsync(position, pdfPage: address.Page);
+            await session.SelectSentenceAsync(position, pdfPage: document.Format == "pdf" ? address.Page : null);
         if (session.Error.Length == 0 && session.Sentence?.Id == document.Sentences[position].Id)
         {
             FocusTranslatedFragment(session.Sentence);
@@ -673,8 +681,13 @@ public partial class ReadingPage
         if (!viewport.IsVisible) return;
         var detached = DetachedPdfReader.IsVisible;
         var background = detached ? DetachedPdfTranslationBackground : PdfTranslationBackground;
-        var original = detached ? DetachedInlinePdfImage : InlinePdfImage;
-        if (!ReferenceEquals(background.Source, original.Source)) background.Source = original.Source;
+        if (!ReferenceEquals(pdfTranslationBackgroundPreview, inlinePdfPreview))
+        {
+            pdfTranslationBackgroundPreview = inlinePdfPreview;
+            PdfTranslationBackground.Source = DetachedPdfTranslationBackground.Source = null;
+        }
+        if (background.Source is null && inlinePdfPreview is { } preview)
+            background.Source = InlinePreviewSource(preview);
         var source = pdfSourceLayout is { } layout && layout.Matches(pdfLayoutRequest) ? layout : null;
         background.IsVisible = background.Source is not null && source is { Lines.Length: > 0 } &&
             pdfLayoutRows.Length > 0;
