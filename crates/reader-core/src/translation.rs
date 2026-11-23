@@ -1704,7 +1704,7 @@ impl Store {
         })
     }
 
-    fn translate_units(
+    pub(crate) fn translate_units(
         &mut self,
         provider: &mut impl TranslationProvider,
         source: &str,

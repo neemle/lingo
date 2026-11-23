@@ -348,6 +348,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         } => sentence_translation(store.translate_installed_sentence(&id, &sentence_id, &target)),
         Command::TranslateDictionaryGloss { id, source, gloss, target } =>
             sentence_translation(store.translate_dictionary_gloss_to(&id, &source, &gloss, target.as_deref().unwrap_or("uk"))),
+        Command::TranslateDictionaryGlosses { id, source, target, glosses } =>
+            value(store.translate_dictionary_glosses(&id, &source, &target, &glosses)),
         Command::TranslateSelection { id, target, selection } =>
             selected_translation(store.translate_selected_text(&id, &target, &selection)),
         Command::ScheduleTranslationWindow { id, sentence_id, revision_id, target } => {

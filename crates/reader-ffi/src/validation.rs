@@ -284,6 +284,7 @@ fn validate(command: &Command) -> Result<()> {
         | Command::FindDetachedPdfText { id, .. }
         | Command::LookupDetachedPdfWord { id, .. }
         | Command::TranslateDictionaryGloss { id, .. }
+        | Command::TranslateDictionaryGlosses { id, .. }
         | Command::TranslateSelection { id, .. }
         | Command::TranslateWithModel { id, .. }
         | Command::SaveDetachedPdfWord { id, .. }

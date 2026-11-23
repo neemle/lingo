@@ -667,6 +667,12 @@ pub enum Command {
         gloss: String,
         target: Option<String>,
     },
+    TranslateDictionaryGlosses {
+        id: String,
+        source: String,
+        target: String,
+        glosses: Vec<String>,
+    },
     TranslateSelection {
         id: String,
         target: String,

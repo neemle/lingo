@@ -114,25 +114,48 @@ public partial class ReadingPage
             (host == WordMeanings ? WordCard.IsVisible && selection == word
                 : DetachedWordCard.IsVisible && detachedSelection == word);
 
-        async Task<string?> LocalizeAsync(string text, string language)
+        var translations = new Dictionary<(string Text, string Language), string?>();
+        string? Localized(string text, string language) =>
+            language == target ? text : translations.GetValueOrDefault((text, language));
+
+        async Task LocalizeAsync(IEnumerable<(string Text, string Language)> inputs)
         {
-            if (language == target) return text;
-            try
+            var groups = inputs.Distinct().Where(item => item.Language != target &&
+                !translations.ContainsKey(item) && !string.IsNullOrWhiteSpace(item.Text) &&
+                System.Text.Encoding.UTF8.GetByteCount(item.Text) <= 4096).GroupBy(item => item.Language);
+            foreach (var group in groups)
             {
-                return (await AppState.Session.TranslateDictionaryGlossAsync(document, language, text, target))?.Text;
-            }
-            catch (Exception error)
-            {
-                System.Diagnostics.Debug.WriteLine(error.Message);
-                return null;
+                foreach (var batch in group.Select(item => item.Text).Chunk(12))
+                {
+                    if (!Current()) return;
+                    try
+                    {
+                        var output = await AppState.Session.TranslateDictionaryGlossesAsync(document, group.Key, target, batch);
+                        for (var index = 0; index < batch.Length; index++)
+                            translations[(batch[index], group.Key)] = output[index];
+                    }
+                    catch (Exception error)
+                    {
+                        System.Diagnostics.Debug.WriteLine(error.Message);
+                        if (batch.Length == 1) continue;
+                        foreach (var text in batch)
+                        {
+                            if (!Current()) return;
+                            try
+                            {
+                                translations[(text, group.Key)] = (await AppState.Session
+                                    .TranslateDictionaryGlossAsync(document, group.Key, text, target))?.Text;
+                            }
+                            catch (Exception entryError) { System.Diagnostics.Debug.WriteLine(entryError.Message); }
+                        }
+                    }
+                }
             }
         }
 
-        foreach (var (meaning, label, detail, _) in rows)
+        void ShowGloss(WordMeaning meaning, Label label, VerticalStackLayout detail)
         {
-            if (!Current()) return;
-            var gloss = await LocalizeAsync(meaning.Gloss, meaning.GlossLanguage);
-            if (!Current()) return;
+            var gloss = Localized(meaning.Gloss, meaning.GlossLanguage);
             if (string.IsNullOrWhiteSpace(gloss))
             {
                 label.Text = $"Значення недоступне мовою перекладу ({DocumentLanguages.Name(target)}).";
@@ -154,20 +177,38 @@ public partial class ReadingPage
             }
         }
 
+        foreach (var (meaning, label, detail, _) in rows.Where(row => row.Meaning.GlossLanguage == target))
+            ShowGloss(meaning, label, detail);
+        await LocalizeAsync(ordered.Select(meaning => (meaning.Gloss, meaning.GlossLanguage)));
+        if (!Current()) return;
+        foreach (var (meaning, label, detail, _) in rows.Where(row => row.Meaning.GlossLanguage != target))
+            ShowGloss(meaning, label, detail);
+
+        var examples = new List<(MeaningExample Example, string GlossLanguage, VerticalStackLayout Host)>();
         foreach (var (meaning, _, detail, _) in rows)
         {
-            if (!Current()) return;
             foreach (var example in meaning.Examples)
             {
-                detail.Children.Add(WordDetailAudioRow(example.Text, source, 15));
-                var translation = example.Translation is { Length: > 0 } value
-                    ? await LocalizeAsync(value, meaning.GlossLanguage)
-                    : await LocalizeAsync(example.Text, source);
-                if (!Current()) return;
-                if (!string.IsNullOrWhiteSpace(translation))
-                    detail.Children.Add(WordDetailAudioRow(translation, target, 14));
+                var exampleHost = new VerticalStackLayout { Spacing = 4 };
+                exampleHost.Children.Add(WordDetailAudioRow(example.Text, source, 15));
+                detail.Children.Add(exampleHost);
+                if (meaning.GlossLanguage == target && example.Translation is { Length: > 0 } localized)
+                    exampleHost.Children.Add(WordDetailAudioRow(localized, target, 14));
+                else examples.Add((example, meaning.GlossLanguage, exampleHost));
             }
         }
+        await LocalizeAsync(examples.Select(row => (row.Example.Text, source)));
+        if (!Current()) return;
+        var remaining = examples.Where(row => string.IsNullOrWhiteSpace(Localized(row.Example.Text, source)) &&
+            row.Example.Translation is { Length: > 0 }).ToArray();
+        foreach (var (example, _, exampleHost) in examples)
+            if (Localized(example.Text, source) is { Length: > 0 } translation)
+                exampleHost.Children.Add(WordDetailAudioRow(translation, target, 14));
+        await LocalizeAsync(remaining.Select(row => (row.Example.Translation!, row.GlossLanguage)));
+        if (!Current()) return;
+        foreach (var (example, language, exampleHost) in remaining)
+            if (Localized(example.Translation!, language) is { Length: > 0 } translation)
+                exampleHost.Children.Add(WordDetailAudioRow(translation, target, 14));
     }
 
     private static SenseSnapshot MeaningSnapshot(string surface, WordMeaning meaning) =>

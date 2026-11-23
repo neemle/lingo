@@ -620,6 +620,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
 
     public Task<MachineTranslation?> TranslateDictionaryGlossAsync(string id, string source, string gloss, string target = "uk") =>
         Task.Run(() => client.TranslateDictionaryGloss(id, source, gloss, target));
+    public Task<string?[]> TranslateDictionaryGlossesAsync(string id, string source, string target, string[] glosses) =>
+        Task.Run(() => client.TranslateDictionaryGlosses(id, source, target, glosses));
     public Task<MachineTranslation?> TranslateSelectionAsync(string id, string target, string revisionId,
         TextSelection selection, int? page = null) =>
         Task.Run(() => client.TranslateSelection(id, target, revisionId, selection.StartUtf16, selection.Text, page));

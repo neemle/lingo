@@ -456,6 +456,13 @@ impl StoreWorker {
         self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?.translate_dictionary_gloss_to(id, source, gloss, target)
     }
 
+    pub fn translate_dictionary_glosses(
+        self, id: &str, source: &str, target: &str, glosses: &[String],
+    ) -> Result<Vec<Option<String>>> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?
+            .translate_dictionary_glosses(id, source, target, glosses)
+    }
+
     pub fn translate_selection(
         self, id: &str, target: &str, selection: &TranslationSelection,
     ) -> Result<Option<SelectedTranslation>> {
@@ -875,6 +882,40 @@ impl Store {
             return Err("Документ не знайдено.".into());
         }
         self.translate_machine_sentence(id, source, target, gloss.to_owned(), Vec::new())
+    }
+
+    pub fn translate_dictionary_glosses(
+        &mut self, id: &str, source: &str, target: &str, glosses: &[String],
+    ) -> Result<Vec<Option<String>>> {
+        crate::valid_language(source)?;
+        crate::valid_language(target)?;
+        if !(1..=12).contains(&glosses.len())
+            || glosses.iter().any(|gloss| gloss.trim().is_empty() || gloss.len() > 4096 || gloss.contains('\0'))
+        {
+            return Err("Некоректний обсяг словникових визначень.".into());
+        }
+        if !self.connection.query_row("SELECT EXISTS(SELECT 1 FROM documents WHERE id=?1)",
+            [id], |row| row.get::<_, bool>(0)).map_err(|error| error.to_string())?
+        {
+            return Err("Документ не знайдено.".into());
+        }
+        let input: Vec<_> = glosses.iter().map(|gloss| gloss.trim().to_owned()).collect();
+        if source == target {
+            return Ok(input.into_iter().map(Some).collect());
+        }
+        let directory = self.model_directory.clone();
+        if let Some(result) =
+            self.translate_units(&mut MarianProvider::interactive(&directory), source, target, &input)?
+        {
+            self.record_translation_cache_use(id, &result.route, &input)?;
+            return Ok(result.segments.into_iter().map(Some).collect());
+        }
+        let routes = self.translation_cache_routes(source, target)?;
+        input.iter().map(|gloss| {
+            let Some(result) = routes.cached_sentence(self, gloss, target)? else { return Ok(None); };
+            self.record_translation_cache_use(id, &result.route, std::slice::from_ref(gloss))?;
+            Ok(result.segments.into_iter().next())
+        }).collect()
     }
 
     pub fn translate_selected_text(

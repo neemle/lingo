@@ -222,6 +222,12 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 return dispatch::sentence_translation(worker.translate_dictionary_gloss_to(id, source, gloss, target.as_deref().unwrap_or("uk")));
             }
         }
+        Command::TranslateDictionaryGlosses { id, source, target, glosses } => {
+            let worker = registry::lock()?.store(handle)?.prepare_translation_worker();
+            if let Some(worker) = worker {
+                return encode_job(worker.translate_dictionary_glosses(id, source, target, glosses));
+            }
+        }
         Command::TranslateSelection { id, target, selection } => {
             let worker = registry::lock()?.store(handle)?.prepare_translation_worker();
             if let Some(worker) = worker {
