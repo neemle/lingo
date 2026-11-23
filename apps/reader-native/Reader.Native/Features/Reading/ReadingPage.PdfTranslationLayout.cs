@@ -28,6 +28,7 @@ public partial class ReadingPage
     private string? pdfLayoutStatus;
     private int pdfLayoutRequestId;
     private bool refreshingPdfLayout;
+    private bool openingPdfTranslationText;
     private PdfLayoutAddress? pendingPdfCacheRefresh;
     private PdfAutoTranslation? pendingPdfAutoTranslation;
     private (PdfAutoTranslation Request, int Attempts)? pdfAutoAttempts;
@@ -228,31 +229,85 @@ public partial class ReadingPage
     private async void ReadPdfTranslationTextClicked(object? sender, EventArgs args)
     {
         var rows = pdfLayoutRows;
-        if (!rows.Any(HasPdfTranslation) || pdfLayoutRequest is not { } address || CurrentPdfLayoutAddress() != address) return;
+        if (openingPdfTranslationText || !rows.Any(HasPdfTranslation) ||
+            pdfLayoutRequest is not { } address || CurrentPdfLayoutAddress() != address) return;
+        openingPdfTranslationText = true;
+        try
+        {
+            var selected = await ChoosePdfTranslationSourceAsync(address, rows);
+            if (selected is not null)
+                await RevealPdfTranslationSourceAsync(address, selected);
+        }
+        catch (Exception error) { await DisplayAlertAsync("Переклад сторінки", error.Message, "Гаразд"); }
+        finally { openingPdfTranslationText = false; }
+    }
+
+    private async Task<PdfPageTranslationRow?> ChoosePdfTranslationSourceAsync(
+        PdfLayoutAddress address, PdfPageTranslationRow[] rows)
+    {
+        var result = new TaskCompletionSource<PdfPageTranslationRow?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var text = new VerticalStackLayout { Padding = new Thickness(22, 10), Spacing = 9 };
         var viewport = new ScrollView { Content = text };
         if (PdfPagePivotNotice(address) is { } pivotNotice)
             text.Children.Add(new Label { Text = pivotNotice, Style = (Style)Resources["ReaderMeta"] });
-        Label? activeLabel = null;
+        Grid? activeRow = null;
         foreach (var row in rows)
         {
             var label = PdfTranslationTextLabel(row, 20);
+            var action = new Button
+            {
+                Text = "До оригіналу",
+                Style = (Style)Resources["PlayerButton"],
+                VerticalOptions = LayoutOptions.Center,
+            };
+            SemanticProperties.SetHint(action, "Показати відповідний фрагмент на сторінці PDF");
+            action.Clicked += (_, _) => result.TrySetResult(row);
+            var item = new Grid { ColumnDefinitions = { new(GridLength.Star), new(GridLength.Auto) }, ColumnSpacing = 12 };
+            item.Add(label);
+            item.Add(action, 1);
             if (pdfLayoutSentence is { } sentence &&
                 row.StartUtf16 < sentence.EndUtf16 && row.EndUtf16 > sentence.StartUtf16)
             {
-                label.BackgroundColor = Color.FromArgb("#FFF1CF");
-                activeLabel ??= label;
+                item.BackgroundColor = Color.FromArgb("#FFF1CF");
+                activeRow ??= item;
             }
-            text.Children.Add(label);
+            text.Children.Add(item);
         }
         var done = new Button { Text = "Закрити", HorizontalOptions = LayoutOptions.End, Margin = new Thickness(12) };
         var layout = new Grid { RowDefinitions = { new(GridLength.Auto), new(GridLength.Star) } };
         layout.Add(done);
         layout.Add(viewport, 0, 1);
         var page = new ContentPage { Title = $"Переклад сторінки {address.Page + 1}", Content = layout };
-        done.Clicked += async (_, _) => await Navigation.PopModalAsync();
+        page.Disappearing += (_, _) => result.TrySetResult(null);
+        done.Clicked += (_, _) => result.TrySetResult(null);
         await Navigation.PushModalAsync(page);
-        if (activeLabel is not null) await viewport.ScrollToAsync(activeLabel, ScrollToPosition.MakeVisible, animated: false);
+        if (activeRow is not null) await viewport.ScrollToAsync(activeRow, ScrollToPosition.MakeVisible, animated: false);
+        var selected = await result.Task;
+        if (Navigation.ModalStack.LastOrDefault() == page) await Navigation.PopModalAsync();
+        return selected;
+    }
+
+    private async Task RevealPdfTranslationSourceAsync(PdfLayoutAddress address, PdfPageTranslationRow fragment)
+    {
+        var session = AppState.Session;
+        await session.WaitUntilIdleAsync();
+#if MACCATALYST
+        await pdfWindowRead;
+        if (address.DetachedText is not null) await detachedInitialSentence;
+#endif
+        if (!readingPageActive || session.Busy || session.Document is not { Format: "pdf" } document ||
+            document.Id != address.Document || document.CurrentRevisionId != address.Revision ||
+            TargetCode != address.Target ||
+            (await session.PdfReadingPageAsync(document.Id) ?? session.OriginalPageIndex()) != address.Page ||
+            !ReferenceEquals(session.Document, document))
+            return;
+
+        if (readingLayout == ReaderLayout.Translation)
+        {
+            readingLayout = ReaderLayout.Automatic;
+            ArrangeReadingColumns();
+        }
+        await SelectPdfSourceRangeAsync(address, fragment);
     }
 
     private Label PdfTranslationTextLabel(PdfPageTranslationRow row, double size) =>
@@ -412,17 +467,39 @@ public partial class ReadingPage
         var session = AppState.Session;
         if (!readingPageActive || session.Busy || CurrentPdfLayoutAddress() is not { } address ||
             address != pdfLayoutRequest || !pdfLayoutRows.Contains(fragment)) return;
-        if (DetachedPdfReader.IsVisible)
+        await SelectPdfSourceRangeAsync(address, fragment);
+    }
+
+    private async Task SelectPdfSourceRangeAsync(PdfLayoutAddress address, PdfPageTranslationRow fragment)
+    {
+        var session = AppState.Session;
+        lastInlinePdfFollow = null;
+        if (address.DetachedText is not null)
         {
-            if (detachedAddress is { } detached && !loadingDetachedSentence)
+            if (detachedAddress is { } detached && detached.Document == address.Document &&
+                detached.Page == address.Page && detached.Text == address.DetachedText && !loadingDetachedSentence)
                 await LoadDetachedSentenceAsync(detached, position: null, sourceOffset: fragment.StartUtf16);
             return;
         }
-        if (session.Document is not { } document || document.Id != address.Document) return;
+        if (DetachedPdfReader.IsVisible || session.Document is not { } document ||
+            document.Id != address.Document || document.CurrentRevisionId != address.Revision) return;
         var position = Array.FindIndex(document.Sentences,
             sentence => sentence.StartUtf16 < fragment.EndUtf16 && sentence.EndUtf16 > fragment.StartUtf16);
-        if (position >= 0 && position != document.Position)
+        if (position < 0) return;
+        dictionaryFocus = null;
+        documentFindFocus = null;
+        selection = null;
+        WordCard.IsVisible = false;
+        if (position != document.Position)
+        {
+            StopSpeech();
             await session.SelectSentenceAsync(position, pdfPage: address.Page);
+        }
+        if (session.Error.Length == 0 && session.Sentence?.Id == document.Sentences[position].Id)
+        {
+            UpdateHighlight();
+            SourceText.RevealOffset(fragment.StartUtf16);
+        }
     }
 
     private async Task FollowPdfTranslationScrollAsync(bool fromOriginal)
