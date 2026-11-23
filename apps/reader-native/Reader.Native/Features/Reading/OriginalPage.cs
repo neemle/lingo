@@ -81,12 +81,19 @@ internal sealed class OriginalPage : ContentPage
             : lines.FirstOrDefault(line => Overlaps(line.SourceSpan, focus))?.Page ?? initialPage;
         Title = isPdf ? "Вихідний PDF" : "Вихідна фотографія";
         SemanticProperties.SetDescription(image, filename);
-        SemanticProperties.SetDescription(previous, "Попередня сторінка");
-        SemanticProperties.SetDescription(next, "Наступна сторінка");
-        SemanticProperties.SetDescription(jump, "Перейти за номером сторінки PDF");
-        SemanticProperties.SetDescription(zoomOut, "Зменшити масштаб оригіналу");
-        SemanticProperties.SetDescription(zoomIn, "Збільшити масштаб оригіналу");
-        SemanticProperties.SetDescription(fit, "Вмістити оригінал у вікно");
+        foreach (var (button, description) in new[]
+        {
+            (previous, "Попередня сторінка"),
+            (next, "Наступна сторінка"),
+            (jump, "Перейти за номером сторінки PDF"),
+            (zoomOut, "Зменшити масштаб оригіналу"),
+            (zoomIn, "Збільшити масштаб оригіналу"),
+            (fit, "Вмістити оригінал у вікно"),
+        })
+        {
+            ToolTipProperties.SetText(button, description);
+            SemanticProperties.SetDescription(button, description);
+        }
         zoomOut.Clicked += (_, _) => SetZoom(zoomLevel - 1);
         zoomIn.Clicked += (_, _) => SetZoom(zoomLevel + 1);
         fit.Clicked += (_, _) => SetZoom(0);

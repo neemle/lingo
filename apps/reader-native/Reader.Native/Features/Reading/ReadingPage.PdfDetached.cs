@@ -909,7 +909,7 @@ public partial class ReadingPage
         DetachedShareTranslation.IsVisible = available && !translatingDetachedSentence && DisplayedDetachedTranslationPair() is not null;
         var playing = speakingDetachedSentence && !detachedPaused;
         DetachedSpeak.Text = playing ? "Ⅱ" : "▶";
-        SemanticProperties.SetDescription(DetachedSpeak, playing ? "Призупинити озвучення"
+        DescribeButton(DetachedSpeak, playing ? "Призупинити озвучення"
             : detachedPaused || DetachedResumeSpeech.IsVisible ? "Продовжити озвучення" : "Озвучити речення сторінки");
     }
 }

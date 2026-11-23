@@ -101,6 +101,10 @@ public partial class ReadingPage
         TranslateWithModel.Text = DetachedTranslateWithModel.Text = running ? "Скасувати переклад" : translation is not null
             ? "Перегенерувати" : address is not null && modelPassageError?.Address == address
                 ? "Повторити переклад" : "Перекласти моделлю";
+        var actionHint = running ? "Скасувати переклад моделлю" : translation is not null
+            ? "Перекласти поточний уривок моделлю заново" : "Перекласти поточний уривок локальною моделлю";
+        DescribeButton(TranslateWithModel, actionHint);
+        DescribeButton(DetachedTranslateWithModel, actionHint);
 
         var result = translation is null ? "" :
             $"{(translation.Cached ? "Збережений переклад" : "Переклад")} · {translation.ModelName}{Environment.NewLine}{translation.Text}";

@@ -66,7 +66,7 @@ public partial class ReadingPage
             PdfFit.WholePage => "Ціла сторінка",
             _ => "За шириною сторінки"
         };
-        SemanticProperties.SetDescription(InlinePdfFitToggle, $"Масштаб. {InlinePdfFitToggle.Text}. Натисніть, щоб змінити.");
+        DescribeButton(InlinePdfFitToggle, $"Змінити масштаб. Зараз {InlinePdfFitToggle.Text}");
     }
 
     private void ClearInlineOriginal()

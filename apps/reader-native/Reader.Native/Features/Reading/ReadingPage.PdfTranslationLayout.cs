@@ -150,7 +150,27 @@ public partial class ReadingPage
     private static void LabelTranslationIcon(Button button, string glyph, string label)
     {
         button.Text = glyph;
-        ToolTipProperties.SetText(button, label);
+        DescribeButton(button, label);
+    }
+
+    private static void DescribeButton(Button button, string label)
+    {
+        if (ToolTipProperties.GetText(button) as string != label)
+        {
+            ToolTipProperties.SetText(button, label);
+#if MACCATALYST
+            if (button.Handler?.PlatformView is UIKit.UIButton platformButton)
+            {
+                // Use the control's native tooltip setter so Catalyst refreshes
+                // the hover text when the action changes.
+                var builtIn = platformButton.ToolTipInteraction;
+                foreach (var tooltip in platformButton.Interactions.OfType<UIKit.UIToolTipInteraction>())
+                    if (tooltip.Handle != builtIn?.Handle)
+                        platformButton.RemoveInteraction(tooltip);
+                platformButton.ToolTip = label;
+            }
+#endif
+        }
         SemanticProperties.SetDescription(button, label);
     }
 

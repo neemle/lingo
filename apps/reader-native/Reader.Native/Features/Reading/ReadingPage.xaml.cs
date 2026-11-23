@@ -254,7 +254,7 @@ public partial class ReadingPage : ContentPage
     private void TogglePlaybackOptions(object? sender, EventArgs args)
     {
         PlaybackOptions.IsVisible = !PlaybackOptions.IsVisible;
-        SemanticProperties.SetDescription(PlaybackOptionsButton,
+        DescribeButton(PlaybackOptionsButton,
             PlaybackOptions.IsVisible ? "Сховати параметри озвучення" : "Показати параметри озвучення");
     }
 
@@ -265,7 +265,7 @@ public partial class ReadingPage : ContentPage
 
         var playing = pause.IsEnabled && !speechPaused;
         PrimarySpeech.Text = playing ? "Ⅱ" : "▶";
-        SemanticProperties.SetDescription(PrimarySpeech, playing ? "Призупинити озвучення" : "Відтворити озвучення");
+        DescribeButton(PrimarySpeech, playing ? "Призупинити озвучення" : "Відтворити озвучення");
     }
 
     private void ArrangeReadingColumns()
@@ -297,7 +297,7 @@ public partial class ReadingPage : ContentPage
         AlignPdfViewports();
         var layout = Layouts.First(item => item.Mode == readingLayout);
         ReaderLayoutButton.Text = layout.Compact;
-        SemanticProperties.SetDescription(ReaderLayoutButton, $"Розкладка читання · {layout.Label}. Змінити розкладку");
+        DescribeButton(ReaderLayoutButton, $"Змінити розкладку читання. Зараз {layout.Label}");
         if (revealTranslation) RequestTranslationScroll();
     }
 
@@ -347,7 +347,7 @@ public partial class ReadingPage : ContentPage
 
         var targetLabel = TargetCode is { } chosenTarget ? DocumentLanguages.Name(chosenTarget) : "Мова перекладу";
         TargetLanguage.Text = targetLabel;
-        SemanticProperties.SetDescription(TargetLanguage, $"Мова перекладу · {targetLabel}");
+        DescribeButton(TargetLanguage, $"Вибрати мову перекладу. Зараз {targetLabel}");
         RefreshPdfTranslationLayout();
 
         var wordTranslationLabel = TargetCode is { } cardTarget
