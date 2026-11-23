@@ -41,6 +41,11 @@ impl Bounds {
         )
     }
 
+    fn intersects(self, other: Self) -> bool {
+        let (width, height) = self.overlap(other);
+        width > 0.001 && height > 0.001
+    }
+
     fn reading_box(self, rotation: u16) -> Self {
         let (x, y, width, height) = crate::ocr::reading_box((self.x, self.y, self.width, self.height), rotation);
         Self { x, y, width, height }
@@ -123,8 +128,19 @@ fn plan(fragments: &[SourceFragment]) -> Result<PageLayout> {
             .iter()
             .rposition(|previous| fits(previous, &region, fragment.block_index, fragments))
         {
+            let previous_bounds = page.regions[position].bounds;
+            let expanded = region.bounds.union(previous_bounds);
+            // The space between two lines can belong to another column or caption.
+            // Check source boxes too, including those that have yet to be planned.
+            if fragments.iter().any(|other| {
+                (other.pending || other.block_index != fragment.block_index) &&
+                    other.bounds.is_some_and(|bounds| expanded.intersects(bounds) &&
+                        !region.bounds.intersects(bounds) && !previous_bounds.intersects(bounds))
+            }) {
+                break;
+            }
             let previous = page.regions.remove(position);
-            region.bounds = region.bounds.union(previous.bounds);
+            region.bounds = expanded;
             region.line_height = region.line_height.min(previous.line_height);
             region.fragments.extend(previous.fragments);
             region.style_fragment = [region.style_fragment, previous.style_fragment]
@@ -150,10 +166,7 @@ fn plan(fragments: &[SourceFragment]) -> Result<PageLayout> {
             .pending
             .iter()
             .filter_map(|&index| fragments[index].bounds)
-            .any(|bounds| {
-                let (width, height) = region.bounds.overlap(bounds);
-                width > 0.001 && height > 0.001
-            });
+            .any(|bounds| region.bounds.intersects(bounds));
         if covers_pending {
             page.overflow.append(&mut region.fragments);
         }
@@ -215,8 +228,7 @@ fn remove_overlapping_regions(page: &mut PageLayout) {
     let mut colliding = vec![false; page.regions.len()];
     for (index, region) in page.regions.iter().enumerate() {
         for (other, candidate) in page.regions.iter().enumerate().skip(index + 1) {
-            let (width, height) = region.bounds.overlap(candidate.bounds);
-            if width > 0.001 && height > 0.001 {
+            if region.bounds.intersects(candidate.bounds) {
                 colliding[index] = true;
                 colliding[other] = true;
             }
@@ -325,6 +337,30 @@ mod tests {
         .unwrap();
         assert_eq!(page.overflow, [0, 1]);
         assert_eq!(page.regions[0].fragments, [2]);
+    }
+
+    #[test]
+    fn a_combined_translation_box_does_not_cover_an_adjacent_caption() {
+        let left = || fragment(0.10, 0.20, 1, 10);
+        let next = || fragment(0.25, 0.234, 1, 20);
+        let caption = || fragment(0.45, 0.20, 2, 30);
+        let unoccupied = plan(&[left(), next()]).unwrap();
+        assert_eq!(unoccupied.regions[0].fragments, [0, 1]);
+
+        for order in [[left(), next(), caption()], [caption(), left(), next()]] {
+            let page = plan(&order).unwrap();
+            assert!(page.overflow.is_empty());
+            assert_eq!(page.regions.len(), 3);
+            assert!(page.regions.iter().all(|region| region.fragments.len() == 1));
+        }
+
+        let mut pending = caption();
+        pending.pending = true;
+        pending.block_index = Some(1);
+        let page = plan(&[left(), next(), pending]).unwrap();
+        assert!(page.overflow.is_empty());
+        assert_eq!(page.pending, [2]);
+        assert_eq!(page.regions.len(), 2);
     }
 
     #[test]
