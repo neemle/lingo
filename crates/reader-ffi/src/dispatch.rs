@@ -45,6 +45,8 @@ pub fn selected_translation(
         }
         SelectedTranslation::Cardinal { text, source_text } =>
             serde_json::json!({ "text": text, "sourceText": source_text, "joinedLines": false }),
+        SelectedTranslation::PersonalDictionary { text, source_text } =>
+            serde_json::json!({ "text": text, "sourceText": source_text, "personalDictionary": true }),
     })))
 }
 

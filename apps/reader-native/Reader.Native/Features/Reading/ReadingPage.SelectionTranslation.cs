@@ -7,8 +7,8 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage
 {
     private int popupTranslationRequest;
-    private (string Document, string Revision, TextSelection Selection, string Target, string Text, string Source)? wordTranslation;
-    private (string Target, string Text, string Source)? detachedWordTranslation;
+    private (string Document, string Revision, TextSelection Selection, string Target, string Text, string Source, bool Saved)? wordTranslation;
+    private (string Target, string Text, string Source, bool Saved)? detachedWordTranslation;
 
     private async void TranslateSelectionClicked(object? sender, EventArgs args) =>
         await LoadPopupTranslationAsync(detached: false);
@@ -56,10 +56,10 @@ public partial class ReadingPage
             }
 
             var original = result.SourceText ?? selected.Text.Trim();
-            if (detached) detachedWordTranslation = (target, result.Text, original);
+            if (detached) detachedWordTranslation = (target, result.Text, original, result.PersonalDictionary);
             else
             {
-                wordTranslation = (document.Id, revision, selected, target, result.Text, original);
+                wordTranslation = (document.Id, revision, selected, target, result.Text, original, result.PersonalDictionary);
                 if (canonicalSense is null && string.IsNullOrWhiteSpace(Translation.Text)) Translation.Text = result.Text;
             }
             UpdatePopupGloss(detached);
@@ -91,8 +91,12 @@ public partial class ReadingPage
     {
         var gloss = PopupGloss(detached);
         var label = detached ? DetachedWordTranslationGloss : WordTranslationGloss;
+        var origin = detached ? DetachedWordTranslationOrigin : WordTranslationOrigin;
         var listen = detached ? DetachedSpeakWordTranslation : SpeakWordTranslation;
         label.Text = gloss ?? status;
+        var chosen = detached ? detachedSense : canonicalSense;
+        origin.IsVisible = chosen?.Target != TargetCode && PopupMachineGloss(detached) is not null &&
+            (detached ? detachedWordTranslation?.Saved : wordTranslation?.Saved) == true;
         listen.IsEnabled = !string.IsNullOrWhiteSpace(gloss);
         UpdatePopupTranslationHighlights();
     }

@@ -503,8 +503,10 @@
        SemanticProperties.Description="Закрити пояснення слова" />
      </Grid>
      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" Padding="10,6" BackgroundColor="#F3EDDA">
-      <Label x:Name="WordTranslationGloss" FontSize="20" FontAttributes="Bold" VerticalOptions="Center"
-       LineBreakMode="WordWrap" />
+      <VerticalStackLayout VerticalOptions="Center" Spacing="1">
+       <Label x:Name="WordTranslationGloss" FontSize="20" FontAttributes="Bold" LineBreakMode="WordWrap" />
+       <Label x:Name="WordTranslationOrigin" Text="Мій словник" FontSize="11" TextColor="{StaticResource Muted}" IsVisible="False" />
+      </VerticalStackLayout>
       <Button Grid.Column="1" x:Name="SpeakWordTranslation" Text="Слухати" Style="{StaticResource PlayerButton}"
        Clicked="SpeakPopupTranslationClicked" IsEnabled="False" SemanticProperties.Description="Прослухати переклад" />
      </Grid>
@@ -578,8 +580,10 @@
        SemanticProperties.Description="Закрити пояснення слова" />
      </Grid>
      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" Padding="10,6" BackgroundColor="#F3EDDA">
-      <Label x:Name="DetachedWordTranslationGloss" FontSize="20" FontAttributes="Bold" VerticalOptions="Center"
-       LineBreakMode="WordWrap" />
+      <VerticalStackLayout VerticalOptions="Center" Spacing="1">
+       <Label x:Name="DetachedWordTranslationGloss" FontSize="20" FontAttributes="Bold" LineBreakMode="WordWrap" />
+       <Label x:Name="DetachedWordTranslationOrigin" Text="Мій словник" FontSize="11" TextColor="{StaticResource Muted}" IsVisible="False" />
+      </VerticalStackLayout>
       <Button Grid.Column="1" x:Name="DetachedSpeakWordTranslation" Text="Слухати" Style="{StaticResource PlayerButton}"
        Clicked="SpeakPopupTranslationClicked" IsEnabled="False" SemanticProperties.Description="Прослухати переклад" />
      </Grid>

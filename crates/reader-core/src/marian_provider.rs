@@ -1034,6 +1034,11 @@ impl Store {
         if source.is_empty() {
             return Ok(None);
         }
+        if language != target {
+            if let Some(text) = self.saved_selection_translation(id, &language, target, &source, &context)? {
+                return Ok(Some(SelectedTranslation::PersonalDictionary { text, source_text: source }));
+            }
+        }
         if language == "fr" && target == "uk" {
             if let Some(number) = crate::french_cardinals::compound(&source) {
                 let text = crate::tts::uk_numbers::cardinal(number).replace('\'', "’");
@@ -1724,6 +1729,37 @@ fn copy_verified_asset(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn personal_word_translation_uses_the_exact_context_without_guessing_a_sense() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let document = store.import(
+            "grue.txt",
+            "La grue traverse la rive. La grue déplace la caisse. Il voit une grue.".as_bytes(),
+            "fr",
+        ).unwrap();
+        for (sentence, translation) in document.sentences.iter().zip(["журавель", "підйомний кран"]) {
+            store.save_word(crate::Vocabulary {
+                id: String::new(), word: "grue".into(), translation: translation.into(),
+                language: "fr".into(), target_language: "uk".into(),
+                context: sentence.text.clone(), document_id: document.id.clone(),
+                forward: Default::default(), reverse: Default::default(),
+                analysis: None, expression: None, sense: None, accepted_translations: Vec::new(),
+            }).unwrap();
+        }
+        let select = |sentence: &crate::Sentence| TranslationSelection {
+            page: None, revision_id: document.current_revision_id.clone().unwrap(), text: "grue".into(),
+            start_utf16: sentence.start_utf16 + sentence.text.split_once("grue").unwrap().0.encode_utf16().count(),
+        };
+        for (sentence, expected) in document.sentences.iter().zip(["журавель", "підйомний кран"]) {
+            let Some(SelectedTranslation::PersonalDictionary { text, source_text }) =
+                store.translate_selected_text(&document.id, "uk", &select(sentence)).unwrap()
+            else { panic!("expected the saved translation for this sentence"); };
+            assert_eq!((text.as_str(), source_text.as_str()), (expected, "grue"));
+        }
+        assert!(store.translate_selected_text(&document.id, "uk", &select(&document.sentences[2])).unwrap().is_none());
+    }
 
     #[test]
     fn french_apostrophe_normalization_only_changes_model_input() {

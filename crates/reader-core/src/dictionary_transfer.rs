@@ -420,6 +420,47 @@ impl Store {
         Ok(cards)
     }
 
+    pub(crate) fn saved_selection_translation(
+        &self, document_id: &str, language: &str, target: &str, surface: &str, context: &str,
+    ) -> Result<Option<String>> {
+        use crate::knowledge::word_key;
+        if surface.len() > 500 {
+            return Ok(None);
+        }
+        let key = word_key(surface);
+        let mut query = self.connection.prepare_cached(
+            "SELECT v.body, EXISTS(
+                SELECT 1 FROM dictionary_card_contexts c
+                JOIN dictionary_sources s ON s.document_id=c.document_id
+                WHERE c.card_id=v.id AND c.sentence=?4 AND
+                    (c.document_id=?3 OR s.source_hash=(SELECT source_hash FROM documents WHERE id=?3))
+             ) AS matches_context
+             FROM vocabulary v
+             WHERE json_extract(v.body,'$.language')=?1 AND json_extract(v.body,'$.targetLanguage')=?2",
+        ).map_err(error)?;
+        let mut rows = query.query(params![language, target, document_id, context]).map_err(error)?;
+        let mut contextual = std::collections::BTreeMap::new();
+        let mut general = std::collections::BTreeMap::new();
+        while let Some(row) = rows.next().map_err(error)? {
+            let body: String = row.get(0).map_err(error)?;
+            let card: Vocabulary = serde_json::from_str(&body).map_err(error)?;
+            let forms = [
+                Some(card.word.as_str()),
+                card.analysis.as_ref().map(|analysis| analysis.surface.as_str()),
+                card.expression.as_ref().map(|expression| expression.surface.as_str()),
+                card.sense.as_ref().map(|sense| sense.surface.as_str()),
+            ];
+            if !forms.into_iter().flatten().any(|form| word_key(form) == key) {
+                continue;
+            }
+            let same_context: bool = row.get(1).map_err(error)?;
+            let candidates = if same_context { &mut contextual } else { &mut general };
+            candidates.entry(word_key(&card.translation)).or_insert(card.translation);
+        }
+        let candidates = if contextual.is_empty() { general } else { contextual };
+        Ok(if candidates.len() == 1 { candidates.into_values().next() } else { None })
+    }
+
     pub fn dictionary_sources(&self) -> Result<Vec<DictionarySource>> {
         let tx = self.connection.unchecked_transaction().map_err(error)?;
         let entries = self.dictionary_collection(None)?;

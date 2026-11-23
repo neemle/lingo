@@ -296,6 +296,7 @@ pub struct TranslationSelection {
 pub enum SelectedTranslation {
     Model { translation: AlignedTranslation, source_text: String },
     Cardinal { text: String, source_text: String },
+    PersonalDictionary { text: String, source_text: String },
 }
 
 pub(crate) fn route_readiness(
