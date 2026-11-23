@@ -236,8 +236,8 @@ public partial class PracticePage : ContentPage, IQueryAttributable
                 : next.Context ?? card?.Context;
         if (state.Direction == "forward" && card?.Sense is { } sense)
         {
-            var showGloss = saved?.Revealed == true ||
-                !string.Equals(sense.GlossLanguage, card.TargetLanguage, StringComparison.OrdinalIgnoreCase);
+            var showGloss = saved?.Revealed == true &&
+                string.Equals(sense.GlossLanguage, card.TargetLanguage, StringComparison.OrdinalIgnoreCase);
             var hint = showGloss ? sense.Gloss : sense.PartOfSpeech;
             context = string.IsNullOrWhiteSpace(context) ? hint : $"{context}{Environment.NewLine}{hint}";
         }

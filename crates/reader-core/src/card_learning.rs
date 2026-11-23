@@ -91,7 +91,19 @@ impl Vocabulary {
 
     pub(crate) fn practice_answers(&self, reverse: bool) -> Vec<String> {
         if reverse {
-            return vec![self.word.clone()];
+            let mut answers = vec![self.word.clone()];
+            let mut seen = BTreeSet::from([answer_key(&self.word)]);
+            let forms = [
+                self.sense.as_ref().map(|sense| sense.surface.as_str()),
+                self.analysis.as_ref().map(|analysis| analysis.surface.as_str()),
+                self.expression.as_ref().map(|expression| expression.surface.as_str()),
+            ];
+            for form in forms.into_iter().flatten().map(str::trim) {
+                if crate::review_schedule::valid_answer(form) && seen.insert(answer_key(form)) {
+                    answers.push(form.to_owned());
+                }
+            }
+            return answers;
         }
         std::iter::once(self.translation.clone())
             .chain(self.accepted_translations.iter().cloned())

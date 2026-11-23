@@ -260,7 +260,7 @@ fn question_answers(db: &Connection, card: &Vocabulary, reverse: bool) -> Result
         return Ok(answers);
     }
     let key = answer_key(&card.translation);
-    let mut seen = BTreeSet::from([answer_key(&card.word)]);
+    let mut seen: BTreeSet<_> = answers.iter().map(|answer| answer_key(answer)).collect();
     let mut query = db.prepare(
         "SELECT body FROM vocabulary WHERE id<>?1
          AND json_extract(body, '$.language')=?2 AND json_extract(body, '$.targetLanguage')=?3
@@ -271,8 +271,8 @@ fn question_answers(db: &Connection, card: &Vocabulary, reverse: bool) -> Result
     for body in rows {
         let other: Vocabulary = serde_json::from_str(&body.map_err(|error| error.to_string())?)
             .map_err(|error| error.to_string())?;
-        if matches_prompt(&other, true, &key) && seen.insert(answer_key(&other.word)) {
-            answers.push(other.word);
+        if matches_prompt(&other, true, &key) {
+            answers.extend(other.practice_answers(true).into_iter().filter(|answer| seen.insert(answer_key(answer))));
         }
     }
     Ok(answers)
@@ -531,6 +531,44 @@ pub(crate) fn restore_if_fresh(
 mod tests {
     use super::*;
     use crate::{ReviewState, Vocabulary};
+
+    #[test]
+    fn reverse_practice_accepts_and_retains_the_observed_form() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("reader.db");
+        let mut store = Store::open(&path).unwrap();
+        let card = store.save_word(Vocabulary {
+            id: String::new(), word: "livres".into(), translation: "книга".into(),
+            language: "fr".into(), target_language: "uk".into(),
+            context: "Elle lit des livres.".into(), document_id: String::new(),
+            forward: ReviewState::default(), reverse: ReviewState::default(),
+            analysis: Some(Box::new(crate::LemmaSnapshot {
+                lemma: "livre".into(), surface: "livres".into(), part_of_speech: "NOUN".into(),
+                features: "Number=Plur".into(), source: "fixture".into(), source_version: "1".into(),
+                context: None, document_id: None,
+            })),
+            expression: None, sense: None, accepted_translations: Vec::new(),
+        }).unwrap();
+        let vocabulary = [card.clone(), Vocabulary { word: "livres".into(), translation: "томи".into(), ..card.clone() },
+            Vocabulary { word: "bateau".into(), translation: "човен".into(), ..card.clone() },
+            Vocabulary { word: "port".into(), translation: "порт".into(), ..card.clone() }];
+        let options = choices(&card, &vocabulary, true);
+        assert_eq!(options.len(), 3);
+        assert!(!options.iter().any(|option| option == "livres"));
+
+        let progress = store.practice_queue(0, Some(PracticeSettings {
+            direction: "reverse".into(), mode: 1, collection: None,
+        })).unwrap().progress;
+        assert_eq!(progress.question.unwrap().answers, ["livre", "livres"]);
+        drop(store);
+        let mut store = Store::open(&path).unwrap();
+        let answer = store.answer_practice_question(progress.revision, Some("LIVRES"), None).unwrap();
+        assert_eq!(answer.matches_dictionary, Some(true));
+        store.grade_practice(answer.progress.revision, 2).unwrap();
+        let saved = store.snapshot().unwrap().vocabulary.pop().unwrap();
+        assert_eq!(saved.forward.reviews, 0);
+        assert_eq!(saved.reverse.reviews, 1);
+    }
 
     #[test]
     fn restart_keeps_choice_order_and_consumes_grade_once() {
