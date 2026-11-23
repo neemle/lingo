@@ -66,7 +66,16 @@ fn reconstruct_page(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
     if lines.iter().any(|line| line.correction.is_some()) {
         return None;
     }
-    let mut ordered = reconstruct_columns(lines);
+    let mut ordered = None;
+    let mut start = 0;
+    for block in lines.chunk_by(|_, next| !next.block_start) {
+        if let Some(rebuilt) = reconstruct_columns(block) {
+            ordered.get_or_insert_with(|| lines[..start].to_vec()).extend(rebuilt);
+        } else if let Some(ordered) = &mut ordered {
+            ordered.extend_from_slice(block);
+        }
+        start += block.len();
+    }
     let starts = ordered.as_deref().unwrap_or(lines).windows(2).enumerate()
         .filter_map(|(index, pair)| (vertical_block_break(&pair[0], &pair[1])).then_some(index + 1))
         .collect::<Vec<_>>();
@@ -97,8 +106,7 @@ fn vertical_block_break(upper: &OcrLine, lower: &OcrLine) -> bool {
 }
 
 fn reconstruct_columns(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
-    if lines.iter().any(|line| line.block_start) ||
-        !lines.iter().any(|line| line.words.len() >= 4) && lines.len() < 2 {
+    if lines.len() < 2 && !lines.iter().any(|line| line.words.len() >= 4) {
         return None;
     }
     let mut text = String::new();
@@ -197,6 +205,7 @@ fn slice_line(line: &OcrLine, start: usize, end: usize) -> Option<OcrLine> {
     let offset = start + leading;
     let mut piece = line.clone();
     piece.text = trimmed.to_owned();
+    piece.block_start &= start == 0;
     piece.words.clear();
     piece.source_span = None;
     for word in &line.words {
@@ -279,17 +288,19 @@ mod tests {
         let mut store = crate::Store::open(&root.path().join("reader.db")).unwrap();
         let original = root.path().join("scan.pdf");
         std::fs::write(&original, b"%PDF-1.4\n").unwrap();
-        let mut line = caption_line();
-        line.block_start = true;
+        let line = caption_line();
+        let legacy_words = serde_json::to_string(&line.words).unwrap();
+        let mut line_without_geometry = line;
+        line_without_geometry.words.clear();
         let prepared = crate::file_originals::prepare_pdf_import(
-            store.pdf_original_root(), "scan.pdf", &original, "en", vec![String::new()], vec![line],
+            store.pdf_original_root(), "scan.pdf", &original, "en", vec![String::new()], vec![line_without_geometry],
         ).unwrap();
         let doc = store.import_pdf_file(prepared).unwrap();
         assert_eq!(doc.text, "Left caption Right caption");
-        // Simulate an older import without a layout marker, retaining the saved OCR geometry.
+        // Simulate an older import that stored the geometry without separating the captions.
         store.connection.execute(
-            "UPDATE documents SET body=json_set(body, '$.ocrLines[0].blockStart', json('false')) WHERE id=?1",
-            [&doc.id],
+            "UPDATE documents SET body=json_set(body, '$.ocrLines[0].words', json(?2)) WHERE id=?1",
+            rusqlite::params![doc.id, legacy_words],
         ).unwrap();
         let revision = doc.current_revision_id.as_deref().unwrap();
         let sentence = &doc.sentences[0].id;
@@ -300,6 +311,24 @@ mod tests {
         let window = store.pdf_read_window(&doc.id, 0).unwrap();
         assert_eq!(window.pages[0].text, "Left caption\n\nRight caption");
         assert!(!store.upgrade_stored_ocr_layout(&doc.id, 0, revision, &doc.text, false).unwrap());
+    }
+
+    #[test]
+    fn marked_ocr_block_still_separates_side_by_side_captions() {
+        let mut heading = caption_line();
+        heading.text = "Choose an option".into();
+        heading.words.clear();
+        heading.y = 0.26;
+        let mut captions = caption_line();
+        captions.block_start = true;
+        let mut page = vec![heading, captions];
+
+        reconstruct_blocks(&mut page);
+
+        let text = "Choose an option\n\nLeft caption\n\nRight caption";
+        assert_eq!(crate::ocr::recognized_lines(&page, 1).unwrap(), text);
+        assert_eq!(page[2].words[0].raw_start_utf16, Some(0));
+        assert!(upgrade_cached_page(&page, text).is_none());
     }
 
     #[test]
