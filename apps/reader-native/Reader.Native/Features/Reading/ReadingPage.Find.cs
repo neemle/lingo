@@ -420,7 +420,7 @@ public partial class ReadingPage
         form.Add(actions, 0, 4);
         var page = new ContentPage { Title = "Пошук у документі", Content = form };
         var closed = new TaskCompletionSource<DocumentFindSelection?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var cancellation = new CancellationTokenSource();
+        CancellationTokenSource? activeSearch = null;
         var earlierPages = new Stack<DocumentFindCursor>();
         var query = "";
         var inTranslation = false;
@@ -429,19 +429,25 @@ public partial class ReadingPage
 #if MACCATALYST
         int[]? unreadPages = null;
 #endif
-        var searching = false;
         page.Disappearing += (_, _) => closed.TrySetResult(null);
         page.Loaded += (_, _) => page.Dispatcher.Dispatch(() => entry.Focus());
         search.Clicked += async (_, _) => await StartSearchAsync();
         entry.Completed += async (_, _) => await StartSearchAsync();
+        entry.TextChanged += (_, _) =>
+        {
+            if (closed.Task.IsCompleted || (entry.Text?.Trim() ?? "") == query) return;
+            ResetSearchResults();
+            status.Text = string.IsNullOrWhiteSpace(entry.Text)
+                ? "Введіть слово або фразу." : "Натисніть «Знайти».";
+        };
         scope.SelectedIndexChanged += async (_, _) => await StartSearchAsync();
         previous.Clicked += async (_, _) =>
         {
-            if (!searching && earlierPages.TryPop(out var start)) await ShowResultsAsync(start);
+            if (activeSearch is null && earlierPages.TryPop(out var start)) await ShowResultsAsync(start);
         };
         next.Clicked += async (_, _) =>
         {
-            if (searching || nextStart is not { } start) return;
+            if (activeSearch is not null || nextStart is not { } start) return;
             earlierPages.Push(currentStart);
             await ShowResultsAsync(start);
         };
@@ -449,55 +455,69 @@ public partial class ReadingPage
 
         await Navigation.PushModalAsync(page);
         var selected = await closed.Task;
-        cancellation.Cancel();
+        activeSearch?.Cancel();
         if (Navigation.ModalStack.LastOrDefault() == page) await Navigation.PopModalAsync();
         return selected;
 
         async Task StartSearchAsync()
         {
-            if (searching) return;
+            if (closed.Task.IsCompleted) return;
+            ResetSearchResults();
             query = entry.Text?.Trim() ?? "";
             inTranslation = target is not null && scope.SelectedIndex == 1;
+            await ShowResultsAsync(new DocumentFindCursor(0));
+        }
+
+        void ResetSearchResults()
+        {
+            activeSearch?.Cancel();
+            activeSearch = null;
+            results.Children.Clear();
+            nextStart = null;
             earlierPages.Clear();
+            previous.IsVisible = previous.IsEnabled = next.IsVisible = next.IsEnabled = false;
 #if MACCATALYST
             unreadPages = null;
 #endif
-            await ShowResultsAsync(new DocumentFindCursor(0));
         }
 
         async Task ShowResultsAsync(DocumentFindCursor start)
         {
-            searching = true;
-            search.IsEnabled = scope.IsEnabled = previous.IsEnabled = next.IsEnabled = false;
+            using var request = new CancellationTokenSource();
+            activeSearch = request;
+            previous.IsEnabled = next.IsEnabled = false;
             results.Children.Clear();
             nextStart = null;
             currentStart = start;
-            var token = cancellation.Token;
+            var token = request.Token;
+            var searchQuery = query;
+            var searchTranslation = inTranslation;
+            bool Current() => activeSearch == request && !token.IsCancellationRequested && !closed.Task.IsCompleted;
             try
             {
-                if (query.Length == 0)
+                if (searchQuery.Length == 0)
                 {
                     status.Text = "Введіть слово або фразу.";
                     return;
                 }
 
                 status.Text = "Шукаємо…";
-                var page = inTranslation && target is not null
-                    ? await FindTranslatedAsync(target, start, token)
-                    : await FindOriginalAsync(start, token);
-                if (token.IsCancellationRequested || closed.Task.IsCompleted) return;
+                var page = searchTranslation && target is not null
+                    ? await FindTranslatedAsync(searchQuery, target, start, token)
+                    : await FindOriginalAsync(searchQuery, start, token);
+                if (!Current()) return;
                 nextStart = page.Next;
                 status.Text = page.Matches.Length > 0 ? $"Збіги · сторінка {earlierPages.Count + 1}"
-                    : inTranslation ? "Збігів у збереженому перекладі немає." : "Збігів не знайдено.";
+                    : searchTranslation ? "Збігів у збереженому перекладі немає." : "Збігів не знайдено.";
                 foreach (var match in page.Matches)
                 {
-                    var selection = match.Selection with { Query = query };
+                    var selection = match.Selection with { Query = searchQuery };
                     var text = match.Text;
                     if (selection.Translation || selection.PhysicalPage is null || selection.SentenceId is not null)
                     {
                         var sourceMatch = !selection.Translation && document.Format == "pdf"
-                            ? DocumentFind.PdfSourceMatches(text, query, document.Language).FirstOrDefault()
-                            : DocumentFind.SourceMatch(text, query);
+                            ? DocumentFind.PdfSourceMatches(text, searchQuery, document.Language).FirstOrDefault()
+                            : DocumentFind.SourceMatch(text, searchQuery);
                         if (sourceMatch is not null) text = DocumentFind.MatchingExcerpt(text, sourceMatch, keepOpening: true);
                     }
                     var label = selection.PhysicalPage is int physicalPage
@@ -511,24 +531,26 @@ public partial class ReadingPage
                 await resultsScroll.ScrollToAsync(0, 0, animated: false);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-            catch (Exception error) { if (!closed.Task.IsCompleted) status.Text = error.Message; }
+            catch (Exception error) { if (Current()) status.Text = error.Message; }
             finally
             {
-                searching = false;
-                if (!closed.Task.IsCompleted)
+                if (activeSearch == request)
                 {
-                    search.IsEnabled = scope.IsEnabled = true;
-                    previous.IsVisible = previous.IsEnabled = earlierPages.Count > 0;
-                    next.IsVisible = next.IsEnabled = nextStart is not null;
+                    activeSearch = null;
+                    if (!closed.Task.IsCompleted)
+                    {
+                        previous.IsVisible = previous.IsEnabled = earlierPages.Count > 0;
+                        next.IsVisible = next.IsEnabled = nextStart is not null;
+                    }
                 }
             }
         }
 
-        async Task<DocumentFindPage> FindOriginalAsync(DocumentFindCursor start, CancellationToken token)
+        async Task<DocumentFindPage> FindOriginalAsync(string query, DocumentFindCursor start, CancellationToken token)
         {
             var matches = new List<DocumentFindHit>(DocumentFind.PageSize);
 #if MACCATALYST
-            if (start.UnreadLayer) return await AppendUnreadAsync(matches, start.PhysicalPage ?? 0, start.Position, token);
+            if (start.UnreadLayer) return await AppendUnreadAsync(matches, query, start.PhysicalPage ?? 0, start.Position, token);
 #endif
             if (start.PhysicalPage is null)
             {
@@ -539,20 +561,22 @@ public partial class ReadingPage
                 if (found.NextStart is int nextPosition)
                     return new(matches.ToArray(), new DocumentFindCursor(nextPosition));
             }
-            var cached = await AppendDetachedAsync(matches, start, null, token);
+            var cached = await AppendDetachedAsync(matches, query, start, null, token);
 #if MACCATALYST
             if (cached.Next is null && document.Format == "pdf")
-                return await AppendUnreadAsync(matches, 0, 0, token);
+                return await AppendUnreadAsync(matches, query, 0, 0, token);
 #endif
             return cached;
         }
 
 #if MACCATALYST
-        async Task<DocumentFindPage> AppendUnreadAsync(List<DocumentFindHit> matches, int start, int occurrence,
+        async Task<DocumentFindPage> AppendUnreadAsync(List<DocumentFindHit> matches, string query, int start, int occurrence,
             CancellationToken token)
         {
-            unreadPages ??= await session.UnreadPdfTextPagesAsync(document.Id, token);
-            var pending = unreadPages.Where(page => page >= start).ToArray();
+            var pages = unreadPages ?? await session.UnreadPdfTextPagesAsync(document.Id, token);
+            token.ThrowIfCancellationRequested();
+            unreadPages = pages;
+            var pending = pages.Where(page => page >= start).ToArray();
             if (pending.Length == 0 || await session.OriginalFileAsync(document.Id) is not { } original)
                 return new(matches.ToArray(), null);
 
@@ -567,7 +591,7 @@ public partial class ReadingPage
         }
 
         async Task<DocumentFindPage> AppendDetachedAsync(
-            List<DocumentFindHit> matches, DocumentFindCursor start, string? language, CancellationToken token)
+            List<DocumentFindHit> matches, string query, DocumentFindCursor start, string? language, CancellationToken token)
         {
             if (document.Format != "pdf") return new(matches.ToArray(), null);
             var cursor = new DetachedPdfFindCursor(start.PhysicalPage ?? 0,
@@ -595,11 +619,11 @@ public partial class ReadingPage
         }
 #else
         static Task<DocumentFindPage> AppendDetachedAsync(
-            List<DocumentFindHit> matches, DocumentFindCursor start, string? language, CancellationToken token) =>
+            List<DocumentFindHit> matches, string query, DocumentFindCursor start, string? language, CancellationToken token) =>
             Task.FromResult(new DocumentFindPage(matches.ToArray(), null));
 #endif
 
-        async Task<DocumentFindPage> FindTranslatedAsync(string language, DocumentFindCursor start, CancellationToken token)
+        async Task<DocumentFindPage> FindTranslatedAsync(string query, string language, DocumentFindCursor start, CancellationToken token)
         {
             var matches = new List<DocumentFindHit>(DocumentFind.PageSize);
             if (start.PhysicalPage is null)
@@ -626,7 +650,7 @@ public partial class ReadingPage
                     offset = nextOffset;
                 }
             }
-            return await AppendDetachedAsync(matches, start, language, token);
+            return await AppendDetachedAsync(matches, query, start, language, token);
         }
     }
 }
