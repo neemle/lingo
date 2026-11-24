@@ -1819,28 +1819,32 @@ mod tests {
         }
 
         let mut store = Store::open(Path::new(":memory:")).unwrap();
-        let document = store.import("Page.txt", "Le bateau arrive.\n\nLe marin part.\n\nLe port est ouvert.".as_bytes(), "fr").unwrap();
+        let document = store.import("Page.txt",
+            "Le bateau arrive.\n\nLe marin part.\n\nLe port est ouvert.\n\nLe marin part.".as_bytes(), "fr").unwrap();
         store.set_reviewed_translation(&document.id, &document.sentences[0].id,
             "uk", "Корабель прибуває.").unwrap();
         let document = store.translation_document(&document.id).unwrap();
         let mut provider = Provider::default();
         for _ in 0..2 {
-            let rows = translate_pdf_page(&mut store, &mut provider, &document, 0..3,
+            let rows = translate_pdf_page(&mut store, &mut provider, &document, 0..4,
                 "uk", PageBoundaries::Canonical, &|| false).unwrap();
-            assert_eq!(rows.len(), 3);
+            assert_eq!(rows.len(), 4);
             assert_eq!(rows[0].translation.as_deref(), Some("Корабель прибуває."));
             assert!(rows.iter().all(|row| row.translation.is_some()));
+            assert_eq!(rows[1].translation, rows[3].translation);
+            assert_ne!(rows[1].sentence_ids, rows[3].sentence_ids);
         }
         assert_eq!(provider.batches, [vec!["Le marin part.".to_owned(), "Le port est ouvert.".to_owned()]]);
         assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, 0..1, None, "uk", PageBoundaries::Canonical, &|| false).is_err());
         regenerate_pdf_sentences(&mut store, &mut provider, &document, 1..2, None, "uk", PageBoundaries::Canonical, &|| false).unwrap();
         provider.fail = true;
         assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, 1..2, None, "uk", PageBoundaries::Canonical, &|| false).is_err());
-        let rows = translate_pdf_page(&mut store, &mut provider, &document, 0..3,
+        let rows = translate_pdf_page(&mut store, &mut provider, &document, 0..4,
             "uk", PageBoundaries::Canonical, &|| false).unwrap();
         assert_eq!(rows[0].translation.as_deref(), Some("Корабель прибуває."));
         assert_eq!(rows[1].translation.as_deref(), Some("Оновлене речення."));
         assert_eq!(rows[2].translation.as_deref(), Some("Збережене речення."));
+        assert_eq!(rows[3].translation.as_deref(), Some("Оновлене речення."));
         assert_eq!(provider.batches[1..], [vec!["Le marin part.".to_owned()], vec!["Le marin part.".to_owned()]]);
 
         // Layout cuts can divide a single reader sentence into independent translation units.
@@ -3366,6 +3370,37 @@ impl Store {
     }
 
     pub(crate) fn translate_units(
+        &mut self,
+        provider: &mut impl TranslationProvider,
+        document: &str,
+        source: &str,
+        target: &str,
+        input: &[String],
+    ) -> std::result::Result<UnitsTranslation, TranslationBatchError> {
+        let mut by_text = HashMap::new();
+        let mut distinct = Vec::new();
+        let positions: Vec<_> = input.iter().map(|text| {
+            *by_text.entry(text.as_str()).or_insert_with(|| {
+                let index = distinct.len();
+                distinct.push(text);
+                index
+            })
+        }).collect();
+        if distinct.len() == input.len() {
+            return self.translate_distinct_units(provider, document, source, target, input);
+        }
+        // Identical independent inputs use the same cache key. Keep a result
+        // at each original position so the caller retains its source anchors.
+        let distinct: Vec<_> = distinct.into_iter().cloned().collect();
+        let result = self.translate_distinct_units(provider, document, source, target, &distinct)?;
+        Ok(UnitsTranslation {
+            segments: positions.iter().map(|&index| result.segments[index].clone()).collect(),
+            failures: positions.iter().map(|&index| result.failures[index].clone()).collect(),
+            preferred_pivot: result.preferred_pivot,
+        })
+    }
+
+    fn translate_distinct_units(
         &mut self,
         provider: &mut impl TranslationProvider,
         document: &str,
