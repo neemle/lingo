@@ -257,6 +257,8 @@ pub struct SentenceReviewResult {
     cached: bool,
     #[serde(rename = "localRule", skip_serializing_if = "std::ops::Not::not")]
     local_rule: bool,
+    #[serde(rename = "pendingParts")]
+    pending_parts: usize,
 }
 
 pub struct ReviewSentenceJob {
@@ -1059,26 +1061,29 @@ impl ReviewSentenceJob {
                 review: SentenceReview { spelling: None, syntax: Some(syntax.to_owned()) },
                 cached: false,
                 local_rule: true,
+                pending_parts: 0,
             }));
         }
         let (_, system) = sentence_review_prompt(explain_syntax);
-        let read_cache = || -> Result<Option<Vec<SentenceReview>>> {
-            let notes = windows.iter().map(|window| match window {
+        let read_cache = || -> Result<Vec<Option<SentenceReview>>> {
+            windows.iter().map(|window| match window {
                 HintWork::Cached(review) => Ok(review.clone()),
                 HintWork::Generate { cache, .. } => cache.load(),
-            }).collect::<Result<Vec<_>>>()?;
-            Ok(notes.into_iter().collect::<Option<Vec<SentenceReview>>>())
+            }).collect()
         };
         let model = windows.iter().find_map(|window| match window {
             HintWork::Generate { model, .. } => Some(model),
             HintWork::Cached(_) => None,
         });
         let Some(model) = model else {
-            return Ok(read_cache()?.map(|reviews| Self::merge(reviews, true)));
+            let reviews: Vec<_> = read_cache()?.into_iter().flatten().collect();
+            let pending = windows.len() - reviews.len();
+            return Ok((!reviews.is_empty()).then(|| Self::merge(reviews, true, pending)));
         };
         model.run_requested_with_cache(
             Some(canceled),
-            || Ok(read_cache()?.map(|reviews| Some(Self::merge(reviews, true)))),
+            || Ok(read_cache()?.into_iter().collect::<Option<Vec<_>>>()
+                .map(|reviews| Some(Self::merge(reviews, true, 0)))),
             |directory, should_yield| {
                 let opening_deadline = Instant::now() + Duration::from_secs(20);
                 with_prompt_context(
@@ -1111,14 +1116,14 @@ impl ReviewSentenceJob {
                             };
                             reviews.push(review);
                         }
-                        Ok(Some(Self::merge(reviews, cached)))
+                        Ok(Some(Self::merge(reviews, cached, 0)))
                     },
                 )
             },
         )
     }
 
-    fn merge(reviews: Vec<SentenceReview>, cached: bool) -> SentenceReviewResult {
+    fn merge(reviews: Vec<SentenceReview>, cached: bool, pending_parts: usize) -> SentenceReviewResult {
         let mut spelling = Vec::new();
         let mut syntax = Vec::new();
         for review in reviews {
@@ -1135,6 +1140,7 @@ impl ReviewSentenceJob {
             },
             cached,
             local_rule: false,
+            pending_parts,
         }
     }
 }
@@ -1571,6 +1577,36 @@ mod tests {
         assert!(cached.cached);
         assert_eq!(cached.review.syntax.as_deref(), Some(explanation));
         assert!(prepare(&store, true, false).run().unwrap().is_none());
+    }
+
+    #[test]
+    fn unfinished_sentence_review_exposes_completed_parts_without_model_files() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("reader.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        let text = (1..=70).map(|number| format!("le voyageur numéro {number} attend"))
+            .collect::<Vec<_>>().join(", ") + ".";
+        let document = store.import("reader.txt", text.as_bytes(), "fr").unwrap();
+        let prepare = |store: &Store, cached_only| store.prepare_sentence_review(
+            HINT_GENERATION_MODEL, &document.id, None, Some(&document.sentences[0].id), None,
+            document.current_revision_id.as_deref(), cached_only, false,
+        ).unwrap();
+        assert!(prepare(&store, true).run().unwrap().is_none());
+        let work = prepare(&store, false);
+        assert!(work.windows.len() > 1);
+        let HintWork::Generate { cache, .. } = &work.windows[0] else { panic!("expected new work"); };
+        let hint = "Зверніть увагу на узгодження підмета.";
+        cache.save(&SentenceReview { spelling: None, syntax: Some(hint.into()) }).unwrap();
+        drop(store);
+
+        let store = Store::open(&path).unwrap();
+        let saved = prepare(&store, true).run().unwrap().unwrap();
+        assert!(saved.cached);
+        assert_eq!(saved.pending_parts, work.windows.len() - 1);
+        assert_eq!(saved.review.syntax.as_deref(), Some(hint));
+        let next = prepare(&store, false);
+        assert!(matches!(&next.windows[0], HintWork::Cached(Some(_))));
+        assert!(next.windows[1..].iter().all(|window| matches!(window, HintWork::Generate { .. })));
     }
 
     #[test]

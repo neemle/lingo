@@ -229,16 +229,18 @@ public partial class ReadingPage
                 hints.IsVisible = true;
                 hints.Text = "Шукаємо збережену перевірку…";
             }
+            SentenceReview? cached = null;
             try
             {
                 var available = (await AppState.Session.OptionalModelsAsync())
                     .FirstOrDefault(model => model.CanGenerateLanguageHints);
                 cancellation.ThrowIfCancellationRequested();
-                if (available is not null && await review(available.Id, true, cancellation) is { } cached)
+                cached = available is null ? null : await review(available.Id, true, cancellation);
+                if (available is not null && cached is not null)
                 {
                     cancellation.ThrowIfCancellationRequested();
                     ShowReview(available.Name, cached);
-                    return;
+                    if (cached.PendingParts == 0 || cachedOnly || !available.FilesPresent) return;
                 }
                 cancellation.ThrowIfCancellationRequested();
                 if (cachedOnly) return;
@@ -249,14 +251,16 @@ public partial class ReadingPage
                     return;
                 }
                 reviewBusy.IsVisible = reviewBusy.IsRunning = true;
-                hints.Text = $"{available.Name} перевіряє текст…";
+                if (cached is null) hints.Text = $"{available.Name} перевіряє текст…";
                 if (await review(available.Id, false, cancellation) is { } result && !cancellation.IsCancellationRequested)
                     ShowReview(available.Name, result);
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
             catch (Exception error)
             {
-                if (!cachedOnly && !cancellation.IsCancellationRequested) hints.Text = error.Message;
+                if (!cachedOnly && !cancellation.IsCancellationRequested)
+                    hints.Text = cached is { PendingParts: > 0 }
+                        ? $"{hints.Text}{Environment.NewLine}{error.Message}" : error.Message;
             }
             finally
             {
@@ -272,6 +276,7 @@ public partial class ReadingPage
             if (result.Spelling is { } spelling) notes.Add($"Правопис · {spelling}");
             if (result.Syntax is { } syntax) notes.Add($"Синтаксис · {syntax}");
             if (notes.Count == 1) notes.Add("Модель не запропонувала виправлень.");
+            if (result.PendingParts > 0) notes.Add("Перевірено лише частину речення.");
             hints.Text = string.Join(Environment.NewLine, notes);
             hints.IsVisible = true;
         }
