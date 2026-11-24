@@ -335,6 +335,27 @@ fn pdf_translation_checks_the_displayed_page_source() {
     assert_error(&cached(40, canonical), "core_error");
     assert_error(&cached(40, json!({"language":"fr","revisionId":"old","detached":true})), "core_error");
     assert_eq!(cached(40, serde_json::Value::Null)["ok"], true);
+
+    let model = |page: Option<u16>, sentence: &serde_json::Value, revision, language, cached_only| {
+        call(store.handle, json!({
+            "version":1,"operation":"translate_with_model","id":id,"page":page,
+            "sentenceId":sentence,"target":"uk","revisionId":revision,
+            "sourceLanguage":language,"cachedOnly":cached_only,
+        }))
+    };
+    let canonical_sentence = &imported["data"]["sentences"][0]["id"];
+    let detached_sentence = &detached["data"]["sentence"]["id"];
+    assert_eq!(model(None, canonical_sentence, revision, "fr", true)["ok"], true);
+    assert_eq!(model(Some(40), detached_sentence, detached_revision, "fr", true)["ok"], true);
+    for stale in [
+        model(None, canonical_sentence, revision, "en", false),
+        model(Some(40), detached_sentence, revision, "fr", true),
+        model(Some(40), detached_sentence, revision, "fr", false),
+    ] {
+        assert_error(&stale, "core_error");
+        assert!(stale["error"]["message"].as_str().unwrap().contains("мова оригіналу змінилися"), "{stale}");
+    }
+    assert_error(&model(Some(40), detached_sentence, &serde_json::Value::Null, "fr", true), "invalid_argument");
 }
 
 #[test]

@@ -529,6 +529,10 @@ pub enum Command {
         #[serde(rename = "sentenceId")]
         sentence_id: String,
         target: String,
+        #[serde(rename = "revisionId")]
+        revision_id: Option<String>,
+        #[serde(rename = "sourceLanguage")]
+        source_language: Option<String>,
         #[serde(default)]
         regenerate: bool,
         #[serde(default, rename = "cachedOnly")]

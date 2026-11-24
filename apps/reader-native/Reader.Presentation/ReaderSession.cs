@@ -707,14 +707,15 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<MachineTranslation?> TranslateSentenceAsync(string id, string sentenceId, string target, bool regenerate = false) =>
         Task.Run(() => client.TranslateSentence(id, sentenceId, target, regenerate));
     public Task<ModelPassageTranslation> TranslateWithModelAsync(string id, int? page, string sentenceId, string target,
-        bool regenerate, CancellationToken cancellationToken = default) =>
-        Task.Run(() => client.TranslateWithModel(id, page, sentenceId, target, regenerate, cancellationToken), cancellationToken);
+        bool regenerate, CancellationToken cancellationToken = default, string? revisionId = null, string? sourceLanguage = null) =>
+        Task.Run(() => client.TranslateWithModel(id, page, sentenceId, target, regenerate, cancellationToken, revisionId, sourceLanguage), cancellationToken);
 
     public Task<OfflinePassageTranslation?> TranslateOfflinePassageAsync(string id, int? page, string sentenceId, string target,
         CancellationToken cancellationToken = default) =>
         Task.Run(() => client.TranslateOfflinePassage(id, page, sentenceId, target, cancellationToken), cancellationToken);
-    public Task<ModelPassageTranslation?> CachedModelTranslationAsync(string id, int? page, string sentenceId, string target) =>
-        Task.Run(() => client.CachedModelTranslation(id, page, sentenceId, target));
+    public Task<ModelPassageTranslation?> CachedModelTranslationAsync(string id, int? page, string sentenceId, string target,
+        string? revisionId = null, string? sourceLanguage = null) =>
+        Task.Run(() => client.CachedModelTranslation(id, page, sentenceId, target, revisionId, sourceLanguage));
     public Task<string> PassageSourceAsync(string id, int? page, string sentenceId) =>
         Task.Run(() => client.PassageSource(id, page, sentenceId));
 

@@ -1190,7 +1190,7 @@ impl Store {
             return Err("Офлайн-переклад уривка скасовано.".into());
         }
         crate::valid_language(target)?;
-        let (source, source_text) = self.passage_translation_source(id, page, sentence_id)?;
+        let (source, source_text) = self.passage_translation_source(id, page, sentence_id, None)?;
         if source == target {
             return Err("Виберіть іншу мову перекладу.".into());
         }

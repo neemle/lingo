@@ -387,10 +387,11 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 .map_err(gateway::domain)?;
             return encode_job(job.run());
         }
-        Command::TranslateWithModel { id, page, sentence_id, target, regenerate, cached_only, request_id } => {
+        Command::TranslateWithModel { id, page, sentence_id, target, revision_id, source_language, regenerate, cached_only, request_id } => {
+            let expected = revision_id.as_deref().zip(source_language.as_deref());
             if *cached_only {
                 return encode_job(registry::lock()?.store(handle)?
-                    .cached_passage_translation(id, *page, sentence_id, target));
+                    .cached_passage_translation_for_source(id, *page, sentence_id, target, expected));
             }
             let state = registry::lock()?;
             let cancellation = state.model_cancellation(handle, ModelRequestKind::Passage)?;
@@ -400,7 +401,8 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 return Err(canceled_error());
             }
             let job = state.store(handle)?
-                .prepare_passage_translation(id, *page, sentence_id, target, *regenerate).map_err(gateway::domain)?;
+                .prepare_passage_translation_for_source(id, *page, sentence_id, target, *regenerate, expected)
+                .map_err(gateway::domain)?;
             drop(state);
             let result = if request_id.is_some() { job.run_until_canceled(canceled) } else { job.run() };
             return if canceled() { Err(canceled_error()) } else { encode_job(result) };

@@ -57,7 +57,7 @@ public partial class ReadingPage
         try
         {
             var result = await session.TranslateWithModelAsync(address.Document, address.Page, address.Sentence,
-                address.Target, regenerate, cancellation.Token);
+                address.Target, regenerate, cancellation.Token, address.Revision, address.SourceLanguage);
             if (readingPageActive && !cancellation.IsCancellationRequested && CurrentModelPassage() == address)
                 modelPassageResult = (address, result);
         }
@@ -163,7 +163,7 @@ public partial class ReadingPage
         try
         {
             var translation = await AppState.Session.CachedModelTranslationAsync(
-                address.Document, address.Page, address.Sentence, address.Target);
+                address.Document, address.Page, address.Sentence, address.Target, address.Revision, address.SourceLanguage);
             if (translation is null || !Current()) return;
             modelPassageResult = (address, translation);
             UpdateModelTranslation();

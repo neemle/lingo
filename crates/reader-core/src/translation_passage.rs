@@ -3,18 +3,19 @@ use std::ops::Range;
 
 impl Store {
     pub fn passage_source(&self, id: &str, page: Option<u16>, sentence_id: &str) -> Result<String> {
-        let (_, text) = self.passage_translation_source(id, page, sentence_id)?;
+        let (_, text) = self.passage_translation_source(id, page, sentence_id, None)?;
         passage_chunks(&text)?;
         Ok(text)
     }
 
     pub(crate) fn passage_translation_source(
-        &self, id: &str, page: Option<u16>, sentence_id: &str,
+        &self, id: &str, page: Option<u16>, sentence_id: &str, expected: Option<(&str, &str)>,
     ) -> Result<(String, String)> {
         let (language, text) = if let Some(page) = page {
             let cached = self
                 .detached_pdf_sentences(id, page)?
                 .ok_or("Текст сторінки PDF недоступний.")?;
+            check_source(expected, Some(&cached.revision), &cached.language)?;
             let sentence = cached
                 .sentences
                 .iter()
@@ -30,6 +31,7 @@ impl Store {
             (cached.language, normalize_passage(&document, range))
         } else {
             let mut document = self.token_document(id)?;
+            check_source(expected, document.current_revision_id.as_deref(), &document.language)?;
             let sentence = document
                 .sentences
                 .iter()
@@ -46,6 +48,15 @@ impl Store {
         };
         Ok((language, text))
     }
+}
+
+fn check_source(expected: Option<(&str, &str)>, revision: Option<&str>, language: &str) -> Result<()> {
+    if expected.is_some_and(|(expected_revision, expected_language)| {
+        revision != Some(expected_revision) || language != expected_language
+    }) {
+        return Err("Текст або мова оригіналу змінилися. Повторіть переклад.".into());
+    }
+    Ok(())
 }
 
 pub(crate) struct PassageChunk<'a> {

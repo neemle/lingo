@@ -631,9 +631,9 @@ public sealed class CoreClient : IDisposable
     public MachineTranslation? TranslateSentence(string id, string sentenceId, string target, bool regenerate = false) =>
         CallIndependent<MachineTranslation?>(new { version = 1, operation = "translate_sentence", id, sentenceId, target, regenerate });
     public ModelPassageTranslation TranslateWithModel(string id, int? page, string sentenceId, string target,
-        bool regenerate, CancellationToken cancellationToken = default) =>
+        bool regenerate, CancellationToken cancellationToken = default, string? revisionId = null, string? sourceLanguage = null) =>
         CallCancelable<ModelPassageTranslation>(ref nextModelTranslationRequest, cancellationToken,
-            requestId => new { version = 1, operation = "translate_with_model", id, page, sentenceId, target, regenerate, requestId },
+            requestId => new { version = 1, operation = "translate_with_model", id, page, sentenceId, target, regenerate, requestId, revisionId, sourceLanguage },
             requestId => new { version = 1, operation = "cancel_model_translation", requestId });
 
     private T CallCancelable<T>(ref long sequence, CancellationToken cancellationToken,
@@ -659,8 +659,9 @@ public sealed class CoreClient : IDisposable
             throw new OperationCanceledException(cancellationToken);
         }
     }
-    public ModelPassageTranslation? CachedModelTranslation(string id, int? page, string sentenceId, string target) =>
-        CallIndependent<ModelPassageTranslation?>(new { version = 1, operation = "translate_with_model", id, page, sentenceId, target, cachedOnly = true });
+    public ModelPassageTranslation? CachedModelTranslation(string id, int? page, string sentenceId, string target,
+        string? revisionId = null, string? sourceLanguage = null) =>
+        CallIndependent<ModelPassageTranslation?>(new { version = 1, operation = "translate_with_model", id, page, sentenceId, target, cachedOnly = true, revisionId, sourceLanguage });
     public string PassageSource(string id, int? page, string sentenceId) =>
         Call<string>(new { version = 1, operation = "passage_source", id, page, sentenceId });
     public OfflinePassageTranslation? TranslateOfflinePassage(string id, int? page, string sentenceId, string target,

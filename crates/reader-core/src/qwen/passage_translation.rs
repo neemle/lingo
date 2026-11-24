@@ -68,22 +68,36 @@ impl Store {
         target: &str,
         regenerate: bool,
     ) -> Result<TranslatePassageJob> {
+        self.prepare_passage_translation_for_source(id, page, sentence_id, target, regenerate, None)
+    }
+
+    pub fn prepare_passage_translation_for_source(
+        &self, id: &str, page: Option<u16>, sentence_id: &str, target: &str, regenerate: bool,
+        expected: Option<(&str, &str)>,
+    ) -> Result<TranslatePassageJob> {
         let mode = if regenerate { HintCacheMode::Refresh } else { HintCacheMode::PreferCached };
-        self.passage_translation_job(id, page, sentence_id, target, mode)
+        self.passage_translation_job(id, page, sentence_id, target, mode, expected)
     }
 
     pub fn cached_passage_translation(
         &self, id: &str, page: Option<u16>, sentence_id: &str, target: &str,
     ) -> Result<Option<PassageTranslation>> {
-        self.passage_translation_job(id, page, sentence_id, target, HintCacheMode::ReadOnly)?.cached()
+        self.cached_passage_translation_for_source(id, page, sentence_id, target, None)
+    }
+
+    pub fn cached_passage_translation_for_source(
+        &self, id: &str, page: Option<u16>, sentence_id: &str, target: &str, expected: Option<(&str, &str)>,
+    ) -> Result<Option<PassageTranslation>> {
+        self.passage_translation_job(id, page, sentence_id, target, HintCacheMode::ReadOnly, expected)?.cached()
     }
 
     fn passage_translation_job(
         &self, id: &str, page: Option<u16>, sentence_id: &str, target: &str, mode: HintCacheMode,
+        expected: Option<(&str, &str)>,
     ) -> Result<TranslatePassageJob> {
         // Read the source, OCR geometry and all cache chunks from one snapshot.
         let snapshot = self.connection.unchecked_transaction().map_err(|error| error.to_string())?;
-        let (language, text) = self.passage_translation_source(id, page, sentence_id)?;
+        let (language, text) = self.passage_translation_source(id, page, sentence_id, expected)?;
         let source_name = language_name(&language)?;
         let target_name = language_name(target)?;
         if language == target {
