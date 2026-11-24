@@ -241,29 +241,58 @@ public partial class ReadingPage
 
         async Task ShowExamplesAsync(WordMeaning meaning, VerticalStackLayout exampleList)
         {
-            var pending = new List<(MeaningExample Example, VerticalStackLayout Row)>();
+            var pending = new List<(MeaningExample Example, VerticalStackLayout Row, Label Status)>();
             foreach (var example in meaning.Examples)
             {
                 var row = new VerticalStackLayout { Spacing = 4 };
                 row.Children.Add(WordDetailAudioRow(example.Text, source, 15));
                 exampleList.Children.Add(row);
-                if (meaning.GlossLanguage == target && example.Translation is { Length: > 0 } localized)
-                    row.Children.Add(WordDetailAudioRow(localized, target, 14));
-                else pending.Add((example, row));
+                if (meaning.GlossLanguage == target && !string.IsNullOrWhiteSpace(example.Translation))
+                    row.Children.Add(WordDetailAudioRow(example.Translation, target, 14));
+                else
+                {
+                    var status = new Label { Text = "Перекладаємо приклад…", Style = (Style)Resources["ReaderMeta"] };
+                    row.Children.Add(status);
+                    pending.Add((example, row, status));
+                }
             }
 
+            PositionWordPopup();
             await LocalizeAsync(pending.Select(row => (row.Example.Text, source)));
             if (!Current()) return;
-            var remaining = pending.Where(row => string.IsNullOrWhiteSpace(Localized(row.Example.Text, source)) &&
-                row.Example.Translation is { Length: > 0 }).ToArray();
-            foreach (var (example, row) in pending)
-                if (Localized(example.Text, source) is { Length: > 0 } translation)
+            var remaining = new List<(MeaningExample Example, VerticalStackLayout Row, Label Status)>();
+            foreach (var (example, row, status) in pending)
+            {
+                var translation = Localized(example.Text, source);
+                if (string.IsNullOrWhiteSpace(translation))
+                    remaining.Add((example, row, status));
+                else
+                {
+                    row.Children.Remove(status);
                     row.Children.Add(WordDetailAudioRow(translation, target, 14));
-            await LocalizeAsync(remaining.Select(row => (row.Example.Translation!, meaning.GlossLanguage)));
+                }
+            }
+            PositionWordPopup();
+            await LocalizeAsync(remaining.Where(row => !string.IsNullOrWhiteSpace(row.Example.Translation))
+                .Select(row => (row.Example.Translation!, meaning.GlossLanguage)));
             if (!Current()) return;
-            foreach (var (example, row) in remaining)
-                if (Localized(example.Translation!, meaning.GlossLanguage) is { Length: > 0 } translation)
+            var missingLanguages = new HashSet<string>();
+            foreach (var (example, row, status) in remaining)
+            {
+                var translation = example.Translation is { } equivalent
+                    ? Localized(equivalent, meaning.GlossLanguage) : null;
+                if (!string.IsNullOrWhiteSpace(translation))
+                {
+                    row.Children.Remove(status);
                     row.Children.Add(WordDetailAudioRow(translation, target, 14));
+                    continue;
+                }
+                status.Text = $"Переклад прикладу недоступний ({DocumentLanguages.Name(target)}).";
+                missingLanguages.Add(source);
+                if (!string.IsNullOrWhiteSpace(example.Translation)) missingLanguages.Add(meaning.GlossLanguage);
+            }
+            PositionWordPopup();
+            await AddMissingPackagesAsync(exampleList, missingLanguages, "Мовні пакети для прикладів");
         }
 
         foreach (var (meaning, label, detail, _) in rows.Where(row => row.Meaning.GlossLanguage == target))
@@ -273,40 +302,45 @@ public partial class ReadingPage
         foreach (var (meaning, label, detail, _) in rows.Where(row => row.Meaning.GlossLanguage != target))
             ShowGloss(meaning, label, detail);
 
-        var missing = new HashSet<Reader.Contracts.TranslationPair>();
-        foreach (var language in ordered.Where(meaning => meaning.GlossLanguage != target &&
-                     string.IsNullOrWhiteSpace(Localized(meaning.Gloss, meaning.GlossLanguage)))
-                 .Select(meaning => meaning.GlossLanguage).Distinct())
+        await AddMissingPackagesAsync(host,
+            ordered.Where(meaning => string.IsNullOrWhiteSpace(Localized(meaning.Gloss, meaning.GlossLanguage)))
+                .Select(meaning => meaning.GlossLanguage), "Мовні пакети для значень");
+
+        async Task AddMissingPackagesAsync(VerticalStackLayout destination, IEnumerable<string> languages, string buttonText)
         {
-            try
+            var missing = new HashSet<Reader.Contracts.TranslationPair>();
+            foreach (var language in languages.Where(language => language != target).Distinct())
             {
-                var state = await AppState.Session.TranslationReadinessAsync(language, target);
                 if (!Current()) return;
-                if (!state.Ready) missing.UnionWith(state.Missing);
+                try
+                {
+                    var state = await AppState.Session.TranslationReadinessAsync(language, target);
+                    if (!state.Ready) missing.UnionWith(state.Missing);
+                }
+                catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
             }
-            catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
-        }
-        if (!Current() || missing.Count == 0) return;
-        var packages = missing.ToArray();
-        var packageButton = new Button
-        {
-            Text = "Мовні пакети для значень", HorizontalOptions = LayoutOptions.Start,
-            Style = (Style)Resources["PlayerButton"],
-        };
-        var routes = packages.Select(pair => $"{DocumentLanguages.Name(pair.Source)} → {DocumentLanguages.Name(pair.Target)}");
-        DescribeButton(packageButton, $"Відкрити потрібні мовні пакети · {string.Join(", ", routes)}");
-        packageButton.Clicked += async (_, _) =>
-        {
-            if (!Current()) return;
-            try
+            if (!Current() || missing.Count == 0) return;
+            var packages = missing.ToArray();
+            var packageButton = new Button
             {
-                await Shell.Current.GoToAsync(AppShell.SettingsRoute,
-                    new ShellNavigationQueryParameters { ["translationPackages"] = packages });
-            }
-            catch (Exception error) { await DisplayAlertAsync("Мовні пакети", error.Message, "Гаразд"); }
-        };
-        host.Children.Add(packageButton);
-        PositionWordPopup();
+                Text = buttonText, HorizontalOptions = LayoutOptions.Start,
+                Style = (Style)Resources["PlayerButton"],
+            };
+            var routes = packages.Select(pair => $"{DocumentLanguages.Name(pair.Source)} → {DocumentLanguages.Name(pair.Target)}");
+            DescribeButton(packageButton, $"Відкрити потрібні мовні пакети · {string.Join(", ", routes)}");
+            packageButton.Clicked += async (_, _) =>
+            {
+                if (!Current()) return;
+                try
+                {
+                    await Shell.Current.GoToAsync(AppShell.SettingsRoute,
+                        new ShellNavigationQueryParameters { ["translationPackages"] = packages });
+                }
+                catch (Exception error) { await DisplayAlertAsync("Мовні пакети", error.Message, "Гаразд"); }
+            };
+            destination.Children.Add(packageButton);
+            PositionWordPopup();
+        }
     }
 
     private static SenseSnapshot MeaningSnapshot(string surface, WordMeaning meaning) =>
