@@ -637,16 +637,17 @@ public partial class ReadingPage : ContentPage
             existing is null ? sentence.Text : "Очистьте поле, щоб видалити цей переклад.",
             accept: "Зберегти", cancel: "Скасувати", maxLength: 4000,
             initialValue: existing ?? IndependentMachineText(document, target) ?? "");
-        if (text is not null && session.Document?.Id == document.Id && session.Sentence?.Id == sentence.Id
+        if (text is not null && session.Document is { } current && current.Id == document.Id &&
+            current.Language == document.Language && session.Sentence?.Id == sentence.Id
             && TargetCode == target && !session.Busy)
         {
+            var pdf = ReflowPdfRefreshTarget(current, sentence, target);
             ClearTranslationFocus();
             await session.SetReviewedTranslationAsync(document.Id, sentence.Id, target, text);
             if (session.Error.Length != 0) return;
             if (existing is not null && string.IsNullOrWhiteSpace(text))
                 AppState.TranslationWorker?.TranslationReviewRemoved(document.Id, target);
-            if (CurrentPdfLayoutAddress() is { } page && page.Document == document.Id && page.Target == target)
-                RefreshCachedPdfPageLayout();
+            if (pdf is { } page) InvalidateReviewedPdfRows(page.Address, sentence);
         }
     }
 

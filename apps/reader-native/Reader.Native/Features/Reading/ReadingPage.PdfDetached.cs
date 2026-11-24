@@ -372,7 +372,11 @@ public partial class ReadingPage
                 cancel: "Скасувати", initialValue: own ?? (detachedMachineTranslation is { SourceText: null } result ? result.Text : ""),
                 maxLength: 4000);
             if (text is null || !ReferenceEquals(detachedAddress, address) ||
-                detachedSentence?.Sentence.Id != current.Sentence.Id || TargetCode != target) return;
+                detachedSentence?.Sentence.Id != current.Sentence.Id || TargetCode != target ||
+                AppState.Session.Document is not { } document || document.Id != address.Document ||
+                document.Language != address.Language) return;
+            var reviewPage = new PdfLayoutAddress(address.Document, address.Page, document.CurrentRevisionId,
+                address.Language, target, address.Text);
             ClearTranslationFocus();
             var updated = await AppState.Session.UpdateDetachedPdfAnnotationAsync(
                 address.Document, address.Page, current.Sentence.Id, new { kind = "translation", target, text });
@@ -383,9 +387,7 @@ public partial class ReadingPage
                 detachedSentence = updated;
                 ResetDetachedTranslation();
             }
-            if (CurrentPdfLayoutAddress() is { } page && page.Document == address.Document &&
-                page.Page == address.Page && page.Target == target)
-                RefreshCachedPdfPageLayout();
+            InvalidateReviewedPdfRows(reviewPage, current.Sentence);
         }
         catch (Exception error) { await DisplayAlertAsync("Переклад", error.Message, "Гаразд"); }
         finally

@@ -18,9 +18,11 @@ public partial class ReadingPage
             (displayed is null || displayed.Page != Page || displayed.DetachedText == DetachedText);
 
         public bool DependsOnSentenceRefresh(PdfLayoutAddress refreshed, Sentence sentence, PdfPageTranslationRow[] rows) =>
-            this == refreshed || (DetachedText is null && refreshed.DetachedText is null &&
-                (this with { Page = refreshed.Page }) == refreshed &&
+            this == refreshed || (SharesCanonicalSource(refreshed) &&
                 rows.Any(row => row.SourceSentenceId == sentence.Id || IsActivePdfRow(row, sentence)));
+
+        public bool SharesCanonicalSource(PdfLayoutAddress other) =>
+            DetachedText is null && other.DetachedText is null && (this with { Page = other.Page }) == other;
     }
     private sealed record PdfLayoutSentenceRefresh(Sentence Source, PdfSentenceRefresh Request);
     private sealed record PdfAutoTranslation(PdfLayoutAddress Address, int RouteRequest);
@@ -639,15 +641,7 @@ public partial class ReadingPage
 
     private void NotifyPdfSentenceRefresh(PdfLayoutAddress address, Sentence sentence, bool applyingCurrentRows = false)
     {
-        recentPdfTranslations.RemoveAll(entry => entry.Address.DependsOnSentenceRefresh(address, sentence, entry.Rows));
-        if (!applyingCurrentRows && pdfLayoutRequest is { } displayed &&
-            displayed.DependsOnSentenceRefresh(address, sentence, pdfLayoutRows))
-        {
-            pdfLayoutRowsStale = true;
-            // Ignore cache reads started before the refresh committed.
-            pdfLayoutRequestId++;
-            RefreshCachedPdfPageLayout();
-        }
+        InvalidatePdfTranslationRows(address, sentence, applyingCurrentRows);
 
         if (address.DetachedText is null)
         {
@@ -659,6 +653,26 @@ public partial class ReadingPage
         {
             RecheckDetachedTranslationCache();
         }
+    }
+
+    private void InvalidateReviewedPdfRows(PdfLayoutAddress address, Sentence sentence)
+    {
+        // A page request can finish with translations read before the review was saved.
+        if (translatingPdfLayout is { } running && (running == address || running.SharesCanonicalSource(address)))
+            pdfLayoutTranslationCancellation?.Cancel();
+        InvalidatePdfTranslationRows(address, sentence);
+    }
+
+    private void InvalidatePdfTranslationRows(PdfLayoutAddress address, Sentence sentence, bool applyingCurrentRows = false)
+    {
+        recentPdfTranslations.RemoveAll(entry => entry.Address.DependsOnSentenceRefresh(address, sentence, entry.Rows));
+        if (applyingCurrentRows || pdfLayoutRequest is not { } displayed ||
+            !displayed.DependsOnSentenceRefresh(address, sentence, pdfLayoutRows)) return;
+
+        pdfLayoutRowsStale = true;
+        // Ignore cache reads started before the new translation was committed.
+        pdfLayoutRequestId++;
+        RefreshCachedPdfPageLayout();
     }
 
     private void RememberPdfPageTranslations(PdfLayoutAddress address, PdfPageTranslationRow[] rows)
