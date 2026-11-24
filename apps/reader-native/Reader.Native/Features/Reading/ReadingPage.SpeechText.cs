@@ -33,7 +33,9 @@ public partial class ReadingPage
             return saved;
         var text = sentence.Text;
         if (document.PdfPageStarts is { Length: > 0 } && text.Length > 0 &&
-            (char.IsLower(text[0]) || text[^1] is '-' or '\u00ad' or '\u2010'))
+            (char.IsLower(text[0]) || text[^1] is '-' or '\u00ad' or '\u2010' ||
+                document.Blocks.Any(block => block.Footnote &&
+                    block.StartUtf16 > sentence.StartUtf16 && block.StartUtf16 < sentence.EndUtf16)))
             return AppState.Session.GetSpeechNarration(document.Id, sentence.Id) ?? text;
         return text;
     }

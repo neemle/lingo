@@ -127,8 +127,25 @@ pub(crate) fn canonical_narration(
     if document.speech_text_overrides.contains_key(&sentence.id) {
         return Ok(None);
     }
-    let (previous, next) = canonical_edges(db, document, EdgeUse::Speech, Some(sentence), Some(sentence))?;
-    Ok(narration_fragments(document, &sentence.text, sentence.start_utf8, previous.as_deref(), next.as_deref()))
+    let body = sentence.end_utf16.checked_sub(1)
+        .and_then(|offset| pdf_reading_position::page_for_offset(document, offset))
+        .and_then(|page| canonical_body_range(document, page));
+    // A stored sentence can end in the footnote even though the body ends in a hyphen.
+    // Use the clipped source only for speech so bookmarks and sentence IDs still resolve.
+    let clipped = body.filter(|body| sentence.start_utf8 < body.end && body.end < sentence.end_utf8)
+        .and_then(|body| document.text.get(sentence.start_utf8..body.end))
+        .map(str::trim_end)
+        .filter(|text| !text.is_empty())
+        .map(|text| Sentence {
+            text: text.to_owned(),
+            end_utf8: sentence.start_utf8 + text.len(),
+            end_utf16: sentence.start_utf16 + text.encode_utf16().count(),
+            ..sentence.clone()
+        });
+    let source = clipped.as_ref().unwrap_or(sentence);
+    let (previous, next) = canonical_edges(db, document, EdgeUse::Speech, Some(source), Some(source))?;
+    Ok(narration_fragments(document, &source.text, source.start_utf8, previous.as_deref(), next.as_deref())
+        .or_else(|| clipped.as_ref().map(|source| speech_slice(document, &source.text, source.start_utf8).into_owned())))
 }
 
 fn narration_fragments(

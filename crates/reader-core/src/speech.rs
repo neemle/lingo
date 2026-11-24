@@ -361,6 +361,30 @@ mod tests {
     }
 
     #[test]
+    fn narration_joins_a_canonical_page_when_a_note_shares_its_last_sentence() {
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("book.pdf");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let prepared = crate::file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "book.pdf", &original, "fr",
+            vec!["Sur le quai², on décharge des marchan-\n2 Quai : bord du port.".into(), String::new()], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let sentence = &document.sentences[0];
+        assert!(sentence.text.contains("2 Quai"));
+        crate::pdf_detached_pages::write_text_layer(&store.connection, &document.id, 1,
+            "dises depuis 1815.").unwrap();
+        let expected = "Sur le quai , on décharge des marchandises";
+        assert_eq!(store.speech_narration(&document.id, &sentence.id).unwrap().as_deref(), Some(expected));
+        let (id, source) = store.speech_source(&document.id, &sentence.id, false).unwrap().unwrap();
+        assert_eq!(id, sentence.id);
+        assert_eq!(source.text, expected);
+        let next = store.detached_pdf_sentence(&document.id, 1, Some(0)).unwrap().unwrap();
+        assert_eq!(next.narration_text.as_deref(), Some("depuis 1815."));
+    }
+
+    #[test]
     fn narration_joins_pdf_wraps_but_keeps_french_inversion() {
         let input = "Les marchan-\ndises sont ici. Est-\nelle au port ?";
         let document = crate::document_layout::detached_pdf_document(input.into(), "fr", None);
