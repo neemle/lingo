@@ -25,6 +25,18 @@ public sealed record Vocabulary(
 
     [JsonIgnore]
     public string AcceptedTranslationsLabel => string.Join(" · ", AcceptedTranslations);
+
+    [JsonIgnore]
+    public string? NounGenderLabel => Analysis is { PartOfSpeech: "NOUN" } analysis
+        ? analysis.Features.Split('|').FirstOrDefault(feature => feature.StartsWith("Gender=", StringComparison.Ordinal)) switch
+        {
+            "Gender=Masc" => "Чоловічий рід",
+            "Gender=Fem" => "Жіночий рід",
+            "Gender=Neut" => "Середній рід",
+            "Gender=Com" => "Спільний рід",
+            _ => null,
+        }
+        : null;
 }
 
 public sealed record LemmaSnapshot(string Lemma, string Surface, string PartOfSpeech, string Features,

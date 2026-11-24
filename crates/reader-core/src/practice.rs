@@ -277,6 +277,7 @@ fn question_answers(db: &Connection, card: &Vocabulary, reverse: bool) -> Result
         return Ok(answers);
     }
     let key = answer_key(prompt(card, reverse));
+    let gender = card.analysis.as_deref().and_then(crate::card_learning::noun_gender);
     let mut seen: BTreeSet<_> = answers.iter().map(|answer| answer_key(answer)).collect();
     let mut add_answer = |answer: String| {
         let trimmed = answer.trim();
@@ -299,6 +300,9 @@ fn question_answers(db: &Connection, card: &Vocabulary, reverse: bool) -> Result
     for body in rows {
         let other: Vocabulary = serde_json::from_str(&body.map_err(|error| error.to_string())?)
             .map_err(|error| error.to_string())?;
+        if !reverse && gender.is_some() && gender != other.analysis.as_deref().and_then(crate::card_learning::noun_gender) {
+            continue;
+        }
         if matches_prompt(&other, reverse, &key) {
             for answer in other.practice_answers(reverse) {
                 add_answer(answer);

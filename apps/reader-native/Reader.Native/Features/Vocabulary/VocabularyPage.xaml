@@ -69,6 +69,13 @@
         <VerticalStackLayout Grid.Column="1" Spacing="5">
          <Label Text="{Binding Word}" Style="{StaticResource SerifTitle}" FontSize="26" />
          <Label Text="{Binding Translation}" FontSize="15" TextColor="{StaticResource Sage}" />
+         <Label Text="{Binding NounGenderLabel}" TextColor="{StaticResource Muted}" FontSize="12">
+          <Label.Triggers>
+           <DataTrigger TargetType="Label" Binding="{Binding NounGenderLabel}" Value="{x:Null}">
+            <Setter Property="IsVisible" Value="False" />
+           </DataTrigger>
+          </Label.Triggers>
+         </Label>
          <Label Text="{Binding AcceptedTranslationsLabel, StringFormat='Варіанти: {0}'}" FontSize="13"
           TextColor="{StaticResource Sage}" LineBreakMode="WordWrap">
           <Label.Triggers>

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using Reader.Contracts;
 using Reader.Native.Services;
+using Reader.Presentation;
 
 namespace Reader.Native.Features.Practice;
 
@@ -229,6 +230,13 @@ public partial class PracticePage : ContentPage, IQueryAttributable
             : "Оберіть іншу добірку або додайте слова з документа.";
         Prompt.Text = saved?.Prompt ?? (noCards ? emptyTitle : "На сьогодні все");
         var card = saved is null ? null : session.Snapshot.Vocabulary.FirstOrDefault(entry => entry.Id == saved.CardId);
+        var asksSource = state.Direction == "reverse";
+        var answerLanguage = card is null ? null : DocumentLanguages.Name(asksSource ? card.Language : card.TargetLanguage);
+        QuestionLanguages.Text = card is null ? null
+            : $"{DocumentLanguages.Name(asksSource ? card.TargetLanguage : card.Language)} → {answerLanguage}";
+        QuestionLanguages.IsVisible = card is not null;
+        TypedAnswer.Placeholder = answerLanguage is null ? "Ваша відповідь…" : $"Ваша відповідь · {answerLanguage}";
+        SemanticProperties.SetDescription(TypedAnswer, TypedAnswer.Placeholder);
         SpeakPrompt.IsVisible = card is not null;
         SpeakAnswer.IsVisible = card is not null && saved?.Revealed == true;
         var context = saved is null
@@ -242,6 +250,8 @@ public partial class PracticePage : ContentPage, IQueryAttributable
             var hint = showGloss ? sense.Gloss : sense.PartOfSpeech;
             context = string.IsNullOrWhiteSpace(context) ? hint : $"{context}{Environment.NewLine}{hint}";
         }
+        if (!asksSource && card?.NounGenderLabel is { } gender)
+            context = string.IsNullOrWhiteSpace(context) ? gender : $"{gender}{Environment.NewLine}{context}";
         QuestionContext.Text = context;
         QuestionContext.IsVisible = !string.IsNullOrWhiteSpace(context);
         EmptyAction.Text = session.Document is null ? "Відкрити бібліотеку" : "Продовжити читати";

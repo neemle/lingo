@@ -302,16 +302,19 @@ impl Vocabulary {
         }
         match &self.analysis {
             None => self.surface_key(&self.word),
-            Some(analysis) => format!(
-                "lemma:{}",
-                serde_json::json!([
-                    self.language,
-                    self.target_language,
+            Some(analysis) => {
+                let identity = (
+                    &self.language,
+                    &self.target_language,
                     knowledge::word_key(&analysis.lemma),
-                    analysis.part_of_speech,
+                    &analysis.part_of_speech,
                     knowledge::word_key(&self.translation),
-                ])
-            ),
+                );
+                match card_learning::noun_gender(analysis) {
+                    Some(gender) => format!("lemma-gender:{}", serde_json::json!([identity, gender])),
+                    None => format!("lemma:{}", serde_json::json!(identity)),
+                }
+            }
         }
     }
 
@@ -594,7 +597,8 @@ impl Store {
         translation_queue::initialize(connection)?;
         translation::initialize_cache_ownership(connection)?;
         knowledge::annotation_cache::initialize(connection)?;
-        pdf_sentences::upgrade_documents(connection)
+        pdf_sentences::upgrade_documents(connection)?;
+        card_learning::upgrade_noun_keys(connection)
     }
     pub fn snapshot(&self) -> Result<Snapshot> {
         fn rows<T: serde::de::DeserializeOwned>(

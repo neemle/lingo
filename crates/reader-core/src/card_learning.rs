@@ -8,6 +8,45 @@ use unicode_normalization::UnicodeNormalization;
 const MAX_VARIANTS: usize = 32;
 const MAX_TRANSLATION_BYTES: usize = 2000;
 
+pub(crate) fn noun_gender(analysis: &crate::LemmaSnapshot) -> Option<&str> {
+    if analysis.part_of_speech != "NOUN" {
+        return None;
+    }
+    let gender = analysis.features.split('|').find_map(|feature| feature.strip_prefix("Gender="))?;
+    matches!(gender, "Masc" | "Fem" | "Neut" | "Com").then_some(gender)
+}
+
+pub(crate) fn upgrade_noun_keys(connection: &mut rusqlite::Connection) -> Result<()> {
+    const VERSION: u32 = 6;
+    let version = |db: &rusqlite::Connection| db.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
+        .map_err(|error| error.to_string());
+    if version(connection)? >= VERSION {
+        return Ok(());
+    }
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    if version(&tx)? < VERSION {
+        let mut select = tx.prepare("SELECT body FROM vocabulary WHERE word_key LIKE 'lemma:%' AND
+            json_extract(body, '$.analysis.partOfSpeech')='NOUN'").map_err(|error| error.to_string())?;
+        let rows = select.query_map([], |row| row.get::<_, String>(0)).map_err(|error| error.to_string())?;
+        let mut keys = Vec::new();
+        for body in rows {
+            let card: Vocabulary = serde_json::from_str(&body.map_err(|error| error.to_string())?)
+                .map_err(|error| error.to_string())?;
+            if card.analysis.as_deref().and_then(noun_gender).is_some() {
+                keys.push((card.word_key(), card.id));
+            }
+        }
+        let mut update = tx.prepare("UPDATE vocabulary SET word_key=?1 WHERE id=?2")
+            .map_err(|error| error.to_string())?;
+        for (key, id) in keys {
+            update.execute(params![key, id]).map_err(|error| error.to_string())?;
+        }
+        tx.pragma_update(None, "user_version", VERSION).map_err(|error| error.to_string())?;
+    }
+    tx.commit().map_err(|error| error.to_string())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SenseSnapshot {
@@ -243,6 +282,54 @@ mod tests {
     use super::*;
     use crate::practice::{PracticeCollection, PracticeProgress, SavedQuestion};
     use crate::ReviewState;
+
+    #[test]
+    fn noun_gender_upgrade_keeps_reviews_and_saves_distinct_cards() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("reader.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        let card = |features: &str, surface: &str| Vocabulary {
+            id: String::new(), word: surface.into(), translation: "манера".into(), language: "fr".into(),
+            target_language: "uk".into(), context: String::new(), document_id: String::new(),
+            forward: ReviewState::default(), reverse: ReviewState::default(),
+            analysis: Some(Box::new(crate::LemmaSnapshot {
+                lemma: "mode".into(), surface: surface.into(), part_of_speech: "NOUN".into(),
+                features: features.into(), source: "fixture".into(), source_version: "1".into(),
+                context: None, document_id: None,
+            })),
+            expression: None, sense: None, accepted_translations: vec![],
+        };
+        let former = store.save_word(card("Gender=Masc|Number=Sing", "mode")).unwrap();
+        store.review(&former.id, "forward", 2).unwrap();
+        store.review(&former.id, "reverse", 3).unwrap();
+        let mut legacy = former.clone();
+        legacy.analysis.as_mut().unwrap().features = "Number=Sing".into();
+        store.connection.execute("UPDATE vocabulary SET word_key=?1 WHERE id=?2",
+            params![legacy.word_key(), former.id]).unwrap();
+        store.connection.pragma_update(None, "user_version", 5).unwrap();
+        drop(store);
+
+        let mut store = Store::open(&path).unwrap();
+        let plural = store.save_word(card("Gender=Masc|Number=Plur", "modes")).unwrap();
+        let feminine = store.save_word(card("Gender=Fem|Number=Sing", "mode")).unwrap();
+        assert_eq!(plural.id, former.id);
+        assert_ne!(feminine.id, former.id);
+        assert_eq!((plural.forward.reviews, plural.reverse.reviews), (1, 1));
+        assert_eq!((feminine.forward.reviews, feminine.reverse.reviews), (0, 0));
+        assert_eq!(store.vocabulary_review_history(&former.id).unwrap().len(), 2);
+
+        let mut receiver = Store::open(&root.path().join("receiver.sqlite")).unwrap();
+        let archive = store.export_dictionary(None).unwrap();
+        receiver.import_dictionary(archive.clone()).unwrap();
+        receiver.import_dictionary(archive).unwrap();
+        assert_eq!(receiver.dictionary_collection(None).unwrap().len(), 2);
+        assert_eq!(receiver.vocabulary_review_history(&former.id).unwrap().len(), 2);
+
+        store.edit_vocabulary_translation(&feminine.id, Some("мода"), vec![]).unwrap();
+        let question = store.next_practice_question(0).unwrap().progress.question.unwrap();
+        assert_eq!(question.card_id, feminine.id);
+        assert_eq!(question.answers, ["мода"]);
+    }
 
     #[test]
     fn deleting_cards_cleans_history_and_only_affected_practice() {

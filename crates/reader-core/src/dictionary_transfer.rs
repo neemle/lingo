@@ -944,7 +944,8 @@ fn same_card_identity(local: &Vocabulary, incoming: &Vocabulary) -> bool {
         _ => return false,
     }
     match (&local.analysis, &incoming.analysis) {
-        (Some(local), Some(incoming)) => local.part_of_speech == incoming.part_of_speech,
+        (Some(local), Some(incoming)) => local.part_of_speech == incoming.part_of_speech &&
+            crate::card_learning::noun_gender(local) == crate::card_learning::noun_gender(incoming),
         (None, None) => true,
         _ => false,
     }

@@ -57,6 +57,8 @@
     <VerticalStackLayout Spacing="18" VerticalOptions="Center">
      <Label x:Name="QueueStatus" TextColor="{StaticResource Muted}" FontSize="12" CharacterSpacing="0.7"
       HorizontalTextAlignment="Center" />
+     <Label x:Name="QuestionLanguages" TextColor="{StaticResource Muted}" FontSize="14"
+      HorizontalTextAlignment="Center" IsVisible="False" />
      <Label x:Name="Prompt" Style="{StaticResource SerifTitle}" FontSize="42" TextColor="{StaticResource Sage}"
       HorizontalTextAlignment="Center" SemanticProperties.HeadingLevel="Level2" />
      <Button x:Name="SpeakPrompt" Text="Прослухати запитання" Clicked="SpeakPracticeSideClicked"
