@@ -2619,7 +2619,30 @@ mod tests {
         };
         assert_eq!(advance(&mut store)["translatedPage"], 0);
         assert_eq!(advance(&mut store)["translatedPage"], 1);
-        assert!(advance(&mut store)["translatedPage"].is_null());
+        let limit = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let page = advance(&mut store);
+            assert!(page["translatedPage"].is_null());
+            let (cursor, retry_cursor): (u32, Option<u32>) = store.connection.query_row(
+                "SELECT cursor,retry_cursor FROM background_translation_progress WHERE document_id=?1",
+                [&document.id], |row| Ok((row.get(0)?, row.get(1)?)),
+            ).unwrap();
+            if cursor == 3 {
+                assert_eq!(retry_cursor, Some(2));
+                break;
+            }
+            // Parallel tests can temporarily hold the model permit. Expire only
+            // this page's deferral in the fixture, without waiting for the scheduler.
+            assert_eq!((cursor, retry_cursor), (2, None));
+            let resume_at = page["resumeAt"].as_i64().unwrap();
+            assert!(resume_at > 0 && std::time::Instant::now() < limit);
+            assert_eq!(store.connection.execute(
+                "UPDATE background_translation_progress SET resume_at=0
+                 WHERE document_id=?1 AND target='uk' AND cursor=2 AND resume_at=?2",
+                params![document.id, resume_at],
+            ).unwrap(), 1);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         assert_eq!(advance(&mut store)["translatedPage"], 3);
         drop(store);
 
