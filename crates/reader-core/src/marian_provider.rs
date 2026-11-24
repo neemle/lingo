@@ -1784,11 +1784,22 @@ impl MarianProvider<'_> {
                         }
                     }
                 }
-                if package.target == "uk" && crate::marian_target_uk::clearly_russian(&translated) {
+                let wrong_ukrainian = |text: &str| {
+                    crate::marian_target_uk::clearly_russian(text)
+                        || (start == 0 && end == source_pieces.len()
+                            && crate::marian_target_uk::clearly_foreign_prose(segment, text))
+                };
+                if package.target == "uk" && wrong_ukrainian(&translated) {
+                    let russian = crate::marian_target_uk::clearly_russian(&translated);
+                    let acceptable = |text: &String| {
+                        crate::marian_target_uk::clearly_ukrainian(text)
+                            && !wrong_ukrainian(text)
+                            && (start != 0 || end != source_pieces.len() || protected.restore(text.clone()).is_ok())
+                    };
                     let candidate = alternatives
                         .into_iter()
                         .chain(decoded.filter_map(|tokens| decode_text(&tokens).ok()))
-                        .find(|text| crate::marian_target_uk::clearly_ukrainian(text));
+                        .find(acceptable);
                     let french_retry = if candidate.is_none() && ukrainian_retry_budget > 0 && package.source == "fr"
                         && start == 0 && end == source_pieces.len() && segment.len() <= 768
                     {
@@ -1808,22 +1819,24 @@ impl MarianProvider<'_> {
                             let sentence = segment.trim_end();
                             if let Some(retry) = french_retry {
                                 reference(&retry.input, settings.beam_size).ok()
-                                    .filter(|text| crate::marian_target_uk::clearly_ukrainian(text))
                                     .map(|text| retry.restore(&text))
+                                    .filter(acceptable)
                             } else if let Some(mark @ ('.' | '!' | '?')) = sentence.chars().last() {
                                 let source = sentence[..sentence.len() - mark.len_utf8()].trim_end();
                                 reference(source, settings.beam_size).ok()
-                                    .filter(|text| crate::marian_target_uk::clearly_ukrainian(text))
+                                    .filter(acceptable)
                                     .map(|text| format!("{}{mark}", text.trim_end_matches(['.', '!', '?'])))
                             } else {
                                 reference(segment, 1).ok()
-                                    .filter(|text| crate::marian_target_uk::clearly_ukrainian(text))
+                                    .filter(acceptable)
                             }
                         }
                         None => None,
                     };
                     let Some(candidate) = candidate else {
-                        results.push(Err("Модель повернула російський текст замість українського.".into()));
+                        let message = if russian { "Модель повернула російський текст замість українського." }
+                            else { "Модель повернула текст іншою мовою замість української." };
+                        results.push(Err(message.into()));
                         continue 'segments;
                     };
                     translated = candidate;

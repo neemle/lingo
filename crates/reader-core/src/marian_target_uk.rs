@@ -149,6 +149,24 @@ pub(super) fn clearly_ukrainian(text: &str) -> bool {
     distinguish(&sample) == Some(Lang::Ukr) && !contains_russian_clause(&sample)
 }
 
+pub(super) fn clearly_foreign_prose(source: &str, output: &str) -> bool {
+    use crate::{language_detection::detect, protected_translation::without_identifiers};
+
+    let prose = outside_quotes(&without_identifiers(output));
+    let has_cyrillic = |text: &str| text.chars().any(|ch| {
+        ('\u{0400}'..='\u{052f}').contains(&ch) && ch.is_alphabetic()
+    });
+    let foreign = |text: &str| !has_cyrillic(text) && detect(text).is_some_and(|code| code != "uk");
+    if has_cyrillic(&prose) {
+        return prose.split_sentence_bounds().any(foreign);
+    }
+
+    // A short Latin heading or name can be valid on its own. When it is all
+    // that remains of a confidently identified foreign passage, prose was lost.
+    foreign(&prose) || (prose.chars().filter(|ch| ch.is_alphabetic()).take(8).count() >= 8 &&
+        detect(&without_identifiers(source)).is_some_and(|code| code != "uk"))
+}
+
 fn contains_russian_clause(sample: &str) -> bool {
     // Words that distinguish ordinary Russian prose even when it uses only shared letters.
     // Require two independent cues in the same unquoted sentence to avoid flagging names.

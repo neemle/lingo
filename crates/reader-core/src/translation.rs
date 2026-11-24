@@ -2060,7 +2060,7 @@ mod tests {
     }
 
     #[test]
-    fn unchanged_source_prose_is_neither_served_from_cache_nor_accepted_from_a_model() {
+    fn foreign_prose_is_neither_served_from_cache_nor_accepted_from_a_model() {
         struct Provider(Vec<String>);
         impl TranslationProvider for Provider {
             fn installed_models(&self) -> Result<Vec<ModelEdge>> { Ok(vec![]) }
@@ -2078,25 +2078,34 @@ mod tests {
 
         let source = "Le jeune homme quitta le port sans dire un seul mot à ses compagnons.";
         let echo = "LE JEUNE HOMME QUITTA LE PORT, SANS DIRE UN SEUL MOT À SES COMPAGNONS !";
+        let paraphrase = "Sans parler à ses compagnons, le jeune homme a quitté le port.";
+        let english = "The young man left the harbor without saying a single word to his companions.";
+        let partial = "CHAPITRE I";
         let translated = "Юнак покинув порт, не сказавши своїм товаришам ані слова.";
         let edge = ModelEdge { source: "fr".into(), target: "uk".into(), revision: "test".into(), quality: None };
         let route = Route::Direct(edge.clone());
-        let mut provider = Provider(vec![echo.into()]);
-        assert!(checked_inference(&mut provider, &edge, &[source.into()], None, TranslationSettings::default()).is_err());
-        provider.0.push(translated.into());
         let mut store = Store::open(Path::new(":memory:")).unwrap();
         let document = store.import("page.txt", source.as_bytes(), "fr").unwrap();
-        let results = infer_independent_units(&mut store, &mut provider, &document.id, &route,
-            &[source.into(), source.into()]).unwrap();
-        assert!(results[0].is_err());
-        assert_eq!(results[1].as_deref(), Ok(translated));
-
         let key = unit_cache_key(&route, source).unwrap();
-        store.save_cached_segments([(key.clone(), &[echo.into()][..])]).unwrap();
-        assert!(store.cached_segments(&key, &[source], "uk").unwrap().is_none());
+        let mixed = format!("{translated} {english}");
+        for invalid in [echo, paraphrase, english, partial, &mixed] {
+            let mut provider = Provider(vec![invalid.into()]);
+            assert!(checked_inference(&mut provider, &edge, &[source.into()], None,
+                TranslationSettings::default()).is_err(), "{invalid}");
+            provider.0.push(translated.into());
+            let results = infer_independent_units(&mut store, &mut provider, &document.id, &route,
+                &[source.into(), source.into()]).unwrap();
+            assert!(results[0].is_err(), "{invalid}");
+            assert_eq!(results[1].as_deref(), Ok(translated));
+            store.save_cached_segments([(key.clone(), &[invalid.into()][..])]).unwrap();
+            assert!(store.cached_segments(&key, &[source], "uk").unwrap().is_none(), "{invalid}");
+        }
         store.save_cached_segments([(key.clone(), &[translated.into()][..])]).unwrap();
         assert_eq!(store.cached_segments(&key, &[source], "uk").unwrap().unwrap(), [translated]);
         assert!(translation_language_error("Alexandre Dumas", "Alexandre Dumas", "uk").is_none());
+        assert!(translation_language_error(source, "Газета The Times надрукувала цей уривок.", "uk").is_none());
+        let citation = format!("Він процитував: «{paraphrase}».");
+        assert!(translation_language_error(source, &citation, "uk").is_none());
     }
 
     #[test]
@@ -3892,6 +3901,9 @@ fn translation_language_error(source: &str, output: &str, target: &str) -> Optio
         crate::language_detection::detect(&source).is_some_and(|language| language != target)
     {
         return Some("Мовний пакет повторив оригінал замість перекладу");
+    }
+    if target == "uk" && crate::marian_target_uk::clearly_foreign_prose(&source, &output) {
+        return Some("Мовний пакет повернув текст іншою мовою замість української");
     }
     None
 }
