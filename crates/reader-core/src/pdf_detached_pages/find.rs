@@ -110,15 +110,17 @@ impl Store {
                         if let Some((layout, fragments)) = split {
                             let mut matched = None;
                             for index in fragments {
-                                let Some(text) = routes.cached_pdf_row(
+                                let Some(row) = routes.cached_pdf_row(
                                     self, layout, index, target, PageBoundaries::Projected, UnitGrouping::Sentence,
-                                )?.and_then(|row| row.translation) else { continue; };
+                                )? else { continue; };
+                                let Some(text) = row.translation else { continue; };
                                 if !search_text(&text).contains(&needle) { continue; }
                                 let part = &layout.sentences[index];
                                 pdf_fragment = Some(TranslationSearchFragment {
                                     page,
                                     start_utf16: part.start_utf16 - projected_offset,
                                     end_utf16: part.end_utf16 - projected_offset,
+                                    pivot_language: row.pivot_language,
                                 });
                                 matched = Some(text);
                                 break;

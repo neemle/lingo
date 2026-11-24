@@ -12,5 +12,8 @@ public static class DocumentLanguages
     public static string PivotRoute(string source, string pivot, string target) =>
         $"{Name(source)} → {Name(pivot)} → {Name(target)}";
 
+    public static string WithPivotRoute(string label, string source, string? pivot, string target) =>
+        pivot is null ? label : $"{label} · {PivotRoute(source, pivot, target)}";
+
     public static string Name(string code) => All.FirstOrDefault(language => language.Code == code).Name ?? code;
 }

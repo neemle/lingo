@@ -539,8 +539,7 @@ public partial class ReadingPage
     {
         detachedMachineTranslation = translation;
         var label = translation.SourceText is null ? "Машинний переклад" : "Машинний переклад групи речень";
-        if (translation.PivotLanguage is { } pivot)
-            label += $" · {DocumentLanguages.PivotRoute(source, pivot, target)}";
+        label = DocumentLanguages.WithPivotRoute(label, source, translation.PivotLanguage, target);
         ShowDetachedTranslation($"{label}{Environment.NewLine}{translation.Text}");
     }
 
@@ -552,9 +551,10 @@ public partial class ReadingPage
 
     private void RenderDetachedTranslation()
     {
-        var value = FoundPdfTranslation(detached: true) is { } hit
-            ? $"Збіг у збереженому перекладі PDF{Environment.NewLine}{hit.Target}"
-            : detachedTranslationLabel;
+        var hit = FoundPdfTranslation(detached: true);
+        var value = hit is null ? detachedTranslationLabel
+            : DocumentLanguages.WithPivotRoute("Збіг у збереженому перекладі PDF",
+                hit.SourceLanguage, hit.PivotLanguage, hit.TargetLanguage) + Environment.NewLine + hit.Target;
         var changed = DetachedTranslation.Text != value;
         DetachedTranslation.Text = value;
         DetachedTranslationPane.IsVisible = value.Length != 0;

@@ -381,19 +381,21 @@ public partial class ReadingPage : ContentPage
         var searchHit = FoundPdfTranslation(detached: false);
         var machineLabel = alignment?.Unit.Sources.Length > 1 ? "Машинний переклад групи речень"
             : machine?.JoinedLines == true ? "Машинний переклад об’єднаних рядків" : "Машинний переклад";
-        if (alignment is { Window.Scope: var scope, Translation.PivotLanguage: { } pivot })
-            machineLabel += $" · {DocumentLanguages.PivotRoute(scope.Source, pivot, scope.Target)}";
+        if (alignment is { Window.Scope: var scope, Translation.PivotLanguage: var pivot })
+            machineLabel = DocumentLanguages.WithPivotRoute(machineLabel, scope.Source, pivot, scope.Target);
         var currentStatus = key == statusKey ? machineStatus : null;
         if (alignment is { } result && !IsPreferredRoute(result.Window)
             && (readiness is not { Ready: true } || result.Translation.PivotLanguage is null))
-            machineLabel = $"Збережено раніше · {machineLabel}. {currentStatus ?? ReadinessMessage()}";
+            machineLabel = currentStatus is null
+                ? $"Збережено раніше · {machineLabel}. {ReadinessMessage()}" : $"Збережено раніше · {machineLabel}";
 
         TranslationNotice.Text = footnote ? "Виноски залишаються в оригіналі."
             : !active ? "Відкрийте документ для читання."
-            : searchHit is not null ? "Збіг у збереженому перекладі PDF"
-            : translating && currentStatus is not null ? currentStatus
+            : searchHit is not null ? DocumentLanguages.WithPivotRoute("Збіг у збереженому перекладі PDF",
+                searchHit.SourceLanguage, searchHit.PivotLanguage, searchHit.TargetLanguage)
+            : translating && currentStatus is not null && machine is null ? currentStatus
             : text is not null ? "Ваш переклад активного речення"
-            : machine is not null ? currentStatus ?? machineLabel
+            : machine is not null ? (currentStatus is null ? machineLabel : $"{currentStatus} {machineLabel}")
             : currentStatus ?? ReadinessMessage();
         var newTranslation = footnote ? "" : searchHit?.Target ?? text ?? machine?.Text ?? "";
         var hasNewActiveTranslation = newTranslation.Length > 0 && SegmentTranslation.Text != newTranslation;

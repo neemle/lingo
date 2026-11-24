@@ -185,7 +185,8 @@ public partial class ReadingPage
             ? !loadingDetachedSentence && detachedAddress?.Page == focus.Page && detachedSentence is { } page &&
                 page.RevisionId == focus.Revision && page.Sentence.Id == focus.Sentence
             : focus.Page is null && document.CurrentRevisionId == focus.Revision && AppState.Session.Sentence?.Id == focus.Sentence;
-        return current ? new TranslationPair(source.Text, document.Language, translation, target) : null;
+        return current ? new TranslationPair(source.Text, document.Language, translation, target,
+            focus.PdfFragment?.PivotLanguage) : null;
     }
 
     private void RefreshFindTranslationDisplay()

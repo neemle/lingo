@@ -1007,6 +1007,8 @@ pub struct TranslationSearchFragment {
     pub(crate) page: u16,
     pub(crate) start_utf16: usize,
     pub(crate) end_utf16: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) pivot_language: Option<String>,
 }
 
 pub(crate) fn search_cached_translation(
@@ -1053,14 +1055,16 @@ pub(crate) fn search_cached_translation(
                 if last > first + 1 {
                     previous_unit = None;
                     for fragment in first..last {
-                        let Some(text) = routes.cached_pdf_row(
+                        let Some(row) = routes.cached_pdf_row(
                             store, projected, fragment, target, PageBoundaries::Canonical, UnitGrouping::Sentence,
-                        )?.and_then(|row| row.translation) else { continue; };
+                        )? else { continue; };
+                        let Some(text) = row.translation else { continue; };
                         if !normalize_translation_search(&text).contains(&query) { continue; }
                         let part = &projected.sentences[fragment];
                         page.matches.push(TranslationSearchMatch {
                             position, text, pdf_fragment: Some(TranslationSearchFragment {
                                 page: physical_page, start_utf16: part.start_utf16, end_utf16: part.end_utf16,
+                                pivot_language: row.pivot_language,
                             }),
                         });
                         break;

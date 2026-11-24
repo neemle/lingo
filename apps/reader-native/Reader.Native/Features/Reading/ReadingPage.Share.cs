@@ -8,7 +8,8 @@ public partial class ReadingPage
 {
     private bool sharingReaderText;
 
-    private sealed record TranslationPair(string Source, string SourceLanguage, string Target, string TargetLanguage);
+    private sealed record TranslationPair(string Source, string SourceLanguage, string Target, string TargetLanguage,
+        string? PivotLanguage = null);
 
     private TranslationPair? DisplayedTranslationPair()
     {
