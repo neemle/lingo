@@ -358,7 +358,11 @@ public partial class ReadingPage
         try
         {
             await session.OpenPdfReadingPageAsync(document.Id, revisionId: null, page: page);
-            if (session.Error.Length == 0) await pdfWindowRead;
+            if (session.Error.Length == 0 && session.Document?.Id == document.Id)
+            {
+                RecordReadingActivity(document.Id);
+                await pdfWindowRead;
+            }
         }
         finally
         {

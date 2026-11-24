@@ -79,8 +79,11 @@ public partial class ReadingPage
         {
             var result = await AppState.Session.DetachedPdfSentenceAsync(address.Document, address.Page, position, sentenceId, sourceOffset);
             if (request != detachedSentenceRequest || !ReferenceEquals(detachedAddress, address)) return;
+            var previous = detachedSentence;
             detachedSentence = result;
             if (result is not { } current) return;
+            if ((position.HasValue || sourceOffset.HasValue) && previous?.Position != current.Position)
+                RecordReadingActivity(address.Document);
             var sentence = current.Sentence;
             DetachedPdfText.HighlightStart = sentence.StartUtf16;
             DetachedPdfText.HighlightLength = sentence.EndUtf16 - sentence.StartUtf16;
@@ -155,6 +158,7 @@ public partial class ReadingPage
     {
         if (detachedAddress is not { } address || detachedSentence is not { } sentence || loadingDetachedSentence) return;
         dictionaryFocus = null;
+        RecordReadingActivity(address.Document);
         SetDetachedSelection(selected);
         UpdateDetachedControls();
         DetachedSelectedWord.Text = selected.ReadingText;
@@ -760,6 +764,7 @@ public partial class ReadingPage
                 Save(null);
                 return true;
             }
+            RecordReadingActivity(address.Document);
             await loadingVoices.WaitAsync(token);
             if (run != detachedAudioRun) return false;
             var voice = SelectedVoice();
@@ -825,6 +830,7 @@ public partial class ReadingPage
             if (run != detachedAudioRun) return false;
             if (status == LocalSpeech.CompletedStatus)
             {
+                RecordReadingActivity(address.Document);
                 checkpointDetachedSpeech = null;
                 Save(null);
                 return true;

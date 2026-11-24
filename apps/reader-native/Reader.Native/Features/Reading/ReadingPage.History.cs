@@ -93,9 +93,10 @@ public partial class ReadingPage
         _ = SaveReadingCheckpointAsync(readingVisit, opened);
     }
 
-    private void RecordReadingActivity()
+    private void RecordReadingActivity(string? documentId = null)
     {
-        if (!readingHistoryVisible || !readingHistoryForeground || readingVisit is not { } visit) return;
+        if (!readingHistoryVisible || !readingHistoryForeground || readingVisit is not { } visit ||
+            (documentId is not null && documentId != visit.Checkpoint.DocumentId)) return;
         var timestamp = Stopwatch.GetTimestamp();
         if (visit.LastInteraction is long previous)
         {
