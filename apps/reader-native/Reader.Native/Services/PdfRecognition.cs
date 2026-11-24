@@ -11,14 +11,66 @@ internal static class PdfRecognition
             throw new InvalidDataException($"Для розпізнавання PDF має містити від 1 до {MaxPages} сторінок.");
     }
 
-    internal static async Task<string?> DetectSampleLanguageAsync(string[] samples, Func<string, Task<string?>> detect)
+    internal static async Task<string?> DetectSampleLanguageAsync(string[] textLayers, Func<string, Task<string?>> detect,
+        CancellationToken cancellation, params Func<int, int, Task<string[]>>[] readOcr)
     {
-        var votes = await Task.WhenAll(samples.Where(text => !string.IsNullOrWhiteSpace(text)).Select(detect));
-        var recognized = votes.OfType<string>().ToArray();
-        if (recognized.Length == 0) return await detect(string.Join("\n", samples));
+        var votes = new string?[textLayers.Length];
+        var bestSamples = (string[])textLayers.Clone();
+        var bodyCount = Math.Min(3, textLayers.Length);
 
+        async Task<string?> ProbeAsync(int start, int count)
+        {
+            var end = start + count;
+            var window = votes.AsMemory(start, count);
+            await AddLanguageVotesAsync(textLayers[start..end], window, detect);
+            cancellation.ThrowIfCancellationRequested();
+            var language = SampleLanguage(votes.AsSpan(0, end));
+            if (language is not null) return language;
+
+            foreach (var read in readOcr)
+            {
+                if (Array.IndexOf(votes, null, start, count) < 0) break;
+                var samples = await read(start, count);
+                await AddLanguageVotesAsync(samples, window, detect);
+                cancellation.ThrowIfCancellationRequested();
+                language = SampleLanguage(votes.AsSpan(0, end));
+                if (language is not null) return language;
+
+                for (var i = 0; i < samples.Length; i++)
+                    if (samples[i].Length > bestSamples[start + i].Length)
+                        bestSamples[start + i] = samples[i];
+            }
+
+            // Detect short snippets jointly when no individual page supplied a confident vote.
+            if (votes.Take(end).Any(vote => vote is not null)) return null;
+            var snippets = bestSamples.Take(end).Where(sample => !string.IsNullOrWhiteSpace(sample)).ToArray();
+            return snippets.Length >= (end == 1 ? 1 : 2) ? await detect(string.Join("\n", snippets)) : null;
+        }
+
+        if (bodyCount == 0) return null;
+        var language = await ProbeAsync(0, bodyCount);
+        if (language is not null || bodyCount == textLayers.Length) return language;
+        return await ProbeAsync(bodyCount, textLayers.Length - bodyCount);
+    }
+
+    private static async Task AddLanguageVotesAsync(string[] samples, Memory<string?> votes,
+        Func<string, Task<string?>> detect)
+    {
+        await Task.WhenAll(samples.Select(async (sample, index) =>
+        {
+            if (votes.Span[index] is null && !string.IsNullOrWhiteSpace(sample))
+            {
+                var language = await detect(sample).ConfigureAwait(false);
+                votes.Span[index] = language;
+            }
+        })).ConfigureAwait(false);
+    }
+
+    private static string? SampleLanguage(ReadOnlySpan<string?> votes)
+    {
         // One cover page cannot decide the language when we sampled a larger book.
-        if (recognized.Length == 1 && samples.Length >= 3) return null;
+        var recognized = votes.ToArray().OfType<string>().ToArray();
+        if (recognized.Length == 1 && votes.Length >= 3) return null;
         return recognized.GroupBy(language => language, StringComparer.Ordinal)
             .FirstOrDefault(group => group.Count() > recognized.Length / 2)?.Key;
     }

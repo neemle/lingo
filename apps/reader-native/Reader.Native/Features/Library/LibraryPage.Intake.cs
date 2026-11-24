@@ -121,24 +121,11 @@ public partial class LibraryPage
                 path ??= (await session.IntakeFileAsync(item.Id)).Path;
                 var samples = await PdfScan.ReadLanguageSamplesAsync(path, PdfScan.LanguageSample.TextLayer, cancellation: token);
                 Task<string?> DetectAsync(string sample) => ImportLanguageDetection.DetectAsync(session, sample);
-                var detected = await PdfRecognition.DetectSampleLanguageAsync(samples, DetectAsync);
-                token.ThrowIfCancellationRequested();
-                if (detected is not null) return detected;
-
-                const int bodySamples = 3;
-                foreach (var source in new[] { PdfScan.LanguageSample.PortableOcr, PdfScan.LanguageSample.NativeOcr })
-                {
-                    var body = await PdfScan.ReadLanguageSamplesAsync(path, source, count: bodySamples, cancellation: token);
-                    detected = await PdfRecognition.DetectSampleLanguageAsync(body, DetectAsync);
-                    token.ThrowIfCancellationRequested();
-                    if (detected is not null) return detected;
-                    if (samples.Length <= bodySamples) continue;
-                    var front = await PdfScan.ReadLanguageSamplesAsync(path, source, skip: bodySamples, cancellation: token);
-                    detected = await PdfRecognition.DetectSampleLanguageAsync([.. body, .. front], DetectAsync);
-                    token.ThrowIfCancellationRequested();
-                    if (detected is not null) return detected;
-                }
-                return null;
+                return await PdfRecognition.DetectSampleLanguageAsync(samples, DetectAsync, token,
+                    (start, count) => PdfScan.ReadLanguageSamplesAsync(path, PdfScan.LanguageSample.PortableOcr,
+                        skip: start, count: count, cancellation: token),
+                    (start, count) => PdfScan.ReadLanguageSamplesAsync(path, PdfScan.LanguageSample.NativeOcr,
+                        skip: start, count: count, cancellation: token));
             });
             if (language is null) return false;
             await session.WaitUntilIdleAsync();
