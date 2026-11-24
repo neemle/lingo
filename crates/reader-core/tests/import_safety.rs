@@ -128,6 +128,37 @@ fn docx_run_controls_preserve_visible_text_and_ignore_tab_stops() {
 }
 
 #[test]
+fn docx_import_uses_current_runs_and_paragraph_properties() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&dir.path().join("reader.db")).unwrap();
+    let bytes = docx(br#"
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body>
+            <w:p>
+              <w:pPr><w:outlineLvl w:val="1"/>
+                <w:pPrChange w:id="1" w:author="Editor">
+                  <w:pPr><w:outlineLvl w:val="9"/></w:pPr>
+                </w:pPrChange>
+              </w:pPr>
+              <w:r><w:t xml:space="preserve">Chapter </w:t></w:r>
+              <w:del w:id="2" w:author="Editor"><w:r><w:tab/><w:br/><w:delText>One</w:delText></w:r></w:del>
+              <w:ins w:id="3" w:author="Editor"><w:r><w:t>Two</w:t></w:r></w:ins>
+            </w:p>
+            <w:p>
+              <w:moveFrom w:id="4" w:author="Editor"><w:r><w:cr/><w:delText>Read this.</w:delText></w:r></w:moveFrom>
+              <w:r><w:t>Start here.</w:t></w:r>
+            </w:p>
+            <w:p><w:moveTo w:id="5" w:author="Editor"><w:r><w:t>Read this.</w:t></w:r></w:moveTo></w:p>
+          </w:body>
+        </w:document>"#, zip::CompressionMethod::Deflated);
+    let document = store.import("tracked.docx", &bytes, "en").unwrap();
+    assert_eq!(document.text, "Chapter Two\nStart here.\nRead this.\n");
+    assert_eq!(document.blocks[0].heading_level, Some(2));
+    assert_eq!(document.blocks.len(), 3);
+    assert_eq!(store.original(&document.id).unwrap().bytes, bytes);
+}
+
+#[test]
 fn truncated_docx_is_rejected_without_persisting_a_document() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(&dir.path().join("reader.db")).unwrap();

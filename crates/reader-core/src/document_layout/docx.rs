@@ -14,7 +14,7 @@ use std::{
 mod numbering;
 use numbering::Numbering;
 
-pub(crate) const DOCX_LAYOUT_VERSION: u8 = 4;
+pub(crate) const DOCX_LAYOUT_VERSION: u8 = 5;
 
 #[derive(Clone, Default)]
 struct ParagraphProperties {
@@ -116,6 +116,9 @@ fn parse_styles(xml: &str) -> Result<Styles> {
                 if word_element(&namespace, event.name().as_ref()) =>
             {
                 match event.local_name().as_ref() {
+                    b"pPrChange" if !empty => {
+                        reader.read_to_end(event.name()).map_err(xml_error)?;
+                    }
                     b"style" if !empty => {
                         let kind = attribute(event, decoder, b"type")?;
                         let id = attribute(event, decoder, b"styleId")?;
@@ -235,6 +238,12 @@ fn parse_body(xml: &str, styles: &Styles, mut numbering: Numbering) -> Result<Ex
                 if word_element(&namespace, event.name().as_ref()) =>
             {
                 match event.local_name().as_ref() {
+                    // Revision wrappers can contain recognizable runs and properties from
+                    // the previous version. Insertions and move destinations are read normally.
+                    b"del" | b"moveFrom" | b"pPrChange" | b"rPrChange" | b"tblPrChange"
+                    | b"tblGridChange" | b"trPrChange" | b"tcPrChange" if !empty => {
+                        reader.read_to_end(event.name()).map_err(xml_error)?;
+                    }
                     b"p" if !empty => {
                         if let Some(paragraph) = paragraphs.last_mut() {
                             ranges.push(block(

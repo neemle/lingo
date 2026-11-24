@@ -78,7 +78,8 @@ pub(crate) fn parser_version(document: &Document) -> &'static str {
         document.ocr_lines.is_some(),
         document.pdf_page_starts.is_some(),
     ) {
-        ("docx", _, _) if document.docx_layout_version.unwrap_or(0) >= 4 => "docx-reflow/4",
+        ("docx", _, _) if document.docx_layout_version.unwrap_or(0) >= 5 => "docx-reflow/5",
+        ("docx", _, _) if document.docx_layout_version == Some(4) => "docx-reflow/4",
         ("docx", _, _) if document.docx_layout_version == Some(3) => "docx-reflow/3",
         ("docx", _, _) if document.docx_layout_version == Some(2) => "docx-reflow/2",
         ("docx", _, _) => "docx-reflow/1",
