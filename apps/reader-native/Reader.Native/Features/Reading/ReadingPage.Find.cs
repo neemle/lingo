@@ -19,7 +19,8 @@ public partial class ReadingPage
     private sealed record UnreadPdfFind(string Document, int Page, string Query, int Occurrence);
     private UnreadPdfFind? pendingUnreadPdfFind;
 #endif
-    private sealed record DocumentFindCursor(int Position, int? PhysicalPage = null, bool UnreadLayer = false);
+    private sealed record DocumentFindCursor(int Position, int? PhysicalPage = null, bool UnreadLayer = false,
+        int Offset = 0);
     private sealed record DocumentFindHit(string Text, DocumentFindSelection Selection);
     private sealed record DocumentFindPage(DocumentFindHit[] Matches, DocumentFindCursor? Next);
 
@@ -155,6 +156,9 @@ public partial class ReadingPage
         previous.Page == latest.Page && previous.StartUtf16 == latest.StartUtf16 &&
         previous.EndUtf16 == latest.EndUtf16 && previous.ReflowOnly == latest.ReflowOnly;
 
+    private static int FindFragmentOffset(TranslationFindFragment? fragment) =>
+        fragment is { ReflowOnly: false } ? fragment.StartUtf16 : 0;
+
     private static async Task<DocumentFindSelection?> RefreshTranslationFindMatchAsync(
         ReaderSession session, Document document, DocumentFindSelection match, string target)
     {
@@ -162,7 +166,7 @@ public partial class ReadingPage
         if (match.PhysicalPage is int page)
         {
             var results = await session.FindDetachedPdfTextAsync(document.Id, query,
-                new DetachedPdfFindCursor(page, match.Position), 1, default, target);
+                new DetachedPdfFindCursor(page, match.Position, FindFragmentOffset(match.PdfFragment)), 1, default, target);
             var hit = results.Matches.FirstOrDefault(hit => hit.Page == page && hit.Position == match.Position &&
                 hit.SentenceId == match.SentenceId && SameFindFragment(match.PdfFragment, hit.PdfFragment));
             return hit is null ? null : match with
@@ -174,7 +178,8 @@ public partial class ReadingPage
             };
         }
 
-        var found = await session.FindTranslationPageAsync(document.Id, target, query, match.Position, default);
+        var found = await session.FindTranslationPageAsync(document.Id, target, query, match.Position, default,
+            FindFragmentOffset(match.PdfFragment));
         if (!MatchesFindSource(found, document)) return null;
         var current = found.Matches.FirstOrDefault(hit => hit.Position == match.Position &&
             SameFindFragment(match.PdfFragment, hit.PdfFragment));
@@ -561,7 +566,7 @@ public partial class ReadingPage
         {
             if (document.Format != "pdf") return new(matches.ToArray(), null);
             var cursor = new DetachedPdfFindCursor(start.PhysicalPage ?? 0,
-                start.PhysicalPage is null ? 0 : start.Position);
+                start.PhysicalPage is null ? 0 : start.Position, start.PhysicalPage is null ? 0 : start.Offset);
             var space = DocumentFind.PageSize - matches.Count;
             while (true)
             {
@@ -569,7 +574,8 @@ public partial class ReadingPage
                 var found = await session.FindDetachedPdfTextAsync(
                     document.Id, query, cursor, Math.Max(1, space), token, language);
                 if (space == 0 && found.Matches.FirstOrDefault() is { } first)
-                    return new(matches.ToArray(), new DocumentFindCursor(first.Position, first.Page));
+                    return new(matches.ToArray(), new DocumentFindCursor(first.Position, first.Page,
+                        Offset: FindFragmentOffset(first.PdfFragment)));
 
                 matches.AddRange(found.Matches.Select(hit => new DocumentFindHit(hit.Text,
                     new DocumentFindSelection(hit.Position, Translation: language is not null,
@@ -594,22 +600,25 @@ public partial class ReadingPage
             if (start.PhysicalPage is null)
             {
                 var position = start.Position;
+                var offset = start.Offset;
                 while (true)
                 {
                     token.ThrowIfCancellationRequested();
-                    var found = await session.FindTranslationPageAsync(document.Id, language, query, position, token);
+                    var found = await session.FindTranslationPageAsync(document.Id, language, query, position, token, offset);
                     if (!MatchesFindSource(found, document))
                         throw new InvalidOperationException("Текст документа змінився. Відкрийте пошук знову.");
                     matches.AddRange(found.Matches.Where(hit => hit.Position >= 0 && hit.Position < document.Sentences.Length)
                         .Select(hit => new DocumentFindHit(hit.Text, new DocumentFindSelection(hit.Position, Translation: true,
                             PdfFragment: hit.PdfFragment, SavedText: hit.Text, Alignment: hit.Alignment,
                             PivotLanguage: hit.PivotLanguage, SourceText: hit.SourceText))));
-                    if (found.NextStart is not int nextPosition ||
-                        nextPosition <= position || nextPosition >= document.Sentences.Length)
+                    var nextOffset = found.NextOffset ?? 0;
+                    if (found.NextStart is not int nextPosition || nextPosition >= document.Sentences.Length ||
+                        nextPosition < position || (nextPosition == position && nextOffset <= offset))
                         break;
                     if (matches.Count > 0)
-                        return new(matches.ToArray(), new DocumentFindCursor(nextPosition));
+                        return new(matches.ToArray(), new DocumentFindCursor(nextPosition, Offset: nextOffset));
                     position = nextPosition;
+                    offset = nextOffset;
                 }
             }
             return await AppendDetachedAsync(matches, start, language, token);

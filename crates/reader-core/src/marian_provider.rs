@@ -618,9 +618,10 @@ impl StoreWorker {
         target: &str,
         query: &str,
         start: usize,
+        start_offset: usize,
     ) -> Result<TranslationSearchPage> {
         self.open(OpenFlags::SQLITE_OPEN_READ_ONLY)?
-            .find_translation_page(document_id, target, query, start)
+            .find_translation_page(document_id, target, query, start, start_offset)
     }
 }
 
@@ -879,11 +880,12 @@ impl Store {
         target: &str,
         query: &str,
         start: usize,
+        start_offset: usize,
     ) -> Result<TranslationSearchPage> {
         let document = self.translation_document(document_id)?;
         let installed = self.installed_reader_routes(&document.language, target)?;
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
-        search_cached_translation(self, &installed, &catalog, &document, target, query, start)
+        search_cached_translation(self, &installed, &catalog, &document, target, query, (start, start_offset))
     }
 
     pub(crate) fn translation_cache_routes(

@@ -578,8 +578,8 @@ public sealed class CoreClient : IDisposable
             : CallIndependent<ParagraphTranslation>(new { version = 1, operation = "translate_paragraph", id, sentenceId, target });
     public CachedTranslation ReadCachedTranslation(string id, string sentenceId, string target) =>
         CallIndependent<CachedTranslation>(new { version = 1, operation = "cached_translation", id, sentenceId, target });
-    public TranslationFindPage FindTranslationPage(string id, string target, string query, int start) =>
-        CallIndependent<TranslationFindPage>(new { version = 1, operation = "find_translation_page", id, target, query, start });
+    public TranslationFindPage FindTranslationPage(string id, string target, string query, int start, int startOffset = 0) =>
+        CallIndependent<TranslationFindPage>(new { version = 1, operation = "find_translation_page", id, target, query, start, startOffset });
     public LexicalPackage[] LexicalPackages() =>
         Call<LexicalPackage[]>(new { version = 1, operation = "lexical_packages" });
     public LexicalPackage InstallLexicalPackage(string language, string path) =>

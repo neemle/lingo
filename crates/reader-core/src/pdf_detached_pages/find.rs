@@ -13,6 +13,8 @@ const MAX_RESULTS: usize = 30;
 pub struct DetachedPdfFindCursor {
     pub page: u16,
     pub position: usize,
+    #[serde(default)]
+    pub offset: usize,
 }
 
 #[derive(Serialize)]
@@ -76,7 +78,7 @@ impl Store {
             let page: u16 = row.get(0).map_err(database_error)?;
             let first_position = if page == start.page { start.position } else { 0 };
             if scanned == MAX_SCAN_PAGES {
-                result.next = Some(DetachedPdfFindCursor { page, position: first_position });
+                result.next = Some(DetachedPdfFindCursor { page, position: first_position, offset: 0 });
                 break;
             }
             scanned += 1;
@@ -96,11 +98,12 @@ impl Store {
             let layout = projection.as_ref().zip(routes.as_ref())
                 .and_then(|(projection, (target, _, _))| projection.ocr_search_projection(target));
             for (position, sentence) in sentences.iter().enumerate().skip(first_position) {
+                let offset = if page == start.page && position == start.position { start.offset } else { 0 };
                 let mut pdf_fragment = None;
                 let (text, pivot_language, reviewed, source_text) =
                     if let (Some((target, _, routes)), Some(projection)) = (&routes, &projection) {
                         if scanned_sentences == MAX_TRANSLATION_SCAN_SENTENCES {
-                            result.next = Some(DetachedPdfFindCursor { page, position });
+                            result.next = Some(DetachedPdfFindCursor { page, position, offset });
                             return Ok(result);
                         }
                         scanned_sentences += 1;
@@ -110,29 +113,33 @@ impl Store {
                             (last > first + 1).then_some((layout, first..last))
                         });
                         let has_fragments = split.is_some();
-                        let mut matched = None;
                         if let Some((layout, fragments)) = split {
+                            let previous_count = result.matches.len();
                             for index in fragments {
+                                let part = &layout.sentences[index];
+                                let start_utf16 = part.start_utf16 - projected_offset;
+                                if start_utf16 < offset { continue; }
                                 let Some(row) = routes.cached_pdf_row(
                                     self, layout, index, target, PageBoundaries::Projected, UnitGrouping::Sentence,
                                 )? else { continue; };
                                 let Some(text) = row.translation else { continue; };
                                 if !search_text(&text).contains(&needle) { continue; }
-                                let part = &layout.sentences[index];
-                                pdf_fragment = Some(TranslationSearchFragment {
-                                    page,
-                                    start_utf16: part.start_utf16 - projected_offset,
-                                    end_utf16: part.end_utf16 - projected_offset,
-                                    pivot_language: row.pivot_language,
-                                    reflow_only: false,
+                                if result.matches.len() == limit {
+                                    result.next = Some(DetachedPdfFindCursor { page, position, offset: start_utf16 });
+                                    return Ok(result);
+                                }
+                                result.matches.push(DetachedPdfFindHit {
+                                    page, position, sentence_id: sentence.id.clone(), text,
+                                    pivot_language: row.pivot_language.clone(), reviewed: None, source_text: row.pdf_source,
+                                    pdf_fragment: Some(TranslationSearchFragment {
+                                        page, start_utf16, end_utf16: part.end_utf16 - projected_offset,
+                                        pivot_language: row.pivot_language, reflow_only: false,
+                                    }),
                                 });
-                                matched = Some((text, row.pdf_source));
-                                break;
                             }
+                            if result.matches.len() != previous_count || offset > 0 { continue; }
                         }
-                        if let Some((text, source)) = matched {
-                            (text, None, None, source)
-                        } else if let Some(text) = projection.reviewed(&sentence.id, target) {
+                        if let Some(text) = projection.reviewed(&sentence.id, target) {
                             (text.to_owned(), None, Some(true), None)
                         } else if let Some(hit) = translation::cached_page_translation(self, routes, projection, position, target)? {
                             if hit.start_position != position { continue; }
@@ -158,7 +165,7 @@ impl Store {
                 }
                 let Some(offset) = offset else { continue; };
                 if result.matches.len() == limit {
-                    result.next = Some(DetachedPdfFindCursor { page, position });
+                    result.next = Some(DetachedPdfFindCursor { page, position, offset: 0 });
                     return Ok(result);
                 }
                 let text = if reviewed.is_none() && pdf_fragment.is_none() && text.chars().take(513).count() > 512 {
@@ -192,7 +199,7 @@ mod tests {
         let document = store.import_pdf_file(prepared).unwrap();
         let text = "L’e\u{301}quipage attend\n  sur le quai des marchan-\n  dises. Est-\nil arrivé ?";
         super::super::write_text_layer(&store.connection, &document.id, 2, text).unwrap();
-        let cursor = DetachedPdfFindCursor { page: 0, position: 0 };
+        let cursor = DetachedPdfFindCursor { page: 0, position: 0, offset: 0 };
         let found = store.find_detached_pdf_text(&document.id, "L'équipage attend sur", cursor, 1, None).unwrap();
         let cached = store.detached_pdf_sentences(&document.id, 2).unwrap().unwrap();
         assert_eq!(found.matches.len(), 1);

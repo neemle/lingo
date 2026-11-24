@@ -357,12 +357,13 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             target,
             query,
             start,
+            start_offset,
         } => {
             let worker = registry::lock()?
                 .store(handle)?
                 .prepare_translation_worker();
             if let Some(worker) = worker {
-                return encode_job(worker.find_translation_page(id, target, query, *start));
+                return encode_job(worker.find_translation_page(id, target, query, *start, *start_offset));
             }
         }
         Command::CachedTranslation {

@@ -10,4 +10,4 @@ public sealed record TranslationFindFragment(int Page, int StartUtf16, int EndUt
 public sealed record TranslationFindHit(int Position, string Text, TranslationFindFragment? PdfFragment = null,
     TranslationAlignment? Alignment = null, string? PivotLanguage = null, string? SourceText = null);
 public sealed record TranslationFindPage(TranslationFindHit[] Matches, int? NextStart,
-    string? SourceRevisionId = null, string? SourceLanguage = null);
+    string? SourceRevisionId = null, string? SourceLanguage = null, int? NextOffset = null);

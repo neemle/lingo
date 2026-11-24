@@ -429,7 +429,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             target,
             query,
             start,
-        } => value(store.find_translation_page(&id, &target, &query, start)),
+            start_offset,
+        } => value(store.find_translation_page(&id, &target, &query, start, start_offset)),
         Command::CachedTranslation {
             id,
             sentence_id,

@@ -53,7 +53,7 @@ public sealed record DetachedPdfOcrPage(string Revision, OcrLine[] Lines);
 
 public sealed record DetachedPdfAnnotationItem(int Position, string Text, bool Bookmarked, string? Note);
 
-public sealed record DetachedPdfFindCursor(int Page, int Position);
+public sealed record DetachedPdfFindCursor(int Page, int Position, int Offset = 0);
 public sealed record DetachedPdfFindHit(int Page, int Position, string SentenceId, string Text,
     string? PivotLanguage = null, bool? Reviewed = null, string? SourceText = null,
     TranslationFindFragment? PdfFragment = null);

@@ -1042,6 +1042,8 @@ fn read_cached_plan(
 pub struct TranslationSearchPage {
     pub matches: Vec<TranslationSearchMatch>,
     pub next_start: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_offset: Option<usize>,
     pub source_revision_id: Option<String>,
     pub source_language: String,
 }
@@ -1080,8 +1082,9 @@ pub(crate) fn search_cached_translation(
     document: &crate::Document,
     target: &str,
     query: &str,
-    start: usize,
+    cursor: (usize, usize),
 ) -> Result<TranslationSearchPage> {
+    let (start, start_offset) = cursor;
     const SCAN_LIMIT: usize = 128;
     const MATCH_LIMIT: usize = 30;
 
@@ -1090,6 +1093,7 @@ pub(crate) fn search_cached_translation(
     let mut page = TranslationSearchPage {
         matches: Vec::new(),
         next_start: None,
+        next_offset: None,
         source_revision_id: document.current_revision_id.clone(),
         source_language: document.language.clone(),
     };
@@ -1120,12 +1124,18 @@ pub(crate) fn search_cached_translation(
                 if last > first + 1 {
                     let previous_count = page.matches.len();
                     for fragment in first..last {
+                        let part = &projected.sentences[fragment];
+                        if position == start && part.start_utf16 < start_offset { continue; }
                         let Some(row) = routes.cached_pdf_row(
                             store, projected, fragment, target, PageBoundaries::Canonical, UnitGrouping::Sentence,
                         )? else { continue; };
                         let Some(text) = row.translation else { continue; };
                         if !normalize_translation_search(&text).contains(&query) { continue; }
-                        let part = &projected.sentences[fragment];
+                        if page.matches.len() == MATCH_LIMIT {
+                            page.next_start = Some(position);
+                            page.next_offset = Some(part.start_utf16);
+                            return Ok(page);
+                        }
                         page.matches.push(TranslationSearchMatch {
                             position, text, source_text: row.pdf_source, alignment: None,
                             pivot_language: row.pivot_language.clone(),
@@ -1134,13 +1144,8 @@ pub(crate) fn search_cached_translation(
                                 pivot_language: row.pivot_language, reflow_only: false,
                             }),
                         });
-                        break;
                     }
-                    if page.matches.len() == MATCH_LIMIT {
-                        page.next_start = (position + 1 < len).then_some(position + 1);
-                        return Ok(page);
-                    }
-                    if page.matches.len() != previous_count {
+                    if page.matches.len() != previous_count || (position == start && start_offset > 0) {
                         previous_unit = None;
                         continue;
                     }
@@ -1176,6 +1181,10 @@ pub(crate) fn search_cached_translation(
         if let Some((text, pivot, alignment)) = active.filter(|(text, _, _)| {
             position >= start && !repeated && normalize_translation_search(text).contains(&query)
         }) {
+            if page.matches.len() == MATCH_LIMIT {
+                page.next_start = Some(position);
+                return Ok(page);
+            }
             page.matches.push(TranslationSearchMatch {
                 position,
                 text: text.to_owned(),
@@ -2394,10 +2403,10 @@ mod tests {
         assert_eq!(saved["text"], "Моряк вирушає.");
         assert_eq!(saved["pivotLanguage"], "en");
         let find_list = |store: &Store, query: &str| {
-            store.find_translation_page(&document.id, "uk", query, 0).unwrap().matches
+            store.find_translation_page(&document.id, "uk", query, 0, 0).unwrap().matches
         };
         let find_detached = |store: &Store, query: &str| {
-            let cursor = crate::DetachedPdfFindCursor { page: 0, position: 0 };
+            let cursor = crate::DetachedPdfFindCursor { page: 0, position: 0, offset: 0 };
             let found = store.find_detached_pdf_text(&detached_document.id, query, cursor, 5, Some("uk")).unwrap();
             serde_json::to_value(found).unwrap()["matches"].as_array().unwrap().clone()
         };
@@ -3020,6 +3029,41 @@ mod tests {
     }
 
     #[test]
+    fn pdf_translation_search_resumes_inside_a_split_sentence() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let text = format!("{}bateau.", "bateau ".repeat(30));
+        let mut document = store.import("page.txt", text.as_bytes(), "fr").unwrap();
+        assert_eq!(document.sentences.len(), 1);
+        document.format = "pdf".into();
+        document.pdf_page_starts = Some(vec![Some(0)]);
+        document.ocr_lines = Some((0..31).map(|index| {
+            let start = index * 7;
+            let end = if index == 30 { text.len() } else { start + 6 };
+            crate::ocr::OcrLine {
+                page: 0, text: text[start..end].into(), x: if index % 2 == 0 { 0.1 } else { 0.6 },
+                y: 0.1 + index as f64 * 0.02, width: 0.15, height: 0.01,
+                confidence: None, correction: None, words: vec![], rotation: None, block_start: false,
+                source_span: Some(crate::ocr::OcrSpan {
+                    start_utf8: start, end_utf8: end, start_utf16: start, end_utf16: end,
+                }),
+            }
+        }).collect());
+        let edge = ModelEdge { source: "fr".into(), target: "uk".into(), revision: "test".into(), quality: None };
+        let route = Route::Direct(edge.clone());
+        let output = ["судно".into()];
+        store.save_cached_segments(["bateau", "bateau."].map(|text|
+            (unit_cache_key(&route, text).unwrap(), output.as_slice()))).unwrap();
+        let models = [edge];
+        let first = search_cached_translation(&store, &models, &[], &document, "uk", "судно", (0, 0)).unwrap();
+        assert_eq!(first.matches.len(), 30);
+        assert_eq!((first.next_start, first.next_offset), (Some(0), Some(210)));
+        let second = search_cached_translation(&store, &models, &[], &document, "uk", "судно", (0, 210)).unwrap();
+        assert_eq!(second.matches.len(), 1);
+        assert_eq!(second.matches[0].pdf_fragment.as_ref().unwrap().start_utf16, 210);
+        assert_eq!((second.next_start, second.next_offset), (None, None));
+    }
+
+    #[test]
     fn translation_search_uses_cached_routes_and_reviewed_text_in_position_order() {
         let mut store = Store::open(Path::new(":memory:")).unwrap();
         let mut document = store
@@ -3066,7 +3110,7 @@ mod tests {
                 document,
                 target,
                 query,
-                start,
+                (start, 0),
             )
             .unwrap()
             .matches
@@ -3077,7 +3121,7 @@ mod tests {
         assert_eq!(search(&document, "fr", "L'ÉTÉ", 0), [0, 3]);
         assert_eq!(search(&document, "fr", "L'ÉTÉ", 1), [3]);
         let direct = std::slice::from_ref(&edge);
-        let phrase = search_cached_translation(&store, direct, &[], &document, "fr", "l'été arrive", 0).unwrap();
+        let phrase = search_cached_translation(&store, direct, &[], &document, "fr", "l'été arrive", (0, 0)).unwrap();
         let hit = &phrase.matches[0];
         assert_eq!(hit.text, "L’e\u{301}te\u{301}   arrive.");
         assert_eq!(

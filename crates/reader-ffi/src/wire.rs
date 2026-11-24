@@ -876,6 +876,8 @@ pub enum Command {
         target: String,
         query: String,
         start: usize,
+        #[serde(default, rename = "startOffset")]
+        start_offset: usize,
     },
     CachedTranslation {
         id: String,
