@@ -974,7 +974,7 @@ impl Store {
         correction: Option<String>,
         revision: Option<&str>,
     ) -> Result<()> {
-        self.edit_ocr_lines(id, revision, |lines| {
+        self.edit_ocr_lines(id, revision, ocr::ReviewedTranslationPolicy::RequireSameText, |lines| {
             let line = lines.get_mut(index).ok_or("Розпізнаний рядок не знайдено")?;
             let correction = correction.map(|text| text.trim().to_owned());
             if line.correction == correction {
@@ -1000,7 +1000,7 @@ impl Store {
                 |lines| ocr::apply_reviewed_lines(lines, page, &edits))?;
             return Ok(());
         }
-        self.edit_ocr_lines(id, Some(revision), |lines| {
+        self.edit_ocr_lines(id, Some(revision), ocr::ReviewedTranslationPolicy::Reanchor, |lines| {
             let previous: Vec<_> = lines.iter().map(|line| line.reading_text().to_owned()).collect();
             ocr::apply_reviewed_lines(lines, page, &edits)?;
             Ok(Some(ocr::line_transcript_edits(lines, &previous)?))
@@ -1009,6 +1009,7 @@ impl Store {
 
     fn edit_ocr_lines(
         &mut self, id: &str, revision: Option<&str>,
+        translation_policy: ocr::ReviewedTranslationPolicy,
         edit: impl FnOnce(&mut [ocr::OcrLine]) -> Result<Option<Vec<ocr::TranscriptEdit>>>,
     ) -> Result<()> {
         let native_pages = self.native_pdf_page_text(id)?;
@@ -1051,7 +1052,7 @@ impl Store {
             let text_changed = document.text != parsed.text;
             let previous_revision = document.current_revision_id.clone();
             let starts = if edits.is_empty() { None } else { parsed.pdf_page_starts.as_deref() };
-            let before = ocr::update_transcript_with_edits(document, parsed.text, starts, &edits)?;
+            let before = ocr::update_transcript_with_edits(document, parsed.text, starts, &edits, translation_policy)?;
             document.pdf_page_starts = parsed.pdf_page_starts;
             document.blocks = parsed.blocks;
             ocr::refresh_provenance(document);

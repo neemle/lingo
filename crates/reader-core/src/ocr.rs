@@ -151,7 +151,7 @@ impl crate::Store {
             let edits = line_transcript_edits(lines, &previous)?;
             let parsed = crate::document_layout::from_ocr(recognized_lines(lines, 1)?, lines, None);
             let previous_revision = document.current_revision_id.clone();
-            let before = update_transcript_with_edits(document, parsed.text, None, &edits)?;
+            let before = update_transcript_with_edits(document, parsed.text, None, &edits, ReviewedTranslationPolicy::Reanchor)?;
             document.blocks = parsed.blocks;
             refresh_provenance(document);
             crate::document_revisions::append(document, tx)?;
@@ -576,7 +576,7 @@ pub(crate) fn update_transcript_with_page_starts(
     text: String,
     starts: Option<&[Option<usize>]>,
 ) -> Result<()> {
-    update_transcript_with_edits(document, text, starts, &[]).map(drop)
+    update_transcript_with_edits(document, text, starts, &[], ReviewedTranslationPolicy::Reanchor).map(drop)
 }
 
 pub(crate) struct TranscriptEdit {
@@ -664,11 +664,20 @@ pub(crate) fn map_unchanged_range_start(start: usize, length: usize, edits: &[Tr
     Some(mapped)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReviewedTranslationPolicy {
+    /// Keep the translation attached during checked recognition repairs.
+    Reanchor,
+    /// Free-form edits may change the meaning of the translated sentence.
+    RequireSameText,
+}
+
 pub(crate) fn update_transcript_with_edits(
     document: &mut crate::Document,
     text: String,
     starts: Option<&[Option<usize>]>,
     edits: &[TranscriptEdit],
+    translation_policy: ReviewedTranslationPolicy,
 ) -> Result<Vec<crate::Sentence>> {
     use std::collections::HashMap;
 
@@ -726,10 +735,13 @@ pub(crate) fn update_transcript_with_edits(
                     .flatten()
             })
     };
-    let map_id = |old_id: &str| {
+    let map_id = |old_id: &str, require_same_text: bool| {
         old_by_id
             .get(old_id)
-            .and_then(|old| matching_index(old))
+            .and_then(|old| {
+                matching_index(old)
+                    .filter(|&index| !require_same_text || sentences[index].text == old.text)
+            })
             .map(|index| sentences[index].id.clone())
             .ok_or(
                 "Зміна зачіпає речення із закладкою, нотаткою, збереженим перекладом або текстом озвучення".to_owned(),
@@ -739,37 +751,38 @@ pub(crate) fn update_transcript_with_edits(
     let mut bookmarks: Vec<_> = document
         .bookmarks
         .iter()
-        .map(|id| map_id(id))
+        .map(|id| map_id(id, false))
         .collect::<Result<_>>()?;
     bookmarks.sort_unstable();
     bookmarks.dedup();
     let mut notes = std::collections::BTreeMap::new();
     for (id, note) in &document.notes {
-        if notes.insert(map_id(id)?, note.clone()).is_some() {
+        if notes.insert(map_id(id, false)?, note.clone()).is_some() {
             return Err("Не вдалося однозначно перенести нотатки".into());
         }
     }
     let mut speech_text_overrides = std::collections::BTreeMap::new();
     for (id, text) in &document.speech_text_overrides {
         if speech_text_overrides
-            .insert(map_id(id)?, text.clone())
+            .insert(map_id(id, false)?, text.clone())
             .is_some()
         {
             return Err("Не вдалося однозначно перенести текст озвучення".into());
         }
     }
+    let require_same_text = translation_policy == ReviewedTranslationPolicy::RequireSameText;
     let mut translations = std::collections::BTreeMap::new();
     for (language, entries) in &document.reviewed_translations {
         let mut moved = std::collections::BTreeMap::new();
         for (id, translation) in entries {
-            if moved.insert(map_id(id)?, translation.clone()).is_some() {
+            if moved.insert(map_id(id, require_same_text)?, translation.clone()).is_some() {
                 return Err("Не вдалося однозначно перенести збережені переклади".into());
             }
         }
         translations.insert(language.clone(), moved);
     }
     let speech_resume = document.speech_resume.clone().and_then(|mut resume| {
-        resume.sentence_id = map_id(&resume.sentence_id).ok()?;
+        resume.sentence_id = map_id(&resume.sentence_id, false).ok()?;
         Some(resume)
     });
     let previous_sentence = document.sentences.get(document.position);

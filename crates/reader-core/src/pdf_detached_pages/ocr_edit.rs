@@ -98,7 +98,7 @@ impl Store {
             correction.as_deref().unwrap_or(line.text.trim()),
         );
         line.correction = correction;
-        let updated = save_ocr_edits(&tx, id, page, &old_text, previous.lines, &edits)?;
+        let updated = save_ocr_edits(&tx, id, page, &old_text, previous.lines, &edits, ocr::ReviewedTranslationPolicy::RequireSameText)?;
         tx.commit().map_err(database_error)?;
         Ok(updated)
     }
@@ -130,7 +130,7 @@ impl Store {
             let start = line.source_span.ok_or("Розпізнаний рядок не має позиції в тексті.")?.start_utf16;
             edits.extend(Edit::for_line(start, old, line.reading_text()));
         }
-        save_ocr_edits(&tx, id, page, &old_text, previous.lines, &edits)?;
+        save_ocr_edits(&tx, id, page, &old_text, previous.lines, &edits, ocr::ReviewedTranslationPolicy::Reanchor)?;
         tx.commit().map_err(database_error)?;
         Ok(true)
     }
@@ -167,7 +167,7 @@ impl Store {
             old_end: edit.start_utf16 + edit.old_len,
             new_end: edit.start_utf16 + edit.new_len,
         }).collect();
-        save_ocr_edits(&tx, id, page, &old, rebuilt, &edits)?;
+        save_ocr_edits(&tx, id, page, &old, rebuilt, &edits, ocr::ReviewedTranslationPolicy::Reanchor)?;
         tx.commit().map_err(database_error)?;
         Ok(true)
     }
@@ -193,7 +193,7 @@ impl Store {
             old_end: edit.start_utf16 + edit.old_len,
             new_end: edit.start_utf16 + edit.new_len,
         }).collect();
-        save_ocr_edits(&tx, id, page, &text, merged, &edits)?;
+        save_ocr_edits(&tx, id, page, &text, merged, &edits, ocr::ReviewedTranslationPolicy::Reanchor)?;
         tx.commit().map_err(database_error)?;
         Ok(true)
     }
@@ -201,6 +201,7 @@ impl Store {
 
 fn save_ocr_edits(
     db: &Connection, id: &str, page: u16, old_text: &str, mut lines: Vec<ocr::OcrLine>, edits: &[Edit],
+    translation_policy: ocr::ReviewedTranslationPolicy,
 ) -> Result<DetachedPdfOcrPage> {
     let text = ocr::recognized_lines(&lines, page.checked_add(1).ok_or("Некоректна сторінка PDF.")?)?;
     for line in &mut lines {
@@ -211,7 +212,7 @@ fn save_ocr_edits(
     }
     let encoded = serde_json::to_string(&lines).map_err(database_error)?;
     if old_text != text {
-        move_sentence_anchors(db, id, page, old_text, &text, Some(edits))?;
+        move_sentence_anchors(db, id, page, old_text, &text, Some(edits), translation_policy)?;
     }
     db.execute(
         "UPDATE pdf_detached_pages SET text=?3,lines=?4 WHERE document_id=?1 AND page=?2",
@@ -283,7 +284,7 @@ fn sentence_at(sentences: &[Sentence], offset: usize) -> Option<usize> {
 }
 
 pub(super) fn reanchor_replaced_ocr(db: &Connection, id: &str, page: u16, old: &str, new: &str) -> Result<()> {
-    move_sentence_anchors(db, id, page, old, new, None)
+    move_sentence_anchors(db, id, page, old, new, None, ocr::ReviewedTranslationPolicy::Reanchor)
 }
 
 fn replacement_edits(old: &str, new: &str, before: &[Sentence], after: &[Sentence]) -> Vec<Edit> {
@@ -327,6 +328,7 @@ fn move_sentence_anchors(
     old: &str,
     new: &str,
     edits: Option<&[Edit]>,
+    translation_policy: ocr::ReviewedTranslationPolicy,
 ) -> Result<()> {
     let layout = super::page_layout(db, id, page)?;
     let old_revision = page_revision(old);
@@ -381,7 +383,17 @@ fn move_sentence_anchors(
     for mut item in items {
         let index = sentence_at(&new_sentences, map_start(item.start_utf16))
             .ok_or("Після виправлення примітка залишилася без речення.")?;
-        let start = new_sentences[index].start_utf16;
+        let sentence = &new_sentences[index];
+        if translation_policy == ocr::ReviewedTranslationPolicy::RequireSameText
+            && !item.translations.is_empty()
+            && old_sentences
+                .binary_search_by_key(&item.start_utf16, |sentence| sentence.start_utf16)
+                .ok()
+                .is_none_or(|old| old_sentences[old].text != sentence.text)
+        {
+            return Err("Зміна зачіпає речення зі збереженим перекладом.".into());
+        }
+        let start = sentence.start_utf16;
         item.start_utf16 = start;
         if let Some(existing) = moved.get_mut(&start) {
             existing.bookmarked |= item.bookmarked;
@@ -526,6 +538,17 @@ mod tests {
         assert_eq!(saved.sentence.text, "The last paragraph.");
         assert!(saved.speech_resume.is_none());
         assert!(speech_resume::read(&store.connection, &document.id, 0).unwrap().is_none());
+        store.update_detached_pdf_annotation(
+            &document.id, 0, &saved.sentence.id,
+            DetachedPdfAnnotationChange::Translation { target: "uk".into(), text: "Останній абзац.".into() },
+        ).unwrap();
+        let updated = store.detached_pdf_ocr(&document.id, 0).unwrap().unwrap();
+        assert!(store.correct_detached_pdf_ocr(
+            &document.id, 0, &updated.revision, 2, Some("The last page.".into()),
+        ).is_err());
+        let saved = store.detached_pdf_sentence(&document.id, 0, None).unwrap().unwrap();
+        assert_eq!(saved.sentence.text, "The last paragraph.");
+        assert_eq!(saved.reviewed_translations["uk"], "Останній абзац.");
     }
 
     #[test]

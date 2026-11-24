@@ -1385,6 +1385,7 @@ fn reflow_pdf_document(
         parsed.text,
         parsed.pdf_page_starts.as_deref(),
         edits,
+        ocr::ReviewedTranslationPolicy::Reanchor,
     )?;
     let old_pages = std::mem::replace(&mut document.pdf_page_starts, parsed.pdf_page_starts);
     document.blocks = parsed.blocks;
