@@ -62,6 +62,7 @@ public partial class ReadingPage
         readingHistoryForeground = false;
         ResetReadingActivity();
         CheckpointSpeechPosition();
+        checkpointDetachedSpeech?.Invoke();
     }
 
     private void ResetReadingActivity()
