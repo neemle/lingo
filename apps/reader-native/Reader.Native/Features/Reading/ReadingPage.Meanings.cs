@@ -207,6 +207,7 @@ public partial class ReadingPage
                     Text = "Використати значення", HorizontalOptions = LayoutOptions.Start,
                     Style = (Style)Resources["PlayerButton"],
                 };
+                DescribeButton(pick, "Використати це значення для запису в словнику");
                 pick.Clicked += (_, _) =>
                 {
                     if (Current()) choose(MeaningSnapshot(word.Text, meaning), gloss);
@@ -222,11 +223,13 @@ public partial class ReadingPage
                 Text = action, HorizontalOptions = LayoutOptions.Start,
                 Style = (Style)Resources["PlayerButton"],
             };
+            DescribeButton(toggle, "Показати приклади вживання");
             toggle.Clicked += async (_, _) =>
             {
                 if (!Current()) return;
                 examples.IsVisible = !examples.IsVisible;
                 toggle.Text = examples.IsVisible ? "Згорнути приклади" : action;
+                DescribeButton(toggle, examples.IsVisible ? "Згорнути приклади" : "Показати приклади вживання");
                 PositionWordPopup();
                 if (examples.IsVisible && examples.Children.Count == 0)
                     await ShowExamplesAsync(meaning, examples);

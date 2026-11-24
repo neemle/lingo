@@ -69,6 +69,9 @@ public partial class ReadingPage
         var save = new Button { Text = "Зберегти", Style = (Style)resources["AccentButton"] };
         var cancel = new Button { Text = "Закрити", Style = (Style)resources["OutlineButton"] };
         var remove = new Button { Text = "Видалити", IsVisible = existing is not null, Style = (Style)resources["OutlineButton"] };
+        DescribeButton(save, "Зберегти нотатку до речення");
+        DescribeButton(cancel, "Закрити редактор нотатки");
+        DescribeButton(remove, "Видалити нотатку до речення");
         actions.Children.Add(save);
         actions.Children.Add(cancel);
         actions.Children.Add(remove);

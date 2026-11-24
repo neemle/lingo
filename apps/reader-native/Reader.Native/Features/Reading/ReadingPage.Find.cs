@@ -281,6 +281,10 @@ public partial class ReadingPage
         var previous = new Button { Text = "Попередні", Style = outline, IsVisible = false };
         var next = new Button { Text = "Наступні", Style = outline, IsVisible = false };
         var close = new Button { Text = "Закрити", Style = outline };
+        DescribeButton(search, "Знайти слово або фразу");
+        DescribeButton(previous, "Показати попередні результати пошуку");
+        DescribeButton(next, "Показати наступні результати пошуку");
+        DescribeButton(close, "Закрити пошук");
         var status = new Label { Text = "Введіть слово або фразу." };
         var results = new VerticalStackLayout { Spacing = 6 };
         var resultsScroll = new ScrollView { Content = results };
@@ -391,6 +395,7 @@ public partial class ReadingPage
                         ? $"PDF {physicalPage + 1} · {(selection.SentenceId is null ? text : BookmarkLabel(selection.Position, text))}"
                         : BookmarkLabel(selection.Position, text);
                     var result = new Button { Text = label, Style = outline, HorizontalOptions = LayoutOptions.Fill };
+                    ToolTipProperties.SetText(result, "Перейти до цього збігу в документі");
                     result.Clicked += (_, _) => closed.TrySetResult(selection);
                     results.Children.Add(result);
                 }

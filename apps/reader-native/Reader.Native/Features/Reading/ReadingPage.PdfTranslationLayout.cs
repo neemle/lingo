@@ -162,7 +162,7 @@ public partial class ReadingPage
         DescribeButton(button, label);
     }
 
-    private static void DescribeButton(Button button, string label)
+    internal static void DescribeButton(Button button, string label)
     {
         if (ToolTipProperties.GetText(button) as string != label)
         {
@@ -426,7 +426,7 @@ public partial class ReadingPage
                 Style = (Style)Resources["PlayerButton"],
                 VerticalOptions = LayoutOptions.Center,
             };
-            SemanticProperties.SetHint(action, "Показати відповідний фрагмент на сторінці PDF");
+            DescribeButton(action, "Показати відповідний фрагмент на сторінці PDF");
             action.Clicked += (_, _) => result.TrySetResult(row);
             var item = new Grid { ColumnDefinitions = { new(GridLength.Star), new(GridLength.Auto) }, ColumnSpacing = 12 };
             if (!HasPdfTranslation(row) && !string.IsNullOrWhiteSpace(row.SourceText))
@@ -445,6 +445,7 @@ public partial class ReadingPage
             text.Children.Add(item);
         }
         var done = new Button { Text = "Закрити", HorizontalOptions = LayoutOptions.End, Margin = new Thickness(12) };
+        DescribeButton(done, "Закрити список фрагментів");
         var layout = new Grid { RowDefinitions = { new(GridLength.Auto), new(GridLength.Star) } };
         layout.Add(done);
         layout.Add(viewport, 0, 1);

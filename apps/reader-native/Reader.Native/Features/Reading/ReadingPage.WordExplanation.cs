@@ -169,6 +169,7 @@ public partial class ReadingPage
                     Text = "Використати переклад", Style = (Style)Resources["PlayerButton"],
                     HorizontalOptions = LayoutOptions.Start,
                 };
+                DescribeButton(use, "Підставити цей переклад у картку слова");
                 use.Clicked += (_, _) =>
                 {
                     if (glossHost.Children.Contains(use)) apply(localized);

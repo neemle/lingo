@@ -205,6 +205,7 @@ public partial class ReadingPage
         var (offlineHeading, offlineText) = AddPassageComparisonSection(content, "Офлайн-переклад", "Перекладаємо уривок…");
         AddPassageComparisonSection(content, modelName, modelText);
         var close = new Button { Text = "Закрити", HorizontalOptions = LayoutOptions.End, Margin = new Thickness(12) };
+        DescribeButton(close, "Закрити порівняння перекладів");
         var layout = new Grid { RowDefinitions = { new(GridLength.Auto), new(GridLength.Star) } };
         layout.Add(close);
         layout.Add(new ScrollView { Content = content }, 0, 1);

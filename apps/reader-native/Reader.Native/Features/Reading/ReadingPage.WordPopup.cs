@@ -269,6 +269,7 @@ public partial class ReadingPage
         row.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
         row.Add(new Label { Text = text, FontSize = fontSize, VerticalOptions = LayoutOptions.Center }, 0);
         var listen = new Button { Text = "Слухати", VerticalOptions = LayoutOptions.Start, Style = (Style)Resources["PlayerButton"] };
+        DescribeButton(listen, $"Прослухати · {DocumentLanguages.Name(language)}");
         listen.Clicked += async (_, _) => await SpeakWordDetailAsync(text, language);
         row.Add(listen, 1);
         return row;

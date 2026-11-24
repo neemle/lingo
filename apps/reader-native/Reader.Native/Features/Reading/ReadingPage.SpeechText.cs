@@ -138,6 +138,10 @@ public partial class ReadingPage
             Style = (Style)resources["OutlineButton"],
             IsVisible = language == "uk",
         };
+        DescribeButton(save, "Зберегти вимову речення");
+        DescribeButton(cancel, "Закрити редактор вимови");
+        DescribeButton(reset, "Відновити вимову за текстом оригіналу");
+        DescribeButton(accent, "Поставити наголос на голосній біля курсора");
         controls.Children.Add(save);
         controls.Children.Add(accent);
         controls.Children.Add(reset);

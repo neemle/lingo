@@ -89,10 +89,18 @@ internal sealed class OriginalPage : ContentPage
             (zoomOut, "Зменшити масштаб оригіналу"),
             (zoomIn, "Збільшити масштаб оригіналу"),
             (fit, "Вмістити оригінал у вікно"),
+            (readPage, "Відкрити цю сторінку в читачі"),
+            (wordCard, "Показати словникову картку виділення"),
+            (reviewOcrWord, "Звірити розпізнане слово локальною моделлю"),
+            (proofreadPhoto, "Звірити розпізнаний текст фото"),
+            (lineButton, "Вибрати розпізнаний рядок"),
+            (edit, "Змінити розпізнаний текст рядка"),
+            (suggest, "Переглянути підказки для розпізнаного рядка"),
+            (reviewOcrLine, "Звірити рядок локальною моделлю"),
+            (reset, "Відновити початковий результат OCR для рядка"),
         })
         {
-            ToolTipProperties.SetText(button, description);
-            SemanticProperties.SetDescription(button, description);
+            ReadingPage.DescribeButton(button, description);
         }
         zoomOut.Clicked += (_, _) => SetZoom(zoomLevel - 1);
         zoomIn.Clicked += (_, _) => SetZoom(zoomLevel + 1);
@@ -102,6 +110,11 @@ internal sealed class OriginalPage : ContentPage
         previous.Clicked += async (_, _) => await LoadAsync(pageIndex - 1);
         next.Clicked += async (_, _) => await LoadAsync(pageIndex + 1);
         overlay.IsVisible = lines.Any(line => Overlaps(line.SourceSpan, focus));
+        toggle.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(Button.Text))
+                ReadingPage.DescribeButton(toggle, OverlayLabel());
+        };
         toggle.Text = OverlayLabel();
         toggle.IsVisible = lines.Length > 0;
         toggle.Clicked += (_, _) =>
@@ -124,9 +137,7 @@ internal sealed class OriginalPage : ContentPage
             control.Margin = new Thickness(0, 0, 8, 5);
             controls.Children.Add(control);
         }
-        SemanticProperties.SetDescription(lineButton, "Вибрати розпізнаний рядок");
         lineButton.Clicked += async (_, _) => await ChooseLineAsync();
-        SemanticProperties.SetDescription(reset, "Відновити початковий результат OCR для рядка");
         edit.Clicked += async (_, _) => await CorrectAsync(LineAction.Edit);
         suggest.Clicked += async (_, _) => await CorrectAsync(LineAction.Suggest);
         reviewOcrLine.Clicked += async (_, _) => await ReviewOcrLineAsync();
@@ -609,6 +620,7 @@ internal sealed class OriginalPage : ContentPage
         var revision = detachedOcr?.Revision ?? session.Document?.CurrentRevisionId;
         reviewOcrPage.Text = ocrPageReview.ButtonText(revision is null ? null :
             new OcrPageReviewFlow.Source(documentId, pageIndex, detachedOcr is not null, revision));
+        ReadingPage.DescribeButton(reviewOcrPage, reviewOcrPage.Text);
         reset.IsEnabled = edit.IsEnabled && lines[index].Correction is not null;
     }
 

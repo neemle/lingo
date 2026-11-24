@@ -190,6 +190,7 @@ public partial class ReadingPage
             this.load = load;
             this.review = review;
             var close = new Button { Text = "Закрити" };
+            DescribeButton(close, "Закрити мовний аналіз");
             close.Clicked += async (_, _) => await Navigation.PopModalAsync();
             more.Clicked += async (_, _) => await LoadAsync();
             var stack = new VerticalStackLayout { Padding = 24, Spacing = 12, MaximumWidthRequest = 760 };

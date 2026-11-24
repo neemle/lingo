@@ -21,6 +21,8 @@ internal sealed class OcrCorrectionReviewPage : ContentPage
         var apply = new Button();
         apply.SetDynamicResource(StyleProperty, "AccentButton");
         var skip = new Button { Text = "Пропустити групу" };
+        ReadingPage.DescribeButton(skip, "Пропустити цю групу виправлень OCR");
+        ReadingPage.DescribeButton(apply, "Застосувати позначені виправлення OCR");
         skip.Clicked += (_, _) => result.TrySetResult([]);
         for (var index = 0; index < corrections.Length; index++)
         {

@@ -261,8 +261,33 @@ public partial class ReadingPage : ContentPage
 
     private void PauseSpeechChanged(object? sender, PropertyChangedEventArgs args)
     {
+        if (args.PropertyName == nameof(Button.Text) && sender is Button button)
+            DescribeButton(button, speechPaused ? "Продовжити озвучення" : "Призупинити озвучення");
         if (args.PropertyName is nameof(Button.IsEnabled) or nameof(Button.Text))
             UpdatePrimarySpeechButton();
+    }
+
+    private void ReaderCommandTextChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName != nameof(Button.Text) || sender is not Button { Text: { Length: > 0 } text } button)
+            return;
+        var hint = text switch
+        {
+            "Більше" => "Показати додаткові дії зі словом",
+            "Згорнути" => "Сховати додаткові дії зі словом",
+            "Дії OCR…" => "Відкрити дії з розпізнаним текстом сторінки",
+            "Сторінка PDF" => "Показати оригінальну сторінку PDF",
+            "Фото" => "Показати оригінальне фото",
+            "Розпізнаний текст" => "Показати розпізнаний текст",
+            "Завантажуємо PDF…" or "Завантажуємо фото…" => "Повернутися до розпізнаного тексту",
+            "Закладка" => "Додати закладку",
+            "Нотатка…" => "Додати нотатку",
+            "Свій переклад…" => "Додати свій переклад",
+            "Значення" => "Показати словникові значення",
+            _ when text.StartsWith("Значення · ", StringComparison.Ordinal) => "Показати словникові значення",
+            _ => text,
+        };
+        DescribeButton(button, hint);
     }
 
     private void UpdatePrimarySpeechButton()
