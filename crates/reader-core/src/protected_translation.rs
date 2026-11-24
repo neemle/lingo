@@ -11,6 +11,41 @@ static WEB_ADDRESSES: LazyLock<Regex> = LazyLock::new(|| {
     )).expect("web addresses")
 });
 
+static EURO_AMOUNTS: LazyLock<Regex> = LazyLock::new(|| {
+    const AMOUNT: &str = concat!(
+        r"[+\-−]?(?:[0-9]{1,3}(?:\.[0-9]{3})+,[0-9]+",
+        r"|[0-9]{1,3}(?:,[0-9]{3})+\.[0-9]+",
+        r"|(?:[0-9]{1,3}(?:[ \u{a0}\u{202f}][0-9]{3})+|[0-9]+)(?:[,.][0-9]+)?)",
+    );
+    const SPACE: &str = r"[ \u{a0}\u{202f}]*";
+    Regex::new(&format!(
+        r"(?i)(?P<before>{AMOUNT}){SPACE}(?:euros?|EUR|€)|(?:EUR|€){SPACE}(?P<after>{AMOUNT})",
+    )).expect("euro amounts")
+});
+
+fn euro_amounts(source: &str) -> impl Iterator<Item = (Range<usize>, &str)> + '_ {
+    let mut addresses = web_address_spans(source).peekable();
+    EURO_AMOUNTS.captures_iter(source).filter_map(move |matched| {
+        let range = matched.get(0)?.range();
+        let adjacent = |ch: char| ch.is_alphanumeric() || ch == '_';
+        if source[..range.start].ends_with(adjacent) || source[range.end..].starts_with(adjacent) {
+            return None;
+        }
+        while addresses.peek().is_some_and(|address| address.end <= range.start) {
+            addresses.next();
+        }
+        if addresses.peek().is_some_and(|address| address.start < range.end) {
+            return None;
+        }
+        let amount = matched.name("before").or_else(|| matched.name("after"))?;
+        Some((range, amount.as_str()))
+    })
+}
+
+pub(crate) fn contains_euro_amount(source: &str) -> bool {
+    euro_amounts(source).next().is_some()
+}
+
 pub(crate) fn web_address_spans(text: &str) -> impl Iterator<Item = Range<usize>> + '_ {
     WEB_ADDRESSES.find_iter(text).filter_map(|address| {
         let raw = address.as_str();
@@ -64,7 +99,7 @@ pub(crate) fn transform_outside_web_addresses(text: &str, transform: impl Fn(&st
 
 struct Marker<'a> {
     token: String,
-    replacement: &'a str,
+    replacement: Cow<'a, str>,
 }
 
 pub(crate) struct ProtectedText<'a> {
@@ -81,7 +116,17 @@ impl<'a> ProtectedText<'a> {
         let mut number = 1;
         let mut unprotected_letters = false;
         let mut source_upper = None;
-        for (range, value) in protected_spans(source) {
+        let amounts: Vec<_> = if target == "uk" { euro_amounts(source).collect() } else { Vec::new() };
+        let identifiers = protected_spans(source).filter(|(range, _)| {
+            !amounts.iter().any(|(amount, _)| amount.start < range.end && range.start < amount.end)
+        }).map(|(range, value)| {
+            let replacement = value.filter(|_| target == "uk").unwrap_or(&source[range.clone()]);
+            (range, Cow::Borrowed(replacement))
+        });
+        let mut spans: Vec<_> = identifiers.collect();
+        spans.extend(amounts.into_iter().map(|(range, amount)| (range, Cow::Owned(format!("{amount} євро")))));
+        spans.sort_unstable_by_key(|(range, _)| range.start);
+        for (range, replacement) in spans {
             let token = loop {
                 let token = format!("ZXQ{number:03}QXZ");
                 number += 1;
@@ -91,12 +136,6 @@ impl<'a> ProtectedText<'a> {
                 {
                     break token;
                 }
-            };
-            let original = &source[range.clone()];
-            let replacement = if target == "uk" {
-                value.unwrap_or(original)
-            } else {
-                original
             };
             let plain = &source[offset..range.start];
             unprotected_letters |= plain.chars().any(char::is_alphabetic);
@@ -168,7 +207,7 @@ impl<'a> ProtectedText<'a> {
             }
             seen[index] = true;
             restored.push_str(&output[offset..range.start]);
-            let replacement = self.markers[index].replacement;
+            let replacement = self.markers[index].replacement.as_ref();
             restored.push_str(replacement);
             offset = range.end;
             if replacement.ends_with('.') && output[offset..].strip_prefix('.')
@@ -328,6 +367,22 @@ fn is_identifier(word: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_euro_amounts_keep_their_value_precision_and_position_in_ukrainian() {
+        let source = "A320-200: 19,50 euros, puis EUR 1\u{202f}250,00 et €5.";
+        let protected = ProtectedText::new(source, "uk");
+        assert_eq!(protected.input(), "ZXQ001QXZ: ZXQ002QXZ, puis ZXQ003QXZ et ZXQ004QXZ.");
+        assert_eq!(protected.restore("ZXQ003QXZ, ZXQ004QXZ та ZXQ002QXZ за ZXQ001QXZ.".into()).unwrap(),
+            "1\u{202f}250,00 євро, 5 євро та 19,50 євро за A320-200.");
+        assert!(protected.restore("ZXQ001QXZ, ZXQ002QXZ та ZXQ004QXZ.".into()).is_err());
+        assert_eq!(ProtectedText::new("19,50 euros", "en").input(), "19,50 euros");
+        assert!(!contains_euro_amount("Euro 2024 a lieu en Europe."));
+        assert!(!contains_euro_amount("https://example.org/cost/19-euros?value=EUR25"));
+        assert!(contains_euro_amount("Une correction de −19,50 euros."));
+        let standalone = ProtectedText::new("€1.250,00", "uk");
+        assert_eq!(standalone.restore(standalone.input().to_owned()).unwrap(), "1.250,00 євро");
+    }
 
     #[test]
     fn restores_abbreviations_and_identifiers_at_their_translated_positions() {
