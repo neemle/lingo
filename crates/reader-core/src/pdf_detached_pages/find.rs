@@ -66,7 +66,9 @@ impl Store {
             None
         };
         let mut statement = self.connection.prepare(
-            "SELECT page,text,soft_lines FROM pdf_detached_pages WHERE document_id=?1 AND page>=?2 ORDER BY page LIMIT ?3",
+            "SELECT p.page,p.text,p.soft_lines,json_extract(d.body,'$.language')
+             FROM pdf_detached_pages p JOIN documents d ON d.id=p.document_id
+             WHERE p.document_id=?1 AND p.page>=?2 ORDER BY p.page LIMIT ?3",
         ).map_err(database_error)?;
         let mut pages = statement.query(params![id, start.page, MAX_SCAN_PAGES as u32 + 1]).map_err(database_error)?;
         let mut scanned = 0;
@@ -81,6 +83,7 @@ impl Store {
             scanned += 1;
 
             let text: String = row.get(1).map_err(database_error)?;
+            let source_document = crate::Document { language: row.get(3).map_err(database_error)?, ..Default::default() };
             let prefix = super::sentence_prefix(id, page, &super::page_revision(&text));
             let sentences = super::Layout::from_storage(row.get(2).map_err(database_error)?).segment(&text, &prefix);
             let local_start = sentences.first().map_or(0, |sentence| sentence.start_utf16);
@@ -148,17 +151,22 @@ impl Store {
                     } else {
                         (sentence.text.clone(), None, None, None)
                     };
-                let normalized = search_text(&text);
-                let Some(offset) = normalized.find(&needle) else { continue; };
+                let mut normalized = search_text(&text);
+                let mut offset = normalized.find(&needle);
+                if offset.is_none() && target.is_none() && text.contains('\n') && text.contains(['-', '\u{00ad}', '\u{2010}']) {
+                    normalized = search_text(&crate::translation::normalize_ocr_input(&source_document, &text, 0));
+                    offset = normalized.find(&needle);
+                }
+                let Some(offset) = offset else { continue; };
                 if result.matches.len() == limit {
                     result.next = Some(DetachedPdfFindCursor { page, position });
                     return Ok(result);
                 }
-                let text = if reviewed.is_some() || pdf_fragment.is_some() || text.chars().take(513).count() <= 512 {
-                    text
-                } else {
+                let text = if reviewed.is_none() && pdf_fragment.is_none() && text.chars().take(513).count() > 512 {
                     let excerpt: String = normalized[offset..].chars().take(512).collect();
                     if offset == 0 { excerpt } else { format!("…{excerpt}") }
+                } else {
+                    text
                 };
                 result.matches.push(DetachedPdfFindHit {
                     page, position, sentence_id: sentence.id.clone(), text, pivot_language, reviewed, source_text, pdf_fragment,
@@ -191,7 +199,7 @@ mod tests {
             store.pdf_original_root(), "source.pdf", &path, "fr", vec![String::new(); 3], vec![],
         ).unwrap();
         let document = store.import_pdf_file(prepared).unwrap();
-        let text = "L’e\u{301}quipage attend\n  sur le quai.";
+        let text = "L’e\u{301}quipage attend\n  sur le quai des marchan-\n  dises. Est-\nil arrivé ?";
         super::super::write_text_layer(&store.connection, &document.id, 2, text).unwrap();
         let cursor = DetachedPdfFindCursor { page: 0, position: 0 };
         let found = store.find_detached_pdf_text(&document.id, "L'équipage attend sur", cursor, 1, None).unwrap();
@@ -200,6 +208,11 @@ mod tests {
         let hit = &found.matches[0];
         assert_eq!((hit.page, hit.position), (2, 0));
         assert_eq!(hit.sentence_id, cached.sentences[0].id);
-        assert_eq!(hit.text, text);
+        assert_eq!(hit.text, cached.sentences[0].text);
+        let found = store.find_detached_pdf_text(&document.id, "marchandises", cursor, 1, None).unwrap();
+        assert_eq!(found.matches[0].sentence_id, cached.sentences[0].id);
+        let found = store.find_detached_pdf_text(&document.id, "est-il", cursor, 1, None).unwrap();
+        assert_eq!(found.matches[0].sentence_id, cached.sentences[1].id);
+        assert!(store.find_detached_pdf_text(&document.id, "estil", cursor, 1, None).unwrap().matches.is_empty());
     }
 }

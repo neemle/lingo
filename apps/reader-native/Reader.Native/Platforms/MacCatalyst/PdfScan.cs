@@ -69,7 +69,7 @@ internal static partial class PdfScan
     }
 
     internal static Task<(int Page, int Occurrence, string Text)[]> FindUnreadTextAsync(string path, int[] pages,
-        int firstOccurrence, string query, int limit, CancellationToken cancellation) =>
+        int firstOccurrence, string query, string language, int limit, CancellationToken cancellation) =>
         Task.Run(() =>
         {
             using var pool = new NSAutoreleasePool();
@@ -82,7 +82,7 @@ internal static partial class PdfScan
                 using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
                 var text = TextLayer(page, out _).Text;
                 var occurrence = 0;
-                foreach (var match in DocumentFind.SourceMatches(text, query))
+                foreach (var match in DocumentFind.PdfSourceMatches(text, query, language))
                 {
                     cancellation.ThrowIfCancellationRequested();
                     var position = occurrence++;

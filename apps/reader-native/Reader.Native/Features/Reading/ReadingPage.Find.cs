@@ -69,7 +69,8 @@ public partial class ReadingPage
                     if (ReferenceEquals(detachedAddress, address) && !loadingDetachedSentence &&
                         detachedSentence is { } found && found.Sentence.Id == sentenceId &&
                         !match.Translation && match.Query is { } query &&
-                        DocumentFind.SourceMatch(found.Sentence, query) is { } span)
+                        DocumentFind.PdfSourceMatches(found.Sentence.Text, query, found.Language,
+                            found.Sentence.StartUtf16).FirstOrDefault() is { } span)
                         RevealDetachedFindSpan(address, found, span);
                     if (ReferenceEquals(detachedAddress, address) && !loadingDetachedSentence &&
                         detachedSentence is { } loaded && loaded.Sentence.Id == sentenceId &&
@@ -92,7 +93,8 @@ public partial class ReadingPage
                 current.Sentences[position] != document.Sentences[position]) return;
             if (!match.Translation && current.Format == "pdf" && current.CurrentRevisionId is { } revision &&
                 match.Query is { } sourceQuery &&
-                DocumentFind.SourceMatch(current.Sentences[position], sourceQuery) is { } sourceMatch)
+                DocumentFind.PdfSourceMatches(current.Sentences[position].Text, sourceQuery, current.Language,
+                    current.Sentences[position].StartUtf16).FirstOrDefault() is { } sourceMatch)
             {
                 StopSpeech();
                 var cursor = await session.AnchorReadingSelectionAsync(current.Id, revision, sourceMatch);
@@ -233,7 +235,8 @@ public partial class ReadingPage
             {
                 if (page.State == "detached" && detachedAddress is { } address &&
                     address.Document == find.Document && address.Page == find.Page &&
-                    DocumentFind.SourceMatches(address.Text, find.Query).ElementAtOrDefault(find.Occurrence) is { } local)
+                    DocumentFind.PdfSourceMatches(address.Text, find.Query, address.Language)
+                        .ElementAtOrDefault(find.Occurrence) is { } local)
                 {
                     await LoadDetachedSentenceAsync(address, position: null, sourceOffset: local.StartUtf16);
                     if (readingPageActive && ReferenceEquals(detachedAddress, address) && !loadingDetachedSentence &&
@@ -243,7 +246,7 @@ public partial class ReadingPage
                     return;
                 }
                 if (page.Span is not { } range || document.CurrentRevisionId is not { } revision ||
-                    DocumentFind.SourceMatches(page.Text, find.Query, range.StartUtf16)
+                    DocumentFind.PdfSourceMatches(page.Text, find.Query, document.Language, range.StartUtf16)
                         .ElementAtOrDefault(find.Occurrence) is not { } original ||
                     original.StartUtf16 > document.Text.Length - original.LengthUtf16 ||
                     !document.Text.AsSpan(original.StartUtf16, original.LengthUtf16).SequenceEqual(original.Text))
@@ -394,8 +397,14 @@ public partial class ReadingPage
                 foreach (var match in page.Matches)
                 {
                     var selection = match.Selection with { Query = query };
-                    var text = selection is { PhysicalPage: not null, SentenceId: null } && !selection.Translation
-                        ? match.Text : DocumentFind.MatchingExcerpt(match.Text, query);
+                    var text = match.Text;
+                    if (selection.Translation || selection.PhysicalPage is null || selection.SentenceId is not null)
+                    {
+                        var sourceMatch = !selection.Translation && document.Format == "pdf"
+                            ? DocumentFind.PdfSourceMatches(text, query, document.Language).FirstOrDefault()
+                            : DocumentFind.SourceMatch(text, query);
+                        if (sourceMatch is not null) text = DocumentFind.MatchingExcerpt(text, sourceMatch, keepOpening: true);
+                    }
                     var label = selection.PhysicalPage is int physicalPage
                         ? $"PDF {physicalPage + 1} · {(selection.SentenceId is null ? text : BookmarkLabel(selection.Position, text))}"
                         : BookmarkLabel(selection.Position, text);
@@ -428,7 +437,8 @@ public partial class ReadingPage
 #endif
             if (start.PhysicalPage is null)
             {
-                var found = await Task.Run(() => DocumentFind.FindPage(document.Sentences, query, start.Position, token), token);
+                var pdfLanguage = document.Format == "pdf" ? document.Language : null;
+                var found = await Task.Run(() => DocumentFind.FindPage(document.Sentences, query, start.Position, token, pdfLanguage), token);
                 matches.AddRange(found.Positions.Select(position => new DocumentFindHit(document.Sentences[position].Text,
                     new DocumentFindSelection(position, Translation: false))));
                 if (found.NextStart is int nextPosition)
@@ -453,7 +463,7 @@ public partial class ReadingPage
 
             var space = DocumentFind.PageSize - matches.Count;
             var found = await PdfScan.FindUnreadTextAsync(original.Path, pending, pending[0] == start ? occurrence : 0,
-                query, space + 1, token);
+                query, document.Language, space + 1, token);
             matches.AddRange(found.Take(space).Select(hit => new DocumentFindHit(hit.Text,
                 new DocumentFindSelection(hit.Occurrence, Translation: false, PhysicalPage: hit.Page))));
             var next = found.Length > space

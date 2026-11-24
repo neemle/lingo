@@ -13,7 +13,7 @@ public static class DocumentFind
     }
 
     public static (int[] Positions, int? NextStart) FindPage(Sentence[] sentences, string query,
-        int start, CancellationToken cancellationToken)
+        int start, CancellationToken cancellationToken, string? pdfLanguage = null)
     {
         var needle = Normalize(query.Trim());
         if (needle.Length == 0) return ([], null);
@@ -23,7 +23,9 @@ public static class DocumentFind
         {
             cancellationToken.ThrowIfCancellationRequested();
             var text = Normalize(sentences[position].Text);
-            if (!text.Contains(needle, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!text.Contains(needle, StringComparison.OrdinalIgnoreCase) &&
+                (pdfLanguage is null || !sentences[position].Text.Contains('\n') ||
+                    !PdfSourceMatches(sentences[position].Text, query, pdfLanguage).Any())) continue;
             if (positions.Count == PageSize) return (positions.ToArray(), position);
             positions.Add(position);
         }
@@ -47,6 +49,22 @@ public static class DocumentFind
 
     public static TextSelection? SourceMatch(string source, string query, int startUtf16 = 0) =>
         SourceMatches(source, query, startUtf16).FirstOrDefault();
+
+    public static IEnumerable<TextSelection> PdfSourceMatches(string source, string query, string language,
+        int startUtf16 = 0)
+    {
+        var original = SourceMatches(source, query, startUtf16);
+        if (!source.Contains('\n') || source.AsSpan().IndexOfAny('-', '\u00ad', '\u2010') < 0) return original;
+        var block = new DocumentBlock("paragraph", 0, 0, 0, source.Length, null, null);
+        var projection = new ReaderTextProjection(source, [block], reflowPdf: true, sourceLanguage: language);
+        if (projection.Text == source) return original;
+        var reflow = SourceMatches(projection.Text, query).Select(match =>
+            projection.ToSource(match.StartUtf16, match.LengthUtf16) is { } span
+                ? new TextSelection(startUtf16 + span.Start, span.Length, source.Substring(span.Start, span.Length))
+                : null).OfType<TextSelection>();
+        return original.Concat(reflow).DistinctBy(match => (match.StartUtf16, match.LengthUtf16))
+            .OrderBy(match => match.StartUtf16).ThenBy(match => match.LengthUtf16);
+    }
 
     public static IEnumerable<TextSelection> SourceMatches(string source, string query, int startUtf16 = 0)
     {
