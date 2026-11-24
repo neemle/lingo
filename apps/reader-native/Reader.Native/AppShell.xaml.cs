@@ -24,6 +24,12 @@ public partial class AppShell : Shell
     public AppShell()
 	{
 		InitializeComponent();
+#if IOS
+        // Custom flyout chrome can loop in UIKit layout before the first page appears.
+        FlyoutHeader = null;
+        FlyoutFooter = null;
+        FlyoutBehavior = FlyoutBehavior.Flyout;
+#endif
 	}
 
     internal async void RestoreAfterActivation()

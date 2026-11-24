@@ -11,7 +11,6 @@ public partial class App : Application
             Title = "Читай — локальна бібліотека",
         };
 #if IOS
-        shell.FlyoutBehavior = FlyoutBehavior.Flyout;
         _ = ReceiveSharedFilesAsync();
         window.Activated += ReceiveSharedFiles;
 #else

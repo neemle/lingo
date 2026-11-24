@@ -13,5 +13,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../Reader.Native/Platforms/iOS/SharedImportFolder.cs" Link="SharedImportFolder.cs" />
+    <_LinkNativeExecutableInputs Include="$(CodesignEntitlements)" Condition="$(RuntimeIdentifier.StartsWith('iossimulator-'))" />
   </ItemGroup>
 </Project>

@@ -64,6 +64,8 @@
   </PropertyGroup>
   <ItemGroup Condition="$(TargetFramework.Contains('-ios'))">
     <ProjectReference Include="../Reader.ShareExtension/Reader.ShareExtension.csproj" IsAppExtension="true" />
+    <!-- The iOS SDK embeds simulator entitlements in the executable but does not track edits as linker inputs. -->
+    <_LinkNativeExecutableInputs Include="$(CodesignEntitlements)" Condition="$(RuntimeIdentifier.StartsWith('iossimulator-'))" />
     <NativeReference Include="../../../target/$(AppleRustTarget)/release/libreader_ffi.a">
       <Kind>Static</Kind><SmartLink>false</SmartLink>
       <Frameworks>Accelerate Foundation Metal</Frameworks>
