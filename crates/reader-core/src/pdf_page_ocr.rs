@@ -832,8 +832,6 @@ impl Store {
                     }
                 }
                 reconcile_ocr_with_layer(old_layer, &mut lines);
-                repair_ocr_drop_caps(old_layer, &mut lines);
-                remove_spurious_ocr_note_punctuation(old_layer, &mut lines);
                 pages[usize::from(page)].clear();
                 let page_text = serde_json::to_string(&pages).map_err(database_error)?;
                 tx.execute("UPDATE file_originals SET pdf_page_text=?2 WHERE document_id=?1",
@@ -963,7 +961,7 @@ fn normalized_ocr_anchor(word: &str) -> String {
         .collect()
 }
 
-fn remove_spurious_ocr_note_punctuation(reference: &str, lines: &mut [ocr::OcrLine]) {
+fn remove_spurious_ocr_note_punctuation(reference: &str, lines: &mut [ocr::OcrLine]) -> bool {
     use crate::document_layout::{footnote_start, pdf_note_references};
     use crate::document_tokens::word_parts;
 
@@ -976,7 +974,7 @@ fn remove_spurious_ocr_note_punctuation(reference: &str, lines: &mut [ocr::OcrLi
         .collect();
     let references = pdf_note_references(reference, &numbers);
     if references.is_empty() {
-        return;
+        return false;
     }
 
     let mut source = String::with_capacity(reference.len());
@@ -1003,9 +1001,10 @@ fn remove_spurious_ocr_note_punctuation(reference: &str, lines: &mut [ocr::OcrLi
         .take(4097)
         .collect();
     if !(ANCHORS + 1..=4096).contains(&source_words.len()) {
-        return;
+        return false;
     }
 
+    let mut changed = false;
     for line in lines {
         let text = line.reading_text();
         let words: Vec<_> = word_parts(text)
@@ -1040,11 +1039,13 @@ fn remove_spurious_ocr_note_punctuation(reference: &str, lines: &mut [ocr::OcrLi
         }
         if corrected != text {
             line.correction = Some(corrected);
+            changed = true;
         }
     }
+    changed
 }
 // OCR sometimes reads a two-line initial as part of both text lines.
-fn repair_ocr_drop_caps(reference: &str, lines: &mut [ocr::OcrLine]) {
+fn repair_ocr_drop_caps(reference: &str, lines: &mut [ocr::OcrLine]) -> bool {
     use crate::document_tokens::word_parts;
 
     const ANCHORS: usize = 4;
@@ -1053,7 +1054,7 @@ fn repair_ocr_drop_caps(reference: &str, lines: &mut [ocr::OcrLine]) {
         .take(4097)
         .collect();
     if !(ANCHORS + 1..=4096).contains(&reference.len()) {
-        return;
+        return false;
     }
 
     let replacement = |words: &[(usize, usize, &str)]| {
@@ -1073,10 +1074,12 @@ fn repair_ocr_drop_caps(reference: &str, lines: &mut [ocr::OcrLine]) {
         matches.all(|word| word == candidate).then_some(candidate)
     };
 
+    let mut changed = false;
     for index in 0..lines.len().saturating_sub(1) {
         let (first, rest) = lines.split_at_mut(index + 1);
         let (initial, continuation) = (&mut first[index], &mut rest[0]);
-        if initial.page != continuation.page
+        if initial.page != continuation.page || initial.rotation != continuation.rotation
+            || initial.is_rotated()
             || initial.height < continuation.height * 1.6
             || initial.height > continuation.height * 4.0
             || continuation.x < initial.x + continuation.height * 0.5
@@ -1112,6 +1115,7 @@ fn repair_ocr_drop_caps(reference: &str, lines: &mut [ocr::OcrLine]) {
             };
             if let Some(corrected) = corrected {
                 initial.correction = Some(corrected);
+                changed = true;
             }
         }
 
@@ -1124,11 +1128,21 @@ fn repair_ocr_drop_caps(reference: &str, lines: &mut [ocr::OcrLine]) {
                     && word.chars().skip(1).eq(candidate.chars())
             }) {
                 continuation.correction = Some(format!("{candidate}{}", &text[word.len()..]));
+                changed = true;
             }
         }
     }
+    changed
 }
-pub(crate) fn reconcile_ocr_with_layer(reference: &str, lines: &mut [ocr::OcrLine]) -> bool {
+
+fn reconcile_ocr_with_layer(reference: &str, lines: &mut [ocr::OcrLine]) -> bool {
+    let mut changed = repair_ocr_drop_caps(reference, lines);
+    changed |= reconcile_ocr_words(reference, lines);
+    changed |= remove_spurious_ocr_note_punctuation(reference, lines);
+    changed
+}
+
+fn reconcile_ocr_words(reference: &str, lines: &mut [ocr::OcrLine]) -> bool {
     use crate::document_tokens::word_parts;
     const CONTEXT: usize = 4;
     const MAX_LAYER_WORDS: usize = 4096;
@@ -1723,20 +1737,51 @@ mod drop_cap_tests {
         };
         let mut lines = [
             make_line("© 15 fevrier 1815, à Marseille.", 0.117, 0.264, 0.050),
-            make_line("Jentre dans le port. Il revient.", 0.148, 0.303, 0.022),
+            make_line("ventre dans le port. Il revient.", 0.148, 0.303, 0.022),
         ];
-        repair_ocr_drop_caps(reference, &mut lines);
-        assert_eq!(lines[0].reading_text(), "Le 15 fevrier 1815, à Marseille.");
-        assert_eq!(lines[1].reading_text(), "entre dans le port. Il revient.");
-        assert!(lines[0].text.starts_with('©'));
         assert!(reconcile_ocr_with_layer(reference, &mut lines));
         assert_eq!(lines[0].reading_text(), "Le 15 février 1815, à Marseille.");
+        assert_eq!(lines[1].reading_text(), "entre dans le port. Il revient.");
+        assert!(lines[0].text.starts_with('©'));
+        assert!(!reconcile_ocr_with_layer(reference, &mut lines));
 
         lines[0].correction = None;
         lines[0].height = 0.024;
         lines[1].correction = None;
         repair_ocr_drop_caps(reference, &mut lines);
         assert!(lines.iter().all(|line| line.correction.is_none()));
+    }
+
+    #[test]
+    fn cached_pdf_ocr_reconciles_a_drop_cap_without_replacing_raw_text() {
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("scan.pdf");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let prepared = file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "scan.pdf", &original, "fr", vec![String::new()], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let make_line = |text: &str, x, y, width, height| ocr::OcrLine {
+            page: 0, text: text.into(), x, y, width, height, rotation: None,
+            block_start: false, confidence: Some(0.98), correction: None,
+            words: vec![], source_span: None,
+        };
+        let document = store.cache_pdf_ocr_page(&document.id, 0, vec![
+            make_line("© 15 février 1815, à Marseille, un grand bateau, le Pharaon,", 0.106, 0.260, 0.789, 0.060),
+            make_line("ventre dans le port. Il revient de Turquie.", 0.151, 0.304, 0.740, 0.022),
+        ]).unwrap();
+        let reference = "Le 15 février 1815, à Marseille, un grand bateau, le Pharaon,\nentre dans le port. Il revient de Turquie.";
+        let revision = document.current_revision_id.as_deref().unwrap();
+        assert!(store.reconcile_pdf_ocr_page(&document.id, 0, revision, "fr", reference, false).unwrap());
+
+        let document = store.translation_document(&document.id).unwrap();
+        let lines = document.ocr_lines.as_deref().unwrap();
+        assert_eq!(lines[0].text, "© 15 février 1815, à Marseille, un grand bateau, le Pharaon,");
+        assert_eq!(lines[1].text, "ventre dans le port. Il revient de Turquie.");
+        assert_eq!(document.text, reference);
+        let revision = document.current_revision_id.as_deref().unwrap();
+        assert!(!store.reconcile_pdf_ocr_page(&document.id, 0, revision, "fr", reference, false).unwrap());
     }
 }
 
