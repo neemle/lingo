@@ -158,9 +158,6 @@ public partial class ReadingPage : ContentPage
     {
         if (storageRevision == AppState.StorageRevision) return false;
         storageRevision = AppState.StorageRevision;
-        translationSource = null;
-        TargetCode = null;
-        preferredTargetCode = null;
         translationWindows.Clear();
         prefetchAttempts.Clear();
         CancelScheduledTranslation();

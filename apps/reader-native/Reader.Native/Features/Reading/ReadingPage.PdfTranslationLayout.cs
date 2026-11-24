@@ -346,18 +346,21 @@ public partial class ReadingPage
         string? text = null;
         if (address is not null)
         {
+            var translated = pdfLayoutRows.Count(HasPdfTranslation);
             if (translatingPage) text = refreshingPdfSentence ? "Перекладаємо речення заново…"
                 : photo ? "Перекладаємо фото…" : "Перекладаємо сторінку…";
             else if (!ready && AppState.Session.Document is { } document)
-                text = readinessPair == (document.Language, address.Target)
+            {
+                var routeStatus = readinessPair == (document.Language, address.Target)
                     ? ReadinessMessage() : "Перевіряємо мовні пакети…";
+                text = translated > 0 ? $"Збережений переклад · {routeStatus}" : routeStatus;
+            }
             else if (pdfLayoutStatus is { Length: > 0 }) text = pdfLayoutStatus;
             if (!translatingPage && refreshingPdfSentence && translatingPdfLayout is { } running)
             {
                 var progress = $"Оновлюємо переклад речення на сторінці {running.Page + 1}.";
                 text = text is null ? progress : $"{text} {progress}";
             }
-            var translated = pdfLayoutRows.Count(HasPdfTranslation);
             if (translated > 0 && translated < pdfLayoutRows.Length)
             {
                 var progress = $"Перекладено {translated} з {pdfLayoutRows.Length} фрагментів.";
