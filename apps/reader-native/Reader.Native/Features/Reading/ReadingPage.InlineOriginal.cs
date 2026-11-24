@@ -8,6 +8,8 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage
 {
     private sealed record InlinePdfAddress(string Document, int Page, string? Revision, string? DetachedText);
+    private sealed record InlinePdfFrame(InlinePdfAddress Address, PhotoPreview Preview, string Text,
+        OcrLine[] Boxes, IReadOnlyDictionary<int, PdfBoxAppearance>? Appearance);
     private sealed record PdfWordAnchor(VisualElement View, InlinePdfAddress Address, Rect Bounds);
     private enum PdfFit { PageWidth, TextWidth, WholePage }
     private bool showInlineOriginal;
@@ -20,6 +22,7 @@ public partial class ReadingPage
     private InlinePdfAddress? inlinePdfAddress;
     private InlinePdfAddress? inlinePdfLoading;
     private CancellationTokenSource? inlinePdfLoad;
+    private InlinePdfFrame? recentInlinePdfFrame;
     private PhotoPreview? inlinePdfPreview;
     private OcrLine[] inlineDetachedLines = [];
     private OcrLine[] inlineNativeBoxes = [];
@@ -76,6 +79,7 @@ public partial class ReadingPage
         inlinePdfRequest++;
         inlinePdfLoading = null;
         inlinePdfLoad?.Cancel();
+        recentInlinePdfFrame = null;
         ClearInlinePdfFrame();
         SourceText.IsVisible = DetachedPdfText.IsVisible = true;
         InlinePdfViewport.IsVisible = DetachedInlinePdfViewport.IsVisible = PendingInlinePdfViewport.IsVisible = false;
@@ -147,8 +151,14 @@ public partial class ReadingPage
             inlinePdfLoading = address;
             InlinePdfHighlight.IsVisible = DetachedInlinePdfHighlight.IsVisible = false;
             var previous = inlinePdfAddress;
+            var cached = recentInlinePdfFrame is { } recent && recent.Address == address &&
+                CanReuseInlinePdfFrame(address) ? recent : null;
             if (previous is not null)
             {
+                // Retain one compressed frame. Rebuilding decoded surfaces is cheaper than caching them.
+                recentInlinePdfFrame = previous.Document == address.Document && previous.Revision == address.Revision &&
+                    CanReuseInlinePdfFrame(previous) && inlinePdfPreview is { Bytes.Length: <= 12 * 1024 * 1024 } image
+                    ? new(previous, image, inlineNativeText, inlineNativeBoxes, inlinePdfAppearance) : null;
                 ClearInlinePdfFrame();
                 RefreshPdfTranslationLayout();
             }
@@ -158,6 +168,14 @@ public partial class ReadingPage
             OcrLine[] detachedLines = [], nativeBoxes = [];
             string nativeText = "";
             IReadOnlyDictionary<int, PdfBoxAppearance>? appearance = null;
+            if (cached is not null)
+            {
+                preview = cached.Preview;
+                nativeText = cached.Text;
+                nativeBoxes = cached.Boxes;
+                appearance = cached.Appearance;
+            }
+            else
 #if MACCATALYST
             if (isPdf && await session.OriginalFileAsync(document.Id).WaitAsync(cancellation) is { } file)
             {
@@ -230,6 +248,10 @@ public partial class ReadingPage
             work?.Dispose();
         }
     }
+
+    private bool CanReuseInlinePdfFrame(InlinePdfAddress address) => address.DetachedText is null &&
+        CurrentNativePdfWindow(address.Document)?.Pages.Any(page => page.Page == address.Page &&
+            page is { State: "textLayer", HasOcr: false, RefreshPending: false }) == true;
 
     private static ImageSource InlinePreviewSource(PhotoPreview preview) =>
         ImageSource.FromStream(() => new MemoryStream(preview.Bytes, writable: false));
