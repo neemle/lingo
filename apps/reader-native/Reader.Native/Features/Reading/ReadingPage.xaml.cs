@@ -1179,10 +1179,8 @@ public partial class ReadingPage : ContentPage
                 var pronounced = await LocalSpeech.PrepareSystemSpeechAsync(session, doc.Language, ReadingPronunciation(doc, sentence, speechText));
                 if (request != speechRequest || activeSpeechSource is not { } active ||
                     !IsSpeechSourceCurrent(session, active)) return;
-                status = hasSpeechOverride
-                    ? await speech.SpeakAsync(pronounced, doc.Language)
-                    : await PlaySystemSentenceAsync(session, doc, sentence, pronounced, startAt, textHash, request,
-                        () => receivedCue = true);
+                status = await PlaySystemSentenceAsync(session, doc, sentence, pronounced, startAt,
+                    hasSpeechOverride ? null : textHash, request, () => receivedCue = true);
                 if (fallbackReason is not null && status is not null && status != LocalSpeech.CompletedStatus)
                     status = $"{fallbackReason} {status}";
             }
@@ -1250,7 +1248,7 @@ public partial class ReadingPage : ContentPage
     }
 
     private Task<string?> PlaySystemSentenceAsync(ReaderSession session, Document document, Sentence sentence,
-        string pronounced, int startAt, string textHash, int request, Action receivedCue)
+        string pronounced, int startAt, string? resumeHash, int request, Action receivedCue)
     {
         var input = SourceRanges.ProjectPronunciation(sentence.Text, pronounced, startAt, (start, length) =>
             Dispatcher.Dispatch(() =>
@@ -1261,7 +1259,8 @@ public partial class ReadingPage : ContentPage
                     HighlightSpokenWord(sentence, start, length) is int spokenOffset)
                 {
                     receivedCue();
-                    pendingSpeechResume = (document.Id, new(sentence.Id, textHash, spokenOffset));
+                    if (resumeHash is null) return;
+                    pendingSpeechResume = (document.Id, new(sentence.Id, resumeHash, spokenOffset));
                     if (lastSpeechSave == 0 || Stopwatch.GetElapsedTime(lastSpeechSave) >= TimeSpan.FromSeconds(2))
                         SaveSpeechResume();
                 }

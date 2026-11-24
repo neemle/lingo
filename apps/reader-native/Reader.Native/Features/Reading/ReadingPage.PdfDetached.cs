@@ -826,10 +826,7 @@ public partial class ReadingPage
                 var pronunciation = current.SpeechText ?? current.PronunciationText ?? speechText;
                 var pronounced = await LocalSpeech.PrepareSystemSpeechAsync(session, current.Language, pronunciation);
                 if (run != detachedAudioRun) return false;
-                if (speechText != sentence.Text)
-                    status = await detachedSpeech.SpeakAsync(pronounced, current.Language);
-                else
-                    status = await PlayDefaultDetachedPronunciationAsync(pronounced);
+                status = await PlayDetachedPronunciationAsync(pronounced);
                 if (modelError is not null && status is not null && status != LocalSpeech.CompletedStatus)
                     status = $"{modelError} {status}";
             }
@@ -861,10 +858,12 @@ public partial class ReadingPage
         }
         return false;
 
-        Task<string?> PlayDefaultDetachedPronunciationAsync(string pronounced)
+        Task<string?> PlayDetachedPronunciationAsync(string pronounced)
         {
-            var startAt = SpeechProgress.ResumeOffset(sentence, saved) ?? 0;
-            checkpointDetachedSpeech = () => { if (pending is { } resume) Save(resume); };
+            var canSaveWordPosition = speechText == sentence.Text;
+            var startAt = canSaveWordPosition ? SpeechProgress.ResumeOffset(sentence, saved) ?? 0 : 0;
+            if (canSaveWordPosition)
+                checkpointDetachedSpeech = () => { if (pending is { } resume) Save(resume); };
             var input = SourceRanges.ProjectPronunciation(sentence.Text, pronounced, startAt, (start, length) =>
                 MainThread.BeginInvokeOnMainThread(() =>
                 {
@@ -872,6 +871,7 @@ public partial class ReadingPage
                         start > sentence.Text.Length - length) return;
                     DetachedPdfText.SpokenWord = new TextSelection(
                         sentence.StartUtf16 + start, length, sentence.Text.Substring(start, length));
+                    if (!canSaveWordPosition) return;
                     pending = new SpeechResume(sentence.Id, hash, start);
                     if (Environment.TickCount64 - lastSavedAt >= 2000) checkpointDetachedSpeech?.Invoke();
                 }));
