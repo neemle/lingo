@@ -36,6 +36,20 @@ public partial class ReadingPage
             if (!readingPageActive || session.Document is not { } current || current.Id != document.Id ||
                 current.Language != document.Language || (match.Translation && TargetCode != target))
                 return;
+            if (match.Translation && target is not null)
+            {
+                var latest = await RefreshTranslationFindMatchAsync(session, document, match, target);
+                if (!readingPageActive || session.Document is not { } stillOpen || stillOpen.Id != document.Id ||
+                    stillOpen.Language != document.Language || TargetCode != target) return;
+                if (latest is null)
+                {
+                    await DisplayAlertAsync("Пошук у документі",
+                        "Цей збіг змінився. Повторіть пошук, щоб побачити актуальний переклад.", "Гаразд");
+                    return;
+                }
+                current = stillOpen;
+                match = latest;
+            }
             ClearTranslationFocus();
             documentFindFocus = null;
             if ((match.Translation && readingLayout == ReaderLayout.Source) ||
@@ -132,6 +146,46 @@ public partial class ReadingPage
         catch (Exception error) { await DisplayAlertAsync("Пошук у документі", error.Message, "Гаразд"); }
         finally { findingInDocument = false; }
     }
+
+    private static bool MatchesFindSource(TranslationFindPage results, Document document) =>
+        results.SourceRevisionId == document.CurrentRevisionId && results.SourceLanguage == document.Language;
+
+    private static bool SameFindFragment(TranslationFindFragment? previous, TranslationFindFragment? latest) =>
+        previous is null ? latest is null : latest is not null &&
+        previous.Page == latest.Page && previous.StartUtf16 == latest.StartUtf16 &&
+        previous.EndUtf16 == latest.EndUtf16 && previous.ReflowOnly == latest.ReflowOnly;
+
+    private static async Task<DocumentFindSelection?> RefreshTranslationFindMatchAsync(
+        ReaderSession session, Document document, DocumentFindSelection match, string target)
+    {
+        if (match.Query is not { } query) return null;
+        if (match.PhysicalPage is int page)
+        {
+            var results = await session.FindDetachedPdfTextAsync(document.Id, query,
+                new DetachedPdfFindCursor(page, match.Position), 1, default, target);
+            var hit = results.Matches.FirstOrDefault(hit => hit.Page == page && hit.Position == match.Position &&
+                hit.SentenceId == match.SentenceId && SameFindFragment(match.PdfFragment, hit.PdfFragment));
+            return hit is null ? null : match with
+            {
+                SavedText = hit.Text,
+                PdfFragment = hit.PdfFragment,
+                CachedMachine = CachedFindMachine(hit),
+            };
+        }
+
+        var found = await session.FindTranslationPageAsync(document.Id, target, query, match.Position, default);
+        if (!MatchesFindSource(found, document)) return null;
+        var current = found.Matches.FirstOrDefault(hit => hit.Position == match.Position &&
+            SameFindFragment(match.PdfFragment, hit.PdfFragment));
+        return current is null ? null : match with
+        {
+            SavedText = current.Text, Alignment = current.Alignment,
+            PdfFragment = current.PdfFragment, PivotLanguage = current.PivotLanguage,
+        };
+    }
+
+    private static DetachedPdfTranslation? CachedFindMachine(DetachedPdfFindHit hit) =>
+        hit.Reviewed == false ? new(hit.Text, hit.PivotLanguage, hit.SourceText, hit.Position) : null;
 
     private TextSelection? SetDocumentFindFocus(string document, string? revision, int? page, Sentence sentence, string? query)
     {
@@ -518,7 +572,7 @@ public partial class ReadingPage
                 matches.AddRange(found.Matches.Select(hit => new DocumentFindHit(hit.Text,
                     new DocumentFindSelection(hit.Position, Translation: language is not null,
                         PhysicalPage: hit.Page, SentenceId: hit.SentenceId,
-                        CachedMachine: hit.Reviewed == false ? new DetachedPdfTranslation(hit.Text, hit.PivotLanguage, hit.SourceText, hit.Position) : null,
+                        CachedMachine: CachedFindMachine(hit),
                         PdfFragment: hit.PdfFragment, SavedText: language is null ? null : hit.Text))));
                 if (found.Next is not { } next || next == cursor) return new(matches.ToArray(), null);
                 space = DocumentFind.PageSize - matches.Count;
@@ -541,6 +595,8 @@ public partial class ReadingPage
                 {
                     token.ThrowIfCancellationRequested();
                     var found = await session.FindTranslationPageAsync(document.Id, language, query, position, token);
+                    if (!MatchesFindSource(found, document))
+                        throw new InvalidOperationException("Текст документа змінився. Відкрийте пошук знову.");
                     matches.AddRange(found.Matches.Where(hit => hit.Position >= 0 && hit.Position < document.Sentences.Length)
                         .Select(hit => new DocumentFindHit(hit.Text, new DocumentFindSelection(hit.Position, Translation: true,
                             PdfFragment: hit.PdfFragment, SavedText: hit.Text, Alignment: hit.Alignment, PivotLanguage: hit.PivotLanguage))));

@@ -1030,6 +1030,8 @@ fn read_cached_plan(
 pub struct TranslationSearchPage {
     pub matches: Vec<TranslationSearchMatch>,
     pub next_start: Option<usize>,
+    pub source_revision_id: Option<String>,
+    pub source_language: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1074,6 +1076,8 @@ pub(crate) fn search_cached_translation(
     let mut page = TranslationSearchPage {
         matches: Vec::new(),
         next_start: None,
+        source_revision_id: document.current_revision_id.clone(),
+        source_language: document.language.clone(),
     };
     let len = document.sentences.len();
     if query.is_empty() || start >= len {

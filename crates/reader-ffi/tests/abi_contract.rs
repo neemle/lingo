@@ -646,6 +646,19 @@ fn reviewed_translations_follow_stable_segments_and_target_languages() {
     let oversized = "😀".repeat(2001);
     assert_error(&set(store.handle, first, "uk", &oversized), "core_error");
 
+    let find = |query| call(store.handle, json!({
+        "version": 1, "operation": "find_translation_page", "id": id,
+        "target": "uk", "query": query, "start": 0,
+    }));
+    let hit = find("Вітаю");
+    assert_eq!(hit["data"]["sourceRevisionId"], doc["currentRevisionId"]);
+    assert_eq!(hit["data"]["sourceLanguage"], "fr");
+    assert_eq!(hit["data"]["matches"][0]["text"], "Вітаю!");
+    assert_eq!(set(store.handle, first, "uk", "Добрий день!")["ok"], true);
+    assert_eq!(find("Вітаю")["data"]["matches"], json!([]));
+    assert_eq!(find("Добрий день")["data"]["matches"][0]["position"], 0);
+    assert_eq!(set(store.handle, first, "uk", "Вітаю!")["ok"], true);
+
     store.reopen();
     let exported = call(store.handle, json!({"version": 1, "operation": "export"}));
     assert_eq!(exported["ok"], true, "{exported}");
