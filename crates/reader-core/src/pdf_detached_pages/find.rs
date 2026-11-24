@@ -107,8 +107,9 @@ impl Store {
                             let last = layout.sentences.partition_point(|part| part.start_utf16 < sentence.end_utf16);
                             (last > first + 1).then_some((layout, first..last))
                         });
+                        let has_fragments = split.is_some();
+                        let mut matched = None;
                         if let Some((layout, fragments)) = split {
-                            let mut matched = None;
                             for index in fragments {
                                 let Some(row) = routes.cached_pdf_row(
                                     self, layout, index, target, PageBoundaries::Projected, UnitGrouping::Sentence,
@@ -121,16 +122,25 @@ impl Store {
                                     start_utf16: part.start_utf16 - projected_offset,
                                     end_utf16: part.end_utf16 - projected_offset,
                                     pivot_language: row.pivot_language,
+                                    reflow_only: false,
                                 });
                                 matched = Some(text);
                                 break;
                             }
-                            let Some(text) = matched else { continue; };
+                        }
+                        if let Some(text) = matched {
                             (text, None, None, None)
                         } else if let Some(text) = projection.reviewed(&sentence.id, target) {
                             (text.to_owned(), None, Some(true), None)
                         } else if let Some(hit) = translation::cached_page_translation(self, routes, projection, position, target, true)? {
                             if hit.start_position != position { continue; }
+                            if has_fragments {
+                                pdf_fragment = Some(TranslationSearchFragment {
+                                    page, start_utf16: sentence.start_utf16 - projected_offset,
+                                    end_utf16: sentence.end_utf16 - projected_offset,
+                                    pivot_language: hit.pivot_language.clone(), reflow_only: true,
+                                });
+                            }
                             (hit.text, hit.pivot_language, Some(false), hit.source_text)
                         } else {
                             continue;

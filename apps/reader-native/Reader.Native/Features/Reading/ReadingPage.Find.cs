@@ -158,6 +158,11 @@ public partial class ReadingPage
             ? SourceRanges.Selection(source, fragment.StartUtf16, fragment.EndUtf16 - fragment.StartUtf16) : null;
         documentFindFocus = new(document, revision, page, sentence, Span: span, Target: target, Query: query,
             PdfFragment: match.PdfFragment, FragmentTranslation: span is null ? null : match.FragmentTranslation);
+        if (span is not null && match.PdfFragment is { ReflowOnly: true })
+        {
+            pdfTranslationLayout = false;
+            RefreshPdfTranslationLayout();
+        }
         if (page is null)
         {
             UpdateHighlight();

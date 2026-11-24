@@ -1019,6 +1019,8 @@ pub struct TranslationSearchFragment {
     pub(crate) end_utf16: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) pivot_language: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) reflow_only: bool,
 }
 
 pub(crate) fn search_cached_translation(
@@ -1053,6 +1055,7 @@ pub(crate) fn search_cached_translation(
     for position in scan_start..end {
         let sentence = &document.sentences[position];
         let active_id = &sentence.id;
+        let mut reflow_page = None;
         if position >= start && document.ocr_lines.is_some() {
             let physical_page = crate::pdf_reading_position::page_for_offset(document, sentence.start_utf16);
             if physical_page != projected_page {
@@ -1063,7 +1066,7 @@ pub(crate) fn search_cached_translation(
                 let first = projected.sentences.partition_point(|part| part.end_utf16 <= sentence.start_utf16);
                 let last = projected.sentences.partition_point(|part| part.start_utf16 < sentence.end_utf16);
                 if last > first + 1 {
-                    previous_unit = None;
+                    let previous_count = page.matches.len();
                     for fragment in first..last {
                         let Some(row) = routes.cached_pdf_row(
                             store, projected, fragment, target, PageBoundaries::Canonical, UnitGrouping::Sentence,
@@ -1074,7 +1077,7 @@ pub(crate) fn search_cached_translation(
                         page.matches.push(TranslationSearchMatch {
                             position, text, pdf_fragment: Some(TranslationSearchFragment {
                                 page: physical_page, start_utf16: part.start_utf16, end_utf16: part.end_utf16,
-                                pivot_language: row.pivot_language,
+                                pivot_language: row.pivot_language, reflow_only: false,
                             }),
                         });
                         break;
@@ -1083,7 +1086,11 @@ pub(crate) fn search_cached_translation(
                         page.next_start = (position + 1 < len).then_some(position + 1);
                         return Ok(page);
                     }
-                    continue;
+                    if page.matches.len() != previous_count {
+                        previous_unit = None;
+                        continue;
+                    }
+                    reflow_page = Some(physical_page);
                 }
             }
         }
@@ -1100,27 +1107,26 @@ pub(crate) fn search_cached_translation(
             .units
             .into_iter()
             .find(|unit| unit.sentence_ids.contains(active_id));
-        let contextual =
-            active_unit.and_then(|unit| unit.translation.map(|text| (unit.sentence_ids, text)));
+        let contextual = active_unit.and_then(|unit|
+            unit.translation.map(|text| (unit.sentence_ids, text, unit.pivot_language)));
         let repeated = contextual.is_some() && contextual == previous_unit;
         let active = contextual
             .as_ref()
-            .map(|(_, text)| text.as_str())
+            .map(|(_, text, pivot)| (text.as_str(), pivot.as_deref()))
             .or_else(|| {
-                cached
-                    .sentence
-                    .as_ref()?
-                    .segments
-                    .first()
-                    .map(String::as_str)
+                let sentence = cached.sentence.as_ref()?;
+                Some((sentence.segments.first()?.as_str(), sentence.route.pivot_language()))
             });
-        if let Some(text) = active.filter(|text| {
+        if let Some((text, pivot)) = active.filter(|(text, _)| {
             position >= start && !repeated && normalize_translation_search(text).contains(&query)
         }) {
             page.matches.push(TranslationSearchMatch {
                 position,
                 text: text.to_owned(),
-                pdf_fragment: None,
+                pdf_fragment: reflow_page.map(|page| TranslationSearchFragment {
+                    page, start_utf16: sentence.start_utf16, end_utf16: sentence.end_utf16,
+                    pivot_language: pivot.map(str::to_owned), reflow_only: true,
+                }),
             });
             if page.matches.len() == MATCH_LIMIT {
                 page.next_start = (position + 1 < len).then_some(position + 1);
