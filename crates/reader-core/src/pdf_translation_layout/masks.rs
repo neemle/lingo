@@ -65,7 +65,7 @@ pub(super) fn plan(
             .iter()
             .filter_map(|word| word.source_span)
             .any(|span| !mask_safe(span) || background(span).is_some_and(|color| different_color(color, line_background)));
-        if contains(span) && mask_safe(span) && !mixed_background {
+        if contains(span) && mask_safe(span) && !mixed_background && !spans_wide_gaps(line) {
             masks.push(BackgroundMask {
                 bounds: clipped(line.x, line.y, line.width, line.height)?,
                 background: line_background,
@@ -94,6 +94,34 @@ pub(super) fn plan(
         }
     }
     (!masks.is_empty()).then_some(masks)
+}
+
+fn spans_wide_gaps(line: &OcrLine) -> bool {
+    if line.words.is_empty() {
+        return false;
+    }
+    // OCR can return one line across an icon, a form field, or a column gutter.
+    // Those spans of paper are not part of the text to erase.
+    let rotation = crate::ocr::line_rotation(line).unwrap_or_default();
+    let area = Bounds {
+        x: line.x,
+        y: line.y,
+        width: line.width,
+        height: line.height,
+    }.reading_box(rotation);
+    let gap_limit = area.height * 1.6;
+    let mut words: Vec<_> = line.words.iter().map(|word| {
+        Bounds { x: word.x, y: word.y, width: word.width, height: word.height }.reading_box(rotation)
+    }).collect();
+    words.sort_unstable_by(|left, right| left.x.total_cmp(&right.x));
+    let mut right_edge = area.x;
+    for word in words {
+        if word.x - right_edge > gap_limit {
+            return true;
+        }
+        right_edge = right_edge.max(word.right());
+    }
+    area.right() - right_edge > gap_limit
 }
 
 fn clipped(x: f64, y: f64, width: f64, height: f64) -> Option<Bounds> {
@@ -171,5 +199,12 @@ mod tests {
         assert!(plan(right, std::iter::once(5..8), &geometry, &styles).is_none());
         let left = Bounds { width: 0.2, ..area };
         assert_eq!(plan(left, std::iter::once(0..4), &geometry, &styles).unwrap().len(), 1);
+
+        let mut compact = geometry[0].clone();
+        compact.words[1].x = 0.315;
+        compact.width = 0.415;
+        let area = Bounds { width: compact.width, ..area };
+        let plain = plan(area, std::iter::once(0..8), &[compact], &BTreeMap::new()).unwrap();
+        assert_eq!(plain.len(), 1);
     }
 }

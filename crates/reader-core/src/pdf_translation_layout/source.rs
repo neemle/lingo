@@ -311,9 +311,17 @@ mod tests {
         let output = serde_json::to_value(project(&rows, &geometry, 0, &[], true).unwrap()).unwrap();
         let regions = output["regions"].as_array().unwrap();
         assert_eq!(regions.len(), 4);
-        for (index, (angle, _, _)) in entries.into_iter().enumerate() {
+        for (index, (angle, first, second)) in entries.into_iter().enumerate() {
             assert_eq!(regions[index]["rotation"], angle);
-            assert_eq!(regions[index]["masks"].as_array().unwrap().len(), 1);
+            let masks = regions[index]["masks"].as_array().unwrap();
+            assert_eq!(masks.len(), 2);
+            for (mask, (x, y)) in masks.iter().zip([first, second]) {
+                let bounds = &mask["bounds"];
+                assert!((bounds["x"].as_f64().unwrap() - x).abs() < 0.001);
+                assert!((bounds["y"].as_f64().unwrap() - y).abs() < 0.001);
+                assert!(bounds["width"].as_f64().unwrap() < 0.032);
+                assert!(bounds["height"].as_f64().unwrap() < 0.022);
+            }
             assert_eq!(regions[index]["bounds"], output["anchors"][index]["bounds"]);
         }
         rows[0].end_utf16 = rows[1].end_utf16;
