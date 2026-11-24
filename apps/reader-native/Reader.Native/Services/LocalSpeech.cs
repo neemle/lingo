@@ -27,14 +27,15 @@ public sealed class LocalSpeech : IDisposable
     private static readonly object VoiceScanGate = new();
     private static Task<SpeechVoice[]>? voiceScan;
 
-    private static Task<SpeechVoice[]> ReadSystemVoicesAsync()
+    internal static Task<SpeechVoice[]> ReadSystemVoicesAsync(bool refresh = true, CancellationToken cancellation = default)
     {
         lock (VoiceScanGate)
         {
             // Share any pending OS query. A timed-out caller cannot cancel the native enumeration.
-            if (voiceScan is not { IsCompleted: false })
+            if (voiceScan is null ||
+                voiceScan.IsCompleted && (refresh || !voiceScan.IsCompletedSuccessfully))
                 voiceScan = Task.Run(NativeSpeech.InstalledVoices);
-            return voiceScan.WaitAsync(TimeSpan.FromSeconds(4));
+            return voiceScan.WaitAsync(TimeSpan.FromSeconds(4), cancellation);
         }
     }
 

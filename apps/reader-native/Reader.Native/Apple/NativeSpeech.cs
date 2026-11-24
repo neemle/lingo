@@ -5,6 +5,7 @@ namespace Reader.Native.Services;
 
 internal sealed class NativeSpeech
 {
+    private static readonly SemaphoreSlim VoiceLookupGate = new(1);
     private AVSpeechSynthesizer? active;
 
     internal bool Pause() => active?.PauseSpeaking(AVSpeechBoundary.Immediate) == true;
@@ -19,11 +20,8 @@ internal sealed class NativeSpeech
     internal async Task SpeakAsync(string text, string language, string? preferredVoice, float rate,
         Action<int, int>? boundary, CancellationToken token)
     {
-        var voices = AVSpeechSynthesisVoice.GetSpeechVoices();
-        using var systemVoice = AVSpeechSynthesisVoice.FromLanguage(language);
-        var selected = SpeechVoice.ResolveId(voices.Select(ToVoice), language, preferredVoice, systemVoice?.Identifier);
-        var voice = voices.FirstOrDefault(item => item.Identifier == selected)
-            ?? throw new InvalidOperationException("Голос цієї мови не встановлено в системі.");
+        using var voice = await ResolveVoiceAsync(language, preferredVoice, token);
+        token.ThrowIfCancellationRequested();
 
         using var utterance = new AVSpeechUtterance(text)
         {
@@ -56,6 +54,48 @@ internal sealed class NativeSpeech
         {
             active = null;
             if (engine.Speaking || engine.Paused) engine.StopSpeaking(AVSpeechBoundary.Immediate);
+        }
+    }
+
+    private static async Task<AVSpeechSynthesisVoice> ResolveVoiceAsync(
+        string language, string? preferredVoice, CancellationToken token)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(4));
+        var request = deadline.Token;
+        var result = new TaskCompletionSource<AVSpeechSynthesisVoice>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = request.Register(() => result.TrySetCanceled(request));
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                request.ThrowIfCancellationRequested();
+                var voices = await LocalSpeech.ReadSystemVoicesAsync(refresh: false, cancellation: request);
+                await VoiceLookupGate.WaitAsync(request);
+                try
+                {
+                    var selected = voices.FirstOrDefault(voice => voice.Id == preferredVoice &&
+                        SpeechVoice.MatchesLanguage(voice.Language, language))?.Id;
+                    if (selected is null)
+                    {
+                        using var systemVoice = AVSpeechSynthesisVoice.FromLanguage(language);
+                        selected = SpeechVoice.ResolveId(voices, language, null, systemVoice?.Identifier);
+                    }
+                    request.ThrowIfCancellationRequested();
+                    var voice = selected is null ? null : AVSpeechSynthesisVoice.FromIdentifier(selected);
+                    if (voice is null)
+                        throw new InvalidOperationException("Голос цієї мови не встановлено в системі.");
+                    if (!result.TrySetResult(voice)) voice.Dispose();
+                }
+                finally { VoiceLookupGate.Release(); }
+            }
+            catch (Exception error) { result.TrySetException(error); }
+        });
+        try { return await result.Task; }
+        catch (Exception error) when (!token.IsCancellationRequested && error is OperationCanceledException or TimeoutException)
+        {
+            throw new TimeoutException("Система не підготувала голос вчасно. Спробуйте знову пізніше.", error);
         }
     }
 }
