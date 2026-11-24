@@ -138,11 +138,15 @@ pub(crate) fn canonical_narration(
 fn canonical_body_sentence(document: &Document, sentence: &Sentence) -> Option<Sentence> {
     let body = sentence.end_utf16.checked_sub(1)
         .and_then(|offset| pdf_reading_position::page_for_offset(document, offset))
-        .and_then(|page| canonical_body_range(document, page));
+        .and_then(|page| canonical_body_range(document, page))?;
+    clip_to_body_end(document, sentence, body.end)
+}
+
+fn clip_to_body_end(document: &Document, sentence: &Sentence, end: usize) -> Option<Sentence> {
     // A stored sentence can end in the footnote even though the body ends in a hyphen.
     // Only the derived text uses the clipped source so sentence IDs still resolve.
-    body.filter(|body| sentence.start_utf8 < body.end && body.end < sentence.end_utf8)
-        .and_then(|body| document.text.get(sentence.start_utf8..body.end))
+    (sentence.start_utf8 < end && end < sentence.end_utf8).then_some(end)
+        .and_then(|end| document.text.get(sentence.start_utf8..end))
         .map(str::trim_end)
         .filter(|text| !text.is_empty())
         .map(|text| Sentence {
@@ -151,6 +155,26 @@ fn canonical_body_sentence(document: &Document, sentence: &Sentence) -> Option<S
             end_utf16: sentence.start_utf16 + text.encode_utf16().count(),
             ..sentence.clone()
         })
+}
+
+pub(super) fn last_detached_body_sentence<'a>(layout: &Document, sentences: &'a [Sentence]) -> Option<Cow<'a, Sentence>> {
+    let body = prose_range(&layout.blocks, 0..layout.text.len());
+    let last = sentences.partition_point(|sentence| sentence.start_utf8 < body.end).checked_sub(1)?;
+    let sentence = &sentences[last];
+    (sentence.end_utf8 > body.start).then(|| {
+        clip_to_body_end(layout, sentence, body.end).map_or(Cow::Borrowed(sentence), Cow::Owned)
+    })
+}
+
+pub(crate) fn projected_ending<'a>(document: &'a Document, last: &Sentence) -> Option<&'a Sentence> {
+    // A synthetic next-page excerpt can sit after one or more silent footnotes.
+    let next = document.sentences.last().filter(|next| next.id.ends_with(":boundary") && next.start_utf8 > last.end_utf8)?;
+    let page = pdf_reading_position::page_for_offset(document, last.end_utf16.checked_sub(1)?)?;
+    let next_page = pdf_reading_position::page_for_offset(document, next.start_utf16)?;
+    if page.checked_add(1)? != next_page { return None; }
+    let body = canonical_body_range(document, page)?;
+    (last.end_utf8 >= body.end || document.text.get(last.end_utf8..body.end)?.trim().is_empty())
+        .then_some(next)
 }
 
 fn narration_fragments(

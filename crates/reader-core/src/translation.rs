@@ -1440,7 +1440,14 @@ pub(crate) fn sentence_source(
     let (input, range) = sentence_span_input(document, selected);
     let input = match boundaries {
         PageBoundaries::Canonical => with_adjacent_pdf_text(store, document, *range.start(), *range.end(), target, input)?,
-        PageBoundaries::Projected => input,
+        PageBoundaries::Projected => {
+            let joined = word_hyphen(&input)
+                .and_then(|_| word_break::projected_ending(document, &document.sentences[*range.end()]))
+                .map(|next| normalize_ocr_input(document, &next.text, next.start_utf16))
+                .and_then(|next| word_break::join_fragments(&input, None, Some(&next)))
+                .filter(|joined| joined.text.len() <= 1024);
+            joined.map_or(input, |joined| joined.text)
+        }
     };
     let ids = document.sentences[range].iter().map(|sentence| sentence.id.clone()).collect();
     Ok((input, ids))

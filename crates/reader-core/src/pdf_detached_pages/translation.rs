@@ -482,8 +482,11 @@ impl Store {
             reviewed_translations.insert(target.to_owned(), values);
         }
 
+        let lines = self.detached_pdf_ocr(id, page)?.map(|ocr| ocr.lines);
+        let local_layout = document_layout::detached_pdf_document(text, &language, lines);
+        let body_end = word_break::last_detached_body_sentence(&local_layout, &sentences);
         let (mut previous, mut next) = word_break::neighboring_fragments(
-            self, id, page, Some(target), sentences.first(), sentences.last(),
+            self, id, page, Some(target), sentences.first(), body_end.as_deref(),
         )?;
         if let Some(items) = reviewed_translations.get(target) {
             if sentences
@@ -492,8 +495,7 @@ impl Store {
             {
                 previous = None;
             }
-            if sentences
-                .last()
+            if body_end.as_deref()
                 .is_some_and(|sentence| items.contains_key(&sentence.id))
             {
                 next = None;
@@ -501,8 +503,8 @@ impl Store {
         }
         let physical_start = usize::from(previous.is_some());
         let physical = physical_start..physical_start + sentences.len();
-        let lines = self.detached_pdf_ocr(id, page)?.map(|ocr| ocr.lines);
         let layout = if previous.is_some() || next.is_some() {
+            let Document { text, ocr_lines: lines, .. } = local_layout;
             let (joined, starts, center) = include_neighbors(id, page, &text, &mut sentences, previous, next);
             let local = (center.clone(), text[..center.start].encode_utf16().count());
             let projected = if physical_start == 0 { (0, 0) } else {
@@ -519,7 +521,7 @@ impl Store {
             document_layout::reflow_ocr_paragraphs(&mut layout);
             layout
         } else {
-            document_layout::detached_pdf_document(text, &language, lines)
+            local_layout
         };
         let document = Document {
             id: id.to_owned(),
@@ -859,6 +861,36 @@ mod tests {
             assert_eq!(row.source_sentence_id, sentence.id);
             assert_eq!((row.start_utf16, row.end_utf16), (sentence.start_utf16, sentence.end_utf16));
         }
+    }
+
+    #[test]
+    fn projected_pdf_translation_continues_ocr_body_before_a_trailing_note() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let source = root.path().join("mixed.pdf");
+        std::fs::write(&source, b"%PDF-1.4\n").unwrap();
+        let prepared = file_originals::prepare_pdf_import(store.pdf_original_root(), "mixed.pdf", &source, "fr",
+            vec![String::new(), "naire depuis 1815.".into()], vec![]).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let line = |text: &str, y, height| ocr::OcrLine {
+            page: 0, rotation: None, block_start: false, text: text.into(), x: 0.1,
+            y, width: 0.8, height, confidence: None, correction: None, words: vec![], source_span: None,
+        };
+        pdf_detached_pages::write_ocr(&store.connection, &document.id, 0, "fr", &[
+            line("Le bateau arrive.", 0.10, 0.04),
+            line("La mer est calme.", 0.15, 0.04),
+            line("Depuis le quai¹, un voyage extraordi-", 0.20, 0.04),
+            line("1 Quai : bord du port.", 0.80, 0.02),
+        ], 2).unwrap();
+        let cached = store.detached_pdf_sentences(&document.id, 0).unwrap().unwrap();
+        let body = cached.sentences.iter().find(|sentence| sentence.text.contains("extraordi-")).unwrap();
+        let expected_id = body.id.clone();
+        let projection = store.project_pdf_translation_page(&document.id, 0, "uk", cached.text,
+            cached.sentences, cached.language).unwrap();
+        let index = projection.document.sentences.iter().position(|sentence| sentence.id == expected_id).unwrap();
+        let (text, ids) = sentence_source(&store, &projection.document, index, "uk", PageBoundaries::Projected).unwrap();
+        assert_eq!(text, "Depuis le quai , un voyage extraordinaire depuis 1815.");
+        assert_eq!(ids, [expected_id]);
     }
 
     #[test]
