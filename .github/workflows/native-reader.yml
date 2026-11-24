@@ -75,24 +75,75 @@ jobs:
           bash apps/reader-native/package-macos.sh "$app" "$package"
           sudo installer -pkg "$package" -target /
           app="/Applications/Lingo.app"
+          executable_path="$app/Contents/MacOS/$executable"
+          reader_pids() {
+            ps -axo pid=,command= | awk -v exe="$executable_path" '
+              { pid = $1; sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "") }
+              $0 == exe || index($0, exe " ") == 1 { print pid }'
+          }
+          stop_reader() {
+            reader_pids | while IFS= read -r pid; do kill "$pid" 2>/dev/null || true; done
+          }
+          trap stop_reader EXIT
           stdout="$RUNNER_TEMP/lingo-startup.stdout"
           stderr="$RUNNER_TEMP/lingo-startup.stderr"
-          touch "$stdout" "$stderr"
+          started="$RUNNER_TEMP/lingo-startup.marker"
+          touch "$stdout" "$stderr" "$started"
           open -n --stdout "$stdout" --stderr "$stderr" "$app"
           bundle_home="$HOME/Library/Containers/$bundle_id/Data"
+          database=""
           for attempt in {1..30}; do
             for library in "$bundle_home/Library" "$HOME/Library"; do
               db="$library/reader-native.db"
-              if [[ -s "$db" && "$(head -c 15 "$db")" == 'SQLite format 3' ]] &&
-                ps -axo command= | awk -v exe="$app/Contents/MacOS/$executable" \
-                  '$0 == exe || index($0, exe " ") == 1 { found = 1 } END { exit !found }'; then
-                echo 'Packaged reader started and initialized its SQLite database'
-                exit 0
+              if [[ -s "$db" && "$db" -nt "$started" && "$(head -c 15 "$db")" == 'SQLite format 3' && -n "$(reader_pids)" ]]; then
+                database="$db"
+                break 2
               fi
             done
             sleep 1
           done
-          echo 'The installed Catalyst app did not remain running with a valid SQLite database' >&2
+          if [[ -n "$database" ]]; then
+            fixtures="$(mktemp -d "$RUNNER_TEMP/lingo-import.XXXXXXXX")"
+            printf '%s\n' 'Le bateau arrive au port. Le capitaine demande aux passagers de préparer leurs bagages. Les voyageurs descendent tranquillement vers le quai.' > "$fixtures/Import-fr.txt"
+            printf '%s\n' 'Корабель прибуває до порту. Капітан просить пасажирів підготувати свої валізи. Мандрівники спокійно спускаються до причалу.' > "$fixtures/Import-uk.txt"
+            if open -g -a "$app" "$fixtures/Import-fr.txt" "$fixtures/Import-uk.txt" &&
+              python3 - "$database" "$fixtures" <<'PY'
+          import sqlite3
+          import sys
+          import time
+          from contextlib import closing
+          from pathlib import Path
+
+          database, fixtures = map(Path, sys.argv[1:])
+          expected = {}
+          for language in ("fr", "uk"):
+              path = fixtures / f"Import-{language}.txt"
+              expected[language] = path.name, path.read_bytes()
+          deadline = time.monotonic() + 20
+          missing = set(expected)
+          while time.monotonic() < deadline:
+              with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=1)) as connection:
+                  missing = {
+                      language for language, (name, payload) in expected.items()
+                      if connection.execute(
+                          "SELECT 1 FROM documents d JOIN originals o ON d.id = o.document_id "
+                          "WHERE o.name = ? AND o.bytes = ? AND json_extract(d.body, '$.language') = ?",
+                          (name, payload, language),
+                      ).fetchone() is None
+                  }
+              if not missing:
+                  print("Installed Lingo imported both files with detected languages and intact originals")
+                  sys.exit(0)
+              time.sleep(0.25)
+          sys.exit("Missing imported originals or language detection: " + ", ".join(sorted(missing)))
+          PY
+            then
+              if [[ -n "$(reader_pids)" ]]; then exit 0; fi
+            fi
+            echo 'The installed Catalyst app did not complete the native batch import' >&2
+          else
+            echo 'The installed Catalyst app did not remain running with a valid SQLite database' >&2
+          fi
           ps -axo pid=,stat=,command= | awk -v app="$app/Contents/MacOS/" 'index($0, app) && !index($0, "awk")'
           find "$HOME/Library" -maxdepth 5 -name reader-native.db -print 2>/dev/null || true
           head -n 65 "$stdout" "$stderr"
