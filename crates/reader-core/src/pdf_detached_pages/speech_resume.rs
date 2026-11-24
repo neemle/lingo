@@ -143,6 +143,27 @@ pub(super) fn write(
     Ok(())
 }
 
+pub(super) fn remap_page(
+    db: &Connection, id: &str, page: u16, before: &[Sentence], after: &[Sentence],
+    map_start: impl FnOnce(&Sentence) -> Option<usize>,
+) -> Result<()> {
+    let Some(mut checkpoint) = read(db, id, page)? else { return Ok(()); };
+    let moved = before.get(checkpoint.position)
+        .filter(|sentence| sentence.id == checkpoint.resume.sentence_id)
+        .and_then(|sentence| {
+            let start = map_start(sentence)?;
+            let index = after.binary_search_by_key(&start, |item| item.start_utf16).ok()?;
+            (after[index].text == sentence.text).then_some(index)
+        });
+    if let Some(position) = moved {
+        checkpoint.position = position;
+        checkpoint.resume.sentence_id.clone_from(&after[position].id);
+        write(db, id, page, &checkpoint)
+    } else {
+        remove(db, id, page, &checkpoint.resume.sentence_id)
+    }
+}
+
 fn valid(resume: &SpeechResume, sentence: &Sentence, language: &str, speech: Option<&str>) -> bool {
     resume
         .model

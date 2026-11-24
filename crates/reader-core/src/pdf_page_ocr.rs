@@ -1592,6 +1592,8 @@ mod drop_cap_tests {
 
     #[test]
     fn stored_pdf_order_repair_preserves_canonical_and_detached_annotations() {
+        use sha2::{Digest, Sha256};
+
         let root = tempfile::tempdir().unwrap();
         let mut store = Store::open(&root.path().join("library.db")).unwrap();
         let original = root.path().join("library.pdf");
@@ -1639,6 +1641,14 @@ mod drop_cap_tests {
         pdf_detached_pages::write_text_layer(&store.connection, &document.id, 1, old).unwrap();
         let page = store.detached_pdf_sentences(&document.id, 1).unwrap().unwrap();
         store.select_detached_pdf_sentence(&document.id, 1, Some(1), None).unwrap();
+        let spoken = &page.sentences[1];
+        store.set_detached_pdf_speech_resume(&document.id, 1, &spoken.id, Some(crate::SpeechResume {
+            sentence_id: spoken.id.clone(),
+            text_hash: format!("{:x}", Sha256::digest(spoken.text.as_bytes())),
+            offset_utf16: 3,
+            model: None,
+            boundary_text: None,
+        })).unwrap();
         store.update_detached_pdf_annotation(
             &document.id, 1, &page.sentences[1].id,
             crate::DetachedPdfAnnotationChange::Note { text: "keep detached".into() },
@@ -1650,6 +1660,8 @@ mod drop_cap_tests {
         assert_eq!(page.saved, 1);
         let detached = serde_json::to_value(store.detached_pdf_sentence(&document.id, 1, None).unwrap()).unwrap();
         assert_eq!(detached["note"], "keep detached");
+        assert_eq!(detached["speechResume"]["offsetUtf16"], 3);
+        assert_eq!(detached["speechResume"]["sentenceId"], page.sentences[1].id);
     }
 
     #[test]

@@ -387,18 +387,8 @@ pub(crate) fn repair_cached_text_order(
         let offset = ocr::map_transcript_offset(sentence.start_utf16, edits).unwrap_or(sentence.start_utf16);
         write_position(db, id, page, crate::pdf_sentences::position_at(&after, offset))?;
     }
-    if let Some(mut checkpoint) = speech_resume::read(db, id, page)? {
-        let mapped = before.get(checkpoint.position).and_then(|sentence| {
-            find(sentence.start_utf16, sentence.end_utf16).filter(|&index| after[index].text == sentence.text)
-        });
-        if let Some(position) = mapped {
-            checkpoint.position = position;
-            speech_resume::write(db, id, page, &checkpoint)?;
-        } else {
-            db.execute("DELETE FROM pdf_detached_speech_resume WHERE document_id=?1 AND page=?2",
-                params![id, page]).map_err(database_error)?;
-        }
-    }
+    speech_resume::remap_page(db, id, page, &before, &after, |sentence|
+        ocr::map_unchanged_range_start(sentence.start_utf16, sentence.end_utf16 - sentence.start_utf16, edits))?;
     Ok(true)
 }
 

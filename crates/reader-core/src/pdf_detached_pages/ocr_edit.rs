@@ -1,4 +1,4 @@
-use super::{annotations, database_error, page_revision, sqlite_offset};
+use super::{annotations, database_error, page_revision, speech_resume, sqlite_offset};
 use crate::{ocr, Result, Sentence, Store};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
@@ -354,13 +354,16 @@ fn move_sentence_anchors(
         }
     };
     let map_start = |offset| edits.iter().rev().fold(offset, |offset, edit| edit.map_start(offset));
+    let unchanged_start = |start: usize, length| {
+        let end = start.checked_add(length)?;
+        (!edits.iter().any(|edit| edit.start < end && edit.old_end > start)).then(|| map_start(start))
+    };
     crate::dictionary_transfer::reanchor_selections(
         db, (id, Some(page), &old_revision, &new_revision), &old_sentences, &new_sentences,
-        |_, start, length| {
-            let end = start.checked_add(length)?;
-            (!edits.iter().any(|edit| edit.start < end && edit.old_end > start)).then(|| map_start(start))
-        },
+        |_, start, length| unchanged_start(start, length),
     )?;
+    speech_resume::remap_page(db, id, page, &old_sentences, &new_sentences, |sentence|
+        unchanged_start(sentence.start_utf16, sentence.end_utf16 - sentence.start_utf16))?;
     let saved: Option<usize> = db
         .query_row(
             "SELECT sentence FROM pdf_detached_positions WHERE document_id=?1 AND page=?2",
@@ -469,6 +472,8 @@ mod tests {
 
     #[test]
     fn supplemental_ocr_keeps_a_detached_note_and_the_saved_correction() {
+        use sha2::{Digest, Sha256};
+
         let root = tempfile::tempdir().unwrap();
         let mut store = Store::open(&root.path().join("reader.db")).unwrap();
         let original = root.path().join("scan.pdf");
@@ -493,6 +498,14 @@ mod tests {
             &document.id, 0, &frame.revision, 0, Some("An early paragraph.".into()),
         ).unwrap();
         let last = store.select_detached_pdf_sentence(&document.id, 0, Some(1), None).unwrap().unwrap();
+        let spoken = &last.sentence;
+        store.set_detached_pdf_speech_resume(&document.id, 0, &spoken.id, Some(crate::SpeechResume {
+            sentence_id: spoken.id.clone(),
+            text_hash: format!("{:x}", Sha256::digest(spoken.text.as_bytes())),
+            offset_utf16: 4,
+            model: None,
+            boundary_text: None,
+        })).unwrap();
         store.update_detached_pdf_annotation(
             &document.id, 0, &last.sentence.id, DetachedPdfAnnotationChange::Note { text: "A note".into() },
         ).unwrap();
@@ -510,9 +523,21 @@ mod tests {
         let updated = store.detached_pdf_ocr(&document.id, 0).unwrap().unwrap();
         assert_eq!(updated.lines.len(), 3);
         assert_eq!(updated.lines[0].reading_text(), "An early paragraph.");
+        drop(store);
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
         let saved = store.detached_pdf_sentence(&document.id, 0, None).unwrap().unwrap();
         assert_eq!(saved.sentence.text, "The final paragraph.");
         assert_eq!(saved.note.as_deref(), Some("A note"));
+        let resumed = saved.speech_resume.unwrap();
+        assert_eq!(resumed.sentence_id, saved.sentence.id);
+        assert_eq!(resumed.offset_utf16, 4);
+        assert_eq!(saved.position, 2);
+        store.correct_detached_pdf_ocr(&document.id, 0, &updated.revision, 2,
+            Some("The last paragraph.".into())).unwrap();
+        let saved = store.detached_pdf_sentence(&document.id, 0, None).unwrap().unwrap();
+        assert_eq!(saved.sentence.text, "The last paragraph.");
+        assert!(saved.speech_resume.is_none());
+        assert!(speech_resume::read(&store.connection, &document.id, 0).unwrap().is_none());
     }
 
     #[test]
