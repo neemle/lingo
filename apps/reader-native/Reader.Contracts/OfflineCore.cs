@@ -20,7 +20,7 @@ public sealed record DocxTableCell(uint Table, uint Row, uint Column, uint Colum
 
 public sealed record CachedTranslation(ParagraphTranslation Paragraph, MachineTranslation? Sentence);
 public sealed record ParagraphTranslation(ParagraphUnit[] Units, string? PivotLanguage,
-    bool MoreBefore, bool MoreAfter);
+    bool MoreBefore, bool MoreAfter, bool LegacyGroup = false);
 public sealed record ParagraphUnit(string[] SentenceIds, string? Translation, bool Reviewed, string? PivotLanguage = null,
     string? DirectModelRevision = null, TranslationAlignment? Alignment = null);
 

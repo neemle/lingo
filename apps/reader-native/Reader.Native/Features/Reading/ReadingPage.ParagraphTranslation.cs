@@ -276,9 +276,11 @@ public partial class ReadingPage
                 && candidate.Pivot == window.Pivot);
             if (window.Units.Any(unit => MachineFor(current, window, unit) is not null &&
                 (previous?.UnitFor(unit.First) is not { } old || MachineFor(current, previous, old) is null ||
-                    old.DirectModelRevision != unit.DirectModelRevision)))
+                    previous.LegacyGroup != window.LegacyGroup || old.MachineText != unit.MachineText ||
+                    old.Pivot != unit.Pivot || old.DirectModelRevision != unit.DirectModelRevision ||
+                    !old.Sources.SequenceEqual(unit.Sources))))
             {
-                if (previous is not null)
+                if (previous is not null && previous.LegacyGroup == window.LegacyGroup)
                     window = window with { Units = window.Units.Select(unit =>
                         unit.MachineText is null && previous.UnitFor(unit.First) is { } old &&
                         unit.Sources.SequenceEqual(old.Sources) && MachineFor(current, previous, old) is not null
@@ -289,7 +291,7 @@ public partial class ReadingPage
             if (cached.Sentence is { } sentence && ReviewedFor(current, key.Target, key.Sentence) is null &&
                 !matching.Any(previous => previous.Pivot == sentence.PivotLanguage
                     && previous.UnitFor(current.Position) is { } unit && MachineFor(current, previous, unit) is not null
-                    && unit.DirectModelRevision == sentence.DirectModelRevision) &&
+                    && unit.MachineText == sentence.Text && unit.DirectModelRevision == sentence.DirectModelRevision) &&
                 BuildSentenceWindow(current, scope, sentence) is { } standalone)
                 RememberWindow(standalone, background: true);
         }
@@ -444,7 +446,7 @@ public partial class ReadingPage
     }
 
     private sealed record TranslationWindow(TranslationScope Scope, int Anchor, AlignedUnit[] Units,
-        string? Pivot, bool IsParagraph, bool MoreBefore, bool MoreAfter)
+        string? Pivot, bool IsParagraph, bool MoreBefore, bool MoreAfter, bool LegacyGroup = false)
     {
         public AlignedUnit? UnitFor(int position) => Array.Find(Units, unit => unit.Contains(position));
     }
@@ -453,7 +455,7 @@ public partial class ReadingPage
         IsPreferredRoute(window, AppState.Session.Document?.Position ?? window.Anchor);
 
     private bool IsPreferredRoute(TranslationWindow window, int position) =>
-        readiness is { Ready: true } current && readinessPair == (window.Scope.Source, window.Scope.Target)
+        !window.LegacyGroup && readiness is { Ready: true } current && readinessPair == (window.Scope.Source, window.Scope.Target)
             && (window.UnitFor(position) is { MachineText: not null } unit
                 ? unit.Pivot == current.PivotLanguage && unit.DirectModelRevision == current.DirectModelRevision
                 : window.Pivot == current.PivotLanguage);
@@ -467,7 +469,7 @@ public partial class ReadingPage
     }
 
     private TranslationWindow? FindTranslationWindow(Document document, string target) =>
-        MatchingTranslationWindows(document, target).OrderByDescending(IsPreferredRoute)
+        MatchingTranslationWindows(document, target).OrderByDescending(IsPreferredRoute).ThenBy(window => window.LegacyGroup)
             .ThenByDescending(window => window.IsParagraph).FirstOrDefault();
 
     private MachineTranslation? ActiveMachine(Document document, string target) =>
@@ -476,7 +478,7 @@ public partial class ReadingPage
     private (TranslationWindow Window, AlignedUnit Unit, MachineTranslation Translation)? ActiveMachineAlignment(
         Document document, string target, bool preferredOnly = false)
     {
-        foreach (var window in MatchingTranslationWindows(document, target).OrderByDescending(IsPreferredRoute))
+        foreach (var window in MatchingTranslationWindows(document, target).OrderByDescending(IsPreferredRoute).ThenBy(window => window.LegacyGroup))
             if ((!preferredOnly || IsPreferredRoute(window)) && window.UnitFor(document.Position) is { } unit
                 && MachineFor(document, window, unit) is { } machine)
                 return (window, unit, machine);
@@ -541,7 +543,7 @@ public partial class ReadingPage
                 unit.PivotLanguage, unit.DirectModelRevision));
         }
         return new TranslationWindow(scope, document.Position, units.ToArray(),
-            paragraph.PivotLanguage, true, paragraph.MoreBefore, paragraph.MoreAfter);
+            paragraph.PivotLanguage, true, paragraph.MoreBefore, paragraph.MoreAfter, paragraph.LegacyGroup);
     }
 
     private static TranslationWindow? BuildSentenceWindow(Document document, TranslationScope scope,

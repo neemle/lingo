@@ -45,7 +45,7 @@ public sealed record DetachedPdfFindHit(int Page, int Position, string SentenceI
     string? PivotLanguage = null, bool? Reviewed = null, string? SourceText = null,
     TranslationFindFragment? PdfFragment = null);
 public sealed record DetachedPdfTranslation(string Text, string? PivotLanguage, string? SourceText, int StartPosition,
-    string? DirectModelRevision = null);
+    string? DirectModelRevision = null, bool LegacyGroup = false);
 public sealed record DetachedPdfPassage(DetachedPdfTranslation? Active, DetachedPdfPassageRow[] Rows);
 public sealed record DetachedPdfPassageRow(int Position, int SentenceCount, string Text);
 public sealed record PdfPageTranslationRow(int StartUtf16, int EndUtf16, string? Text,

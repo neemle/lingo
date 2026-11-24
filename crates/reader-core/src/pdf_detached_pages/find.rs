@@ -134,7 +134,7 @@ impl Store {
                             (text, None, None, None)
                         } else if let Some(text) = projection.reviewed(&sentence.id, target) {
                             (text.to_owned(), None, Some(true), None)
-                        } else if let Some(hit) = translation::cached_page_translation(self, routes, projection, position, target, true)? {
+                        } else if let Some(hit) = translation::cached_page_translation(self, routes, projection, position, target)? {
                             if hit.start_position != position { continue; }
                             if has_fragments {
                                 pdf_fragment = Some(TranslationSearchFragment {

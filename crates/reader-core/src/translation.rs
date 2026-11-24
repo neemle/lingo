@@ -546,6 +546,8 @@ pub struct ParagraphTranslation {
     pub pivot_language: Option<String>,
     pub more_before: bool,
     pub more_after: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub legacy_group: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -828,10 +830,9 @@ impl CacheRoutes {
     }
 
     pub(crate) fn cached_active(
-        &self, store: &Store, document: &crate::Document, position: usize, target: &str, for_search: bool,
+        &self, store: &Store, document: &crate::Document, position: usize, target: &str,
     ) -> Result<CachedTranslation> {
-        let scope = if for_search { CacheScope::Search } else { CacheScope::Active };
-        cached_translation_with_routes(store, self, document, position, target, scope, PageBoundaries::Projected)
+        cached_translation_with_routes(store, self, document, position, target, CacheScope::Active, PageBoundaries::Projected)
     }
 
     pub(crate) fn cached_sentence(
@@ -877,7 +878,6 @@ impl CacheRoutes {
 enum CacheScope {
     Window,
     Active,
-    Search,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -899,17 +899,17 @@ fn cached_translation_with_routes(
     let aligned_plan = paragraph_plan(store, document, selected, target, boundaries, UnitGrouping::Sentence)?;
     let input = sentence_input(store, document, selected, target, boundaries)?;
     let aligned = read_cached_plan(store, routes, active_id, target, scope, aligned_plan, &input)?;
-    if (routes.preferred.is_some() && !matches!(scope, CacheScope::Search)) ||
-        aligned.sentence.is_some() || aligned.paragraph.units.iter().any(|unit|
+    if aligned.sentence.is_some() || aligned.paragraph.units.iter().any(|unit|
             unit.translation.is_some() && unit.sentence_ids.contains(active_id))
     {
         return Ok(aligned);
     }
     let legacy_plan = paragraph_plan(store, document, selected, target, boundaries, UnitGrouping::LegacyContext)?;
-    let legacy = read_cached_plan(store, routes, active_id, target, scope, legacy_plan, &input)?;
+    let mut legacy = read_cached_plan(store, routes, active_id, target, scope, legacy_plan, &input)?;
     if legacy.paragraph.units.iter().any(|unit|
         unit.translation.is_some() && unit.sentence_ids.contains(active_id))
     {
+        legacy.paragraph.legacy_group = true;
         return Ok(legacy);
     }
     Ok(aligned)
@@ -1105,7 +1105,7 @@ pub(crate) fn search_cached_translation(
             document,
             position,
             target,
-            CacheScope::Search, PageBoundaries::Canonical,
+            CacheScope::Active, PageBoundaries::Canonical,
         )?;
         let active_unit = cached
             .paragraph
@@ -1197,7 +1197,9 @@ fn paragraph_plan(
     let skip = |index| crate::document_layout::skip_in_translation(document, &sentences[index]);
     if skip(selected) {
         return Ok(ParagraphPlan {
-            result: ParagraphTranslation { units: Vec::new(), pivot_language: None, more_before: false, more_after: false },
+            result: ParagraphTranslation {
+                units: Vec::new(), pivot_language: None, more_before: false, more_after: false, legacy_group: false,
+            },
             pending: Vec::new(),
         });
     }
@@ -1320,6 +1322,7 @@ fn paragraph_plan(
             pivot_language: None,
             more_before: first < start,
             more_after: end < last,
+            legacy_group: false,
         },
         pending,
     })
@@ -2262,6 +2265,46 @@ mod tests {
     }
 
     #[test]
+    fn legacy_detached_passage_is_available_with_an_installed_route_after_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        let database = root.path().join("reader.sqlite");
+        let file = root.path().join("scan.pdf");
+        std::fs::write(&file, b"%PDF-1.4\n").unwrap();
+        let mut store = Store::open(&database).unwrap();
+        let prepared = crate::file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "scan.pdf", &file, "fr", vec![String::new()], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let original = "Le bateau arrive. Le marin part.";
+        crate::pdf_detached_pages::write_ocr(&store.connection, &document.id, 0, "fr", &[crate::ocr::OcrLine {
+            text: original.into(), page: 0, x: 0.1, y: 0.1, width: 0.8, height: 0.08,
+            confidence: None, correction: None, words: vec![], source_span: None, rotation: None, block_start: false,
+        }], 1).unwrap();
+        let sentence = store.detached_pdf_sentence(&document.id, 0, Some(0)).unwrap().unwrap().sentence;
+        let route = french_uk_route_with_invalid_assets(&store);
+        let saved = "Корабель прибуває. Моряк вирушає.";
+        store.save_cached_segments([(unit_cache_key(&route, original).unwrap(), &[saved.into()][..])]).unwrap();
+        drop(store);
+
+        let mut store = Store::open(&database).unwrap();
+        assert!(store.translation_readiness("fr", "uk").unwrap().ready);
+        let read = |store: &mut Store| {
+            let data = store.detached_pdf_passage(&document.id, 0, &sentence.id, "uk", true, false).unwrap();
+            serde_json::to_value(data).unwrap()
+        };
+        let fallback = read(&mut store);
+        assert_eq!(fallback["active"]["text"], saved);
+        assert_eq!(fallback["active"]["legacyGroup"], true);
+        assert_eq!(fallback["active"]["sourceText"], original);
+        store.save_cached_segments([(
+            unit_cache_key(&route, &sentence.text).unwrap(), &["Судно прибуває.".into()][..],
+        )]).unwrap();
+        let aligned = read(&mut store);
+        assert_eq!(aligned["active"]["text"], "Судно прибуває.");
+        assert!(aligned["active"].get("legacyGroup").is_none());
+    }
+
+    #[test]
     fn removed_pdf_review_restores_machine_cache_and_rewinds_background_translation() {
         use crate::pdf_detached_pages::DetachedPdfAnnotationChange;
         let root = tempfile::tempdir().unwrap();
@@ -2719,8 +2762,9 @@ mod tests {
         assert_eq!(restored.paragraph.units[0].sentence_ids.len(), 3);
         assert_eq!(restored.paragraph.units[0].translation.as_deref(), Some("L’e\u{301}te\u{301}   arrive."));
         let installed = cached_translation(&store, std::slice::from_ref(&edge), &[], &document, 0, "fr").unwrap();
-        assert_eq!(installed.paragraph.units[0].sentence_ids.len(), 1);
-        assert!(installed.paragraph.units[0].translation.is_none());
+        assert!(installed.paragraph.legacy_group);
+        assert_eq!(installed.paragraph.units[0].sentence_ids.len(), 3);
+        assert_eq!(installed.paragraph.units[0].translation, restored.paragraph.units[0].translation);
 
         let search = |document: &crate::Document, target, query, start| {
             search_cached_translation(
@@ -2761,6 +2805,14 @@ mod tests {
             );
         assert_eq!(search(&document, "fr", "CONFIRMÉES", 0), [3]);
         assert_eq!(search(&document, "fr", "L'ÉTÉ", 0), [0]);
+
+        let fresh_key = unit_cache_key(&route, &document.sentences[0].text).unwrap();
+        store.save_cached_segments([(fresh_key, &["Phrase moderne.".into()][..])]).unwrap();
+        let fresh = cached_translation(&store, std::slice::from_ref(&edge), &[], &document, 0, "fr").unwrap();
+        assert!(!fresh.paragraph.legacy_group);
+        let text = fresh.paragraph.units[0].translation.as_deref()
+            .or_else(|| fresh.sentence.as_ref().and_then(|entry| entry.segments.first().map(String::as_str)));
+        assert_eq!(text, Some("Phrase moderne."));
     }
 
     #[test]

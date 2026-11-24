@@ -534,8 +534,8 @@ public partial class ReadingPage
             readingPageActive && autoTranslate && !PdfUsesPageTranslation && !speakingDetachedSentence &&
             DetachedTranslate.IsEnabled && readinessPair == (current.Language, target) &&
             readiness is { Ready: true } preferred && ReviewedDetachedTranslation() is null &&
-            (detachedMachineTranslation is not { } machine || machine.PivotLanguage != preferred.PivotLanguage ||
-                machine.DirectModelRevision != preferred.DirectModelRevision);
+            (detachedMachineTranslation is not { } machine || machine.LegacyGroup ||
+                machine.PivotLanguage != preferred.PivotLanguage || machine.DirectModelRevision != preferred.DirectModelRevision);
         if (!CanRefresh()) return;
         await Task.Delay(250);
         if (attempt != (detachedSentenceRequest, readinessRequest) || !CanRefresh()) return;
@@ -564,6 +564,7 @@ public partial class ReadingPage
     {
         detachedMachineTranslation = translation;
         var label = translation.SourceText is null ? "Машинний переклад" : "Машинний переклад групи речень";
+        if (translation.LegacyGroup) label = $"Збережено раніше · {label}";
         label = DocumentLanguages.WithPivotRoute(label, source, translation.PivotLanguage, target);
         ShowDetachedTranslation($"{label}{Environment.NewLine}{translation.Text}");
     }

@@ -38,6 +38,8 @@ pub struct DetachedPdfTranslation {
     pub(super) start_position: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) direct_model_revision: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(super) legacy_group: bool,
 }
 
 #[derive(Serialize)]
@@ -322,7 +324,7 @@ impl Store {
         let (projection, selected) = self.detached_page_projection(id, page, sentence_id, target)?;
         if cached_only {
             let routes = self.translation_cache_routes(&projection.document.language, target)?;
-            return cached_page_translation(self, &routes, &projection, selected, target, false);
+            return cached_page_translation(self, &routes, &projection, selected, target);
         }
         let position = projection.physical.start + selected;
         let translated =
@@ -331,7 +333,7 @@ impl Store {
             return Ok(Some(projection.localize(active)));
         }
         let routes = self.translation_cache_routes(&projection.document.language, target)?;
-        cached_page_translation(self, &routes, &projection, selected, target, false)
+        cached_page_translation(self, &routes, &projection, selected, target)
     }
 
     pub fn detached_pdf_passage(
@@ -370,7 +372,7 @@ impl Store {
             .map(|result| projection.localize(result));
         let active = match active {
             Some(active) => Some(active),
-            None => cached_page_translation(self, &routes, &projection, selected, target, false)?,
+            None => cached_page_translation(self, &routes, &projection, selected, target)?,
         };
         Ok(DetachedPdfPassage { active, rows })
     }
@@ -850,7 +852,6 @@ pub(super) fn cached_page_translation(
     projection: &PageProjection,
     selected: usize,
     target: &str,
-    for_search: bool,
 ) -> Result<Option<DetachedPdfTranslation>> {
     let document = &projection.document;
     let local_position = selected;
@@ -866,7 +867,7 @@ pub(super) fn cached_page_translation(
     {
         return Ok(None);
     }
-    let cached = routes.cached_active(store, document, selected, target, for_search)?;
+    let cached = routes.cached_active(store, document, selected, target)?;
     if let Some(active) = active_translation(document, selected, cached.paragraph) {
         return Ok(Some(projection.localize(active)));
     }
@@ -899,6 +900,7 @@ pub(super) fn cached_page_translation(
             direct_model_revision: aligned.route.direct_model_revision().map(str::to_owned),
             source_text: None,
             start_position: local_position,
+            legacy_group: false,
         })))
 }
 
@@ -912,14 +914,16 @@ fn active_translation(
         .units
         .into_iter()
         .find(|unit| !unit.reviewed && unit.sentence_ids.contains(id))?;
-    machine_result(
+    let mut result = machine_result(
         document,
         selected,
         &unit.sentence_ids,
         unit.translation?,
         unit.pivot_language,
         unit.direct_model_revision,
-    )
+    )?;
+    result.legacy_group = paragraph.legacy_group;
+    Some(result)
 }
 
 fn machine_result(
@@ -950,5 +954,6 @@ fn machine_result(
         direct_model_revision,
         source_text,
         start_position,
+        legacy_group: false,
     })
 }
