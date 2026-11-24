@@ -11,6 +11,9 @@ public static class AppState
     internal static BackgroundTranslation? TranslationWorker { get; private set; }
     internal static int StorageRevision { get; private set; }
     internal static event Action? ReaderCacheInvalidated;
+    internal static event Action? VoiceResourcesChanged;
+
+    internal static void NotifyVoiceResourcesChanged() => VoiceResourcesChanged?.Invoke();
 
     internal static void InvalidateReaderCache()
     {

@@ -28,10 +28,33 @@ public partial class ReadingPage
         loadingVoices = LoadVoicesAsync(language, ++voiceCatalogRevision);
     }
 
+    private void VoiceResourcesChanged()
+    {
+        if (readingPageActive) RefreshVoices(force: true);
+    }
+
+    private async Task WaitForSpeechVoicesAsync(CancellationToken token = default)
+    {
+        while (true)
+        {
+            var pending = loadingVoices;
+            await pending.WaitAsync(token);
+            if (ReferenceEquals(pending, loadingVoices)) return;
+        }
+    }
+
     private async Task LoadVoicesAsync(string? language, int revision)
     {
         var (voices, error) = await LocalSpeech.ReadVoicesAsync(AppState.Session, language);
         if (revision != voiceCatalogRevision) return;
+
+        if (SelectedVoice() is { Engine: not null } previous &&
+            !voices.Any(voice => voice.Id == previous.Id && voice.Revision == previous.Revision))
+        {
+            if (utteranceActive) StopSpeech();
+            if (speakingDetachedSentence) ClearDetachedSpeech();
+            StopWordDetail();
+        }
 
         loadingSpeechPreferences = true;
         try
@@ -104,7 +127,7 @@ public partial class ReadingPage
     {
         if (language == voiceLanguage)
         {
-            await loadingVoices.WaitAsync(token);
+            await WaitForSpeechVoicesAsync(token);
             if (language == voiceLanguage) return SelectedVoice();
         }
         var (voices, _) = await LocalSpeech.ReadVoicesAsync(AppState.Session, language).WaitAsync(token);

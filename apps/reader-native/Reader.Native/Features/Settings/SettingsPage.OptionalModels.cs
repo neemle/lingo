@@ -27,8 +27,11 @@ public partial class SettingsPage
         {
             var previous = SelectedOptionalModel?.Id;
             var hadHy = HasAutomaticHyModel;
-            optionalModels = (await AppState.Session.OptionalModelsAsync())
+            var updated = (await AppState.Session.OptionalModelsAsync())
                 .Where(model => model.Id != "qwen-0.8b" || model.HasLocalFiles).ToArray();
+            var voicesChanged = !InstalledVoiceModels(optionalModels).SequenceEqual(InstalledVoiceModels(updated));
+            optionalModels = updated;
+            if (voicesChanged) AppState.NotifyVoiceResourcesChanged();
             if (hadHy != HasAutomaticHyModel && AppState.Session.GetReaderPreferences().HyAutoTranslation == true)
                 AppState.TranslationWorker?.TranslationRoutesChanged();
             optionalInventoryRead = true;
@@ -51,6 +54,11 @@ public partial class SettingsPage
     }
 
     private bool HasAutomaticHyModel => optionalModels.Any(model => model.Id == "hy-mt2-1.8b" && model.FilesPresent);
+
+    private static IEnumerable<(string Id, string Revision)> InstalledVoiceModels(OptionalModel[] models) =>
+        models.Where(model => model.FilesPresent && model.Id is "piper-uk" or "supertonic-3")
+            .OrderBy(model => model.Id, StringComparer.Ordinal)
+            .Select(model => (model.Id, model.Revision));
 
     private async void OptionalModelChanged(object? sender, EventArgs args)
     {

@@ -771,7 +771,7 @@ public partial class ReadingPage
                 return true;
             }
             RecordReadingActivity(address.Document);
-            await loadingVoices.WaitAsync(token);
+            await WaitForSpeechVoicesAsync(token);
             if (run != detachedAudioRun) return false;
             var voice = SelectedVoice();
             string? status = null;

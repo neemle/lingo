@@ -84,6 +84,7 @@ public partial class ReadingPage : ContentPage
         ArrangeReadingColumns();
         readingPageActive = true;
         AppState.ReaderCacheInvalidated += ReaderCacheInvalidated;
+        AppState.VoiceResourcesChanged += VoiceResourcesChanged;
         autoTranslate = readerPreferences.AutoTranslate ?? false;
         lastAutoTranslation = null;
         lastPrefetchOrigin = null;
@@ -119,6 +120,7 @@ public partial class ReadingPage : ContentPage
     {
         readingPageActive = false;
         AppState.ReaderCacheInvalidated -= ReaderCacheInvalidated;
+        AppState.VoiceResourcesChanged -= VoiceResourcesChanged;
         AppState.TranslationWorker?.SetReaderTarget(null);
         readerOcrReview.CancelInference();
         CancelModelPassage();
@@ -193,6 +195,7 @@ public partial class ReadingPage : ContentPage
     {
         readingPageActive = false;
         AppState.ReaderCacheInvalidated -= ReaderCacheInvalidated;
+        AppState.VoiceResourcesChanged -= VoiceResourcesChanged;
         ReleasePdfLayoutTranslation()?.Cancel();
         readerOcrReview.CancelInference();
         CancelModelPassage();
@@ -1107,7 +1110,7 @@ public partial class ReadingPage : ContentPage
         activeSpeechSource = null;
         PauseSpeech.IsEnabled = false;
 
-        await loadingVoices;
+        await WaitForSpeechVoicesAsync();
         if (request != speechRequest || !IsSpeechSourceCurrent(session, source) || session.Busy) return;
         using var run = new CancellationTokenSource();
         modelSpeechRun = run;
