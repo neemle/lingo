@@ -1019,8 +1019,8 @@ impl Store {
             return Ok(input.into_iter().map(Some).collect());
         }
         let directory = self.model_directory.clone();
-        let result =
-            self.translate_units(&mut MarianProvider::interactive(&directory), id, source, target, &input)?;
+        let mut provider = self.reader_translation_provider(&directory, source, target, false, &|| false)?;
+        let result = self.translate_units(&mut provider, id, source, target, &input)?;
         let routes = self.translation_cache_routes(source, target)?;
         input.iter().zip(result.segments).map(|(gloss, translated)| {
             if let Some(translated) = translated {
@@ -1107,8 +1107,9 @@ impl Store {
         let input = [crate::translation::prepare_translation_input(&language, target, source.clone())];
         let directory = self.model_directory.clone();
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
+        let mut provider = self.reader_translation_provider(&directory, &language, target, false, canceled)?;
         let result = self.translate_aligned_with_catalog(
-            &mut MarianProvider { canceled, ..MarianProvider::interactive(&directory) },
+            &mut provider,
             TranslationRequest {
                 source: &language,
                 target,
@@ -1210,7 +1211,7 @@ impl Store {
             .unzip();
         let directory = self.model_directory.clone();
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
-        let mut provider = MarianProvider { canceled, ..MarianProvider::interactive(&directory) };
+        let mut provider = self.reader_translation_provider(&directory, &source, target, false, canceled)?;
         let translated = self.translate_aligned_with_catalog(
             &mut provider,
             TranslationRequest {
@@ -1936,6 +1937,43 @@ fn copy_verified_asset(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn french_reader_actions_share_the_enabled_direct_provider() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let text = "Adaptation : Vincent Leroger";
+        let expected = "Адаптація: Vincent Leroger";
+        let document = store.import("credits.txt", text.as_bytes(), "fr").unwrap();
+        let sentence = &document.sentences[0];
+        let selection = TranslationSelection {
+            page: None, revision_id: document.current_revision_id.clone().unwrap(),
+            text: text.into(), start_utf16: sentence.start_utf16,
+        };
+        let model = store.optional_models().into_iter()
+            .find(|model| model.id == crate::qwen::hy_translation::SMALL_MODEL_ID).unwrap();
+        let model_path = root.path().join("optional-models").join(model.id);
+        fs::create_dir_all(&model_path).unwrap();
+        let model = serde_json::to_value(model).unwrap();
+        // File sizes register the route. The publication credit rule produces the result without model inference.
+        for asset in model["assets"].as_array().unwrap() {
+            File::create(model_path.join(asset["name"].as_str().unwrap())).unwrap()
+                .set_len(asset["bytes"].as_u64().unwrap()).unwrap();
+        }
+        assert!(store.translate_selected_text(&document.id, "uk", &selection).unwrap().is_none());
+        store.update_reader_preference(crate::reader_preferences::ReaderPreferenceChange::HyAutoTranslation { value: true }).unwrap();
+
+        let Some(SelectedTranslation::Model { translation, .. }) =
+            store.translate_selected_text(&document.id, "uk", &selection).unwrap()
+        else { panic!("expected the enabled direct route in the selection action"); };
+        assert_eq!(translation.segments, [expected]);
+        assert!(translation.route.pivot_language().is_none());
+        let passage = store.translate_offline_passage(&document.id, None, &sentence.id, "uk").unwrap().unwrap();
+        assert_eq!(passage.text, expected);
+        assert!(passage.pivot_language.is_none());
+        let gloss = store.translate_dictionary_glosses(&document.id, "fr", "uk", &[text.into()]).unwrap();
+        assert_eq!(gloss, [Some(expected.into())]);
+    }
 
     #[test]
     fn personal_word_translation_uses_the_exact_context_without_guessing_a_sense() {
