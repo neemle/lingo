@@ -530,9 +530,7 @@ public partial class ReadingPage
     }
 
     private bool IsCurrentPdfTranslationSource(PdfLayoutAddress address) =>
-        readingPageActive && !AppState.Session.Busy && TargetCode == address.Target &&
-        AppState.Session.Document is { } document && SupportsOriginalTranslationLayout(document) &&
-        document.Id == address.Document && document.CurrentRevisionId == address.Revision;
+        readingPageActive && !AppState.Session.Busy && CurrentPdfLayoutAddress() == address;
 
     private Label PdfTranslationTextLabel(PdfPageTranslationRow row, double size, string? query = null)
     {

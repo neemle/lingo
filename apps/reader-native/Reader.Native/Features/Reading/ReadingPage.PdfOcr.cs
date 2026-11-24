@@ -397,7 +397,7 @@ public partial class ReadingPage
         CancelModelPassage();
         CancelPopupTranslation();
         CancelWordExplanation();
-        if (!refreshingPdfSentence) pdfLayoutTranslationCancellation?.Cancel();
+        if (!keepPdfTranslationOnNavigation) pdfLayoutTranslationCancellation?.Cancel();
         selection = null;
         SetSelectedSense(null);
         WordCard.IsVisible = false;
