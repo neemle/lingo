@@ -10,6 +10,7 @@ public partial class ReadingPage
 {
     private readonly LocalSpeech wordPopupSpeech = new();
     private CancellationTokenSource? wordDetailRun;
+    private (Button Button, string Text, string Description)? wordDetailControl;
     private (VisualElement View, TextSelection Selection, Border Card, PdfWordAnchor? PdfAnchor)? wordPopup;
 
     private void ShowWordPopup(NativeReaderView view, TextSelection selected, Border card,
@@ -164,14 +165,14 @@ public partial class ReadingPage
     {
         var selected = DetachedWordCard.IsVisible ? detachedSelection : selection;
         var language = DetachedWordCard.IsVisible ? detachedAddress?.Language : AppState.Session.Document?.Language;
-        if (selected is not null && language is not null) await SpeakWordDetailAsync(selected.ReadingText, language);
+        if (selected is not null && language is not null) await SpeakWordDetailAsync(selected.ReadingText, language, sender as Button);
     }
 
     private async void SpeakPopupTranslationClicked(object? sender, EventArgs args)
     {
         if (TargetCode is not { } target) return;
         var text = PopupGloss(DetachedWordCard.IsVisible);
-        if (text is not null) await SpeakWordDetailAsync(text, target);
+        if (text is not null) await SpeakWordDetailAsync(text, target, sender as Button);
     }
 
     private async void SpeakPopupContextClicked(object? sender, EventArgs args)
@@ -179,21 +180,23 @@ public partial class ReadingPage
         if (DetachedWordCard.IsVisible)
         {
             if (detachedSentence is { Footnote: false } current)
-                await SpeakWordDetailAsync(current.SpeechText ?? current.PronunciationText ?? current.NarrationText ?? current.Sentence.Text, current.Language);
+                await SpeakWordDetailAsync(current.SpeechText ?? current.PronunciationText ?? current.NarrationText ?? current.Sentence.Text,
+                    current.Language, sender as Button);
         }
         else if (selection is { } selected && AppState.Session.Document is { } document)
         {
             var sentence = Array.Find(document.Sentences, item =>
                 item.StartUtf16 <= selected.StartUtf16 && item.EndUtf16 > selected.StartUtf16);
             if (sentence is not null)
-                await SpeakWordDetailAsync(ReadingPronunciation(document, sentence, EffectiveSpeechText(document, sentence)), document.Language);
+                await SpeakWordDetailAsync(ReadingPronunciation(document, sentence, EffectiveSpeechText(document, sentence)),
+                    document.Language, sender as Button);
         }
     }
 
     private async void SpeakPopupExplanationClicked(object? sender, EventArgs args)
     {
         var text = DetachedWordCard.IsVisible ? DetachedWordExplanationText.Text : WordExplanationText.Text;
-        if (!string.IsNullOrWhiteSpace(text)) await SpeakWordDetailAsync(text, "uk");
+        if (!string.IsNullOrWhiteSpace(text)) await SpeakWordDetailAsync(text, "uk", sender as Button);
     }
 
     private void StopWordDetail()
@@ -201,16 +204,37 @@ public partial class ReadingPage
         wordDetailRun?.Cancel();
         wordDetailRun = null;
         wordPopupSpeech.Stop();
+        RestoreWordDetailControl();
     }
 
-    private async Task SpeakWordDetailAsync(string text, string language)
+    private void RestoreWordDetailControl()
     {
+        if (wordDetailControl is not { } control) return;
+        wordDetailControl = null;
+        control.Button.Text = control.Text;
+        DescribeButton(control.Button, control.Description);
+    }
+
+    private async Task SpeakWordDetailAsync(string text, string language, Button? button)
+    {
+        if (button is not null && wordDetailControl?.Button == button)
+        {
+            StopWordDetail();
+            return;
+        }
         if (string.IsNullOrWhiteSpace(text)) return;
         StopSpeech();
         if (speakingDetachedSentence) ClearDetachedSpeech();
         StopWordDetail();
         using var run = new CancellationTokenSource();
         wordDetailRun = run;
+        if (button is not null)
+        {
+            var label = button.Text ?? "Слухати";
+            wordDetailControl = (button, label, ToolTipProperties.GetText(button) as string ?? label);
+            button.Text = "Зупинити";
+            DescribeButton(button, "Зупинити озвучення");
+        }
         var token = run.Token;
         var rate = SpeechRatePercent / 100f;
 
@@ -251,7 +275,11 @@ public partial class ReadingPage
         catch (Exception error) { status = error.Message; }
         finally
         {
-            if (ReferenceEquals(wordDetailRun, run)) wordDetailRun = null;
+            if (ReferenceEquals(wordDetailRun, run))
+            {
+                wordDetailRun = null;
+                RestoreWordDetailControl();
+            }
         }
         if (!token.IsCancellationRequested && status is not null && status != LocalSpeech.CompletedStatus)
             await (Navigation.ModalStack.LastOrDefault() ?? this).DisplayAlertAsync("Озвучення", status, "Гаразд");
@@ -273,7 +301,7 @@ public partial class ReadingPage
         row.Add(new Label { Text = text, FontSize = fontSize, VerticalOptions = LayoutOptions.Center }, 0);
         var listen = new Button { Text = "Слухати", VerticalOptions = LayoutOptions.Start, Style = (Style)Resources["PlayerButton"] };
         DescribeButton(listen, $"Прослухати · {DocumentLanguages.Name(language)}");
-        listen.Clicked += async (_, _) => await SpeakWordDetailAsync(text, language);
+        listen.Clicked += async (_, _) => await SpeakWordDetailAsync(text, language, listen);
         row.Add(listen, 1);
         return row;
     }
