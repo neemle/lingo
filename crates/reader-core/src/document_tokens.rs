@@ -325,7 +325,7 @@ pub(crate) fn validated_cursor_offset(document: &Document) -> Option<usize> {
     word_at(&sentence.text, offset).map(|_| offset)
 }
 
-fn word_at(text: &str, start_utf16: usize) -> Option<&str> {
+pub(crate) fn word_at(text: &str, start_utf16: usize) -> Option<&str> {
     word_parts(text)
         .take_while(|(_, offset, _)| *offset <= start_utf16)
         .find_map(|(_, offset, word)| (offset == start_utf16).then_some(word))

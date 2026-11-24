@@ -255,23 +255,11 @@ impl Edit {
     }
 
     fn between(line_start: usize, old: &str, new: &str) -> Self {
-        let prefix: usize = old
-            .chars()
-            .zip(new.chars())
-            .take_while(|(a, b)| a == b)
-            .map(|(ch, _)| ch.len_utf8())
-            .sum();
-        let suffix: usize = old[prefix..]
-            .chars()
-            .rev()
-            .zip(new[prefix..].chars().rev())
-            .take_while(|(a, b)| a == b)
-            .map(|(ch, _)| ch.len_utf16())
-            .sum();
+        let edit = ocr::TranscriptEdit::between(line_start, old, new);
         Self {
-            start: line_start + old[..prefix].encode_utf16().count(),
-            old_end: line_start + old.encode_utf16().count() - suffix,
-            new_end: line_start + new.encode_utf16().count() - suffix,
+            start: edit.start_utf16,
+            old_end: edit.start_utf16 + edit.old_len,
+            new_end: edit.start_utf16 + edit.new_len,
         }
     }
 

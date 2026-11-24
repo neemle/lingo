@@ -581,6 +581,21 @@ pub(crate) struct TranscriptEdit {
     pub new_len: usize,
 }
 
+impl TranscriptEdit {
+    pub(crate) fn between(start: usize, old: &str, new: &str) -> Self {
+        let prefix: usize = old.chars().zip(new.chars()).take_while(|(a, b)| a == b)
+            .map(|(ch, _)| ch.len_utf8()).sum();
+        let suffix: usize = old[prefix..].chars().rev().zip(new[prefix..].chars().rev())
+            .take_while(|(a, b)| a == b).map(|(ch, _)| ch.len_utf16()).sum();
+        let leading = old[..prefix].encode_utf16().count();
+        Self {
+            start_utf16: start + leading,
+            old_len: old.encode_utf16().count() - leading - suffix,
+            new_len: new.encode_utf16().count() - leading - suffix,
+        }
+    }
+}
+
 pub(crate) fn line_transcript_edits(lines: &[OcrLine], previous: &[String]) -> Result<Vec<TranscriptEdit>> {
     let mut edits = Vec::new();
     for (line, old) in lines.iter().zip(previous.iter().map(String::as_str)) {
@@ -590,11 +605,7 @@ pub(crate) fn line_transcript_edits(lines: &[OcrLine], previous: &[String]) -> R
         }
         let span = line.source_span.ok_or("Розпізнаний рядок не має позиції в тексті.")?;
         edits.extend(word_replacement_edits(span.start_utf16, old, new)
-            .unwrap_or_else(|| vec![TranscriptEdit {
-                start_utf16: span.start_utf16,
-                old_len: old.encode_utf16().count(),
-                new_len: new.encode_utf16().count(),
-            }]));
+            .unwrap_or_else(|| vec![TranscriptEdit::between(span.start_utf16, old, new)]));
     }
     Ok(edits)
 }
@@ -759,16 +770,26 @@ pub(crate) fn update_transcript_with_edits(
     });
     let previous_sentence = document.sentences.get(document.position);
     let matched_position = previous_sentence.and_then(matching_index);
-    let position = matched_position
+    let selected_word = previous_sentence.zip(document.reading_token_utf16).and_then(|(old, offset)| {
+        if let Some(index) = matched_position.filter(|&index| old.text == sentences[index].text) {
+            return Some((index, offset));
+        }
+        if edits.is_empty() { return None; }
+        let word = crate::document_tokens::word_at(&old.text, offset)?;
+        let start = map_unchanged_range_start(old.start_utf16 + offset, word.encode_utf16().count(), edits)?;
+        let index = sentences.partition_point(|sentence| sentence.end_utf16 <= start);
+        let sentence = sentences.get(index)?;
+        let offset = start.checked_sub(sentence.start_utf16)?;
+        (crate::document_tokens::word_at(&sentence.text, offset) == Some(word)).then_some((index, offset))
+    });
+    let position = selected_word.map(|(index, _)| index).or(matched_position)
         .unwrap_or(document.position.min(sentences.len().saturating_sub(1)));
 
     document.bookmarks = bookmarks;
     document.notes = notes;
     document.speech_text_overrides = speech_text_overrides;
     document.reviewed_translations = translations;
-    if matched_position.is_none_or(|index| previous_sentence.is_some_and(|old| old.text != sentences[index].text)) {
-        document.reading_token_utf16 = None;
-    }
+    document.reading_token_utf16 = selected_word.map(|(_, offset)| offset);
     document.position = position;
     document.text = text;
     let before = std::mem::replace(&mut document.sentences, sentences);
@@ -854,6 +875,9 @@ mod tests {
         assert_eq!(lines[0].words[1].source_span.unwrap().start_utf8, 5);
         assert_eq!(lines[0].words[1].source_span.unwrap().start_utf16, 3);
         assert_eq!(lines[1].source_span.unwrap().start_utf16, 13);
+        let sentence = &document.sentences[0];
+        store.set_reading_cursor(&document.id, &sentence.id, document.current_revision_id.as_deref().unwrap(),
+            Some(8 - sentence.start_utf16)).unwrap();
 
         store
             .correct_ocr_line(&document.id, 0, Some("📚 Океан дім".into()))
@@ -875,5 +899,17 @@ mod tests {
         let snapshot = restored.snapshot().unwrap();
         let lines = snapshot.documents[0].ocr_lines.as_ref().unwrap();
         assert_eq!(lines[1].words[0].source_span.unwrap().start_utf16, 14);
+        let id = &snapshot.documents[0].id;
+        let cursor = restored.reading_cursor(id).unwrap().unwrap();
+        let sentence = &snapshot.documents[0].sentences[cursor.position];
+        assert_eq!(sentence.start_utf16 + cursor.sentence_start_utf16.unwrap(), 9);
+        assert_eq!(cursor.token_length_utf16, Some(3));
+        restored.correct_ocr_line(id, 0, Some("📚 Тихий океан дім".into())).unwrap();
+        let cursor = restored.reading_cursor(id).unwrap().unwrap();
+        let updated = restored.token_document(id).unwrap();
+        assert_eq!(updated.sentences[cursor.position].start_utf16 + cursor.sentence_start_utf16.unwrap(),
+            "📚 Тихий океан ".encode_utf16().count());
+        restored.correct_ocr_line(id, 0, Some("📚 Тихий океан дах".into())).unwrap();
+        assert!(restored.reading_cursor(id).unwrap().unwrap().sentence_start_utf16.is_none());
     }
 }

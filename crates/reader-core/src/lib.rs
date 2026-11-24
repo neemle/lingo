@@ -977,8 +977,14 @@ impl Store {
             if line.correction == correction {
                 return Ok(None);
             }
+            let previous = line.reading_text().to_owned();
             line.correction = correction;
-            Ok(Some(Vec::new()))
+            let edits = if line.source_span.is_some() {
+                ocr::line_transcript_edits(std::slice::from_ref(line), &[previous])?
+            } else {
+                Vec::new()
+            };
+            Ok(Some(edits))
         })
     }
 
