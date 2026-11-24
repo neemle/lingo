@@ -8,6 +8,33 @@ public partial class LibraryPage
 {
     private sealed record PastedDocument(string Name, string Text, string Language);
 
+#if IOS
+    private async Task ImportLibraryPhotoAsync()
+    {
+        if (importing || changingLanguage || AppState.Session.Busy || !DesktopImport.Gate.Wait(0)) return;
+        importing = true;
+        try
+        {
+            if (await ApplePhotoPicker.PickAsync() is not { } photo) return;
+            ShareInboxItem staged;
+            await using (photo.Content)
+            {
+                ImportStatus.Text = $"Копіюємо «{photo.Name}»…";
+                staged = await ShareInbox.StageAsync("file", photo.Name, photo.Content);
+            }
+            await ImportExternalAsync(staged);
+        }
+        catch (Exception error) { await DisplayAlertAsync("Імпорт фото", error.Message, "Гаразд"); }
+        finally
+        {
+            importing = false;
+            ImportStatus.Text = "";
+            DesktopImport.Gate.Release();
+            await RefreshShareInboxAsync();
+        }
+    }
+#endif
+
     private async Task PasteTextAsync()
     {
         string? clipboard = null;

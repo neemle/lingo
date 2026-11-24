@@ -127,6 +127,11 @@ public partial class LibraryPage : ContentPage
         const string text = "Вставити текст";
         const string image = "Вставити зображення";
         const string article = "Додати статтю за посиланням";
+        var sources = new List<string> { files, scan, text, image, article };
+#if IOS
+        const string photo = "Вибрати з фототеки";
+        sources.Insert(1, photo);
+#endif
 
         string? choice;
         choosingImportSource = true;
@@ -135,7 +140,7 @@ public partial class LibraryPage : ContentPage
             await AppState.Session.WaitUntilIdleAsync();
             if (!ReferenceEquals(Shell.Current?.CurrentPage, this) || importing || changingLanguage) return;
             choice = await NativeChoices.ChooseAsync(this, "Додати документ", null,
-                new[] { files, scan, text, image, article }.Select(label => (label, label)));
+                sources.Select(label => (label, label)));
         }
         finally
         {
@@ -147,6 +152,11 @@ public partial class LibraryPage : ContentPage
             case files:
                 await ImportAsync(scanPdf: false);
                 break;
+#if IOS
+            case photo:
+                await ImportLibraryPhotoAsync();
+                break;
+#endif
             case scan:
                 await ImportAsync(scanPdf: true);
                 break;
