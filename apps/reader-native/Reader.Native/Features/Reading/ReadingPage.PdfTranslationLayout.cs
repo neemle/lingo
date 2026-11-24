@@ -302,8 +302,7 @@ public partial class ReadingPage
             pdfLayoutRowsStale = false;
             pdfDrawingPlan = null;
             PdfTranslationSurface.Drawable = DetachedPdfTranslationSurface.Drawable = null;
-            PdfTranslationBackground.Source = DetachedPdfTranslationBackground.Source = null;
-            pdfTranslationBackgroundPreview = null;
+            ClearPdfTranslationBackground();
             PdfTranslationSurface.Invalidate();
             DetachedPdfTranslationSurface.Invalidate();
             pdfLayoutStatus = null;
@@ -331,6 +330,7 @@ public partial class ReadingPage
             ResizePdfTranslationLayout();
             DrawPdfTranslationLayout();
         }
+        else ClearPdfTranslationBackground();
         SchedulePdfAutoTranslation();
     }
 
@@ -1028,22 +1028,32 @@ public partial class ReadingPage
         return index >= 0 ? overflow.Rows[index] : null;
     }
 
+    private void ClearPdfTranslationBackground()
+    {
+        PdfTranslationBackground.IsVisible = DetachedPdfTranslationBackground.IsVisible = false;
+        PdfTranslationBackground.Source = DetachedPdfTranslationBackground.Source = null;
+        pdfTranslationBackgroundPreview = null;
+    }
+
     private void DrawPdfTranslationLayout()
     {
         var (viewport, surface) = ActivePdfTranslationLayout();
         if (!viewport.IsVisible) return;
         var detached = DetachedPdfReader.IsVisible;
         var background = detached ? DetachedPdfTranslationBackground : PdfTranslationBackground;
-        if (!ReferenceEquals(pdfTranslationBackgroundPreview, inlinePdfPreview))
-        {
-            pdfTranslationBackgroundPreview = inlinePdfPreview;
-            PdfTranslationBackground.Source = DetachedPdfTranslationBackground.Source = null;
-        }
-        if (background.Source is null && inlinePdfPreview is { } preview)
-            background.Source = InlinePreviewSource(preview);
         var source = pdfSourceLayout is { } layout && layout.Matches(pdfLayoutRequest) ? layout : null;
-        background.IsVisible = background.Source is not null && source is { Lines.Length: > 0 } &&
-            pdfLayoutRows.Length > 0;
+        if (TranslationVisible && source is { Lines.Length: > 0 } && pdfLayoutRows.Length > 0 &&
+            inlinePdfPreview is { } preview)
+        {
+            if (background.Source is null || !ReferenceEquals(pdfTranslationBackgroundPreview, preview))
+            {
+                ClearPdfTranslationBackground();
+                background.Source = InlinePreviewSource(preview);
+                pdfTranslationBackgroundPreview = preview;
+            }
+            background.IsVisible = true;
+        }
+        else ClearPdfTranslationBackground();
         var gloss = (detached ? DetachedWordCard : WordCard).IsVisible ? PopupGloss(detached) : null;
         var activeSentence = pdfLayoutSentence;
         QueueGlossAlignment(gloss, pdfLayoutRows.Where(row => IsActivePdfRow(row, activeSentence)).Select(row => row.Text));
