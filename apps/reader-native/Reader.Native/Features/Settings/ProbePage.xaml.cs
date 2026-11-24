@@ -7,6 +7,7 @@ public partial class ProbePage : ContentPage
 {
     private readonly LocalSpeech speech = new();
     private SpeechVoice[] voices = [];
+    private int voiceLoad;
     private int speechRequest;
     private const string SpokenSample = "Don't stop at Cafe\u0301 now.";
     private const string Sample = SpokenSample + " L’esprit. 👩🏽‍💻 😀.\r\n中文 日本語。\nمرحبا بالعالم. שלום עולם.";
@@ -18,13 +19,17 @@ public partial class ProbePage : ContentPage
         ProbeText.HighlightLength = "Cafe\u0301".Length;
     }
 
-    protected override void OnAppearing()
+    protected override async void OnAppearing()
     {
         base.OnAppearing();
+        var request = ++voiceLoad;
+        PlaySpeech.IsEnabled = false;
         try
         {
             var selected = voices.ElementAtOrDefault(VoicePicker.SelectedIndex)?.Id;
-            voices = LocalSpeech.VoicesForLanguage("en");
+            var installed = await LocalSpeech.ReadSystemVoicesAsync();
+            if (request != voiceLoad) return;
+            voices = SpeechVoice.ForLanguage(installed, "en");
             VoicePicker.ItemsSource = voices.Select(voice => $"{voice.Name} · {voice.Language}").ToArray();
             VoicePicker.SelectedIndex = voices.Length == 0 ? -1 : Math.Max(0, Array.FindIndex(voices, voice => voice.Id == selected));
             PlaySpeech.IsEnabled = voices.Length > 0;
@@ -32,6 +37,7 @@ public partial class ProbePage : ContentPage
         }
         catch (Exception error)
         {
+            if (request != voiceLoad) return;
             PlaySpeech.IsEnabled = false;
             SpeechResult.Text = error.Message;
         }
@@ -78,6 +84,7 @@ public partial class ProbePage : ContentPage
     }
     protected override void OnDisappearing()
     {
+        voiceLoad++;
         speechRequest++;
         speech.Stop();
         ProbeText.SpokenWord = null;

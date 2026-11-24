@@ -14,7 +14,7 @@ internal sealed record NativeLanguageCapabilities(
             recognition = new(CapabilityLevel.Unavailable, [], $"Не вдалося перевірити OCR. {error.Message}");
         }
         recognition = recognition with { FallbackLanguages = await TesseractOcr.InstalledLanguagesAsync() };
-        try { return new(recognition, NativeSpeech.InstalledVoices(), null); }
+        try { return new(recognition, await LocalSpeech.ReadSystemVoicesAsync(), null); }
         catch (Exception error)
         {
             return new(recognition, [], $"Не вдалося перелічити системні голоси. {error.Message}");

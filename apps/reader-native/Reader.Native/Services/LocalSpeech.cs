@@ -21,9 +21,6 @@ public sealed class LocalSpeech : IDisposable
     public float Rate { get; set; } = 1;
     internal string? PreferredVoice { get; set; }
 
-    internal static SpeechVoice[] VoicesForLanguage(string language) =>
-        SpeechVoice.ForLanguage(NativeSpeech.InstalledVoices(), language);
-
     private static readonly object VoiceScanGate = new();
     private static Task<SpeechVoice[]>? voiceScan;
 
