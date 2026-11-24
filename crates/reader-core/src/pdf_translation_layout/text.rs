@@ -41,36 +41,47 @@ pub fn fit(
     }
     let words = words(value);
     if words.is_empty() { return None; }
-    let mut size = preferred;
-    loop {
+    let mut fit_at = |size, allow_token_breaks| {
         let height_sample = measure(0, 0, size);
         if !height_sample.is_finite() || height_sample < 0.0 {
             return None;
         }
         let line_height = (size * 1.16).max(height_sample);
         let max_lines = ((height + 0.01) / line_height).floor() as usize;
-        if max_lines > 0 {
-            let mut fits = |start, end| {
-                let measured = measure(start, end - start, size);
-                measured.is_finite() && measured >= 0.0 && measured <= width
-            };
-            // Try ordinary wrapping before splitting an oversized token at the minimum font size.
-            let lines = wrap(value, &words, max_lines, false, &mut fits).or_else(|| {
-                if size <= minimum { wrap(value, &words, max_lines, true, &mut fits) } else { None }
-            });
-            if let Some(lines) = lines {
-                return Some(TextFit { size, line_height, lines });
-            }
-        }
-        if size <= minimum {
+        if max_lines == 0 {
             return None;
         }
-        let smaller = (size * 0.84).max(minimum);
-        if smaller >= size {
-            return None;
-        }
-        size = smaller;
+        let mut fits = |start, end| {
+            let measured = measure(start, end - start, size);
+            measured.is_finite() && measured >= 0.0 && measured <= width
+        };
+        let lines = wrap(value, &words, max_lines, allow_token_breaks, &mut fits)?;
+        Some(TextFit { size, line_height, lines })
+    };
+    if let Some(original) = fit_at(preferred, false) {
+        return Some(original);
     }
+    if preferred == minimum {
+        return fit_at(minimum, true);
+    }
+    let Some(mut best) = fit_at(minimum, false) else {
+        // Breaking an oversized token at a grapheme boundary is a last resort.
+        return fit_at(minimum, true);
+    };
+    let mut too_large = preferred;
+    for _ in 0..8 {
+        let gap = too_large - best.size;
+        if gap <= 0.125 {
+            break;
+        }
+        let candidate = best.size + gap * 0.5;
+        if let Some(fitted) = fit_at(candidate, false) {
+            best = fitted;
+        } else {
+            too_large = candidate;
+        }
+    }
+    Some(best)
 }
 
 fn words(value: &str) -> Vec<Word> {
@@ -200,5 +211,11 @@ mod tests {
             fit("mot !", 35.0, 20.0, 8.0, 7.0, measure).unwrap().size,
             7.0
         );
+
+        let resized = fit("une mot deux", 77.0, 26.0, 16.0, 9.0, measure).unwrap();
+        assert!((10.875..=11.0).contains(&resized.size));
+        assert_eq!(resized.lines.len(), 2);
+        assert!(resized.lines.iter().all(|line| measure(line.start, line.end - line.start, resized.size) <= 77.0));
+        assert!(resized.line_height * 2.0 <= 26.0);
     }
 }
