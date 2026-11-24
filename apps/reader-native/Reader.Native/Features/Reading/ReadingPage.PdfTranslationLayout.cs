@@ -1261,7 +1261,8 @@ public partial class ReadingPage
         {
             var style = entry.Value;
             return new PdfTranslationSourceStyle(style.FontFamily, style.RelativeFontSize, style.Weight,
-                style.Italic, style.Ink is { } ink ? Rgba(ink) : null, Rgba(style.Background), style.MaskSafe);
+                style.Italic, style.Ink is { } ink ? Rgba(ink) : null, Rgba(style.Background), style.MaskSafe,
+                style.ClearRight);
         }) ?? [];
         return CoreClient.CoreClient.PlanPdfTranslationLayout(spans, source?.Lines ?? [], source?.Offset ?? 0,
             styles, preserveArtwork);
@@ -1374,6 +1375,12 @@ public partial class ReadingPage
                     appearance?.Italic == true ? FontStyleType.Italic : FontStyleType.Normal);
                 var fit = textArea.Width >= 2 && textArea.Height >= 2
                     ? FitText(canvas, translated, font, textArea.Width, textArea.Height, preferredSize, minimumSize) : null;
+                if (fit is null && region.WiderBounds is { } wider)
+                {
+                    var expanded = Scale(wider, page);
+                    fit = FitText(canvas, translated, font, expanded.Width, expanded.Height, preferredSize, minimumSize);
+                    if (fit is not null) textArea = expanded;
+                }
                 if (fit is null && region.FallbackRegions is { Length: > 0 } fallbackRegions)
                 {
                     var fallbackIndices = fallbackRegions.SelectMany(fallback => fallback.Fragments).ToHashSet();

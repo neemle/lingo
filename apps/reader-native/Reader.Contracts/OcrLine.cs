@@ -19,18 +19,19 @@ public sealed record OcrWord(string Text, double X, double Y, double Width, doub
     int? RawStartUtf16 = null, OcrSpan? SourceSpan = null);
 
 public sealed record OcrSpan(int StartUtf8, int EndUtf8, int StartUtf16, int EndUtf16);
-public sealed record PdfSampleBox(double X, double Y, double Width, double Height);
-public sealed record PdfSampleColors(uint Background, uint? Ink, bool MaskSafe);
+public sealed record PdfSampleBox(double X, double Y, double Width, double Height,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool ProbeClearRight = false);
+public sealed record PdfSampleColors(uint Background, uint? Ink, bool MaskSafe, double? ClearRight = null);
 public sealed record PdfTranslationSourceRow(int StartUtf16, int EndUtf16, int? BlockIndex, bool Pending);
 public sealed record PdfTranslationSourceStyle(string? FontFamily, double? FontHeight, int Weight, bool Italic,
-    double[]? Ink, double[] Background, bool MaskSafe = true);
+    double[]? Ink, double[] Background, bool MaskSafe = true, double? ClearRight = null);
 public sealed record PdfTranslationStyleAnchor(int StartUtf16, PdfTranslationSourceStyle Style);
 public sealed record PdfTranslationAnchor(PdfSampleBox? Bounds, PdfTranslationSourceStyle? Style,
     PdfTranslationMask[]? PendingMasks = null);
 public sealed record PdfTranslationMask(PdfSampleBox Bounds, double[] Background);
 public sealed record PdfTranslationRegion(PdfSampleBox Bounds, double PreferredFontHeight, bool LimitFontByWidth,
     int[] Fragments, int? StyleFragment, PdfTranslationMask[] Masks, string Alignment = "left", int Rotation = 0,
-    PdfTranslationRegion[]? FallbackRegions = null);
+    PdfTranslationRegion[]? FallbackRegions = null, PdfSampleBox? WiderBounds = null);
 public sealed record PdfTranslationLayout(PdfTranslationRegion[] Regions, int[] Pending, int[] Overflow,
     PdfTranslationAnchor[] Anchors);
 public sealed record PdfTextLine(int Start, int End);

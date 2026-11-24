@@ -69,9 +69,12 @@ internal static partial class PdfScan
         var boxes = new Dictionary<int, PdfSampleBox>();
         foreach (var line in lines)
         {
-            Add(line.SourceSpan, line.X, line.Y, line.Width, line.Height);
-            foreach (var word in line.Words ?? [])
-                Add(word.SourceSpan, word.X, word.Y, word.Width, word.Height);
+            var words = line.Words ?? [];
+            var horizontal = line.Rotation is null or 0;
+            var tail = horizontal ? words.Where(word => word.SourceSpan is not null).MaxBy(word => word.X + word.Width) : null;
+            Add(line.SourceSpan, line.X, line.Y, line.Width, line.Height, horizontal && tail is null);
+            foreach (var word in words)
+                Add(word.SourceSpan, word.X, word.Y, word.Width, word.Height, ReferenceEquals(word, tail));
         }
         if (boxes.Count == 0) return;
         try
@@ -89,13 +92,13 @@ internal static partial class PdfScan
 
         foreach (var key in boxes.Keys)
             appearance[key] = appearance.TryGetValue(key, out var style)
-                ? style with { MaskSafe = false }
+                ? style with { MaskSafe = false, ClearRight = null }
                 : new(null, 0, 400, false, null, Colors.White, MaskSafe: false);
 
-        void Add(OcrSpan? span, double x, double y, double width, double height)
+        void Add(OcrSpan? span, double x, double y, double width, double height, bool probeClearRight)
         {
             if (span is { } range)
-                boxes[range.StartUtf16] = new(x, y, width, height);
+                boxes[range.StartUtf16] = new(x, y, width, height, probeClearRight);
         }
     }
 
@@ -133,8 +136,9 @@ internal static partial class PdfScan
                 var background = Rgb(sampled.Background);
                 var ink = sampled.Ink is { } measured ? Rgb(measured) : null;
                 appearance[key] = appearance.TryGetValue(key, out var style)
-                    ? style with { Background = background, Ink = style.Ink ?? ink, MaskSafe = sampled.MaskSafe }
-                    : new(null, 0, 400, false, ink, background, sampled.MaskSafe);
+                    ? style with { Background = background, Ink = style.Ink ?? ink, MaskSafe = sampled.MaskSafe,
+                        ClearRight = sampled.ClearRight }
+                    : new(null, 0, 400, false, ink, background, sampled.MaskSafe, sampled.ClearRight);
             }
 
             static Color Rgb(uint value) =>

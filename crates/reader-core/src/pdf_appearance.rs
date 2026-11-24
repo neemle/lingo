@@ -7,6 +7,8 @@ pub struct SampleBox {
     y: f64,
     width: f64,
     height: f64,
+    #[serde(default, rename = "probeClearRight")]
+    probe_clear_right: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -15,6 +17,8 @@ pub struct SampledColors {
     pub ink: Option<u32>,
     #[serde(rename = "maskSafe")]
     pub mask_safe: bool,
+    #[serde(rename = "clearRight", skip_serializing_if = "Option::is_none")]
+    pub clear_right: Option<f64>,
 }
 
 pub fn sample_backgrounds(
@@ -47,9 +51,33 @@ pub fn sample_colors(
             } else {
                 None
             };
-            SampledColors { background, ink, mask_safe }
+            let clear_right = if mask_safe && bounds.probe_clear_right {
+                clear_right_edge(pixels, width, height, bounds, background)
+            } else { None };
+            SampledColors { background, ink, mask_safe, clear_right }
         })
         .collect())
+}
+
+fn clear_right_edge(pixels: &[u8], width: usize, height: usize, bounds: &SampleBox, paper: u32) -> Option<f64> {
+    let (width_norm, height_norm) = (width as f64, height as f64);
+    let edge = ((bounds.x + bounds.width) * width_norm).ceil() as usize;
+    let top = (bounds.y * height_norm).floor() as usize;
+    let bottom = ((bounds.y + bounds.height) * height_norm).ceil() as usize;
+    if bounds.x < 0.0 || bounds.y < 0.0 || edge >= width || bottom > height ||
+        !(3..=48).contains(&bottom.saturating_sub(top)) {
+        return None;
+    }
+    let limit = (edge + (width / 8).min(128)).min(width);
+    let paper = [(paper >> 16) as u8, (paper >> 8) as u8, paper as u8];
+    let blocked = (edge..limit).find(|&column| {
+        (top.saturating_sub(1)..(bottom + 1).min(height)).any(|row| {
+            let start = (row * width + column) * 4;
+            pixels[start..start + 3].iter().zip(paper).any(|(&value, target)| value.abs_diff(target) > 6)
+        })
+    }).unwrap_or(limit);
+    // Leave two pixels of separation from the first obstruction or page edge.
+    (blocked >= edge + 5).then(|| (blocked - 2) as f64 / width_norm)
 }
 
 fn validate_image(pixels: &[u8], width: usize, height: usize, boxes: &[SampleBox]) -> Result<()> {
@@ -240,6 +268,7 @@ mod tests {
                 y: f64::from(y) / 24.0,
                 width: f64::from(w) / 24.0,
                 height: f64::from(h) / 24.0,
+                probe_clear_right: false,
             };
             let colors = sample_colors(&pixels, width, height, &[bounds]).unwrap();
             assert_eq!(colors[0].background, 0xea_f7_d0);
@@ -267,6 +296,7 @@ mod tests {
             y: 0.0,
             width: 1.0 / 3.0,
             height: 1.0,
+            probe_clear_right: false,
         });
         let colors = sample_colors(&pixels, 60, 20, &boxes).unwrap();
         assert_eq!(colors[0].background, 0xf3_fa_d8);
@@ -293,7 +323,9 @@ mod tests {
                 pixels.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
             }
         }
-        let boxes = [0.025, 0.525].map(|x| SampleBox { x, y: 0.34, width: 0.45, height: 0.27 });
+        let boxes = [0.025, 0.525].map(|x| SampleBox {
+            x, y: 0.34, width: 0.45, height: 0.27, probe_clear_right: false,
+        });
         let colors = sample_colors(&pixels, width, height, &boxes).unwrap();
         assert!(colors[0].mask_safe);
         assert!(!colors[1].mask_safe);
@@ -320,17 +352,37 @@ mod tests {
                 y: 0.0,
                 width: 0.5,
                 height: 1.0,
+                probe_clear_right: false,
             },
             SampleBox {
                 x: 0.5,
                 y: 0.0,
                 width: 0.5,
                 height: 1.0,
+                probe_clear_right: false,
             },
         ];
         assert_eq!(
             sample_backgrounds(&rgba, 16, 10, &boxes).unwrap(),
             [0xe6_f6_ca, 0xff_ff_ff]
         );
+    }
+
+    #[test]
+    fn right_hand_probe_stops_before_a_same_row_border_or_picture() {
+        let (width, height) = (200, 80);
+        let mut pixels = [237, 246, 224, 255].repeat(width * height);
+        let bounds = SampleBox { x: 0.1, y: 0.25, width: 0.25, height: 0.125,
+            probe_clear_right: true };
+        let index = (26 * width + 86) * 4;
+        pixels[index..index + 3].copy_from_slice(&[120, 157, 193]);
+        let samples = sample_colors(&pixels, width, height, &[bounds]).unwrap();
+        assert_eq!(samples[0].clear_right, Some(84.0 / 200.0));
+        let index = (26 * width + 73) * 4;
+        pixels[index..index + 3].copy_from_slice(&[12, 12, 12]);
+        let bounds = SampleBox { x: 0.1, y: 0.25, width: 0.25, height: 0.125,
+            probe_clear_right: true };
+        let samples = sample_colors(&pixels, width, height, &[bounds]).unwrap();
+        assert_eq!(samples[0].clear_right, None);
     }
 }

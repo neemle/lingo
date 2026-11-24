@@ -24,6 +24,8 @@ pub struct SourceStyle {
     pub(super) background: [f64; 4],
     #[serde(default = "mask_safe_default")]
     pub(super) mask_safe: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    clear_right: Option<f64>,
 }
 
 fn mask_safe_default() -> bool { true }
@@ -65,6 +67,7 @@ impl SourceStyle {
             ink: None,
             background: [r, g, b, 1.0],
             mask_safe: true,
+            clear_right: None,
         }
     }
 }
@@ -143,6 +146,8 @@ pub fn project(
                 return false;
             };
             region.masks = masks;
+            region.wider_bounds = wider_line(region, rows, geometry, offset, &styles)
+                .filter(|bounds| masks_for(*bounds, &region.fragments).is_some());
         }
         region.fallback_regions = fallback;
         true
@@ -165,6 +170,33 @@ pub fn project(
         })
         .collect();
     Ok(ProjectedLayout { layout, anchors })
+}
+
+fn wider_line(
+    region: &Region, rows: &[SourceRow], geometry: &[OcrLine], offset: usize,
+    styles: &BTreeMap<usize, &SourceStyle>,
+) -> Option<Bounds> {
+    let [index] = region.fragments.as_slice() else { return None; };
+    if region.rotation != 0 || region.alignment != super::Alignment::Left { return None; }
+    let range = rows[*index].page_span(offset);
+    let mut lines = geometry.iter().filter(|line| intersects(&range, line.source_span));
+    let line = lines.next()?;
+    let span = line.source_span?;
+    if lines.next().is_some() || range.start > span.start_utf16 || range.end < span.end_utf16 {
+        return None;
+    }
+    let tail_word = line.words.iter().filter(|word| word.source_span.is_some())
+        .max_by(|left, right| (left.x + left.width).total_cmp(&(right.x + right.width)));
+    let bounds = region.bounds;
+    if tail_word.is_some_and(|word| word.y > bounds.y || word.y + word.height < bounds.bottom()) {
+        return None;
+    }
+    let tail = tail_word.and_then(|word| word.source_span).unwrap_or(span);
+    let style = styles.get(&tail.start_utf16)?;
+    let right = style.clear_right.filter(|edge| edge.is_finite() && *edge <= 1.0)?;
+    // Keep any extension close to the original line even on a completely blank page.
+    let width = (right - bounds.x).min(bounds.width * 1.45);
+    (width > bounds.width * 1.08).then_some(Bounds { width, ..bounds })
 }
 
 impl SourceRow {
@@ -261,11 +293,11 @@ fn project_row(
         let middle = heights.len() / 2;
         fragment.line_height = *heights.select_nth_unstable_by(middle, f64::total_cmp).1;
     }
-    return fragment;
+    fragment
+}
 
-    fn intersects(span: &Range<usize>, bounds: Option<OcrSpan>) -> bool {
-        bounds.is_some_and(|bounds| bounds.start_utf16 < span.end && bounds.end_utf16 > span.start)
-    }
+fn intersects(span: &Range<usize>, bounds: Option<OcrSpan>) -> bool {
+    bounds.is_some_and(|bounds| bounds.start_utf16 < span.end && bounds.end_utf16 > span.start)
 }
 
 pub(super) fn different_color(a: [f64; 4], b: [f64; 4]) -> bool {
@@ -276,6 +308,29 @@ pub(super) fn different_color(a: [f64; 4], b: [f64; 4]) -> bool {
 mod tests {
     use super::*;
     use crate::ocr::OcrWord;
+
+    #[test]
+    fn wider_line_uses_verified_paper_without_crossing_other_text() {
+        let line = |x, width, start| OcrLine {
+            rotation: Some(0), page: 0, text: "Texte".into(), x, y: 0.2, width, height: 0.03,
+            confidence: None, correction: None, block_start: true, words: vec![],
+            source_span: Some(OcrSpan { start_utf8: start, end_utf8: start + 5,
+                start_utf16: start, end_utf16: start + 5 }),
+        };
+        let rows = [SourceRow { start_utf16: 0, end_utf16: 5, block_index: Some(0), pending: false }];
+        let styles = [SourceStyleAnchor { start_utf16: 0, style: SourceStyle {
+            clear_right: Some(0.55), ..SourceStyle::test_style([1.0; 3], 0.025)
+        } }];
+        let layout = project(&rows, &[line(0.1, 0.30, 0)], 0, &styles, true).unwrap();
+        let region = &layout.layout.regions[0];
+        assert!((region.wider_bounds.unwrap().right() - 0.535).abs() < 0.001);
+        assert_eq!(region.masks.len(), 1);
+
+        let collision = project(&rows, &[line(0.1, 0.30, 0), line(0.48, 0.2, 10)], 0, &styles, true).unwrap();
+        assert!(collision.layout.regions[0].wider_bounds.is_none());
+        let unsampled = project(&rows, &[line(0.1, 0.30, 0)], 0, &[], true).unwrap();
+        assert!(unsampled.layout.regions[0].wider_bounds.is_none());
+    }
 
     #[test]
     fn preserves_four_rotations_and_keeps_masks_in_page_coordinates() {

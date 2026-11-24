@@ -67,6 +67,8 @@ struct SourceFragment {
 #[serde(rename_all = "camelCase")]
 pub struct Region {
     bounds: Bounds,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wider_bounds: Option<Bounds>,
     alignment: Alignment,
     rotation: u16,
     line_height: f64,
@@ -83,6 +85,7 @@ impl Region {
     fn from_fragment(index: usize, fragment: &SourceFragment, bounds: Bounds, rotation: u16) -> Self {
         Self {
             bounds,
+            wider_bounds: None,
             alignment: Alignment::Left,
             rotation,
             line_height: fragment.line_height,
