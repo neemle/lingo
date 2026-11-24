@@ -19,6 +19,7 @@ public partial class ReadingPage
     private int inlinePdfRequest;
     private InlinePdfAddress? inlinePdfAddress;
     private InlinePdfAddress? inlinePdfLoading;
+    private CancellationTokenSource? inlinePdfLoad;
     private PhotoPreview? inlinePdfPreview;
     private OcrLine[] inlineDetachedLines = [];
     private OcrLine[] inlineNativeBoxes = [];
@@ -74,6 +75,7 @@ public partial class ReadingPage
         showInlineOriginal = false;
         inlinePdfRequest++;
         inlinePdfLoading = null;
+        inlinePdfLoad?.Cancel();
         ClearInlinePdfFrame();
         SourceText.IsVisible = DetachedPdfText.IsVisible = true;
         InlinePdfViewport.IsVisible = DetachedInlinePdfViewport.IsVisible = PendingInlinePdfViewport.IsVisible = false;
@@ -107,6 +109,7 @@ public partial class ReadingPage
 
         var request = inlinePdfRequest;
         var isPdf = document.Format == "pdf";
+        CancellationTokenSource? work = null;
         try
         {
             var page = 0;
@@ -127,6 +130,7 @@ public partial class ReadingPage
                 {
                     inlinePdfRequest++;
                     inlinePdfLoading = null;
+                    inlinePdfLoad?.Cancel();
                 }
                 InlinePdfToggle.Text = "Розпізнаний текст";
                 PendingInlinePdfViewport.IsVisible = PdfPageNotice.IsVisible && !DetachedPdfReader.IsVisible;
@@ -136,6 +140,10 @@ public partial class ReadingPage
             }
             if (inlinePdfLoading == address) return;
             request = ++inlinePdfRequest;
+            inlinePdfLoad?.Cancel();
+            work = new CancellationTokenSource();
+            inlinePdfLoad = work;
+            var cancellation = work.Token;
             inlinePdfLoading = address;
             InlinePdfHighlight.IsVisible = DetachedInlinePdfHighlight.IsVisible = false;
             var previous = inlinePdfAddress;
@@ -151,10 +159,10 @@ public partial class ReadingPage
             string nativeText = "";
             IReadOnlyDictionary<int, PdfBoxAppearance>? appearance = null;
 #if MACCATALYST
-            if (isPdf && await session.OriginalFileAsync(document.Id) is { } file)
+            if (isPdf && await session.OriginalFileAsync(document.Id).WaitAsync(cancellation) is { } file)
             {
                 if (detachedText is not null)
-                    detachedLines = (await session.DetachedPdfOcrAsync(document.Id, page))?.Lines ?? [];
+                    detachedLines = (await session.DetachedPdfOcrAsync(document.Id, page).WaitAsync(cancellation))?.Lines ?? [];
                 var recognized = detachedText is not null ? detachedLines :
                     document.OcrLines?.Where(line => line.Page == page && line.SourceSpan is not null).ToArray() ?? [];
                 var textStart = document.PdfPageStarts?.ElementAtOrDefault(page)
@@ -162,12 +170,12 @@ public partial class ReadingPage
                 var expectedText = detachedText is not null ? detachedText.AsMemory()
                     : textStart >= 0 && textStart <= document.Text.Length ? document.Text.AsMemory(textStart) : default;
                 (preview, nativeText, nativeBoxes, appearance) = await PdfScan.ReadingPreviewAsync(file.Path, page,
-                    recognized, expectedText);
+                    recognized, expectedText, cancellation);
             }
             else
 #endif
             {
-                var fileBytes = (await session.OriginalAsync(document.Id)).Bytes.Select(value => checked((byte)value)).ToArray();
+                var fileBytes = (await session.OriginalAsync(document.Id).WaitAsync(cancellation)).Bytes.Select(value => checked((byte)value)).ToArray();
 #if MACCATALYST
                 if (!isPdf)
                     (preview, appearance) = await PhotoOcr.ReadingPreviewAsync(fileBytes, document.OcrLines ?? []);
@@ -176,7 +184,7 @@ public partial class ReadingPage
                 preview = isPdf ? await PdfScan.PreviewAsync(fileBytes, page) : await PhotoOcr.PreviewAsync(fileBytes);
             }
 
-            if (request != inlinePdfRequest || !showInlineOriginal || !readingPageActive ||
+            if (cancellation.IsCancellationRequested || request != inlinePdfRequest || !showInlineOriginal || !readingPageActive ||
                 session.Document is not { } current || current.Id != address.Document ||
                 current.CurrentRevisionId != address.Revision) return;
             var changedPage = previous is null ||
@@ -209,11 +217,17 @@ public partial class ReadingPage
             lastInlinePdfFollow = null;
             UpdateInlinePdfHighlight();
         }
+        catch (OperationCanceledException) when (work?.IsCancellationRequested == true) { }
         catch (Exception error)
         {
             if (request != inlinePdfRequest) return;
             ClearInlineOriginal();
             await DisplayAlertAsync(isPdf ? "Сторінка PDF" : "Фото", error.Message, "Гаразд");
+        }
+        finally
+        {
+            if (ReferenceEquals(inlinePdfLoad, work)) inlinePdfLoad = null;
+            work?.Dispose();
         }
     }
 

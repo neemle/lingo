@@ -226,12 +226,14 @@ internal static partial class PdfScan
     });
 
     internal static Task<(PhotoPreview Image, string Text, OcrLine[] Boxes, Dictionary<int, PdfBoxAppearance> Appearance)> ReadingPreviewAsync(
-        string path, int index, OcrLine[] recognized, ReadOnlyMemory<char> expectedText = default) => Task.Run(() =>
+        string path, int index, OcrLine[] recognized, ReadOnlyMemory<char> expectedText, CancellationToken cancellation) => Task.Run(() =>
     {
+        cancellation.ThrowIfCancellationRequested();
         using var pool = new NSAutoreleasePool();
         using var document = Open(path);
         using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
         using var thumbnail = Thumbnail(page, 1800);
+        cancellation.ThrowIfCancellationRequested();
         var image = EncodePreview(thumbnail);
         var bitmap = thumbnail.CGImage is { } pixels ? new PreviewColors(pixels) : null;
         var appearance = new Dictionary<int, PdfBoxAppearance>();
@@ -240,7 +242,7 @@ internal static partial class PdfScan
             bitmap?.AddColors(recognized, appearance);
             return (image, "", [], appearance);
         }
-        var layer = TextLayer(page, out var offset, expectedText);
+        var layer = TextLayer(page, out var offset, expectedText, cancellation);
         var text = layer.Text;
         var crop = page.GetBoundsForBox(PdfDisplayBox.Crop);
         if (text.Length == 0 || crop.Width <= 0 || crop.Height <= 0) return (image, text, [], appearance);
@@ -254,6 +256,7 @@ internal static partial class PdfScan
         // PDFKit emits U+FFFC for artwork. Its selection bounds can span the entire page.
         foreach (System.Text.RegularExpressions.Match word in System.Text.RegularExpressions.Regex.Matches(text, @"[^\s\uFFFC]+"))
         {
+            cancellation.ThrowIfCancellationRequested();
             if (IsPdfListLabel(text, word.Index, word.Length)) continue;
             if (layer.OriginalRange(word.Index, word.Length) is not { } original) continue;
             using var selection = page.GetSelection(new NSRange(offset + original.Start, original.Length));
@@ -276,9 +279,10 @@ internal static partial class PdfScan
                 SourceSpan: new(0, 0, word.Index, word.Index + word.Length), Rotation: direction));
             appearance[word.Index] = ReadAppearance(attributes, offset + original.Start, pageHeight, inkSpace);
         }
+        cancellation.ThrowIfCancellationRequested();
         bitmap?.AddColors(boxes, appearance);
         return (image, text, boxes.ToArray(), appearance);
-    });
+    }, cancellation);
 
     private static int DisplayRotation(PdfPage page) => (int)((page.Rotation % 360 + 360) % 360);
 
