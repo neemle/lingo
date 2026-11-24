@@ -14,6 +14,7 @@ internal sealed class BackgroundTranslation
     private readonly Dictionary<JobKey, LibraryFailure> libraryFailures = [];
     private Task pending = Task.CompletedTask;
     private CancellationTokenSource? stepCancellation;
+    private JobKey? activeJob;
     private bool prefetchingVisiblePage;
     private Document[] observedDocuments = [];
     private int wakeVersion;
@@ -33,6 +34,9 @@ internal sealed class BackgroundTranslation
 
     private sealed record JobKey(string Document, string Revision, string Source, string Target)
     {
+        public static JobKey ForPage(BackgroundTranslatedPage page) =>
+            new(page.DocumentId, page.RevisionId, page.Source, page.Target);
+
         public bool Matches(Document document) =>
             Document == document.Id && Revision == document.CurrentRevisionId && Source == document.Language;
     }
@@ -194,9 +198,26 @@ internal sealed class BackgroundTranslation
         observedDocuments = documents;
         if (changed)
         {
+            ReconcileDocuments(documents);
             retryAt = default;
             Wake();
         }
+    }
+
+    private void ReconcileDocuments(Document[] documents)
+    {
+        var current = documents.ToDictionary(document => document.Id, StringComparer.Ordinal);
+        bool Obsolete(JobKey key) => !current.TryGetValue(key.Document, out var document) || !key.Matches(document);
+
+        if (activeJob is { } active && Obsolete(active))
+            stepCancellation?.Cancel();
+        if (visibleAttempt is { Page.Address: var attempted } && Obsolete(JobKey.ForPage(attempted)))
+            visibleAttempt = null;
+        foreach (var key in jobs.Keys.Where(Obsolete).ToArray()) jobs.Remove(key);
+        var previouslyParked = ParkedDocuments;
+        foreach (var key in libraryFailures.Keys.Where(Obsolete).ToArray()) libraryFailures.Remove(key);
+        UpdateRequiredPackages();
+        if (previouslyParked != ParkedDocuments) StatusChanged?.Invoke();
     }
 
     private void Schedule(TimeSpan delay)
@@ -311,9 +332,10 @@ internal sealed class BackgroundTranslation
                 (visibleAttempt is not { } attempted || attempted.Page != visible || attempted.RetryAt <= now))
             {
                 var address = visible.Address;
-                var key = new JobKey(address.DocumentId, address.RevisionId, address.Source, address.Target);
+                var key = JobKey.ForPage(address);
                 if (live.Contains(key) && jobs.GetValueOrDefault(key)?.MissingPackages is null)
                 {
+                    activeJob = key;
                     prefetchingVisiblePage = true;
                     Schedule(Cadence);
                     SetStatus($"Опрацьовуємо відкриту сторінку {address.Page + 1}…", running: true);
@@ -349,6 +371,7 @@ internal sealed class BackgroundTranslation
             var work = ready[(previous + 1) % ready.Count];
             var title = work.Document.Title;
             attemptedJob = work.Key;
+            activeJob = work.Key;
             attemptedTitle = title;
             lastLibraryJob = work.Key;
             libraryStepInvalidated = false;
@@ -421,6 +444,7 @@ internal sealed class BackgroundTranslation
         }
         finally
         {
+            activeJob = null;
             prefetchingVisiblePage = false;
             stepCancellation = null;
         }
