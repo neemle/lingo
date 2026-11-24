@@ -273,7 +273,10 @@ internal static partial class PdfScan
                 270 => (1 - y - height, 1 - x - width, height, width),
                 _ => (x, 1 - y - height, width, height),
             };
-            var direction = TextDirection(page, offset + original.Start, original.Length, raw, box, rotation);
+            var direction = TextDirection(page, offset + original.Start, original.Length, raw, box, rotation,
+                out var oblique);
+            // An axis-aligned word box can cover unrelated artwork under a diagonal label.
+            if (oblique) continue;
             boxes.Add(new(word.Value, x, y, width, height, null, index,
                 SourceSpan: new(0, 0, word.Index, word.Index + word.Length), Rotation: direction));
             if (attributes is not null)
@@ -291,8 +294,10 @@ internal static partial class PdfScan
 
     private static int DisplayRotation(PdfPage page) => (int)((page.Rotation % 360 + 360) % 360);
 
-    private static int? TextDirection(PdfPage page, int start, int length, string raw, CGRect word, int pageRotation)
+    private static int? TextDirection(PdfPage page, int start, int length, string raw, CGRect word, int pageRotation,
+        out bool oblique)
     {
+        oblique = false;
         var source = raw.AsSpan(start, length);
         var split = System.Globalization.StringInfo.GetNextTextElementLength(source);
         if (split == length) return null;
@@ -308,7 +313,11 @@ internal static partial class PdfScan
         int direction;
         if (Math.Abs(dx) > Math.Abs(dy) * 1.6) direction = dx > 0 ? 0 : 180;
         else if (Math.Abs(dy) > Math.Abs(dx) * 1.6) direction = dy < 0 ? 90 : 270;
-        else return null;
+        else
+        {
+            oblique = Math.Max(Math.Abs(dx), Math.Abs(dy)) > Math.Min(word.Width, word.Height) * 0.12;
+            return null;
+        }
         return (direction + pageRotation) % 360;
     }
 
@@ -334,6 +343,8 @@ internal static partial class PdfScan
         var text = raw.Trim();
         var nativeOffset = raw.Length - raw.TrimStart().Length;
         offset = nativeOffset;
+        if (expected.IsEmpty && IsObliqueScanOverlay(page, text, nativeOffset, cancellation))
+            return new("");
         // Existing libraries may already be anchored to PDFKit's original order.
         if (expected.Span.StartsWith(text.AsSpan(), StringComparison.Ordinal))
             return new(text);
@@ -411,7 +422,7 @@ internal static partial class PdfScan
         if (selection is null) return null;
         var box = selection.GetBoundsForPage(page);
         if (box.Width <= 0 || box.Height <= 0) return null;
-        var rotation = raw is null ? null : TextDirection(page, start, length, raw, box, pageRotation: 0);
+        var rotation = raw is null ? null : TextDirection(page, start, length, raw, box, pageRotation: 0, out _);
         return new((double)box.Left, (double)box.Right, (double)(box.Y + box.Height / 2), (double)box.Height, rotation);
     }
 
