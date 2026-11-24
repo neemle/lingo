@@ -254,6 +254,24 @@ pub(crate) fn has_narration_text(text: &str) -> bool {
     text.chars().any(char::is_alphanumeric)
 }
 
+pub(crate) fn same_word_source(source: &str, spoken: &str) -> bool {
+    use unicode_normalization::UnicodeNormalization;
+    use unicode_segmentation::UnicodeSegmentation;
+
+    fn without_stress(element: &str) -> &str {
+        if element.starts_with(|ch| matches!(ch, '\u{0400}'..='\u{052f}')) {
+            element.trim_end_matches('\u{0301}')
+        } else {
+            element
+        }
+    }
+
+    let mut spoken = spoken.graphemes(true);
+    source.graphemes(true).all(|original| {
+        spoken.next().is_some_and(|element| without_stress(original).nfc().eq(without_stress(element).nfc()))
+    }) && spoken.next().is_none()
+}
+
 
 pub(crate) fn pdf_narration(document: &Document, sentence: &Sentence, text: &str) -> Option<String> {
     let masked = without_pdf_note_markers(document, sentence, text);
@@ -277,6 +295,46 @@ pub(crate) fn without_pdf_note_markers(document: &Document, sentence: &Sentence,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detached_word_checkpoint_survives_restart_with_a_stress_edit() {
+        use sha2::{Digest, Sha256};
+
+        let root = tempfile::tempdir().unwrap();
+        let database = root.path().join("reader.db");
+        let original = root.path().join("scan.pdf");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let mut store = Store::open(&database).unwrap();
+        let prepared = crate::file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "scan.pdf", &original, "uk", vec![String::new()], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        crate::pdf_detached_pages::write_text_layer(&store.connection, &document.id, 0,
+            "Біля вікна росте дерево.").unwrap();
+        let sentence = store.detached_pdf_sentence(&document.id, 0, None).unwrap().unwrap().sentence;
+        let edit = |store: &mut Store, text: &str| {
+            store.update_detached_pdf_annotation(&document.id, 0, &sentence.id,
+                crate::DetachedPdfAnnotationChange::SpeechText { text: text.into() }).unwrap();
+        };
+        let save = |store: &mut Store, spoken: &str| {
+            store.set_detached_pdf_speech_resume(&document.id, 0, &sentence.id, Some(crate::SpeechResume {
+                sentence_id: sentence.id.clone(), text_hash: format!("{:x}", Sha256::digest(spoken.as_bytes())),
+                offset_utf16: 5, model: None, boundary_text: None,
+            }))
+        };
+        let stressed = "Біля вікна́ росте дерево.";
+        edit(&mut store, stressed);
+        save(&mut store, stressed).unwrap();
+        drop(store);
+
+        let mut store = Store::open(&database).unwrap();
+        let current = store.detached_pdf_sentence(&document.id, 0, None).unwrap().unwrap();
+        assert_eq!(current.speech_resume.unwrap().offset_utf16, 5);
+        let rewritten = "Біля стіни росте дерево.";
+        edit(&mut store, rewritten);
+        assert!(save(&mut store, rewritten).is_err());
+        assert!(store.detached_pdf_sentence(&document.id, 0, None).unwrap().unwrap().speech_resume.is_none());
+    }
 
     #[test]
     fn narration_skips_detached_dialogue_dashes_inside_and_across_pages() {

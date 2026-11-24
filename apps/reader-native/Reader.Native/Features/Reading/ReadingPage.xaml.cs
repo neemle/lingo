@@ -1010,7 +1010,7 @@ public partial class ReadingPage : ContentPage
             if (resume is null || !SpeechProgress.Matches(sentence, resume, speechText)) return;
             var voice = SelectedVoice();
             var position = voice?.Engine is null
-                ? speechText == sentence.Text ? SpeechProgress.ResumeOffset(sentence, resume) : null
+                ? SpeechProgress.ResumeOffset(sentence, resume, speechText)
                 : ModelResumePosition(resume, voice, document.Language, SpeechRatePercent);
             if (!position.HasValue) return;
             speechResume = resume;
@@ -1141,7 +1141,7 @@ public partial class ReadingPage : ContentPage
             var speechText = EffectiveSpeechText(doc, sentence);
             var speakable = HasNarrationText(speechText);
             var hasSpeechOverride = speechText != sentence.Text;
-            var startAt = modelVoice || hasSpeechOverride ? 0 : SpeechProgress.ResumeOffset(sentence, resume) ?? 0;
+            var startAt = modelVoice ? 0 : SpeechProgress.ResumeOffset(sentence, resume, speechText) ?? 0;
             var startAtMs = modelVoice && resume is not null && SpeechProgress.Matches(sentence, resume, speechText)
                 ? ModelResumePosition(resume, voice, doc.Language, ratePercent) ?? 0 : 0;
             resume = null;
@@ -1180,7 +1180,8 @@ public partial class ReadingPage : ContentPage
                 if (request != speechRequest || activeSpeechSource is not { } active ||
                     !IsSpeechSourceCurrent(session, active)) return;
                 status = await PlaySystemSentenceAsync(session, doc, sentence, pronounced, startAt,
-                    hasSpeechOverride ? null : textHash, request, () => receivedCue = true);
+                    SpeechProgress.SupportsWordResume(sentence.Text, speechText) ? textHash : null,
+                    request, () => receivedCue = true);
                 if (fallbackReason is not null && status is not null && status != LocalSpeech.CompletedStatus)
                     status = $"{fallbackReason} {status}";
             }

@@ -860,8 +860,8 @@ public partial class ReadingPage
 
         Task<string?> PlayDetachedPronunciationAsync(string pronounced)
         {
-            var canSaveWordPosition = speechText == sentence.Text;
-            var startAt = canSaveWordPosition ? SpeechProgress.ResumeOffset(sentence, saved) ?? 0 : 0;
+            var canSaveWordPosition = SpeechProgress.SupportsWordResume(sentence.Text, speechText);
+            var startAt = SpeechProgress.ResumeOffset(sentence, saved, speechText) ?? 0;
             if (canSaveWordPosition)
                 checkpointDetachedSpeech = () => { if (pending is { } resume) Save(resume); };
             var input = SourceRanges.ProjectPronunciation(sentence.Text, pronounced, startAt, (start, length) =>
@@ -908,7 +908,7 @@ public partial class ReadingPage
         var voice = SelectedVoice();
         return voice?.Engine is not null
             ? ModelResumePosition(resume, voice, current.Language, SpeechRatePercent).HasValue
-            : SpeechProgress.ResumeOffset(current.Sentence, resume).HasValue;
+            : SpeechProgress.ResumeOffset(current.Sentence, resume, current.SpeechText ?? current.NarrationText).HasValue;
     }
 
     private void UpdateDetachedControls()

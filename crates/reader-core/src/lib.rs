@@ -195,7 +195,7 @@ impl SpeechResume {
         if let Some(model) = &self.model {
             return model.valid();
         }
-        if spoken != source {
+        if spoken != source && !speech::same_word_source(source, spoken) {
             return false;
         }
         let mut offset = 0;
