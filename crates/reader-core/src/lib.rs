@@ -1054,7 +1054,7 @@ impl Store {
             let text_changed = document.text != parsed.text;
             let previous_revision = document.current_revision_id.clone();
             let starts = if edits.is_empty() { None } else { parsed.pdf_page_starts.as_deref() };
-            let before = ocr::update_transcript_with_edits(document, parsed.text, starts, &edits, translation_policy)?;
+            let before = ocr::update_transcript_with_edits(document, parsed.text, starts, &edits, &[], translation_policy)?;
             document.pdf_page_starts = parsed.pdf_page_starts;
             document.blocks = parsed.blocks;
             ocr::refresh_provenance(document);

@@ -151,7 +151,7 @@ impl crate::Store {
             let edits = line_transcript_edits(lines, &previous)?;
             let parsed = crate::document_layout::from_ocr(recognized_lines(lines, 1)?, lines, None);
             let previous_revision = document.current_revision_id.clone();
-            let before = update_transcript_with_edits(document, parsed.text, None, &edits, ReviewedTranslationPolicy::Reanchor)?;
+            let before = update_transcript_with_edits(document, parsed.text, None, &edits, &[], ReviewedTranslationPolicy::Reanchor)?;
             document.blocks = parsed.blocks;
             refresh_provenance(document);
             crate::document_revisions::append(document, tx)?;
@@ -591,7 +591,7 @@ pub(crate) fn update_transcript_with_page_starts(
     text: String,
     starts: Option<&[Option<usize>]>,
 ) -> Result<()> {
-    update_transcript_with_edits(document, text, starts, &[], ReviewedTranslationPolicy::Reanchor).map(drop)
+    update_transcript_with_edits(document, text, starts, &[], &[], ReviewedTranslationPolicy::Reanchor).map(drop)
 }
 
 pub(crate) struct TranscriptEdit {
@@ -694,6 +694,17 @@ pub(crate) fn map_preserved_range_start(
     })
 }
 
+pub(crate) fn preserved_sentence_index(
+    old: &crate::Sentence, sentences: &[crate::Sentence], edits: &[TranscriptEdit], moves: &[TranscriptMove],
+) -> Option<usize> {
+    if moves.is_empty() { return None; }
+    let length = old.end_utf16.checked_sub(old.start_utf16)?;
+    let start = map_preserved_range_start(old.start_utf16, length, edits, moves)?;
+    let index = sentences.binary_search_by_key(&start, |sentence| sentence.start_utf16).ok()?;
+    let sentence = &sentences[index];
+    (sentence.end_utf16 == start + length && sentence.text == old.text).then_some(index)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReviewedTranslationPolicy {
     /// Keep the translation attached during checked recognition repairs.
@@ -707,6 +718,7 @@ pub(crate) fn update_transcript_with_edits(
     text: String,
     starts: Option<&[Option<usize>]>,
     edits: &[TranscriptEdit],
+    moves: &[TranscriptMove],
     translation_policy: ReviewedTranslationPolicy,
 ) -> Result<Vec<crate::Sentence>> {
     use std::collections::HashMap;
@@ -742,6 +754,9 @@ pub(crate) fn update_transcript_with_edits(
         *old_counts.entry(sentence.text.as_str()).or_insert(0usize) += 1;
     }
     let matching_index = |old: &crate::Sentence| {
+        if let Some(index) = preserved_sentence_index(old, &sentences, edits, moves) {
+            return Some(index);
+        }
         if !edits.is_empty() {
             let start = map_transcript_offset(old.start_utf16, edits)?
                 + edits.iter().filter(|edit| edit.start_utf16 == old.start_utf16 && edit.old_len == 0)
@@ -823,7 +838,7 @@ pub(crate) fn update_transcript_with_edits(
         }
         if edits.is_empty() { return None; }
         let word = crate::document_tokens::word_at(&old.text, offset)?;
-        let start = map_unchanged_range_start(old.start_utf16 + offset, word.encode_utf16().count(), edits)?;
+        let start = map_preserved_range_start(old.start_utf16 + offset, word.encode_utf16().count(), edits, moves)?;
         let index = sentences.partition_point(|sentence| sentence.end_utf16 <= start);
         let sentence = sentences.get(index)?;
         let offset = start.checked_sub(sentence.start_utf16)?;

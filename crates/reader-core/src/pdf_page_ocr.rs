@@ -1449,6 +1449,7 @@ fn reflow_pdf_document(
         parsed.text,
         parsed.pdf_page_starts.as_deref(),
         edits,
+        moves,
         ocr::ReviewedTranslationPolicy::Reanchor,
     )?;
     let old_pages = std::mem::replace(&mut document.pdf_page_starts, parsed.pdf_page_starts);
@@ -1736,6 +1737,10 @@ mod drop_cap_tests {
         let revision = document.current_revision_id.as_deref().unwrap();
         let selected = old.rfind("Right").unwrap();
         let moved = restored.rfind("Right").unwrap();
+        let active = document.sentences.iter().find(|sentence|
+            sentence.start_utf16 <= selected && selected < sentence.end_utf16).unwrap();
+        store.set_reading_cursor(&document.id, &active.id, revision,
+            Some(selected - active.start_utf16)).unwrap();
         let card = store.save_selected_word(crate::Vocabulary {
             id: String::new(), word: "Right".into(), document_id: document.id.clone(),
             language: "en".into(), target_language: "uk".into(), translation: "правий".into(),
@@ -1768,9 +1773,82 @@ mod drop_cap_tests {
         let document = reopened.translation_document(&document.id).unwrap();
         assert_eq!(document.text, restored);
         assert_eq!(document.pdf_page_starts, Some(vec![Some(0)]));
+        assert_eq!(document.sentences[document.position].start_utf16 +
+            document.reading_token_utf16.unwrap(), moved);
         let links = serde_json::to_value(reopened.dictionary_source_locations(&card.id).unwrap()).unwrap();
         assert_eq!(links.as_array().unwrap().len(), 1);
         assert_eq!(links[0]["selection"]["startUtf16"], moved);
+    }
+
+    #[test]
+    fn moved_pdf_sentences_keep_reader_state_on_both_page_types() {
+        use sha2::{Digest, Sha256};
+
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("library.db")).unwrap();
+        let original = root.path().join("columns.pdf");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let old = "Le chat dort. La gare ouvre.\nLe train part. Le chat dort.";
+        let restored = "Le chat dort.\nLe train part.\n\nLa gare ouvre.\nLe chat dort.";
+        let moved = old.find("La gare ouvre.").unwrap();
+        let moved_after = restored.find("La gare ouvre.").unwrap();
+        let other = old.find("Le train part.").unwrap();
+        let other_after = restored.find("Le train part.").unwrap();
+        let edits = [PdfTextOrderEdit {
+            start_utf16: 0,
+            end_utf16: old.len(),
+            replacement: restored.into(),
+            preserved_slices: Some(vec![
+                PdfTextOrderSlice { start_utf16: moved, end_utf16: moved + "La gare ouvre.".len(), replacement_start_utf16: moved_after },
+                PdfTextOrderSlice { start_utf16: other, end_utf16: other + "Le train part.".len(), replacement_start_utf16: other_after },
+            ]),
+        }];
+        let prepared = file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "columns.pdf", &original, "fr", vec![old.into(), "".into()], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let id = &document.id;
+        let revision = document.current_revision_id.as_deref().unwrap();
+        let sentence = &document.sentences[1];
+        assert_eq!(sentence.text, "La gare ouvre.");
+        let hash = format!("{:x}", Sha256::digest(sentence.text.as_bytes()));
+        store.set_reading_cursor(id, &sentence.id, revision, Some(3)).unwrap();
+        store.set_bookmark(id, &sentence.id, true).unwrap();
+        store.set_sentence_note(id, &sentence.id, "La note").unwrap();
+        store.set_reviewed_translation(id, &sentence.id, "uk", "Станція відчиняється.").unwrap();
+        store.set_speech_resume(id, &sentence.id, &hash, Some(3)).unwrap();
+        assert!(store.repair_stored_pdf_text_order(id, 0, revision, old, &edits).unwrap());
+        let document = store.translation_document(id).unwrap();
+        let active = &document.sentences[document.position];
+        assert_eq!(active.start_utf16, moved_after);
+        assert_eq!(document.reading_token_utf16, Some(3));
+        assert_eq!(document.bookmarks, [active.id.clone()]);
+        assert_eq!(document.notes[&active.id], "La note");
+        assert_eq!(document.reviewed_translations["uk"][&active.id], "Станція відчиняється.");
+        let resume = Store::read_speech_resume(&store.connection, id).unwrap().unwrap();
+        assert_eq!((resume.sentence_id, resume.offset_utf16), (active.id.clone(), 3));
+
+        pdf_detached_pages::write_text_layer(&store.connection, id, 1, old).unwrap();
+        for (position, note) in [(2, "Le train"), (1, "La gare")] {
+            let selected = store.select_detached_pdf_sentence(id, 1, Some(position), None).unwrap().unwrap();
+            store.update_detached_pdf_annotation(id, 1, &selected.sentence.id,
+                crate::DetachedPdfAnnotationChange::Note { text: note.into() }).unwrap();
+        }
+        let selected = store.detached_pdf_sentence(id, 1, None).unwrap().unwrap();
+        store.set_detached_pdf_speech_resume(id, 1, &selected.sentence.id, Some(crate::SpeechResume {
+            sentence_id: selected.sentence.id.clone(), text_hash: hash, offset_utf16: 3,
+            model: None, boundary_text: None,
+        })).unwrap();
+        let revision = document.current_revision_id.as_deref().unwrap();
+        assert!(store.repair_stored_pdf_text_order(id, 1, revision, old, &edits).unwrap());
+        let active = store.detached_pdf_sentence(id, 1, None).unwrap().unwrap();
+        assert_eq!(active.sentence.start_utf16, moved_after);
+        assert_eq!(active.note.as_deref(), Some("La gare"));
+        let resume = active.speech_resume.unwrap();
+        assert_eq!((resume.sentence_id, resume.offset_utf16), (active.sentence.id, 3));
+        let previous = store.select_detached_pdf_sentence(id, 1, Some(1), None).unwrap().unwrap();
+        assert_eq!(previous.sentence.start_utf16, other_after);
+        assert_eq!(previous.note.as_deref(), Some("Le train"));
     }
 
     #[test]

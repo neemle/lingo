@@ -362,9 +362,12 @@ pub(crate) fn repair_cached_text_order(
     let new_revision = page_revision(corrected);
     let before = layout.segment(reference, &sentence_prefix(id, page, &old_revision));
     let after = layout.segment(corrected, &sentence_prefix(id, page, &new_revision));
-    let find = |start, end| {
-        let start = ocr::map_transcript_offset(start, edits)?;
-        let end = ocr::map_transcript_offset(end, edits)?;
+    let find = |old: &Sentence| {
+        if let Some(index) = ocr::preserved_sentence_index(old, &after, edits, moves) {
+            return Some(index);
+        }
+        let start = ocr::map_transcript_offset(old.start_utf16, edits)?;
+        let end = ocr::map_transcript_offset(old.end_utf16, edits)?;
         let index = after.binary_search_by_key(&start, |sentence| sentence.start_utf16).ok()?;
         (after[index].end_utf16 == end).then_some(index)
     };
@@ -372,24 +375,28 @@ pub(crate) fn repair_cached_text_order(
     for anchor in &mut anchors {
         let Ok(old) = before.binary_search_by_key(&anchor.start_utf16, |sentence| sentence.start_utf16)
             else { return Ok(false); };
-        let Some(index) = find(before[old].start_utf16, before[old].end_utf16) else { return Ok(false); };
+        let Some(index) = find(&before[old]) else { return Ok(false); };
         anchor.start_utf16 = after[index].start_utf16;
     }
-    if anchors.windows(2).any(|pair| pair[0].start_utf16 >= pair[1].start_utf16) {
+    anchors.sort_unstable_by_key(|anchor| anchor.start_utf16);
+    if anchors.windows(2).any(|pair| pair[0].start_utf16 == pair[1].start_utf16) {
         return Ok(false);
     }
     crate::dictionary_transfer::reanchor_selections(
         db, (id, Some(page), &old_revision, &new_revision), &before, &after,
         |_, start, length| ocr::map_preserved_range_start(start, length, edits, moves),
     )?;
-    write_text_layer(db, id, page, corrected)?;
+    write(db, id, page, corrected, None, None, layout)?;
     if !anchors.is_empty() { annotations::replace_page(db, id, page, &anchors)?; }
     if let Some(sentence) = saved.and_then(|position| before.get(position as usize)) {
-        let offset = ocr::map_transcript_offset(sentence.start_utf16, edits).unwrap_or(sentence.start_utf16);
-        write_position(db, id, page, crate::pdf_sentences::position_at(&after, offset))?;
+        let position = find(sentence).unwrap_or_else(|| {
+            let offset = ocr::map_transcript_offset(sentence.start_utf16, edits).unwrap_or(sentence.start_utf16);
+            crate::pdf_sentences::position_at(&after, offset)
+        });
+        write_position(db, id, page, position)?;
     }
     speech_resume::remap_page(db, id, page, &before, &after, |sentence|
-        ocr::map_unchanged_range_start(sentence.start_utf16, sentence.end_utf16 - sentence.start_utf16, edits))?;
+        ocr::map_preserved_range_start(sentence.start_utf16, sentence.end_utf16 - sentence.start_utf16, edits, moves))?;
     Ok(true)
 }
 
