@@ -170,13 +170,22 @@ public sealed class PdfOrderedText
             if (index > 0 && current.AsSpan(newEnd, newToken.Index - newEnd).SequenceEqual("\n\n"))
             {
                 var gap = stored.AsSpan(oldEnd, oldToken.Index - oldEnd);
-                if (gap.Length > 0 && gap.Count('\n') <= 1 && !gap.SequenceEqual("\n\n"))
+                if (gap.Length > 0 && !HasMultipleLineBreaks(gap))
                     corrections.Add(new(oldEnd, oldToken.Index, "\n\n"));
             }
             oldEnd = oldToken.Index + oldToken.Length;
             newEnd = newToken.Index + newToken.Length;
         }
         return corrections.ToArray();
+    }
+
+    private static bool HasMultipleLineBreaks(ReadOnlySpan<char> gap)
+    {
+        var first = gap.IndexOfAny('\r', '\n');
+        if (first < 0) return false;
+        var next = first + 1;
+        if (gap[first] == '\r' && next < gap.Length && gap[next] == '\n') next++;
+        return gap[next..].IndexOfAny('\r', '\n') >= 0;
     }
 
     private void AppendSource(StringBuilder output, List<SourceSlice> sources, int start, int end)

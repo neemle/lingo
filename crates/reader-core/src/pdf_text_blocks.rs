@@ -80,7 +80,7 @@ pub fn separate_blocks(text: &str, words: &[PositionedWord], page_width: f64) ->
         if run_rotation == 0 {
             edits.extend(horizontal_run(&units, &words[word_start..index], page_width, text_start, previous_end)?);
         }
-        if line_break_count(gap) < 2 {
+        if line_break_count(gap.iter().copied()) < 2 {
             edits.push(BlockEdit { start: previous_end, end: word.start, slices: Vec::new() });
         }
         (word_start, text_start, direction) = (index, word.start, Some(rotation));
@@ -185,7 +185,7 @@ fn separate_positioned_blocks(units: &[u16], words: &[PositionedWord], page_widt
                 let left = *line.last().expect("line has text");
                 let right = next[0];
                 let gap = &units[left.end..right.start];
-                let newlines = line_break_count(gap);
+                let newlines = line_break_count(gap.iter().copied());
                 let parallel = newlines <= 1 && same_baseline(left, right) && wide_gap(left, right, page_width);
                 if !gap.is_empty() && whitespace(gap) &&
                     (parallel ||
@@ -211,15 +211,19 @@ fn isolate_block(units: &[u16], start: usize, end: usize, edits: &mut Vec<BlockE
     let after = units[end..].iter().position(|unit| !space(*unit)).map_or(units.len(), |index| end + index);
     for (left, right) in [(before, start), (end, after)] {
         let gap = &units[left..right];
-        if left > 0 && right < units.len() && line_break_count(gap) == 1 {
+        if left > 0 && right < units.len() && line_break_count(gap.iter().copied()) == 1 {
             edits.push(BlockEdit { start: left, end: right, slices: Vec::new() });
         }
     }
 }
 
-fn line_break_count(gap: &[u16]) -> usize {
-    gap.iter().enumerate().filter(|&(index, &unit)|
-        unit == 13 || unit == 10 && (index == 0 || gap[index - 1] != 13)).count()
+pub(crate) fn line_break_count(units: impl IntoIterator<Item = u16>) -> usize {
+    let mut previous_cr = false;
+    units.into_iter().filter(|&unit| {
+        let line_break = unit == 13 || unit == 10 && !previous_cr;
+        previous_cr = unit == 13;
+        line_break
+    }).count()
 }
 
 // Some OCR providers already emit all lines in the left column before the right column.

@@ -101,10 +101,11 @@ fn valid_pdf_order_edit(original: &str, replacement: &str) -> bool {
             && moved.starts_with(char::is_whitespace) && moved.ends_with(char::is_whitespace);
     }
     if replacement == "\n\n" {
-        return !original.is_empty() && original.lines().count() <= 2 &&
-            original.matches('\n').count() <= 1 && original.chars().all(char::is_whitespace);
+        return !original.is_empty() && original.chars().all(char::is_whitespace) &&
+            crate::pdf_text_blocks::line_break_count(original.encode_utf16()) <= 1;
     }
-    if original.len() > 8192 || !(2..=49).contains(&original.lines().count()) ||
+    if original.len() > 8192 ||
+        !(1..=48).contains(&crate::pdf_text_blocks::line_break_count(original.encode_utf16())) ||
         replacement.trim() != replacement {
         return false;
     }
@@ -1654,6 +1655,41 @@ mod drop_cap_tests {
         assert!(!saved.notes.contains_key(&updated.sentences[2].id));
         let links = serde_json::to_value(reopened.dictionary_source_locations(&card.id).unwrap()).unwrap();
         assert_eq!(links[0]["sentenceId"], updated.sentences[1].id);
+    }
+
+    #[test]
+    fn saves_column_repairs_on_pdf_pages_with_carriage_return_lines() {
+        let root = tempfile::tempdir().unwrap();
+        let database = root.path().join("library.db");
+        let mut store = Store::open(&database).unwrap();
+        let original = root.path().join("columns.pdf");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let old = "Left starts Right starts\rword Right continues\rLeft continues end";
+        let restored = "Left starts\nword\nLeft continues\n\nRight starts\nRight continues\nend";
+        let prepared = file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "columns.pdf", &original, "en", vec![old.into()], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let revision = document.current_revision_id.as_deref().unwrap();
+        let repairs = [PdfTextOrderEdit {
+            start_utf16: 0,
+            end_utf16: old.encode_utf16().count(),
+            replacement: restored.into(),
+        }];
+        assert!(store.repair_stored_pdf_text_order(&document.id, 0, revision, old, &repairs).unwrap());
+        let mut changed = repairs;
+        changed[0].replacement = restored.replace("word", "invented");
+        assert!(repair_text_order(old, &changed).is_err());
+        assert!(valid_pdf_order_edit("\r", "\n\n"));
+        assert!(valid_pdf_order_edit("\r\n", "\n\n"));
+        assert!(!valid_pdf_order_edit("\r\r", "\n\n"));
+        drop(store);
+
+        let reopened = Store::open(&database).unwrap();
+        assert_eq!(reopened.native_pdf_page_text(&document.id).unwrap().unwrap(), [restored]);
+        let document = reopened.translation_document(&document.id).unwrap();
+        assert_eq!(document.text, restored);
+        assert_eq!(document.pdf_page_starts, Some(vec![Some(0)]));
     }
 
     #[test]
