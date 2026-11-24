@@ -701,7 +701,12 @@ public partial class ReadingPage
         if (!rows.Any(HasPdfTranslation)) return;
         recentPdfTranslations.Insert(0, (address, rows));
         if (recentPdfTranslations.Count > RecentPdfTranslationLimit)
-            recentPdfTranslations.RemoveAt(RecentPdfTranslationLimit);
+        {
+            // Returning to a running manual job defers reading its cache until it finishes.
+            var protectedAddress = keepPdfTranslationOnNavigation ? translatingPdfLayout : null;
+            var oldest = recentPdfTranslations.FindLastIndex(entry => entry.Address != protectedAddress);
+            recentPdfTranslations.RemoveAt(oldest);
+        }
     }
 
     private CancellationTokenSource? ReleasePdfLayoutTranslation()
