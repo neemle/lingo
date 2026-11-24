@@ -75,7 +75,7 @@ public partial class ReadingPage : ContentPage
             prefetchAttempts.Clear();
             pdfLayoutRequestId++;
             pdfLayoutRequest = null;
-            translatingPdfLayout = null;
+            ReleasePdfLayoutTranslation()?.Cancel();
             pdfLayoutRows = [];
             recentPdfTranslations.Clear();
             lastCacheRestore = null;
@@ -163,6 +163,7 @@ public partial class ReadingPage : ContentPage
     internal void PrepareWindowClose()
     {
         readingPageActive = false;
+        ReleasePdfLayoutTranslation()?.Cancel();
         readerOcrReview.CancelInference();
         CancelModelPassage();
         CancelWordExplanation();

@@ -11,6 +11,11 @@ public partial class ReadingPage
         string Target, string? DetachedText)
     {
         public InlinePdfAddress Source => new(Document, Page, Revision, DetachedText);
+
+        public bool CanFinishSentenceRefresh(Document? document, string? target, PdfLayoutAddress? displayed) =>
+            document is not null && document.Id == Document && document.CurrentRevisionId == Revision &&
+            document.Language == SourceLanguage && target == Target &&
+            (displayed is null || displayed.Page != Page || displayed.DetachedText == DetachedText);
     }
     private sealed record PdfAutoTranslation(PdfLayoutAddress Address, int RouteRequest);
     private sealed record PdfSourceLayout(InlinePdfAddress Page, OcrLine[] Lines, int Offset, Sentence? Sentence,
@@ -224,9 +229,13 @@ public partial class ReadingPage
         var detached = DetachedPdfReader.IsVisible;
         var shown = available && pdfTranslationLayout;
         var waitingForPreview = PdfUsesPageTranslation && inlinePdfAddress is null && inlinePdfLoading is not null;
-        if (translatingPdfLayout is not null && (!shown || !TranslationVisible || !readingPageActive ||
-            translatingPdfLayout != address))
-            ReleasePdfLayoutTranslation()?.Cancel();
+        if (translatingPdfLayout is { } running)
+        {
+            var keepRunning = readingPageActive && (refreshingPdfSentence
+                ? running.CanFinishSentenceRefresh(AppState.Session.Document, TargetCode, address)
+                : shown && TranslationVisible && running == address);
+            if (!keepRunning) ReleasePdfLayoutTranslation()?.Cancel();
+        }
         PdfTranslationMode.IsVisible = available && !detached;
         DetachedPdfTranslationMode.IsVisible = available && detached;
         var modeGlyph = shown ? "\uf03a" : "\uf0db";
@@ -313,6 +322,11 @@ public partial class ReadingPage
                 text = readinessPair == (document.Language, address.Target)
                     ? ReadinessMessage() : "Перевіряємо мовні пакети…";
             else if (pdfLayoutStatus is { Length: > 0 }) text = pdfLayoutStatus;
+            if (!translatingPage && refreshingPdfSentence && translatingPdfLayout is { } running)
+            {
+                var progress = $"Оновлюємо переклад речення на сторінці {running.Page + 1}.";
+                text = text is null ? progress : $"{text} {progress}";
+            }
             var translated = pdfLayoutRows.Count(HasPdfTranslation);
             if (translated > 0 && translated < pdfLayoutRows.Length)
             {
@@ -553,9 +567,11 @@ public partial class ReadingPage
         }
         finally
         {
-            if (!cachedOnly && ReferenceEquals(pdfLayoutTranslationCancellation, cancellation))
+            var finishedActiveJob = !cachedOnly && ReferenceEquals(pdfLayoutTranslationCancellation, cancellation);
+            if (finishedActiveJob)
                 ReleasePdfLayoutTranslation();
-            if (request == pdfLayoutRequestId || CurrentPdfLayoutAddress() == address)
+            if (readingPageActive && (finishedActiveJob || request == pdfLayoutRequestId ||
+                CurrentPdfLayoutAddress() == address))
                 RefreshPdfTranslationLayout();
             if (!cachedOnly && CurrentPdfLayoutAddress() == address &&
                 (pendingPdfCacheRefresh == address || request != pdfLayoutRequestId))
