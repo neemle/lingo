@@ -405,14 +405,6 @@ pub(crate) fn repair_cached_text_order(
 pub(crate) fn write_ocr(
     db: &Connection, id: &str, page: u16, language: &str, lines: &[ocr::OcrLine], page_count: u16,
 ) -> Result<()> {
-    if lines.is_empty() {
-        db.execute(
-            "UPDATE pdf_detached_pages SET ocr_language=?3 WHERE document_id=?1 AND page=?2",
-            params![id, page, language],
-        )
-        .map_err(database_error)?;
-        return Ok(());
-    }
     let text = ocr::recognized_lines(lines, page_count)?;
     let payload = serde_json::to_string(lines).map_err(database_error)?;
     write(db, id, page, &text, Some(language), Some(&payload), Layout::ClosingQuotes)

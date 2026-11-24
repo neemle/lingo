@@ -318,6 +318,16 @@ fn remove_request(db: &Connection, id: &str, page: u16) -> Result<()> {
     Ok(())
 }
 
+fn release_request(db: &Connection, id: &str, page: u16, token: &str, delay: i64) -> Result<bool> {
+    db.execute(
+        "UPDATE pdf_ocr_requests SET token=NULL, available_at=?4
+         WHERE document_id=?1 AND page=?2 AND token=?3",
+        params![id, page, token, crate::now() + delay],
+    )
+    .map(|count| count != 0)
+    .map_err(database_error)
+}
+
 impl Store {
     /// Resolve a deferred text-layer probe without rendering, running OCR or moving the reading position.
     pub fn cache_background_pdf_text_layer(
@@ -548,14 +558,7 @@ impl Store {
         if !self.owns_pdf_ocr_claim(id, page, token) {
             return Ok(false);
         }
-        let result = self.connection
-            .execute(
-                "UPDATE pdf_ocr_requests SET token=NULL, available_at=?4
-                 WHERE document_id=?1 AND page=?2 AND token=?3",
-                params![id, page, token, crate::now() + retry_delay],
-            )
-            .map(|count| count != 0)
-            .map_err(database_error);
+        let result = release_request(&self.connection, id, page, token, retry_delay);
         self.active_pdf_ocr = None;
         result
     }
@@ -847,15 +850,20 @@ impl Store {
             }
             let remaining = crate::MAX_IMPORT.saturating_sub(document.text.len());
             if let Some(previous_language) = pdf_detached_pages::source_language(tx, id, page)? {
-                if token.is_some() && previous_language.as_deref()
-                    .is_some_and(|previous| previous != document.language.as_str())
-                    && !pdf_detached_pages::has_local_edits(tx, id, page)?
+                if let Some(token) = token.filter(|_| previous_language.as_deref()
+                    .is_some_and(|previous| previous != document.language.as_str()))
                 {
-                    if let Some(text) = text_layer {
-                        pdf_detached_pages::write_text_layer(tx, id, page, text.trim())?;
-                    } else {
-                        let page_count = u16::try_from(pages.len()).map_err(database_error)?;
-                        pdf_detached_pages::write_ocr(tx, id, page, &document.language, &lines, page_count)?;
+                    if !pdf_detached_pages::has_local_edits(tx, id, page)? {
+                        if let Some(text) = text_layer {
+                            pdf_detached_pages::write_text_layer(tx, id, page, text.trim())?;
+                        } else if lines.is_empty() {
+                            release_request(tx, id, page, token, OCR_RETRY_DELAY_SECONDS)?;
+                            updated = Some(document.clone());
+                            return Ok(false);
+                        } else {
+                            let page_count = u16::try_from(pages.len()).map_err(database_error)?;
+                            pdf_detached_pages::write_ocr(tx, id, page, &document.language, &lines, page_count)?;
+                        }
                     }
                 }
                 remove_request(tx, id, page)?;
@@ -1544,6 +1552,42 @@ mod drop_cap_tests {
         let sentences = crate::segment_pdf_with_titles(after, "fixture");
         let segments = sentences.iter().map(|sentence| sentence.text.as_str()).collect::<Vec<_>>();
         assert_eq!(segments, ["Left choice\ncontinues here.", "OR", "Right choice\ncontinues there."]);
+    }
+
+    #[test]
+    fn empty_detached_ocr_retry_leaves_the_current_text_and_its_language() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("library.db")).unwrap();
+        let original = root.path().join("library.pdf");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let prepared = file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "library.pdf", &original, "fr",
+            vec!["Texte natif.".into(), String::new()], vec![],
+        ).unwrap();
+        let id = store.import_pdf_file(prepared).unwrap().id;
+        let line = |text: &str| ocr::OcrLine {
+            page: 1, text: text.into(), x: 0.1, y: 0.2, width: 0.6, height: 0.04,
+            confidence: None, rotation: None, correction: None, block_start: false,
+            words: Vec::new(), source_span: None,
+        };
+        pdf_detached_pages::write_ocr(&store.connection, &id, 1, "fr", &[line("Texte reconnu.")], 2).unwrap();
+        store.set_pdf_reading_page(&id, 1).unwrap();
+        store.set_document_language(&id, "en").unwrap();
+        let claim = store.claim_pdf_ocr_page_for_window(&id, Some(1)).unwrap().unwrap();
+        store.complete_pdf_ocr_page(&id, 1, vec![], Some(&claim.token)).unwrap();
+
+        let window = store.pdf_read_window(&id, 1).unwrap();
+        assert_eq!(window.pages[1].text, "Texte reconnu.");
+        assert!(window.pages[1].refresh_pending);
+        assert_eq!(pdf_detached_pages::source_language(&store.connection, &id, 1).unwrap(), Some(Some("fr".into())));
+        assert!(store.claim_pdf_ocr_page_for_window(&id, Some(1)).unwrap().is_none());
+        let retry = store.claim_pdf_ocr_page_with_retry(&id, Some(1), true).unwrap().unwrap();
+        assert_ne!(retry.token, claim.token);
+        store.complete_pdf_ocr_page(&id, 1, vec![line("Recognized text.")], Some(&retry.token)).unwrap();
+        let window = store.pdf_read_window(&id, 1).unwrap();
+        assert_eq!(window.pages[1].text, "Recognized text.");
+        assert!(!window.pages[1].refresh_pending);
+        assert_eq!(store.pdf_reading_page(&id).unwrap(), Some(1));
     }
 
     #[test]
