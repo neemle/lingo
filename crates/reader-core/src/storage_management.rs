@@ -113,13 +113,18 @@ impl Store {
                         .map_err(storage_error)?;
                 }
                 tx.commit().map_err(storage_error)?;
+                crate::e5::clear_cache();
                 clear_audio_cache(&self.optional_model_directory)?;
                 self.connection.execute_batch("VACUUM;").map_err(storage_error)?;
                 self.checkpoint_storage()?;
             }
-            StorageScope::Downloads => self.clear_downloads()?,
+            StorageScope::Downloads => {
+                self.clear_downloads()?;
+                crate::e5::clear_cache();
+            }
             StorageScope::All => {
                 self.reset_database()?;
+                crate::e5::clear_cache();
                 self.active_pdf_ocr = None;
                 remove(&self.file_original_directory)?;
                 self.clear_downloads()?;

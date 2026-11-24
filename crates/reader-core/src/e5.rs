@@ -1,4 +1,4 @@
-use crate::{optional_models::OptionalModelJob, Result, Store};
+use crate::{optional_models::OptionalModelJob, resources::InferencePriority, Result, Store};
 use ort::{session::Session, value::Tensor};
 use sha2::{Digest, Sha256};
 use std::{
@@ -13,6 +13,7 @@ const TOKEN_LIMIT: usize = 160;
 const BATCH_SIZE: usize = 4;
 const RESULT_LIMIT: usize = 25;
 const CACHE_LIMIT: usize = 4096;
+const RANKING_CACHE_LIMIT: usize = 64;
 type Embedding = [f32; DIMENSIONS];
 type Key = [u8; 32];
 
@@ -43,7 +44,7 @@ impl Store {
             return Err("Введіть пошуковий запит до 240 символів.".into());
         }
         let model = self.prepare_optional_model("multilingual-e5-small")?;
-        let passages = self
+        let mut passages: Vec<_> = self
             .dictionary_collection(document_id)?
             .into_iter()
             .map(|card| {
@@ -71,6 +72,7 @@ impl Store {
                 }
             })
             .collect();
+        passages.sort_unstable_by(|left, right| left.id.cmp(&right.id));
         Ok(SemanticVocabularyJob {
             model,
             query: format!("query: {query}"),
@@ -81,15 +83,20 @@ impl Store {
 
 impl SemanticVocabularyJob {
     pub fn run(self) -> Result<Vec<String>> {
-        if self.passages.is_empty() {
+        let Self { model, query, passages } = self;
+        if passages.is_empty() {
             return Ok(Vec::new());
         }
-        self.model.run(|directory, should_yield| {
+        let key = ranking_key(model.revision(), &query, &passages);
+        let generation = cache().lock().map_err(e5_error)?.generation;
+        model.run_cached(InferencePriority::Background, None, |_| {
+            cache().lock().ok()?.ranking(&key)
+        }, |directory, should_yield| {
             let mut encoder = E5::open(directory)?;
             check_priority(should_yield)?;
-            let query = encoder.encode(&[self.query.as_str()])?[0];
-            let mut ranking = Vec::with_capacity(self.passages.len());
-            for batch in self.passages.chunks(BATCH_SIZE) {
+            let query = encoder.encode(&[query.as_str()])?[0];
+            let mut ranking = Vec::with_capacity(passages.len());
+            for batch in passages.chunks(BATCH_SIZE) {
                 check_priority(should_yield)?;
                 let mut uncached = Vec::new();
                 {
@@ -111,19 +118,38 @@ impl SemanticVocabularyJob {
                     let mut cache = cache().lock().map_err(e5_error)?;
                     for (passage, vector) in uncached.into_iter().zip(vectors) {
                         ranking.push((&passage.id, cosine(&query, &vector)));
-                        cache.insert(passage.key, vector);
+                        if generation == cache.generation { cache.insert(passage.key, vector); }
                     }
                 }
             }
             check_priority(should_yield)?;
             ranking.sort_unstable_by(|(a, x), (b, y)| y.total_cmp(x).then_with(|| a.cmp(b)));
-            Ok(ranking
+            let entries: Vec<_> = ranking
                 .into_iter()
                 .take(RESULT_LIMIT)
                 .map(|(id, _)| id.clone())
-                .collect())
+                .collect();
+            let mut cache = cache().lock().map_err(e5_error)?;
+            if generation == cache.generation {
+                cache.insert_ranking(key, entries.clone());
+            }
+            Ok(entries)
         })
     }
+}
+
+fn ranking_key(revision: &str, query: &str, passages: &[Passage]) -> Key {
+    let mut hash = Sha256::new();
+    for value in [revision, query] {
+        hash.update((value.len() as u64).to_le_bytes());
+        hash.update(value.as_bytes());
+    }
+    for passage in passages {
+        hash.update((passage.id.len() as u64).to_le_bytes());
+        hash.update(passage.id.as_bytes());
+        hash.update(passage.key);
+    }
+    hash.finalize().into()
 }
 
 pub(crate) fn smoke(directory: &Path, interrupted: &dyn Fn() -> bool) -> Result<()> {
@@ -141,9 +167,25 @@ pub(crate) fn smoke(directory: &Path, interrupted: &dyn Fn() -> bool) -> Result<
 struct VectorCache {
     vectors: HashMap<Key, Embedding>,
     order: VecDeque<Key>,
+    rankings: VecDeque<(Key, Vec<String>)>,
+    generation: u64,
 }
 
 impl VectorCache {
+    fn ranking(&self, key: &Key) -> Option<Vec<String>> {
+        self.rankings.iter().find(|(entry, _)| entry == key).map(|(_, ids)| ids.clone())
+    }
+
+    fn insert_ranking(&mut self, key: Key, ids: Vec<String>) {
+        if self.rankings.iter().any(|(entry, _)| *entry == key) {
+            return;
+        }
+        if self.rankings.len() == RANKING_CACHE_LIMIT {
+            self.rankings.pop_front();
+        }
+        self.rankings.push_back((key, ids));
+    }
+
     fn insert(&mut self, key: Key, vector: Embedding) {
         if self.vectors.contains_key(&key) {
             return;
@@ -156,6 +198,12 @@ impl VectorCache {
         self.order.push_back(key);
         self.vectors.insert(key, vector);
     }
+}
+
+pub(crate) fn clear_cache() {
+    let mut cache = cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let generation = cache.generation.wrapping_add(1);
+    *cache = VectorCache { generation, ..VectorCache::default() };
 }
 
 fn cache() -> &'static Mutex<VectorCache> {
@@ -279,6 +327,30 @@ fn e5_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_ranking_requires_the_same_query_collection_and_model() {
+        let card = |id: &str, content| Passage {
+            id: id.into(),
+            text: String::new(),
+            key: [content; 32],
+        };
+        let original = [card("one", 1), card("two", 2)];
+        let key = ranking_key("model-v1", "query: livre", &original);
+        let mut cache = VectorCache::default();
+        cache.insert_ranking(key, vec!["two".to_owned(), "one".to_owned()]);
+        assert_eq!(cache.ranking(&key).unwrap(), ["two", "one"]);
+        assert!(cache.ranking(&ranking_key("model-v1", "query: jardin", &original)).is_none());
+        assert!(cache.ranking(&ranking_key("model-v2", "query: livre", &original)).is_none());
+        assert!(cache.ranking(&ranking_key("model-v1", "query: livre", &original[..1])).is_none());
+        let edited = [card("one", 1), card("two", 3)];
+        assert!(cache.ranking(&ranking_key("model-v1", "query: livre", &edited)).is_none());
+        for index in 0..RANKING_CACHE_LIMIT {
+            cache.insert_ranking([index as u8; 32], Vec::new());
+        }
+        assert!(cache.ranking(&key).is_none());
+        assert_eq!(cache.rankings.len(), RANKING_CACHE_LIMIT);
+    }
 
     #[test]
     fn pooling_ignores_padding_and_normalizes() {
