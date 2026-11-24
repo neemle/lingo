@@ -223,9 +223,6 @@ public partial class ReadingPage
             return;
 
         StartReaderPdfOcr(session, document);
-        pdfAutoAttempts = null;
-        if (pdfTranslationLayout) RefreshCachedPdfPageLayout();
-        else if (DetachedPdfReader.IsVisible) await RestoreDetachedTranslationAsync();
     }
 
     private async Task ReadPdfWindowAsync(ReaderSession session, Document document, bool entering)
@@ -258,8 +255,10 @@ public partial class ReadingPage
                 window = await session.PdfReadWindowAsync(document.Id, page);
             }
             if (!IsCurrentPdfSnapshot(session, document)) return;
-            var pageChanged = pdfWindow?.Center != window.Center;
+            var previousWindow = pdfWindow;
+            var pageChanged = previousWindow?.Center != window.Center;
             pdfWindow = window;
+            var translationChanged = InvalidatePdfTranslationContext(document, previousWindow, window);
             var focus = (document.Id, window.Center, document.Language);
             if (pdfOcrFocus != focus)
             {
@@ -285,7 +284,12 @@ public partial class ReadingPage
                             SourceText.RevealOffset(offset);
                     });
                 }
-                UpdateTranslation();
+            }
+            if (translationChanged || !PdfPageNotice.IsVisible && (pageChanged || revealingText)) UpdateTranslation();
+            if (translationChanged)
+            {
+                if (pdfTranslationLayout) RefreshCachedPdfPageLayout();
+                if (DetachedPdfReader.IsVisible) ResetDetachedTranslation();
             }
             ScheduleUnreadPdfFind();
         }
@@ -303,6 +307,37 @@ public partial class ReadingPage
                 UpdatePdfPageButtons();
             }
         }
+    }
+
+    private bool InvalidatePdfTranslationContext(Document document, PdfReadWindow? previous, PdfReadWindow current)
+    {
+        if (previous is null) return false;
+        var changed = current.Pages.Where(page => previous.Pages.Any(old => old.Page == page.Page &&
+            (old.Text != page.Text || old.HasOcr != page.HasOcr))).Select(page => page.Page).ToArray();
+        if (changed.Length == 0) return false;
+
+        bool Affected(int page) => changed.Any(other => Math.Abs(other - page) <= 1);
+        bool Invalid(PdfLayoutAddress address) => address.Document == document.Id && Affected(address.Page);
+        recentPdfTranslations.RemoveAll(entry => Invalid(entry.Address));
+        if (translatingPdfLayout is { } running && Invalid(running)) ReleasePdfLayoutTranslation()?.Cancel();
+        if (pdfLayoutRequest is { } displayed && Invalid(displayed))
+        {
+            pdfLayoutRowsStale = true;
+            pdfLayoutRequestId++;
+        }
+
+        var spans = previous.Pages.Concat(current.Pages).Where(page => Affected(page.Page))
+            .Select(page => page.Span).OfType<OcrSpan>().ToArray();
+        translationWindows.RemoveAll(window => window.Scope.Document == document.Id && window.Units.Any(unit =>
+            unit.Sources.Any(sentence => spans.Any(span => OverlapsPdfPage(sentence, span)))));
+        translationCacheVersion++;
+        if (Affected(previous.Center) || Affected(current.Center)) pdfTranslationContextGeneration++;
+        lastCacheRestore = null;
+        if (!Affected(current.Center)) return false;
+        pdfAutoAttempts = null;
+        lastAutoTranslation = null;
+        lastPrefetchOrigin = null;
+        return true;
     }
 
     private bool IsCurrentPdfSnapshot(ReaderSession session, Document document) =>
