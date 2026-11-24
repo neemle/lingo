@@ -9,6 +9,8 @@ internal static class DesktopFiles
 {
     private const int MaxClipboardImageBytes = 96 * 1024 * 1024;
     private const int MaxClipboardImagePixels = 24_000_000;
+    private static readonly string[] ClipboardImageTypes =
+        ["org.webmproject.webp", "public.heic", "public.heif", "public.png", "public.jpeg", "public.tiff"];
 
     private static readonly Dictionary<string, string> DocumentTypes = new(StringComparer.Ordinal)
     {
@@ -94,35 +96,47 @@ internal static class DesktopFiles
     {
         var pasteboard = UIPasteboard.General;
         var types = pasteboard.Types ?? [];
-        var type = new[] { "public.png", "public.jpeg", "public.tiff" }
-            .FirstOrDefault(candidate => types.Contains(candidate, StringComparer.Ordinal));
-        if (type is null)
+        InvalidDataException? failure = null;
+        foreach (var type in ClipboardImageTypes.Where(candidate => types.Contains(candidate, StringComparer.Ordinal)))
         {
-            if (pasteboard.HasImages)
-                throw new InvalidDataException("Формат зображення з буфера не підтримується.");
-            return null;
+            using var data = pasteboard.DataForPasteboardType(type);
+            if (data is null || data.Length > MaxClipboardImageBytes)
+            {
+                failure ??= new InvalidDataException(data is null
+                    ? "Не вдалося прочитати зображення з буфера."
+                    : "Зображення з буфера завелике.");
+                continue;
+            }
+            (NSData? Converted, string Extension) prepared;
+            try { prepared = await Task.Run(() => PrepareClipboardImage(data, type)); }
+            catch (InvalidDataException error)
+            {
+                failure ??= error;
+                continue;
+            }
+            using var converted = prepared.Converted;
+            var image = converted ?? data;
+            if (image.Length > Reader.CoreClient.CoreClient.MaxImportBytes)
+            {
+                failure ??= new InvalidDataException("Зображення з буфера перевищує 20 МБ.");
+                continue;
+            }
+            using var stream = image.AsStream();
+            return await ShareInbox.StageAsync("file", "Зображення з буфера" + prepared.Extension, stream);
         }
-
-        using var data = pasteboard.DataForPasteboardType(type)
-            ?? throw new InvalidDataException("Не вдалося прочитати зображення з буфера.");
-        if (data.Length > MaxClipboardImageBytes)
-            throw new InvalidDataException("Зображення з буфера завелике.");
-
-        using var converted = await Task.Run(() => PrepareClipboardImage(data, type));
-        var image = converted ?? data;
-        if (image.Length > Reader.CoreClient.CoreClient.MaxImportBytes)
-            throw new InvalidDataException("Зображення з буфера перевищує 20 МБ.");
-
-        using var stream = image.AsStream();
-        var extension = type == "public.jpeg" ? ".jpg" : ".png";
-        return await ShareInbox.StageAsync("file", "Зображення з буфера" + extension, stream);
+        if (failure is not null) throw failure;
+        if (pasteboard.HasImages)
+            throw new InvalidDataException("Формат зображення з буфера не підтримується.");
+        return null;
     }
 
-    private static NSData? PrepareClipboardImage(NSData data, string type)
+    private static (NSData? Converted, string Extension) PrepareClipboardImage(NSData data, string type)
     {
         using var pool = new NSAutoreleasePool();
         using var source = CGImageSource.FromData(data);
-        if (source is null || source.TypeIdentifier?.ToString() != type || source.GetStatus(0) != CGImageSourceStatus.Complete)
+        if (source?.TypeIdentifier?.ToString() is not { } detected ||
+            (detected != type && !(IsHeif(detected) && IsHeif(type))) ||
+            source.GetStatus(0) != CGImageSourceStatus.Complete)
             throw new InvalidDataException("macOS не може прочитати зображення з буфера.");
 
         var properties = source.GetProperties(0, null);
@@ -130,7 +144,7 @@ internal static class DesktopFiles
         var height = properties?.PixelHeight ?? 0;
         if (width <= 0 || height <= 0 || (long)width * height > MaxClipboardImagePixels)
             throw new InvalidDataException("Розмір зображення з буфера не підтримується.");
-        if (type != "public.tiff") return null;
+        if (detected != "public.tiff") return (null, DocumentTypes[detected]);
 
         using var image = source.CreateThumbnail(0, new CGImageThumbnailOptions
         {
@@ -139,8 +153,10 @@ internal static class DesktopFiles
             MaxPixelSize = 4096,
         }) ?? throw new InvalidDataException("macOS не може прочитати зображення з буфера.");
         using var png = UIImage.FromImage(image);
-        return png.AsPNG() ?? throw new InvalidDataException("Не вдалося підготувати фото з буфера.");
+        return (png.AsPNG() ?? throw new InvalidDataException("Не вдалося підготувати фото з буфера."), ".png");
     }
+
+    private static bool IsHeif(string type) => type is "public.heic" or "public.heif";
 
     internal static async Task<bool> QueueDropAsync(DropEventArgs args)
     {
