@@ -1492,6 +1492,7 @@ impl MarianProvider<'_> {
 
         let mut clock_retry_budget = 2;
         let mut ukrainian_retry_budget = 2;
+        let mut attribution_retry_budget = 2;
         'segments: for segment in segments {
             checkpoint()?;
             if package.source == "fr" && package.target == "uk" {
@@ -1506,8 +1507,13 @@ impl MarianProvider<'_> {
                 continue;
             }
             let segment = protected.input();
+            let attribution = (package.source == "fr" && package.target == "uk" && protected.is_empty())
+                .then(|| crate::marian_target_uk::french_speech_attribution(segment))
+                .flatten();
+            let model_input = attribution.as_ref().map_or(segment, |attribution|
+                attribution.without_dialogue_dash(segment));
             let source_pieces = input
-                .encode(normalized_translation_input(package, segment).as_ref())
+                .encode(normalized_translation_input(package, model_input).as_ref())
                 .map_err(model_error)?;
             let mut start = 0;
             let mut translated_parts = Vec::new();
@@ -1691,6 +1697,19 @@ impl MarianProvider<'_> {
                     if let Some(text) = crate::marian_target_uk::repair_french_affirmative(segment, &translated) {
                         translated = text;
                     }
+                    if attribution_retry_budget > 0
+                        && translated.unicode_words().count() * 3 <= segment.unicode_words().count() * 2
+                        && !crate::marian_target_uk::clearly_russian(&translated)
+                    {
+                        if let Some(attribution) = &attribution {
+                            attribution_retry_budget -= 1;
+                            if let Some(recovered) = reference(&attribution.input, 1).ok()
+                                .and_then(|text| attribution.recover(&translated, &text))
+                            {
+                                translated = recovered;
+                            }
+                        }
+                    }
                 }
                 if package.target == "uk" && crate::marian_target_uk::clearly_russian(&translated) {
                     let candidate = alternatives
@@ -1745,6 +1764,9 @@ impl MarianProvider<'_> {
                 start = end;
             }
             let mut translated = translated_parts.join(" ");
+            if let Some(attribution) = attribution.filter(|_| model_input != segment) {
+                translated = attribution.restore_frame(&translated);
+            }
             if package.source == "fr" && package.target == "uk" {
                 crate::translation_dates::preserve_french_dates(segment, &mut translated);
             }

@@ -3181,6 +3181,8 @@ fn cache_key(
             .unwrap_or(4)
     };
     let version = match route {
+        Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" && segments.iter().any(|text|
+            crate::marian_target_uk::french_speech_attribution(text.as_ref()).is_some()) => 17,
         _ if route.uses_publication_pivot_rules() && segments.iter().any(|text|
             crate::marian_target_uk::publication_term(text.as_ref()).is_some()) => 16,
         Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" && segments.iter().any(|text|

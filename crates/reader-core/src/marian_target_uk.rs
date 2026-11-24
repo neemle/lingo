@@ -273,6 +273,86 @@ pub(super) fn french_dialogue_retry(source: &str) -> Option<FrenchDialogueRetry<
     Some(FrenchDialogueRetry { frame, input })
 }
 
+pub(crate) struct FrenchSpeechAttribution<'a> {
+    frame: DialogueFrame<'a>,
+    pub input: String,
+}
+
+impl FrenchSpeechAttribution<'_> {
+    pub(super) fn without_dialogue_dash<'a>(&self, source: &'a str) -> &'a str {
+        if matches!(self.frame.prefix.trim(), "-" | "–" | "—") {
+            &source.trim()[self.frame.prefix.len()..]
+        } else {
+            source
+        }
+    }
+
+    pub(super) fn restore_frame(&self, text: &str) -> String {
+        self.frame.restore(text)
+    }
+
+    pub(super) fn recover(&self, baseline: &str, attribution: &str) -> Option<String> {
+        let speech = DialogueFrame::new(baseline).body.trim_end_matches(',');
+        let attribution = DialogueFrame::new(attribution).body;
+        let folded_speech = speech.to_lowercase();
+        let folded_attribution = attribution.to_lowercase();
+        let attribution_words: Vec<_> = folded_attribution.unicode_words().collect();
+        if speech.is_empty()
+            || !attribution.starts_with(char::is_uppercase)
+            || !clearly_ukrainian(attribution)
+            || attribution_words.len() < 2
+            || folded_speech.unicode_words().any(|word| attribution_words.contains(&word))
+        {
+            return None;
+        }
+        Some(self.frame.restore(&format!("{speech}, — {attribution}")))
+    }
+}
+
+/// A sentence-final reporting clause with an inverted named subject.
+pub(crate) fn french_speech_attribution(source: &str) -> Option<FrenchSpeechAttribution<'_>> {
+    if source.len() > 768 { return None; }
+    let frame = DialogueFrame::new(source);
+    let (speech, attribution) = frame.body.rsplit_once(',')?;
+    if speech.trim().is_empty() || frame.body.contains(['«', '»', '“', '”', '"']) {
+        return None;
+    }
+    let attribution = attribution.trim_start();
+    let verb_end = attribution.find(char::is_whitespace)?;
+    let verb = &attribution[..verb_end];
+    if !matches!(verb, "dit" | "répond" | "répondit" | "ajoute" | "ajouta" | "demande"
+        | "demanda" | "murmure" | "murmura" | "s'exclame" | "s’exclame" | "reprit" | "reprend")
+    {
+        return None;
+    }
+    let tail = attribution[verb_end..].trim_start();
+    let name_end = tail.find(|ch: char| ch.is_whitespace()).unwrap_or(tail.len());
+    let name = &tail[..name_end];
+    if !name.starts_with(char::is_uppercase) || !name.chars().all(|ch|
+        ch.is_alphabetic() || matches!(ch, '-' | '\'' | '’'))
+    {
+        return None;
+    }
+    let tail = tail[name_end..].trim_start();
+    let (word, rest) = tail.split_once(char::is_whitespace).unwrap_or((tail, ""));
+    let (name, tail) = if word.starts_with(char::is_uppercase)
+        && word.chars().all(|ch| ch.is_alphabetic() || ch == '-')
+    {
+        (format!("{name} {word}"), rest.trim_start())
+    } else {
+        (name.to_owned(), tail)
+    };
+    // Explicit simultaneity prevents the gerund from becoming a means of answering.
+    let mut input = format!("{name} {verb}");
+    if !tail.is_empty() {
+        input.push(' ');
+        if tail.starts_with("en ") { input.push_str("tout "); }
+        input.push_str(tail);
+    }
+    input.push('.');
+    Some(FrenchSpeechAttribution { frame, input })
+}
+
 fn distinguish(sample: &str) -> Option<Lang> {
     // An independent affirmative is distinctive even when the rest is made
     // up of shared vocabulary. Keep ambiguous words and quotations untouched.
@@ -358,6 +438,28 @@ fn quote_closer(open: char) -> Option<char> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restores_omitted_speaker_without_duplicating_an_existing_attribution() {
+        let attribution =
+            french_speech_attribution("— Je n’ai même pas dix-neuf ans, répond Dantès en rougissant.")
+                .unwrap();
+        assert_eq!(attribution.input, "Dantès répond tout en rougissant.");
+        assert_eq!(
+            attribution.without_dialogue_dash("— Je n’ai même pas dix-neuf ans, répond Dantès en rougissant."),
+            "Je n’ai même pas dix-neuf ans, répond Dantès en rougissant."
+        );
+        let speech = "Мені навіть не 19 років.";
+        let tail = "Дантес відповідає, почервонівши.";
+        assert_eq!(
+            attribution.recover(speech, tail).as_deref(),
+            Some("— Мені навіть не 19 років, — Дантес відповідає, почервонівши.")
+        );
+        assert_eq!(attribution.recover("Мені навіть не 19 років, відповів Дантес.", tail), None);
+        assert_eq!(attribution.recover(speech, "Дантес отвечает, покраснев."), None);
+        assert!(french_speech_attribution("Je viendrai, Pierre, demain matin.").is_none());
+        assert!(french_speech_attribution("Il part, dit-on, à midi.").is_none());
+    }
 
     #[test]
     fn publication_credits_translate_the_role_and_preserve_the_name() {
