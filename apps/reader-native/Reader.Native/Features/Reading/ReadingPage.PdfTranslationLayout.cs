@@ -835,7 +835,7 @@ public partial class ReadingPage
         if (request != pdfTranslationViewportRequest || pdfTranslationScroll is not null ||
             CurrentPdfLayoutAddress() != address || CurrentSourceViewport() != source ||
             OverflowRowAtScrollPosition(viewport) is not { } row ||
-            surface.Drawable is not TranslatedPdfDrawing drawing || drawing.SourceBounds(row) is null) return;
+            surface.Drawable is not TranslatedPdfDrawing) return;
         if (pdfLayoutSentence is not { } active || active.StartUtf16 != row.StartUtf16 || active.EndUtf16 != row.EndUtf16)
             await SelectTranslatedPdfRowAsync(row);
     }
@@ -1066,7 +1066,7 @@ public partial class ReadingPage
         var detached = DetachedPdfReader.IsVisible;
         var background = detached ? DetachedPdfTranslationBackground : PdfTranslationBackground;
         var source = pdfSourceLayout is { } layout && layout.Matches(pdfLayoutRequest) ? layout : null;
-        if (TranslationVisible && source is { Lines.Length: > 0 } && pdfLayoutRows.Length > 0 &&
+        if (TranslationVisible && pdfLayoutRequest?.Source == inlinePdfAddress && pdfLayoutRows.Length > 0 &&
             inlinePdfPreview is { } preview)
         {
             if (background.Source is null || !ReferenceEquals(pdfTranslationBackgroundPreview, preview))
@@ -1306,7 +1306,7 @@ public partial class ReadingPage
             else canvas.FillRectangle(page);
             var overflow = layout.Overflow.Select(index => rows[index]).ToList();
             if (rows.Length > 0 && layout.Regions.Length == 0 && layout.Pending.Length == 0 &&
-                (!preserveArtwork || layout.Anchors.All(fragment => fragment.Bounds is null)))
+                !preserveArtwork)
             {
                 canvas.FillRectangle(page);
                 var reflowBounds = new RectF(page.X + (float)visibleWidth.Left * page.Width, page.Y,
