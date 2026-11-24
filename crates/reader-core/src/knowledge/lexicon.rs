@@ -496,13 +496,25 @@ fn is_text(value: &str, maximum_bytes: usize) -> bool {
     !value.trim().is_empty() && value.len() <= maximum_bytes && !value.chars().any(char::is_control)
 }
 
+pub(super) struct LookupContext<'a> {
+    pub word: &'a WordContext,
+    pub grammar_index: Option<&'a Connection>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum PhraseEvidence {
+    CorpusLemma,
+    DictionaryForm,
+    Exact,
+}
+
 pub(super) fn lookup(
     root: &Path,
     language: &str,
     selected: &str,
     analyses: &[WordAnalysis],
     expressions: &[super::expressions::ExpressionMatch],
-    context: Option<&WordContext>,
+    context: Option<LookupContext<'_>>,
     cue: Option<super::grammar_cues::GrammarCue>,
 ) -> Result<(Option<LexicalPackage>, Vec<WordMeaning>, Vec<ExpressionMatch>)> {
     let Some(pack) = find_pack(language) else {
@@ -512,17 +524,16 @@ pub(super) fn lookup(
         return Ok((Some(pack.describe(false)), Vec::new(), Vec::new()));
     };
 
-    let context = context.filter(|context| context.neighbors(selected).is_some());
-    let gloss_anchor = context
+    let context = context.filter(|context| context.word.neighbors(selected).is_some());
+    let word_context = context.as_ref().map(|context| context.word);
+    let gloss_anchor = word_context
         .filter(|_| language == "en")
         .and_then(english_complement_anchor);
     let selected = lexical_key(language, selected);
-    let context_words = context.map_or_else(BTreeSet::new, |context| {
+    let context_words = word_context.map_or_else(BTreeSet::new, |context| {
         content_words(language, &context.sentence)
     });
     let mut keys = BTreeSet::from([selected.clone()]);
-    let mut phrases = context.map_or_else(BTreeMap::new, |context| surrounding_phrases(language, context));
-    keys.extend(phrases.keys().cloned());
     let grammar: Vec<_> = analyses
         .iter()
         .map(|analysis| (lexical_key(language, &analysis.lemma), analysis))
@@ -537,10 +548,15 @@ pub(super) fn lookup(
     let mut redirects = db
         .prepare("SELECT lemma FROM lemma_links WHERE term=?1 ORDER BY lemma LIMIT 8")
         .map_err(lexical_error)?;
-    let redirects = redirects
+    let mut phrases = match context {
+        Some(context) => surrounding_phrases(language, context, &mut redirects)?,
+        None => BTreeMap::new(),
+    };
+    keys.extend(phrases.keys().cloned());
+    let word_redirects = redirects
         .query_map([&selected], |row| row.get::<_, String>(0))
         .map_err(lexical_error)?;
-    for lemma in redirects {
+    for lemma in word_redirects {
         keys.insert(lemma.map_err(lexical_error)?);
     }
 
@@ -558,7 +574,7 @@ pub(super) fn lookup(
             .collect::<rusqlite::Result<Vec<(i64, String)>>>()
             .map_err(lexical_error)?;
         // Use postings to shortlist contextual evidence and recover matching senses past the exact cutoff.
-        let hits = if version == INDEX_VERSION && rows.len() > 1 && context.is_some() {
+        let hits = if version == INDEX_VERSION && rows.len() > 1 && word_context.is_some() {
             let after = rows
                 .last()
                 .filter(|_| rows.len() as i64 == MAX_SENSES_PER_TERM)
@@ -633,7 +649,7 @@ pub(super) fn lookup(
                 key.clone(),
                 example_matches,
                 (
-                    phrases.get(&key).map_or(0, |phrase| phrase.part_starts_utf16.len()),
+                    phrases.get(&key).map(|(evidence, phrase)| (*evidence, phrase.part_starts_utf16.len())),
                     grammar_priority,
                     gloss_matches,
                     example_matches,
@@ -653,14 +669,14 @@ pub(super) fn lookup(
     let meanings = candidates
         .into_iter()
         .filter(|(_, _, _, rank)| {
-            if rank.0 == 0 { return true; }
+            if rank.0.is_none() { return true; }
             phrase_senses += 1;
             phrase_senses <= 4
         })
         .take(MAX_RESULTS)
         .map(|(sense, key, context_matches, rank)| {
-            let matched_expression = (rank.0 > 0).then(|| sense.lemma.clone());
-            if let Some(expression) = phrases.remove(&key) {
+            let matched_expression = rank.0.is_some().then(|| sense.lemma.clone());
+            if let Some((_, expression)) = phrases.remove(&key) {
                 matched_phrases.push(expression);
             }
             let confidence = if context_matches >= 2 && (cue.is_none() || rank.1 > 0) {
@@ -686,32 +702,81 @@ pub(super) fn lookup(
     Ok((Some(pack.describe(true)), meanings, matched_phrases))
 }
 
-fn surrounding_phrases(language: &str, context: &WordContext) -> BTreeMap<String, ExpressionMatch> {
+fn surrounding_phrases(
+    language: &str,
+    context: LookupContext<'_>,
+    redirects: &mut rusqlite::Statement<'_>,
+) -> Result<BTreeMap<String, (PhraseEvidence, ExpressionMatch)>> {
     const MAX_WORDS: usize = 5;
     let mut phrases = BTreeMap::new();
-    if context.sentence.len() > 4096 { return phrases; }
-    let words: Vec<_> = crate::document_tokens::word_parts(&context.sentence).collect();
-    let Some(focus) = words.iter().position(|&(_, offset, _)| offset == context.start_utf16) else {
-        return phrases;
+    let sentence = &context.word.sentence;
+    if sentence.len() > 4096 { return Ok(phrases); }
+    let words: Vec<_> = crate::document_tokens::word_parts(sentence).collect();
+    let Some(focus) = words.iter().position(|&(_, offset, _)| offset == context.word.start_utf16) else {
+        return Ok(phrases);
     };
-    for first in focus.saturating_sub(MAX_WORDS - 1)..=focus {
+    let start = focus.saturating_sub(MAX_WORDS - 1);
+    let surface_keys: Vec<_> = words[start..words.len().min(focus + MAX_WORDS)]
+        .iter().map(|&(_, _, word)| lexical_key(language, word)).collect();
+    let mut lemma_keys = vec![None; surface_keys.len()];
+    if let Some(index) = context.grammar_index {
+        let mut query = index.prepare_cached(
+            "SELECT lemma, max(pos IN ('VERB', 'NOUN', 'ADJ')) FROM forms WHERE term=?1 GROUP BY lemma LIMIT 2",
+        ).map_err(lexical_error)?;
+        for ((&(_, _, word), key), lemma) in words[start..start + surface_keys.len()].iter()
+            .zip(&surface_keys).zip(&mut lemma_keys)
+        {
+            let term = word_key(word);
+            let mut rows = query.query([term]).map_err(lexical_error)?;
+            let Some(row) = rows.next().map_err(lexical_error)? else { continue; };
+            let raw: String = row.get(0).map_err(lexical_error)?;
+            let content: bool = row.get(1).map_err(lexical_error)?;
+            let normalized = lexical_key(language, &raw);
+            if content && normalized != *key && normalized.split_whitespace().count() == 1
+                && rows.next().map_err(lexical_error)?.is_none()
+            {
+                *lemma = Some(normalized);
+            }
+        }
+    }
+    for first in start..=focus {
         let end = words.len().min(first + MAX_WORDS);
         for last in focus.max(first + 1)..end {
             let entries = &words[first..=last];
             if entries.windows(2).any(|pair| {
                 let (start, _, token) = pair[0];
-                let gap = &context.sentence[start + token.len()..pair[1].0];
+                let gap = &sentence[start + token.len()..pair[1].0];
                 gap.is_empty() || !gap.chars().all(char::is_whitespace)
             }) {
                 break;
             }
             let text = entries.iter().map(|&(_, _, word)| word).collect::<Vec<_>>().join(" ");
-            let key = lexical_key(language, &text);
-            let offsets = entries.iter().map(|&(_, offset, _)| offset).collect();
-            phrases.insert(key.clone(), ExpressionMatch::dictionary(text, key, offsets, SOURCE_NAME, REVISION));
+            let offsets: Vec<_> = entries.iter().map(|&(_, offset, _)| offset).collect();
+            let mut register = |key: String, evidence| {
+                let current = phrases.get(&key).map(|&(existing, _)| existing);
+                if current.is_none_or(|existing| evidence > existing) {
+                    let phrase = ExpressionMatch::dictionary(text.clone(), key.clone(), offsets.clone(), SOURCE_NAME, REVISION);
+                    phrases.insert(key, (evidence, phrase));
+                }
+            };
+            let window = first - start..=last - start;
+            let mut keys: Vec<_> = surface_keys[window.clone()].iter().map(String::as_str).collect();
+            let exact = keys.join(" ");
+            let linked = redirects.query_map([&exact], |row| row.get::<_, String>(0)).map_err(lexical_error)?;
+            for lemma in linked {
+                register(lemma.map_err(lexical_error)?, PhraseEvidence::DictionaryForm);
+            }
+            register(exact, PhraseEvidence::Exact);
+            for (index, lemma) in lemma_keys[window].iter().enumerate() {
+                if let Some(lemma) = lemma {
+                    let surface = std::mem::replace(&mut keys[index], lemma);
+                    register(keys.join(" "), PhraseEvidence::CorpusLemma);
+                    keys[index] = surface;
+                }
+            }
         }
     }
-    phrases
+    Ok(phrases)
 }
 
 pub(super) fn index_identity(root: &Path, language: &str) -> Option<(&'static str, u32)> {
@@ -916,7 +981,7 @@ mod tests {
                     &word_key(term),
                     &[],
                     &[],
-                    context,
+                    context.map(|word| LookupContext { word, grammar_index: None }),
                     None,
                 )
                 .unwrap()
@@ -950,7 +1015,8 @@ mod tests {
             .collect::<Vec<_>>().join("\n");
         build_index(&path, "en", data.as_bytes()).unwrap();
         let find = |sentence| lookup(
-            directory.path(), "en", "kick", &[], &[], Some(&WordContext::at(sentence, 3)), None,
+            directory.path(), "en", "kick", &[], &[],
+            Some(LookupContext { word: &WordContext::at(sentence, 3), grammar_index: None }), None,
         ).unwrap();
         let (_, meanings, phrases) = find("😀 kick the bucket");
         assert_eq!(meanings[0].sense.gloss, "To die.");
@@ -962,5 +1028,38 @@ mod tests {
         assert_eq!(meanings.len(), 1);
         assert!(meanings[0].matched_expression.is_none());
         assert!(phrases.is_empty());
+    }
+
+    #[test]
+    fn inflected_phrase_uses_dictionary_redirect_or_unambiguous_corpus_lemma() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = find_pack("en").unwrap().path(directory.path(), INDEX_VERSION);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let data = [
+            r#"{"word":"kick the bucket","lang_code":"en","pos":"verb","senses":[{"glosses":["To die."]}]}"#,
+            r#"{"word":"kicked the bucket","lang_code":"en","pos":"verb","senses":[{"tags":["form-of"],"form_of":[{"word":"kick the bucket"}]}]}"#,
+            r#"{"word":"take heart","lang_code":"en","pos":"verb","senses":[{"glosses":["To gain courage."]}]}"#,
+        ].join("\n");
+        build_index(&path, "en", data.as_bytes()).unwrap();
+        let grammar = Connection::open_in_memory().unwrap();
+        grammar.execute_batch("CREATE TABLE forms(term TEXT, lemma TEXT, pos TEXT);
+            INSERT INTO forms VALUES ('took', 'take', 'VERB');").unwrap();
+        let find = |sentence, word, offset, grammar_index| lookup(
+            directory.path(), "en", word, &[], &[],
+            Some(LookupContext { word: &WordContext::at(sentence, offset), grammar_index }), None,
+        ).unwrap();
+
+        let (_, meanings, phrases) = find("He kicked the bucket.", "bucket", 14, None);
+        assert_eq!(meanings[0].sense.gloss, "To die.");
+        assert_eq!(phrases[0].canonical, "kick the bucket");
+        assert_eq!(phrases[0].part_starts_utf16, [3, 10, 14]);
+
+        let (_, meanings, phrases) = find("He took heart.", "heart", 8, Some(&grammar));
+        assert_eq!(meanings[0].sense.gloss, "To gain courage.");
+        assert_eq!(phrases[0].canonical, "take heart");
+        assert_eq!(phrases[0].part_starts_utf16, [3, 8]);
+
+        grammar.execute("INSERT INTO forms VALUES ('took', 'took', 'NOUN')", []).unwrap();
+        assert!(find("He took heart.", "heart", 8, Some(&grammar)).2.is_empty());
     }
 }

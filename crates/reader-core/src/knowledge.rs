@@ -526,7 +526,7 @@ impl Store {
                 &key,
                 &[],
                 &[],
-                context,
+                context.map(|word| lexicon::LookupContext { word, grammar_index: None }),
                 None,
             )?;
             return Ok(Some(WordLookup {
@@ -605,7 +605,7 @@ impl Store {
             &key,
             &analyses,
             &expressions,
-            context,
+            context.map(|word| lexicon::LookupContext { word, grammar_index: Some(db) }),
             cue,
         )?;
         for expression in dictionary_expressions {
