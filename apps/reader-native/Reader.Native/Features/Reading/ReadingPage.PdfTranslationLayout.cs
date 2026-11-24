@@ -12,7 +12,7 @@ public partial class ReadingPage
     {
         public InlinePdfAddress Source => new(Document, Page, Revision, DetachedText);
 
-        public bool CanFinishSentenceRefresh(Document? document, string? target, PdfLayoutAddress? displayed) =>
+        public bool MatchesSource(Document? document, string? target, PdfLayoutAddress? displayed) =>
             document is not null && document.Id == Document && document.CurrentRevisionId == Revision &&
             document.Language == SourceLanguage && target == Target &&
             (displayed is null || displayed.Page != Page || displayed.DetachedText == DetachedText);
@@ -37,6 +37,7 @@ public partial class ReadingPage
     private TaskCompletionSource? pdfTranslationScroll;
     private PdfLayoutAddress? pdfLayoutRequest;
     private PdfLayoutAddress? translatingPdfLayout;
+    private bool keepPdfTranslationOnNavigation;
     private bool refreshingPdfSentence;
     private CancellationTokenSource? pdfLayoutTranslationCancellation;
     private const int RecentPdfTranslationLimit = 3;
@@ -127,7 +128,7 @@ public partial class ReadingPage
             return;
         }
         if (pdfLayoutRequest is { } address && translatingPdfLayout is null && PdfPageRouteReady(address))
-            await LoadPdfPageLayoutAsync(address, cachedOnly: false);
+            await LoadPdfPageLayoutAsync(address, cachedOnly: false, userRequested: true);
     }
 
     private async void RefreshSentenceTranslationClicked(object? sender, EventArgs args)
@@ -270,8 +271,8 @@ public partial class ReadingPage
         var waitingForPreview = PdfUsesPageTranslation && inlinePdfAddress is null && inlinePdfLoading is not null;
         if (translatingPdfLayout is { } running)
         {
-            var keepRunning = readingPageActive && (refreshingPdfSentence
-                ? running.CanFinishSentenceRefresh(AppState.Session.Document, TargetCode, address)
+            var keepRunning = readingPageActive && (keepPdfTranslationOnNavigation
+                ? running.MatchesSource(AppState.Session.Document, TargetCode, address)
                 : shown && TranslationVisible && running == address);
             if (!keepRunning) ReleasePdfLayoutTranslation()?.Cancel();
         }
@@ -358,9 +359,11 @@ public partial class ReadingPage
                 text = translated > 0 ? $"Збережений переклад · {routeStatus}" : routeStatus;
             }
             else if (pdfLayoutStatus is { Length: > 0 }) text = pdfLayoutStatus;
-            if (!translatingPage && refreshingPdfSentence && translatingPdfLayout is { } running)
+            if (!translatingPage && keepPdfTranslationOnNavigation && translatingPdfLayout is { } running)
             {
-                var progress = $"Оновлюємо переклад речення на сторінці {running.Page + 1}.";
+                var progress = refreshingPdfSentence
+                    ? $"Оновлюємо переклад речення на сторінці {running.Page + 1}."
+                    : $"Перекладаємо сторінку {running.Page + 1}.";
                 text = text is null ? progress : $"{text} {progress}";
             }
             if (translated > 0 && translated < pdfLayoutRows.Length)
@@ -568,7 +571,8 @@ public partial class ReadingPage
         label.FormattedText = formatted;
     }
 
-    private async Task LoadPdfPageLayoutAsync(PdfLayoutAddress address, bool cachedOnly, PdfLayoutSentenceRefresh? refresh = null)
+    private async Task LoadPdfPageLayoutAsync(PdfLayoutAddress address, bool cachedOnly,
+        PdfLayoutSentenceRefresh? refresh = null, bool userRequested = false)
     {
         if (cachedOnly && translatingPdfLayout == address)
         {
@@ -582,6 +586,7 @@ public partial class ReadingPage
         {
             translatingPdfLayout = address;
             refreshingPdfSentence = refresh is not null;
+            keepPdfTranslationOnNavigation = userRequested || refreshingPdfSentence;
             pdfLayoutTranslationCancellation = cancellation;
             if (!refreshingPdfSentence)
             {
@@ -589,6 +594,9 @@ public partial class ReadingPage
                 pdfAutoAttempts = (attempt, PdfAttemptCount(attempt) + 1);
             }
         }
+        bool OwnsManualTranslation() => (userRequested || refresh is not null) &&
+            cancellation is { IsCancellationRequested: false } &&
+            ReferenceEquals(pdfLayoutTranslationCancellation, cancellation);
         RefreshPdfTranslationLayout();
         try
         {
@@ -598,16 +606,13 @@ public partial class ReadingPage
             if (!cachedOnly && refresh is null) _ = FollowPdfTranslationBatchesAsync(address, source, request, translation);
             var rows = await translation;
             var displayMatches = CurrentPdfLayoutAddress() == address;
-            var ownsRefresh = refresh is not null && cancellation is { IsCancellationRequested: false } &&
-                ReferenceEquals(pdfLayoutTranslationCancellation, cancellation);
+            var ownsManualTranslation = OwnsManualTranslation();
             if (refresh is { } regenerated)
-            {
-                NotifyPdfSentenceRefresh(address, regenerated.Source, applyingCurrentRows: ownsRefresh && displayMatches);
-                if (ownsRefresh && !displayMatches)
-                    RememberPdfPageTranslations(address, rows);
-            }
-            // The address can become current again before its explicit regeneration commits.
-            if ((!ownsRefresh && request != pdfLayoutRequestId) || !displayMatches ||
+                NotifyPdfSentenceRefresh(address, regenerated.Source, applyingCurrentRows: ownsManualTranslation && displayMatches);
+            if (ownsManualTranslation && !displayMatches)
+                RememberPdfPageTranslations(address, rows);
+            // Navigation invalidates display reads, but the manual job still owns its source page.
+            if ((!ownsManualTranslation && request != pdfLayoutRequestId) || !displayMatches ||
                 cancellation?.IsCancellationRequested == true) return;
             if (cachedOnly)
             {
@@ -629,7 +634,8 @@ public partial class ReadingPage
         }
         catch (Exception error)
         {
-            if (request == pdfLayoutRequestId) pdfLayoutStatus = error.Message;
+            if (request == pdfLayoutRequestId || OwnsManualTranslation() && CurrentPdfLayoutAddress() == address)
+                pdfLayoutStatus = error.Message;
         }
         finally
         {
@@ -694,6 +700,7 @@ public partial class ReadingPage
     {
         var cancellation = pdfLayoutTranslationCancellation;
         translatingPdfLayout = null;
+        keepPdfTranslationOnNavigation = false;
         refreshingPdfSentence = false;
         pdfLayoutTranslationCancellation = null;
         return cancellation;
