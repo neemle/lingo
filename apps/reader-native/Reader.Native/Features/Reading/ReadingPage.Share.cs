@@ -9,7 +9,10 @@ public partial class ReadingPage
     private bool sharingReaderText;
 
     private sealed record TranslationPair(string Source, string SourceLanguage, string Target, string TargetLanguage,
-        string? PivotLanguage = null);
+        string[]? PivotLanguages = null)
+    {
+        public string? PivotLanguage => PivotLanguages?.FirstOrDefault();
+    }
 
     private TranslationPair? DisplayedTranslationPair()
     {
@@ -30,7 +33,8 @@ public partial class ReadingPage
 
         // Older sentence-only model results can report joined lines without an exact source span.
         var source = aligned.Unit.JoinedLines ? aligned.Unit.SourceSpan : sentence.Text;
-        return source is null ? null : new TranslationPair(source, document.Language, shown, target);
+        return source is null ? null : new TranslationPair(source, document.Language, shown, target,
+            aligned.Translation.PivotLanguage is { } pivot ? [pivot] : null);
     }
 
     private TranslationPair? DisplayedPdfTranslationPair()
@@ -51,7 +55,8 @@ public partial class ReadingPage
 
         return new TranslationPair(
             string.Join(Environment.NewLine, rows.Select(row => row.SourceText)), document.Language,
-            string.Join(Environment.NewLine, rows.Select(row => row.Text)), address.Target);
+            string.Join(Environment.NewLine, rows.Select(row => row.Text)), address.Target,
+            rows.Select(row => row.PivotLanguage).OfType<string>().Distinct(StringComparer.Ordinal).ToArray());
     }
 
     private TranslationPair? DisplayedDetachedTranslationPair()
@@ -60,8 +65,9 @@ public partial class ReadingPage
         if (FoundTranslation(detached: true) is { } hit) return hit;
         if (detachedSentence is not { } current || TargetCode is not { } target ||
             CurrentDetachedTranslation() is not { } translated) return null;
-        var source = ReviewedDetachedTranslation() is null ? detachedMachineTranslation?.SourceText : null;
-        return new TranslationPair(source ?? current.Sentence.Text, current.Language, translated, target);
+        var machine = ReviewedDetachedTranslation() is null ? detachedMachineTranslation : null;
+        return new TranslationPair(machine?.SourceText ?? current.Sentence.Text, current.Language, translated, target,
+            machine?.PivotLanguage is { } pivot ? [pivot] : null);
     }
 
     private async void ShareSelectionClicked(object? sender, EventArgs args)
@@ -104,6 +110,11 @@ public partial class ReadingPage
     {
         var sourceLabel = DocumentLanguages.Name(pair.SourceLanguage);
         var targetLabel = DocumentLanguages.Name(pair.TargetLanguage);
+        if (pair.PivotLanguages is { Length: > 0 } pivots)
+        {
+            var routes = pivots.Select(pivot => DocumentLanguages.PivotRoute(pair.SourceLanguage, pivot, pair.TargetLanguage));
+            targetLabel += $" · {string.Join(", ", routes)}";
+        }
         var text = $"{sourceLabel}{Environment.NewLine}{pair.Source}{Environment.NewLine}{Environment.NewLine}" +
                    $"{targetLabel}{Environment.NewLine}{pair.Target}";
         return ShareReaderTextAsync("Оригінал і переклад", text);

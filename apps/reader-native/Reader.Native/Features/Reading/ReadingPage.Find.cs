@@ -230,7 +230,7 @@ public partial class ReadingPage
         }
         var original = span?.Text ?? match.CachedMachine?.SourceText ?? selected.Text;
         var pivot = match.PdfFragment?.PivotLanguage ?? match.CachedMachine?.PivotLanguage ?? match.PivotLanguage;
-        var pair = new TranslationPair(original, opened.Language, saved, target, pivot);
+        var pair = new TranslationPair(original, opened.Language, saved, target, pivot is null ? null : [pivot]);
         documentFindFocus = new(document, revision, page, sentence, Span: span, Target: target, Query: query,
             PdfFragment: match.PdfFragment, Translation: pair);
         if (PdfUsesPageTranslation && (match.PdfFragment is { ReflowOnly: true } ||
