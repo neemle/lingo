@@ -112,7 +112,9 @@ public partial class ReadingPage
         if (loadingDetachedSentence || detachedAddress is not { } address || detachedSentence is not { } current)
             return Task.CompletedTask;
         var next = current.Position + change;
-        return next >= 0 && next < current.Total ? LoadDetachedSentenceAsync(address, next) : Task.CompletedTask;
+        return next >= 0 && next < current.Total
+            ? LoadDetachedSentenceAsync(address, next)
+            : MoveToAdjacentPdfSentenceAsync(change);
     }
 
     private async void DetachedPdfSelected(object? sender, TextSelection selected) =>
@@ -881,8 +883,9 @@ public partial class ReadingPage
     {
         UpdateSentenceMenu();
         var available = !loadingDetachedSentence && detachedSentence is not null;
-        DetachedPrevious.IsEnabled = available && detachedSentence is { Position: > 0 };
-        DetachedNext.IsEnabled = available && detachedSentence is { } current && current.Position + 1 < current.Total;
+        DetachedPrevious.IsEnabled = available && (detachedSentence is { Position: > 0 } || HasAdjacentPdfPage(-1));
+        DetachedNext.IsEnabled = available && detachedSentence is { } current &&
+            (current.Position + 1 < current.Total || HasAdjacentPdfPage(1));
         DetachedSpeak.IsEnabled = available;
         DetachedRepeatSpeech.IsEnabled = available && detachedSentence?.Footnote == false;
         DetachedEditSpeechText.IsEnabled = available && !AppState.Session.Busy;

@@ -29,6 +29,86 @@ public partial class ReadingPage
 #endif
     }
 
+    private bool HasAdjacentPdfPage(int direction)
+    {
+#if MACCATALYST
+        return pdfWindow is { } window && window.Center + direction >= 0 &&
+            window.Center + direction < window.PageCount;
+#else
+        return false;
+#endif
+    }
+
+    private bool AtPdfSentenceBoundary(int direction)
+    {
+#if MACCATALYST
+        var session = AppState.Session;
+        if (session.Document is not { Format: "pdf" } document || pdfSnapshot?.Id != document.Id ||
+            pdfWindow is not { } window || !HasAdjacentPdfPage(direction))
+            return false;
+
+        if (movingPdfPage) return true;
+        var page = Array.Find(window.Pages, candidate => candidate.Page == window.Center);
+        return page?.Span is { } span && OverlapsPdfPage(session.Sentence, span) &&
+            !OverlapsPdfPage(document.Sentences.ElementAtOrDefault(document.Position + direction), span);
+#else
+        return false;
+#endif
+    }
+
+    private async Task MoveToAdjacentPdfSentenceAsync(int direction)
+    {
+#if MACCATALYST
+        var session = AppState.Session;
+        if (movingPdfPage || pdfWindowLoading || session.Busy || repairingPdfText is not null ||
+            !HasAdjacentPdfPage(direction) ||
+            pdfWindow is not { } window || session.Document is not { } source || pdfSnapshot?.Id != source.Id)
+            return;
+
+        var sourceSentenceId = detachedAddress is null ? session.Sentence?.Id : null;
+        var destination = window.Center + direction;
+        using var travel = new CancellationTokenSource();
+        CancelDetachedSpeechTravel();
+        detachedSpeechTravel = travel;
+        try
+        {
+            await OpenPdfPageAsync(destination, travel);
+            var page = await WaitForNarrationPageAsync(source.Id, destination, travel.Token);
+            travel.Token.ThrowIfCancellationRequested();
+            if (!readingPageActive || session.Document is not { } active || active.Id != source.Id ||
+                active.Language != source.Language || pdfWindow?.Center != destination)
+                return;
+
+            if (page is { State: "detached" } && detachedAddress is { } address &&
+                address.Document == source.Id && address.Page == destination)
+            {
+                await detachedInitialSentence.WaitAsync(travel.Token);
+                travel.Token.ThrowIfCancellationRequested();
+                if (ReferenceEquals(detachedAddress, address) && address.Language == source.Language)
+                    await LoadDetachedSentenceAsync(address, position: null, automatic: true,
+                        sourceOffset: direction > 0 ? 0 : address.Text.Length);
+            }
+            else if (page?.Span is { } span && session.Document is { } document && !session.Busy)
+            {
+                var position = PdfSentenceNavigation.ArrivalPosition(document.Sentences, span, direction, sourceSentenceId);
+                if (position >= 0) await session.SelectSentenceAsync(position, pdfPage: destination);
+            }
+        }
+        catch (OperationCanceledException) when (travel.IsCancellationRequested) {}
+        catch (Exception error)
+        {
+            if (ReferenceEquals(detachedSpeechTravel, travel) && readingPageActive)
+                PdfPageStatus.Text = error.Message;
+        }
+        finally
+        {
+            if (ReferenceEquals(detachedSpeechTravel, travel)) detachedSpeechTravel = null;
+        }
+#else
+        await Task.CompletedTask;
+#endif
+    }
+
     private async void JumpPdfPageClicked(object? sender, EventArgs args)
     {
 #if MACCATALYST

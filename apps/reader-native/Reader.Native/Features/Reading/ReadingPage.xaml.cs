@@ -854,6 +854,11 @@ public partial class ReadingPage : ContentPage
             return;
         }
         if (PdfPageNotice.IsVisible) return;
+        if (AtPdfSentenceBoundary(direction))
+        {
+            await MoveToAdjacentPdfSentenceAsync(direction);
+            return;
+        }
         CancelDetachedSpeechTravel();
         StopSpeech();
         await AppState.Session.MoveAsync(direction);
