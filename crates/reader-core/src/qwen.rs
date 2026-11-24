@@ -472,7 +472,7 @@ impl Store {
         if explain_syntax {
             if let Some(ReviewFocus::Selection { start_utf16, text }) = focus {
                 let local_syntax = start_utf16.checked_sub(sentence.start_utf16)
-                    .and_then(|offset| WordContext::at(&sentence.text, offset).french_spatial_hint(language, text));
+                    .and_then(|offset| WordContext::at(&sentence.text, offset).local_syntax_hint(language, text));
                 if local_syntax.is_some() {
                     return Ok(ReviewSentenceJob { windows: Vec::new(), explain_syntax, local_syntax });
                 }
@@ -1506,12 +1506,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn french_spatial_hint_bypasses_inference_for_an_anchored_phrase() {
+    fn french_rules_bypass_inference_for_anchored_phrases() {
         let mut store = Store::open(Path::new(":memory:")).unwrap();
         for (source, selected) in [
             ("Les élèves attendaient devant le grand bâtiment de la vieille gare.", "devant le grand bâtiment de la vieille gare"),
             ("Zoé est derrière l’arbre.", "derrière l’arbre"),
             ("Nina lit près d’une fenêtre.", "près d’une fenêtre"),
+            ("Il est l’un des plus riches.", "l’un des plus riches"),
+            ("L’une d’entre elles lit.", "L’une d’entre elles"),
         ] {
             let doc = store.import("text.txt", source.as_bytes(), "fr").unwrap();
             let offset = source[..source.find(selected).unwrap()].encode_utf16().count();
@@ -1540,10 +1542,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("reader.sqlite");
         let mut store = Store::open(&path).unwrap();
-        let document = store.import("reader.txt", "Il est l’un des plus riches.".as_bytes(), "fr").unwrap();
+        let document = store.import("reader.txt", "Le marin répare la voile.".as_bytes(), "fr").unwrap();
         let sentence_id = document.sentences[0].id.as_str();
         let revision = document.current_revision_id.as_deref();
-        let focus = ReviewFocus::Selection { start_utf16: 7, text: "l’un".into() };
+        let focus = ReviewFocus::Selection { start_utf16: 16, text: "la voile".into() };
         let prepare = |store: &Store, cached_only, explain_syntax| {
             store.prepare_sentence_review(
                 HINT_GENERATION_MODEL, &document.id, None, Some(sentence_id), Some(&focus), revision,
@@ -1555,9 +1557,11 @@ mod tests {
             panic!("expected one uncached syntax scope");
         };
         let input: serde_json::Value = serde_json::from_str(example).unwrap();
-        assert_eq!(input["focus"][0]["offset"], 7);
-        assert_eq!(input["focus"][0]["text"], "l’un");
-        let explanation = "«des plus riches» називає групу, до якої належить «l’un».";
+        assert_eq!(input["focus"][0]["offset"], 16);
+        assert_eq!(input["focus"][0]["text"], "la");
+        assert_eq!(input["focus"][1]["offset"], 19);
+        assert_eq!(input["focus"][1]["text"], "voile");
+        let explanation = "«la voile» є прямим додатком при дієслові «répare».";
         cache.save(&SentenceReview { spelling: None, syntax: Some(explanation.into()) }).unwrap();
         drop(store);
 

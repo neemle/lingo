@@ -509,10 +509,7 @@ impl Store {
         index: Option<(&Pack, &Connection, u32)>,
     ) -> Result<Option<WordLookup>> {
         let key = word_key(word);
-        let syntax_hint = context.and_then(|context| {
-            context.french_partitive_hint(language, &key)
-                .or_else(|| context.french_spatial_hint(language, &key))
-        });
+        let syntax_hint = context.and_then(|context| context.local_syntax_hint(language, word));
         let Some((pack, db, index_version)) = index else {
             let Some(pack) = PACKS.iter().find(|pack| pack.language == language) else {
                 return Ok(None);
@@ -666,24 +663,44 @@ impl WordContext {
             .filter(|(_, part)| !part.trim().is_empty())
     }
 
+    pub(crate) fn local_syntax_hint(&self, language: &str, selected: &str) -> Option<&'static str> {
+        self.french_partitive_hint(language, selected)
+            .or_else(|| self.french_spatial_hint(language, selected))
+    }
+
     fn french_partitive_hint(&self, language: &str, selected: &str) -> Option<&'static str> {
         if language != "fr" {
             return None;
         }
         let parts: Vec<_> = self.parts().map(|(offset, part)| (offset, word_key(part))).collect();
         let focus = parts.iter().position(|(offset, _)| *offset == self.start_utf16)?;
-        if selected.is_empty() || !selected.split_word_bounds()
+        if selected.trim().is_empty() || !selected.split_word_bounds()
             .filter(|part| !part.trim().is_empty()).enumerate()
-            .all(|(index, part)| parts.get(focus + index).is_some_and(|(_, token)| token == part))
+            .all(|(index, part)| parts.get(focus + index).is_some_and(|(_, token)| *token == word_key(part)))
         {
             return None;
         }
+        let token = |index| parts.get(index).map(|(_, word): &(usize, String)| word.as_str());
         let start = (0..=focus).rev().take(4).find(|&index| {
-            matches!(parts[index].1.as_str(), "l'un" | "l'une")
-                && parts.get(index + 1).is_some_and(|(_, token)| token == "des")
+            matches!(token(index), Some("l'un" | "l'une"))
+                && matches!(token(index + 1), Some("des" | "de" | "d'entre"))
         })?;
-        let word_after_des = parts.get(start + 2).map(|(_, token)| token.as_str());
-        let qualifier = parts.get(start + 3).map(|(_, token)| token.as_str());
+        let word_after_marker = token(start + 2);
+        let qualifier = token(start + 3);
+        match token(start + 1)? {
+            "d'entre" if matches!(word_after_marker, Some("eux" | "elles" | "nous" | "vous")) && focus <= start + 2 =>
+                return Some("«L’un / l’une d’entre …» означає «один / одна з-поміж …». Займенник після «d’entre» указує на групу."),
+            "de" if qualifier.is_some_and(|word| word.starts_with(char::is_alphabetic)) =>
+                return match word_after_marker {
+                    Some("ces") => Some("«L’un / l’une de ces …» означає «один / одна з цих …». «Ces» указує, про яку групу йдеться."),
+                    Some("mes" | "tes" | "ses" | "nos" | "vos" | "leurs") =>
+                        Some("«L’un / l’une de …» виділяє одного або одну з групи. Присвійний визначник після «de» уточнює, чия це група."),
+                    _ => None,
+                },
+            "des" if word_after_marker.is_some_and(|word| word.starts_with(char::is_alphanumeric)) => {}
+            _ => return None,
+        }
+        let word_after_des = word_after_marker;
         if qualifier.is_some_and(|token| token == "de" || token.starts_with("d'")) {
             match word_after_des {
                 Some("plus") => return Some(
@@ -910,6 +927,24 @@ mod tests {
         assert!(store.lookup_word("fr", "village", Some(&unrelated)).unwrap().is_none());
         let punctuation = WordContext::at("L’un, des gens sont venus.", 0);
         assert!(store.lookup_word("fr", "l’un", Some(&punctuation)).unwrap().is_none());
+    }
+
+    #[test]
+    fn french_partitive_handles_pronoun_and_possessive_groups_at_the_selection() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        for (sentence, selected, expected) in [
+            ("«L’une d’entre elles lit.»", "L’une d’entre elles", "з-поміж"),
+            ("L’un d’entre nous arrive.", "nous", "з-поміж"),
+            ("Elle parle à l’un de ses amis.", "ses amis", "Присвійний визначник"),
+            ("L’une de ces élèves lit.", "élèves", "одна з цих"),
+        ] {
+            let start = sentence.find(selected).unwrap();
+            let context = WordContext::at(sentence, sentence[..start].encode_utf16().count());
+            let hint = store.lookup_word("fr", selected, Some(&context)).unwrap().unwrap().syntax_hint.unwrap();
+            assert!(hint.contains(expected), "{hint}");
+        }
+        assert!(WordContext::at("L’une de Brest arrive.", 0).local_syntax_hint("fr", "L’une").is_none());
+        assert!(WordContext::at("L’une d’entre elles lit.", 0).local_syntax_hint("fr", "L’une d’entre nous").is_none());
     }
 
     #[test]

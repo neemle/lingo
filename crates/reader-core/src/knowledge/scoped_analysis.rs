@@ -425,6 +425,9 @@ impl Store {
             version, revision, &sentence.id, language, grammar, lexical, scope,
         ))
         .map_err(|error| error.to_string())?;
+        if language == "fr" {
+            address.extend_from_slice(b"\0french-syntax-v1");
+        }
         if let Some(boundary) = boundary {
             address.extend_from_slice(&(boundary.visible_start as u64).to_le_bytes());
             address.extend_from_slice(boundary.text.as_bytes());
