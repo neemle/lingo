@@ -58,6 +58,12 @@ public partial class ReadingPage
                 (!match.Translation && readingLayout == ReaderLayout.Translation))
             {
                 readingLayout = ReaderLayout.Automatic;
+                compactTranslation = match.Translation;
+                ArrangeReadingColumns();
+            }
+            else if (compactReader && readingLayout == ReaderLayout.Automatic && compactTranslation != match.Translation)
+            {
+                compactTranslation = match.Translation;
                 ArrangeReadingColumns();
             }
 

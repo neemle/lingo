@@ -644,7 +644,7 @@ public partial class ReadingPage
         }
         PdfPageNotice.IsVisible = show;
         ReadingColumns.IsVisible = ReaderControls.IsVisible = SentenceToolbar.IsVisible = !show;
-        SourceHint.IsVisible = !show && SourcePane.IsVisible;
+        SourceHint.IsVisible = !compactReader && !show && SourcePane.IsVisible;
         UpdateSentenceMenu();
         if (stateChanged) SyncAnalysisPrefetch();
     }

@@ -16,6 +16,8 @@ public partial class ReadingPage : ContentPage
     private bool openingOriginal;
     private bool narrowReader;
     private bool narrowPlayer;
+    private bool compactReader;
+    private bool compactTranslation;
     private ReaderLayout readingLayout;
     private bool TranslationVisible => readingLayout != ReaderLayout.Source;
     private enum ReaderLayout { Automatic, Columns, Stacked, Source, Translation }
@@ -266,7 +268,21 @@ public partial class ReadingPage : ContentPage
             || PlayerMain is null || PlayerDocument is null || PlayerTransport is null) return;
 
         var stackColumns = width < 720;
-        if (narrowReader != stackColumns)
+        var compact = width < 540;
+        if (compactReader != compact)
+        {
+            compactReader = compact;
+            ReaderFrame.Padding = compact ? new Thickness(12, 8, 12, 8) : new Thickness(30, 22, 30, 16);
+            ReaderFrame.RowSpacing = compact ? 5 : 13;
+            ReadingToolbar.Padding = compact ? new Thickness(8, 5) : new Thickness(17, 7);
+            ReadingToolbar.ColumnSpacing = compact ? 4 : 8;
+            OriginalCommands.IsVisible = SentenceCommands.IsVisible = !compact;
+            CompactCommands.IsVisible = compact;
+            DetachedCommandViewport.MaximumHeightRequest = compact ? 112 : double.PositiveInfinity;
+            narrowReader = stackColumns;
+            ArrangeReadingColumns();
+        }
+        else if (narrowReader != stackColumns)
         {
             narrowReader = stackColumns;
             ArrangeReadingColumns();
@@ -338,16 +354,18 @@ public partial class ReadingPage : ContentPage
 
     private void ArrangeReadingColumns()
     {
-        var revealTranslation = !TranslationPane.IsVisible && TranslationVisible;
-        var sourceVisible = readingLayout != ReaderLayout.Translation;
-        var split = sourceVisible && TranslationVisible;
+        var pageSwitch = compactReader && readingLayout == ReaderLayout.Automatic;
+        var sourceVisible = readingLayout != ReaderLayout.Translation && (!pageSwitch || !compactTranslation);
+        var targetVisible = TranslationVisible && (!pageSwitch || compactTranslation);
+        var revealTranslation = !TranslationPane.IsVisible && targetVisible;
+        var split = sourceVisible && targetVisible;
         var stacked = split && (readingLayout == ReaderLayout.Stacked
             || readingLayout == ReaderLayout.Automatic && narrowReader);
         var columns = split && !stacked;
         SourcePane.IsVisible = sourceVisible;
         UpdateSourceLanguageButton(AppState.Session.Document);
-        SourceHint.IsVisible = sourceVisible && !PdfPageNotice.IsVisible;
-        TranslationPane.IsVisible = TranslationVisible;
+        SourceHint.IsVisible = !compactReader && sourceVisible && !PdfPageNotice.IsVisible;
+        TranslationPane.IsVisible = targetVisible;
         ReadingColumns.ColumnDefinitions[1].Width = columns ? GridLength.Star : 0;
         ReadingColumns.RowDefinitions[1].Height = stacked ? GridLength.Star : 0;
         ReadingColumns.ColumnSpacing = columns ? 1 : 0;
@@ -355,7 +373,7 @@ public partial class ReadingPage : ContentPage
         Grid.SetColumn(TranslationPane, columns ? 1 : 0);
         Grid.SetRow(TranslationPane, stacked ? 1 : 0);
         DetachedSourcePane.IsVisible = sourceVisible;
-        DetachedTargetPane.IsVisible = TranslationVisible;
+        DetachedTargetPane.IsVisible = targetVisible;
         DetachedReadingColumns.ColumnDefinitions[1].Width = columns ? GridLength.Star : 0;
         DetachedReadingColumns.RowDefinitions[1].Height = stacked ? GridLength.Star : 0;
         DetachedReadingColumns.ColumnSpacing = columns ? 1 : 0;
@@ -364,9 +382,45 @@ public partial class ReadingPage : ContentPage
         Grid.SetRow(DetachedTargetPane, stacked ? 1 : 0);
         AlignPdfViewports();
         var layout = Layouts.First(item => item.Mode == readingLayout);
-        ReaderLayoutButton.Text = layout.Compact;
+        ReaderLayoutButton.Text = compactReader ? "⋯" : layout.Compact;
+        CompactPaneButton.IsVisible = pageSwitch;
+        CompactPaneButton.Text = compactTranslation ? "Показати оригінал" : "Показати переклад";
         DescribeButton(ReaderLayoutButton, $"Змінити розкладку читання. Зараз {layout.Label}");
         if (revealTranslation) RequestTranslationScroll();
+    }
+
+    private void CompactPaneClicked(object? sender, EventArgs args)
+    {
+        compactTranslation = !compactTranslation;
+        ArrangeReadingColumns();
+        RefreshPdfTranslationLayout();
+        ScheduleAutoTranslation();
+    }
+
+    private async void CompactCommandsClicked(object? sender, EventArgs args)
+    {
+        var commands = new List<(Button Button, EventHandler Run)>
+        {
+            (InlinePdfToggle, ToggleInlineOriginalClicked),
+            (InlinePdfFitToggle, ToggleInlinePdfFitClicked),
+            (OpenOriginalButton, ViewOriginalClicked),
+            (PreviewOriginalButton, PreviewOriginalFileClicked),
+        };
+        if (SentenceToolbar.IsVisible)
+            commands.AddRange([
+                (JumpSentenceButton, JumpSentenceClicked), (BookmarkButton, BookmarkClicked),
+                (BookmarksButton, OpenBookmarksClicked), (NotesButton, OpenNotesClicked),
+                (FindButton, FindInDocumentClicked),
+            ]);
+        var available = commands.Where(command => command.Button.IsVisible && command.Button.IsEnabled).ToArray();
+        var selected = await NativeChoices.ChooseAsync(this, "Дії читача", null,
+            available.Select((command, index) => (index.ToString(), command.Button.Text)));
+        if (int.TryParse(selected, out var index) && index >= 0 && index < available.Length)
+        {
+            var command = available[index];
+            if (command.Button.IsVisible && command.Button.IsEnabled)
+                command.Run(command.Button, EventArgs.Empty);
+        }
     }
 
     private async void ReaderLayoutClicked(object? sender, EventArgs args)

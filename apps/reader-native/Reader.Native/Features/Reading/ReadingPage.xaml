@@ -83,42 +83,45 @@
   </MenuBarItem>
  </ContentPage.MenuBarItems>
  <Grid x:Name="ReaderRoot" SizeChanged="WordPopupResized">
- <Grid Padding="30,22,30,16" RowDefinitions="Auto,Auto,*,Auto" RowSpacing="13">
+ <Grid x:Name="ReaderFrame" Padding="30,22,30,16" RowDefinitions="Auto,Auto,*,Auto" RowSpacing="13">
   <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="16">
    <VerticalStackLayout Spacing="7">
     <Label Text="{Binding Document.Format}" Style="{StaticResource ReaderMeta}" />
     <Label Text="{Binding Document.Title, TargetNullValue='Читання'}" Style="{StaticResource SerifTitle}"
      FontSize="40" LineBreakMode="TailTruncation" MaxLines="1" />
    </VerticalStackLayout>
-   <HorizontalStackLayout Grid.Column="1" Spacing="8" VerticalOptions="Center">
+   <HorizontalStackLayout x:Name="OriginalCommands" Grid.Column="1" Spacing="8" VerticalOptions="Center">
     <Button x:Name="InlinePdfToggle" Text="Сторінка PDF" Style="{StaticResource OutlineButton}"
      IsVisible="{Binding CanViewOriginal}" Clicked="ToggleInlineOriginalClicked"
      ToolTipProperties.Text="Показати оригінальну сторінку PDF" PropertyChanged="ReaderCommandTextChanged" />
     <Button x:Name="InlinePdfFitToggle" Text="За шириною сторінки" Style="{StaticResource OutlineButton}"
      IsVisible="False" Clicked="ToggleInlinePdfFitClicked"
      ToolTipProperties.Text="Змінити масштаб PDF" />
-    <Button Text="Відкрити окремо" Style="{StaticResource OutlineButton}" IsVisible="{Binding CanViewOriginal}"
+    <Button x:Name="OpenOriginalButton" Text="Відкрити окремо" Style="{StaticResource OutlineButton}" IsVisible="{Binding CanViewOriginal}"
      Clicked="ViewOriginalClicked" ToolTipProperties.Text="Переглянути оригінал документа" SemanticProperties.Description="Переглянути оригінал документа" />
-    <Button Text="Переглянути оригінал" Style="{StaticResource OutlineButton}" IsVisible="{Binding CanPreviewOriginalFile}"
+    <Button x:Name="PreviewOriginalButton" Text="Переглянути оригінал" Style="{StaticResource OutlineButton}" IsVisible="{Binding CanPreviewOriginalFile}"
      Clicked="PreviewOriginalFileClicked"
      ToolTipProperties.Text="Переглянути збережений оригінал" />
    </HorizontalStackLayout>
-   <Grid Grid.Row="1" Grid.ColumnSpan="2" x:Name="PdfPageControls" IsVisible="False" Margin="0,8,0,0"
-    ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
+   <Button Grid.Column="1" x:Name="CompactCommands" Text="⋯" IsVisible="False"
+    Style="{StaticResource PlayerButton}" Clicked="CompactCommandsClicked" VerticalOptions="Center"
+    ToolTipProperties.Text="Дії читача" SemanticProperties.Description="Дії читача" />
+   <FlexLayout Grid.Row="1" Grid.ColumnSpan="2" x:Name="PdfPageControls" IsVisible="False" Margin="0,8,0,0"
+    Wrap="Wrap" AlignItems="Center">
     <Button x:Name="PreviousPdfPage" Text="‹" FontSize="23" MinimumWidthRequest="42" Style="{StaticResource PlayerButton}" Clicked="PreviousPdfPageClicked"
      IsEnabled="False" ToolTipProperties.Text="Попередня сторінка PDF" SemanticProperties.Description="Попередня сторінка PDF" />
-    <Button Grid.Column="1" x:Name="JumpPdfPage" Text="Сторінка" Style="{StaticResource PlayerButton}"
+    <Button Margin="3,2,0,2" x:Name="JumpPdfPage" Text="Сторінка" Style="{StaticResource PlayerButton}"
      Clicked="JumpPdfPageClicked" IsEnabled="False" ToolTipProperties.Text="Перейти за номером сторінки PDF" SemanticProperties.Description="Перейти за номером сторінки PDF" />
-    <Button Grid.Column="2" x:Name="NextPdfPage" Text="›" FontSize="23" MinimumWidthRequest="42" Style="{StaticResource PlayerButton}" Clicked="NextPdfPageClicked"
+    <Button Margin="3,2,0,2" x:Name="NextPdfPage" Text="›" FontSize="23" MinimumWidthRequest="42" Style="{StaticResource PlayerButton}" Clicked="NextPdfPageClicked"
      IsEnabled="False" ToolTipProperties.Text="Наступна сторінка PDF" SemanticProperties.Description="Наступна сторінка PDF" />
-    <Label Grid.Column="5" x:Name="PdfPageStatus" Style="{StaticResource ReaderMeta}" />
-    <Button Grid.Column="3" x:Name="RetryPdfOcr" Text="Повторити OCR" Style="{StaticResource PlayerButton}"
+    <Button Margin="3,2,0,2" x:Name="RetryPdfOcr" Text="Повторити OCR" Style="{StaticResource PlayerButton}"
      Clicked="RetryPdfOcrClicked" IsVisible="False"
      ToolTipProperties.Text="Повторити розпізнавання сторінки PDF" />
-    <Button Grid.Column="4" x:Name="RepairPdfText" Text="Розпізнати зі скану" Style="{StaticResource PlayerButton}"
+    <Button Margin="3,2,0,2" x:Name="RepairPdfText" Text="Розпізнати зі скану" Style="{StaticResource PlayerButton}"
      Clicked="RepairPdfTextClicked" IsVisible="False"
      ToolTipProperties.Text="Розпізнати зі скану" PropertyChanged="ReaderCommandTextChanged" />
-   </Grid>
+    <Label Margin="6,0,0,0" x:Name="PdfPageStatus" Style="{StaticResource ReaderMeta}" />
+   </FlexLayout>
    <Grid Grid.Row="2" Grid.ColumnSpan="2" x:Name="OcrReviewFeedback" IsVisible="False"
     ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8" Margin="0,6,0,0">
     <ActivityIndicator x:Name="OcrReviewActivity" WidthRequest="16" HeightRequest="16" />
@@ -129,27 +132,29 @@
    </Grid>
   </Grid>
 
-  <Grid Grid.Row="1" x:Name="SentenceToolbar" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
-   <Button Text="До речення…" Style="{StaticResource OutlineButton}" Clicked="JumpSentenceClicked"
+  <Grid Grid.Row="1" x:Name="SentenceToolbar">
+  <Grid x:Name="SentenceCommands" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
+   <Button x:Name="JumpSentenceButton" Text="До речення…" Style="{StaticResource OutlineButton}" Clicked="JumpSentenceClicked"
     IsEnabled="{Binding CanBookmark}" ToolTipProperties.Text="Перейти до речення за номером" SemanticProperties.Description="Перейти до речення за номером" />
-   <Button Grid.Column="1" Text="{Binding BookmarkAction}" Style="{StaticResource OutlineButton}"
+   <Button Grid.Column="1" x:Name="BookmarkButton" Text="{Binding BookmarkAction}" Style="{StaticResource OutlineButton}"
     IsEnabled="{Binding CanBookmark}" Clicked="BookmarkClicked"
     ToolTipProperties.Text="Додати закладку" PropertyChanged="ReaderCommandTextChanged" />
-   <Button Grid.Column="2" Text="Закладки" Style="{StaticResource OutlineButton}"
+   <Button Grid.Column="2" x:Name="BookmarksButton" Text="Закладки" Style="{StaticResource OutlineButton}"
     IsEnabled="{Binding HasBookmarks}" Clicked="OpenBookmarksClicked"
     ToolTipProperties.Text="Показати закладки документа" />
-   <Button Grid.Column="3" Text="Нотатки" Style="{StaticResource OutlineButton}"
+   <Button Grid.Column="3" x:Name="NotesButton" Text="Нотатки" Style="{StaticResource OutlineButton}"
     IsEnabled="{Binding CanBookmark}" Clicked="OpenNotesClicked"
     ToolTipProperties.Text="Показати нотатки до документа" />
-   <Button Grid.Column="4" Text="Знайти" Style="{StaticResource OutlineButton}" Clicked="FindInDocumentClicked"
+   <Button Grid.Column="4" x:Name="FindButton" Text="Знайти" Style="{StaticResource OutlineButton}" Clicked="FindInDocumentClicked"
     IsEnabled="{Binding CanBookmark}" ToolTipProperties.Text="Знайти в документі" SemanticProperties.Description="Знайти в документі" />
+  </Grid>
   </Grid>
 
   <Border Grid.Row="2" BackgroundColor="{StaticResource Panel}" Stroke="{StaticResource BorderTone}"
    StrokeShape="RoundRectangle 11">
    <Border.Shadow><Shadow Brush="#434B30" Opacity="0.08" Radius="7" Offset="0,3" /></Border.Shadow>
    <Grid RowDefinitions="Auto,Auto,*,Auto">
-    <Grid Padding="17,7" ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
+    <Grid x:Name="ReadingToolbar" Padding="17,7" ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8">
      <Button x:Name="SourceLanguage" Text="Мова оригіналу" Style="{StaticResource PlayerButton}"
       Clicked="ChooseSourceLanguageClicked" IsEnabled="{Binding CanInteract}" IsVisible="False"
       ToolTipProperties.Text="Вибрати мову оригіналу" SemanticProperties.Description="Вибрати мову оригіналу" />
@@ -163,6 +168,9 @@
       ToolTipProperties.Text="Збільшити шрифт читання" SemanticProperties.Description="Збільшити шрифт читання" />
      <Button Grid.Column="5" x:Name="ReaderLayoutButton" Text="Авто" Style="{StaticResource PlayerButton}"
       Clicked="ReaderLayoutClicked" ToolTipProperties.Text="Змінити розкладку читання" SemanticProperties.Description="Змінити розкладку читання" />
+     <Button Grid.Row="1" Grid.ColumnSpan="6" x:Name="CompactPaneButton" Text="Показати переклад" IsVisible="False"
+      Margin="0,4,0,0" Style="{StaticResource OutlineButton}" Clicked="CompactPaneClicked"
+      SemanticProperties.Description="Перемкнути оригінал і переклад" />
     </Grid>
     <BoxView Grid.Row="1" Color="{StaticResource BorderTone}" HeightRequest="1" />
     <Grid Grid.Row="2" x:Name="ReadingColumns" ColumnDefinitions="*,*" RowDefinitions="*,0" ColumnSpacing="1"
@@ -403,7 +411,8 @@
         </ScrollView>
        </Grid>
       </Grid>
-      <FlexLayout Grid.Row="1" Padding="8,5" Wrap="Wrap" AlignItems="Center">
+      <ScrollView Grid.Row="1" x:Name="DetachedCommandViewport">
+      <FlexLayout Padding="8,5" Wrap="Wrap" AlignItems="Center">
        <Button x:Name="DetachedReadPdfTranslationText" Text="Фрагменти" IsVisible="False" Margin="0,0,5,0"
         Style="{StaticResource PlayerButton}" Clicked="ReadPdfTranslationTextClicked"
         ToolTipProperties.Text="Показати всі фрагменти перекладу сторінки" />
@@ -466,6 +475,7 @@
        </HorizontalStackLayout>
        <Label x:Name="DetachedSentenceStatus" Margin="5,0" Style="{StaticResource ReaderMeta}" />
       </FlexLayout>
+      </ScrollView>
      </Grid>
     </Grid>
     <Grid Grid.Row="3" x:Name="SourceHint" BackgroundColor="#FAFBF6" Padding="15,7">
