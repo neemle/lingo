@@ -179,19 +179,47 @@ fn wider_line(
     let [index] = region.fragments.as_slice() else { return None; };
     if region.rotation != 0 || region.alignment != super::Alignment::Left { return None; }
     let range = rows[*index].page_span(offset);
-    let mut lines = geometry.iter().filter(|line| intersects(&range, line.source_span));
-    let line = lines.next()?;
-    let span = line.source_span?;
-    if lines.next().is_some() || range.start > span.start_utf16 || range.end < span.end_utf16 {
+    let mut lines: Vec<_> = geometry
+        .iter()
+        .filter_map(|line| line.source_span.map(|span| (span, line)))
+        .filter(|(span, _)| intersects(&range, Some(*span)))
+        .collect();
+    if lines.iter().any(|(span, _)| range.start > span.start_utf16 || range.end < span.end_utf16) {
         return None;
     }
-    let tail_word = line.words.iter().filter(|word| word.source_span.is_some())
-        .max_by(|left, right| (left.x + left.width).total_cmp(&(right.x + right.width)));
     let bounds = region.bounds;
-    if tail_word.is_some_and(|word| word.y > bounds.y || word.y + word.height < bounds.bottom()) {
+    const ROUNDING_TOLERANCE: f64 = 1e-9;
+    let (tail, top, bottom) = if let [(span, line)] = lines.as_slice() {
+        line.words.iter().filter_map(|word| word.source_span.map(|span| (span, word)))
+            .max_by(|(_, left), (_, right)| (left.x + left.width).total_cmp(&(right.x + right.width)))
+            .map_or((*span, line.y, line.y + line.height), |(span, word)| {
+                (span, word.y, word.y + word.height)
+            })
+    } else {
+        // A PDF text layer can provide one box per word. Work in source order so
+        // wrapped lines, columns and reordered text cannot form one wider row.
+        lines.sort_unstable_by_key(|(span, _)| span.start_utf16);
+        if lines.iter().any(|(_, line)| !line.words.is_empty() || line.rotation.unwrap_or(0) != 0)
+            || lines.windows(2).any(|pair| {
+                let (left_span, left) = pair[0];
+                let (right_span, right) = pair[1];
+                let gap = right.x - (left.x + left.width);
+                let shorter = left.height.min(right.height);
+                let center_shift = (left.y + left.height * 0.5 - right.y - right.height * 0.5).abs();
+                right.block_start || left_span.end_utf16 > right_span.start_utf16
+                    || !(-ROUNDING_TOLERANCE..=shorter * 1.6).contains(&gap)
+                    || center_shift > shorter * 0.2
+            })
+        {
+            return None;
+        }
+        let (span, line) = lines.last()?;
+        (*span, line.y, line.y + line.height)
+    };
+    // The sample covers only the height of the final box.
+    if top > bounds.y + ROUNDING_TOLERANCE || bottom < bounds.bottom() - ROUNDING_TOLERANCE {
         return None;
     }
-    let tail = tail_word.and_then(|word| word.source_span).unwrap_or(span);
     let style = styles.get(&tail.start_utf16)?;
     let right = style.clear_right.filter(|edge| edge.is_finite() && *edge <= 1.0)?;
     // Keep any extension close to the original line even on a completely blank page.
@@ -330,6 +358,45 @@ mod tests {
         assert!(collision.layout.regions[0].wider_bounds.is_none());
         let unsampled = project(&rows, &[line(0.1, 0.30, 0)], 0, &[], true).unwrap();
         assert!(unsampled.layout.regions[0].wider_bounds.is_none());
+    }
+
+    #[test]
+    fn wider_line_accepts_native_pdf_word_boxes_on_the_same_baseline() {
+        let word_box = |text: &str, start, x_pt, width_pt, y_pt| {
+            let end = start + text.len();
+            OcrLine {
+                text: text.into(), x: x_pt / 612.0, y: y_pt / 792.0,
+                width: width_pt / 612.0, height: 24.0 / 792.0, page: 0,
+                confidence: None, correction: None, block_start: false, words: vec![],
+                rotation: Some(0), source_span: Some(OcrSpan { start_utf8: start, end_utf8: end,
+                    start_utf16: start, end_utf16: end }),
+            }
+        };
+        let boxes = [
+            word_box("Le", 0, 72.0, 26.688, 73.52),
+            word_box("port", 3, 105.36, 41.352, 73.52),
+            word_box("ouvre.", 8, 153.384, 66.696, 73.52),
+        ];
+        let rows = [SourceRow { start_utf16: 0, end_utf16: 14, block_index: Some(0), pending: false }];
+        let style = |clear_right| SourceStyleAnchor { start_utf16: 8, style: SourceStyle {
+            clear_right, ..SourceStyle::test_style([1.0; 3], 24.0 / 792.0)
+        } };
+        let styles = [style(Some(0.49))];
+        let layout = project(&rows, &boxes, 0, &styles, true).unwrap();
+        let region = &layout.layout.regions[0];
+        assert!((region.wider_bounds.unwrap().right() - 0.46849).abs() < 0.001);
+        assert_eq!(region.masks.len(), 3);
+
+        let blocked = project(&rows, &boxes, 0, &[style(Some(0.36))], true).unwrap();
+        assert!(blocked.layout.regions[0].wider_bounds.is_none());
+        let mut wrapped = boxes.clone();
+        wrapped[2].y += 30.0 / 792.0;
+        let layout = project(&rows, &wrapped, 0, &styles, true).unwrap();
+        assert!(layout.layout.regions[0].wider_bounds.is_none());
+        let mut across_columns = boxes;
+        across_columns[2].x += 36.0 / 612.0;
+        let layout = project(&rows, &across_columns, 0, &styles, true).unwrap();
+        assert!(layout.layout.regions[0].wider_bounds.is_none());
     }
 
     #[test]
