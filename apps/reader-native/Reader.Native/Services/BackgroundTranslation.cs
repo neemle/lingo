@@ -7,6 +7,8 @@ namespace Reader.Native.Services;
 internal sealed class BackgroundTranslation
 {
     private static readonly TimeSpan Cadence = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan StepTimeout = TimeSpan.FromMinutes(2);
+    private const int VisiblePageRetrySeconds = 30;
     private readonly ReaderSession session;
     private readonly IDispatcher dispatcher;
     private readonly IDispatcherTimer timer;
@@ -178,7 +180,10 @@ internal sealed class BackgroundTranslation
         // A neighbouring page can supply the rest of a sentence crossing the page break.
         if (visibleAttempt is { Page.Address: var address } && address.DocumentId == documentId &&
             Math.Abs(address.Page - page) <= 1)
+        {
             visibleAttempt = null;
+            if (textChanged && prefetchingVisiblePage) stepCancellation?.Cancel();
+        }
         UpdateRequiredPackages();
         if (ParkedDocuments != previouslyParked) StatusChanged?.Invoke();
         Wake();
@@ -279,7 +284,7 @@ internal sealed class BackgroundTranslation
     private async Task RunStepAsync()
     {
         using var cancellation = new CancellationTokenSource();
-        using var libraryTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
         stepCancellation = cancellation;
         var token = cancellation.Token;
         JobKey? attemptedJob = null;
@@ -347,12 +352,16 @@ internal sealed class BackgroundTranslation
                     prefetchingVisiblePage = true;
                     Schedule(Cadence);
                     SetStatus($"Опрацьовуємо відкриту сторінку {address.Page + 1}…", running: true);
-                    visibleAttempt = (visible, now + 30);
+                    var attempt = (visible, now + VisiblePageRetrySeconds);
+                    visibleAttempt = attempt;
+                    timeout.CancelAfter(StepTimeout);
+                    token = timeout.Token;
                     var complete = await session.PrefetchVisiblePdfTranslationAsync(address, token, visible.DetachedText);
                     token.ThrowIfCancellationRequested();
-                    if (enabled && !paused && visiblePdf == visible && visibleAttempt == (visible, now + 30))
+                    if (enabled && !paused && visiblePdf == visible && visibleAttempt == attempt)
                     {
-                        visibleAttempt = (visible, complete ? long.MaxValue : DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 30);
+                        visibleAttempt = (visible, complete ? long.MaxValue
+                            : DateTimeOffset.UtcNow.ToUnixTimeSeconds() + VisiblePageRetrySeconds);
                         SetStatus(complete ? $"Переклад сторінки {address.Page + 1} у кеші."
                             : "Черга перекладу продовжується.");
                     }
@@ -383,8 +392,8 @@ internal sealed class BackgroundTranslation
             attemptedTitle = title;
             lastLibraryJob = work.Key;
             libraryStepInvalidated = false;
-            libraryTimeout.CancelAfter(TimeSpan.FromMinutes(2));
-            token = libraryTimeout.Token;
+            timeout.CancelAfter(StepTimeout);
+            token = timeout.Token;
             SetStatus($"Опрацьовуємо «{title}»…", running: true);
             var progress = await session.AdvanceBackgroundTranslationAsync(
                 work.Key.Document, work.Key.Revision, work.Key.Source, work.Key.Target, token);
@@ -421,7 +430,7 @@ internal sealed class BackgroundTranslation
                         : $"Переклад фото «{title}»."
                     : $"Перевірено кеш · «{title}».");
         }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        catch (Exception) when (cancellation.IsCancellationRequested)
         {
             if (prefetchingVisiblePage) visibleAttempt = null;
             if (enabled && !paused) SetStatus("Перевіряємо чергу перекладу…");
@@ -429,7 +438,14 @@ internal sealed class BackgroundTranslation
         catch (Exception error)
         {
             if (!enabled || paused || cancellation.IsCancellationRequested) return;
-            if (attemptedJob is { } key)
+            if (prefetchingVisiblePage)
+            {
+                if (visibleAttempt is { } attempt && attempt.Page == visiblePdf)
+                    visibleAttempt = (attempt.Page, DateTimeOffset.UtcNow.ToUnixTimeSeconds() + VisiblePageRetrySeconds);
+                System.Diagnostics.Debug.WriteLine(error);
+                SetStatus("Фоновий переклад сторінки повторить спробу.");
+            }
+            else if (attemptedJob is { } key)
             {
                 if (libraryStepInvalidated || !session.Snapshot.Documents.Any(key.Matches)) return;
                 var attempts = (libraryFailures.GetValueOrDefault(key)?.Attempts ?? 0) + 1;
@@ -437,7 +453,7 @@ internal sealed class BackgroundTranslation
                 libraryFailures[key] = new(attempts, due);
                 jobs.Remove(key);
                 System.Diagnostics.Trace.TraceWarning("Background translation job {0}, attempt {1}, parked={2}, timeout={3}, error={4}",
-                    key.Document, attempts, due is null, libraryTimeout.IsCancellationRequested, error.GetType().Name);
+                    key.Document, attempts, due is null, timeout.IsCancellationRequested, error.GetType().Name);
                 SetStatus(due is null ? $"Переклад «{attemptedTitle}» призупинено."
                     : $"Переклад «{attemptedTitle}» повторить спробу.");
                 StatusChanged?.Invoke();
