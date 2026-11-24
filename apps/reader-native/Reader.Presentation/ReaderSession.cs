@@ -320,7 +320,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
                 background: true, cancellationToken: cancellationToken), cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (rows.Any(row => row.Text is not null)) BackgroundPageTranslated?.Invoke(address);
-        return rows.Length > 0 && rows.All(row => row.Text is not null);
+        return rows.Length > 0 && rows.All(row => row.Text is not null && !row.LegacyGroup);
     }
 
     public async Task ReplacePdfTextLayerAsync(string id, int page, string revisionId, string language, OcrLine[] lines)

@@ -246,8 +246,11 @@ impl Store {
                 physical.start + selected.start..physical.start + selected.end, reflow_input, target, boundaries, canceled)?;
         } else if !cached_only {
             match self.translate_document_page(&document, physical.clone(), target, boundaries, background, canceled) {
-                Ok(generated) if generated.iter().any(|unit| !unit.reviewed && unit.translation.is_some())
-                    && generated.iter().all(|unit| unit.translation.is_some()) =>
+                // The scheduler needs to see unfinished units even when the
+                // reader can display a legacy cached group over the same text.
+                Ok(generated) if background ||
+                    (generated.iter().any(|unit| !unit.reviewed && unit.translation.is_some())
+                        && generated.iter().all(|unit| unit.translation.is_some())) =>
                 {
                     return Ok(generated.into_iter().filter_map(|unit| {
                         let (first, last) = page_range(&unit.sentence_ids)?;
@@ -263,7 +266,7 @@ impl Store {
                         }
                     }
                 }
-                Err(error) if canceled() || (background && matches!(&error, TranslationBatchError::Deferred { .. })) =>
+                Err(error) if background || canceled() =>
                     return Err(error),
                 // Earlier batches may already be in SQLite, alongside translations from prior routes.
                 Err(error) => generation_error = Some(error),

@@ -2221,6 +2221,18 @@ mod tests {
         assert_eq!(grouped[0].text.as_deref(), Some("Старий груповий переклад."));
         assert_eq!(serde_json::to_value(&grouped[0]).unwrap()["legacyGroup"], true);
 
+        store.merge_reader_preferences(crate::reader_preferences::ReaderPreferences {
+            background_translation: Some(true), ..Default::default()
+        }).unwrap();
+        let revision = document.current_revision_id.as_deref().unwrap();
+        store.advance_background_translation(&document.id, revision, "uk").unwrap();
+        drop(store);
+        let mut store = Store::open(&root.path().join("library.sqlite")).unwrap();
+        let retry = store.advance_background_translation(&document.id, revision, "uk").unwrap();
+        assert!(serde_json::to_value(retry).unwrap()["resumeAt"].as_i64().is_some_and(|at| at > crate::now()));
+        let grouped = store.pdf_page_translation(&document.id, 0, "uk", true).unwrap();
+        assert_eq!(grouped[0].text.as_deref(), Some("Старий груповий переклад."));
+
         let sentence = &document.sentences[1];
         let sentence_key = unit_cache_key(&route, &sentence.text).unwrap();
         store.save_cached_segments([(sentence_key, &["Моряк вирушає.".into()][..])]).unwrap();
