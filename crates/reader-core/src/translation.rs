@@ -3185,6 +3185,8 @@ fn cache_key(
             .unwrap_or(4)
     };
     let version = match route {
+        _ if segments.iter().any(|text| crate::protected_translation::contains_dotted_acronym(text.as_ref()))
+            || context.is_some_and(crate::protected_translation::contains_dotted_acronym) => 18,
         Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" && segments.iter().any(|text|
             crate::marian_target_uk::french_speech_attribution(text.as_ref()).is_some()) => 17,
         _ if route.uses_publication_pivot_rules() && segments.iter().any(|text|

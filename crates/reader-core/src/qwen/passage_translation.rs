@@ -120,7 +120,9 @@ impl Store {
                     };
                     (HINT_GENERATION_MODEL, SYSTEM, example, cache_kind)
                 };
-                let cache_kind = if protected_translation::web_address_spans(prompt_text).next().is_some() {
+                let cache_kind = if protected_translation::contains_dotted_acronym(prompt_text) {
+                    "passage-protected-dotted-acronyms-v1"
+                } else if protected_translation::web_address_spans(prompt_text).next().is_some() {
                     "passage-protected-web-addresses-v1"
                 } else if protected_translation::contains_protected(prompt_text) {
                     "passage-protected-spans-v1"

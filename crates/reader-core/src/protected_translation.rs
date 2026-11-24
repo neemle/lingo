@@ -134,6 +134,16 @@ impl<'a> ProtectedText<'a> {
         self.only_protected
     }
 
+    pub(crate) fn detached_french_articles(&self) -> Option<String> {
+        let mut input = self.input.to_string();
+        for marker in &self.markers {
+            for article in ["l’", "L’", "l'", "L'"] {
+                input = input.replace(&format!("{article}{}", marker.token), &marker.token);
+            }
+        }
+        (input != self.input).then_some(input)
+    }
+
     pub(crate) fn restore(&self, output: String) -> Result<String> {
         if self.is_empty() {
             return Ok(output);
@@ -158,8 +168,14 @@ impl<'a> ProtectedText<'a> {
             }
             seen[index] = true;
             restored.push_str(&output[offset..range.start]);
-            restored.push_str(self.markers[index].replacement);
+            let replacement = self.markers[index].replacement;
+            restored.push_str(replacement);
             offset = range.end;
+            if replacement.ends_with('.') && output[offset..].strip_prefix('.')
+                .is_some_and(|tail| !tail.starts_with('.'))
+            {
+                offset += 1;
+            }
         }
         if !seen.into_iter().all(|seen| seen) {
             return Err(MARKER_ERROR.into());
@@ -173,10 +189,15 @@ pub(crate) fn contains_protected(source: &str) -> bool {
     protected_spans(source).next().is_some()
 }
 
+pub(crate) fn contains_dotted_acronym(source: &str) -> bool {
+    token_spans(source, |word| is_dotted_acronym(word).then_some(None))
+        .any(|(range, _)| is_dotted_acronym(&source[range]))
+}
+
 pub(crate) fn without_identifiers(text: &str) -> Cow<'_, str> {
     let mut output = String::new();
     let mut offset = 0;
-    for range in token_spans(text, |word| is_identifier(word).then_some(None)).map(|(range, _)| range) {
+    for (range, _) in token_spans(text, |word| (is_identifier(word) || is_dotted_acronym(word)).then_some(None)) {
         output.push_str(&text[offset..range.start]);
         output.push(' ');
         offset = range.end;
@@ -195,7 +216,19 @@ fn protected_spans(
         if let Some(translated) = ukrainian_acronym(word) {
             return Some(Some(translated));
         }
-        (is_identifier(word) || in_marker_namespace(word)).then_some(None)
+        (is_identifier(word) || in_marker_namespace(word) || is_dotted_acronym(word)).then_some(None)
+    })
+    .map(|(mut range, replacement)| {
+        if is_dotted_acronym(&source[range.clone()]) {
+            if let Some(tail) = source[range.end..].strip_prefix('.') {
+                // Keep an unfamiliar abbreviation verbatim. For a known equivalent,
+                // omit an interior abbreviation dot while leaving sentence punctuation.
+                if replacement.is_none() || tail.trim_start().starts_with(char::is_lowercase) {
+                    range.end += 1;
+                }
+            }
+        }
+        (range, replacement)
     })
 }
 
@@ -254,13 +287,8 @@ fn ascii_tokens(text: &str) -> impl Iterator<Item = Range<usize>> + '_ {
 
 fn ukrainian_acronym(word: &str) -> Option<&'static str> {
     let compact;
-    let word = if word.contains('.') {
-        if word
-            .split('.')
-            .any(|part| part.len() != 1 || !part.as_bytes()[0].is_ascii_uppercase())
-        {
-            return None;
-        }
+    let dotted = is_dotted_acronym(word);
+    let word = if dotted {
         compact = word.replace('.', "");
         compact.as_str()
     } else {
@@ -273,9 +301,16 @@ fn ukrainian_acronym(word: &str) -> Option<&'static str> {
         "UNICEF" => "ЮНІСЕФ",
         "NASA" => "НАСА",
         "OMS" => "ВООЗ",
+        "QI" if dotted => "IQ",
         "UE" => "ЄС",
         _ => return None,
     })
+}
+
+fn is_dotted_acronym(word: &str) -> bool {
+    (3..=19).contains(&word.len())
+        && word.contains('.')
+        && word.split('.').all(|part| part.len() == 1 && part.as_bytes()[0].is_ascii_uppercase())
 }
 
 fn is_identifier(word: &str) -> bool {
@@ -335,6 +370,28 @@ mod tests {
             collision.restore(collision.input().to_owned()).unwrap(),
             "ZXQ001QXZ et ООН"
         );
+    }
+
+    #[test]
+    fn keeps_dotted_abbreviations_without_preserving_uppercase_headings() {
+        let protected = ProtectedText::new("Le C.N.R.S. collabore avec l’O.M.S. aujourd’hui.", "uk");
+        assert_eq!(protected.input(), "Le ZXQ001QXZ collabore avec l’ZXQ002QXZ aujourd’hui.");
+        assert_eq!(
+            protected.restore("Сьогодні ZXQ002QXZ співпрацює з ZXQ001QXZ.".into()).unwrap(),
+            "Сьогодні ВООЗ співпрацює з C.N.R.S."
+        );
+        let known_at_end = ProtectedText::new("Avec l’O.M.S.", "uk");
+        assert_eq!(known_at_end.restore("З ZXQ001QXZ.".into()).unwrap(), "З ВООЗ.");
+        let foreign = ProtectedText::new("L’O.M.S. annonce le résultat.", "en");
+        assert_eq!(
+            foreign.restore("ZXQ001QXZ announces the result.".into()).unwrap(),
+            "O.M.S. announces the result."
+        );
+        assert_eq!(ProtectedText::new("Le Q.I. varie.", "uk")
+            .restore("ZXQ001QXZ змінюється.".into()).unwrap(), "IQ змінюється.");
+        assert!(contains_dotted_acronym("Le C.N.R.S. publie le rapport."));
+        assert!(!contains_dotted_acronym("CHAPITRE II. M. Morrel arrive."));
+        assert!(!contains_dotted_acronym("Voir https://example.org/publications/A.B.C."));
     }
 
     #[test]

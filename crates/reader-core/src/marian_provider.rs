@@ -1493,6 +1493,7 @@ impl MarianProvider<'_> {
         let mut clock_retry_budget = 2;
         let mut ukrainian_retry_budget = 2;
         let mut attribution_retry_budget = 2;
+        let mut marker_retry_budget = 2;
         'segments: for segment in segments {
             checkpoint()?;
             if package.source == "fr" && package.target == "uk" {
@@ -1707,6 +1708,27 @@ impl MarianProvider<'_> {
                                 .and_then(|text| attribution.recover(&translated, &text))
                             {
                                 translated = recovered;
+                            }
+                        }
+                    }
+                }
+                if !protected.is_empty() && start == 0 && end == source_pieces.len() &&
+                    protected.restore(translated.clone()).is_err()
+                {
+                    let complete = |text: &String| {
+                        protected.restore(text.clone()).is_ok()
+                            && (package.target != "uk" || !crate::marian_target_uk::clearly_russian(text))
+                    };
+                    let alternative = decoded.clone()
+                        .filter_map(|tokens| decode_text(&tokens).ok())
+                        .find(complete);
+                    if let Some(alternative) = alternative {
+                        translated = alternative;
+                    } else if package.source == "fr" && marker_retry_budget > 0 {
+                        if let Some(input) = protected.detached_french_articles() {
+                            marker_retry_budget -= 1;
+                            if let Some(candidate) = reference(&input, settings.beam_size).ok().filter(complete) {
+                                translated = candidate;
                             }
                         }
                     }
