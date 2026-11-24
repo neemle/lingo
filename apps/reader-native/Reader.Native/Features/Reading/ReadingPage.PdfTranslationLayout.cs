@@ -70,7 +70,7 @@ public partial class ReadingPage
     private static bool NeedsPdfTranslation(PdfPageTranslationRow row) => row.LegacyGroup || !HasPdfTranslation(row);
     private bool NeedsPreferredPdfTranslation(PdfPageTranslationRow row) =>
         NeedsPdfTranslation(row) || (!row.Reviewed && readiness is { Ready: true, DirectModelRevision: { } revision }
-            && row.DirectModelRevision != revision);
+            && (row.PivotLanguage is not null || row.DirectModelRevision is { } previous && previous != revision));
 
     private (ScrollView Viewport, GraphicsView Surface) ActivePdfTranslationLayout() =>
         DetachedPdfReader.IsVisible
