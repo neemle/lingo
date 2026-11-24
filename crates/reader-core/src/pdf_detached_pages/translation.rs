@@ -9,6 +9,20 @@ use std::{collections::BTreeMap, ops::Range};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PdfTranslationSource {
+    language: String,
+    revision_id: Option<String>,
+    detached: bool,
+}
+
+impl PdfTranslationSource {
+    fn matches(&self, language: &str, revision_id: Option<&str>, detached: bool) -> bool {
+        self.language == language && self.revision_id.as_deref() == revision_id && self.detached == detached
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PdfSentenceRefresh {
     offset_utf16: usize,
     #[serde(default)]
@@ -134,17 +148,19 @@ impl Store {
     pub fn pdf_page_translation_with_priority(
         &mut self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
     ) -> Result<Vec<PdfPageTranslationRow>> {
-        self.pdf_page_translation_until_canceled(id, page, target, cached_only, background, None, &|| false)
+        self.pdf_page_translation_until_canceled(id, page, target, cached_only, background, None, None, &|| false)
     }
 
     pub fn pdf_page_translation_until_canceled(
         &mut self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
         refresh: Option<&PdfSentenceRefresh>,
+        expected: Option<&PdfTranslationSource>,
         canceled: &dyn Fn() -> bool,
     ) -> Result<Vec<PdfPageTranslationRow>> {
-        match self.pdf_page_translation_result_interruptible(id, page, target, cached_only, background, refresh, canceled) {
+        match self.pdf_page_translation_result_interruptible(id, page, target, cached_only, background, refresh, expected, canceled) {
             Err(TranslationBatchError::Deferred { .. }) if background && !cached_only && !canceled() =>
-                self.pdf_page_translation_result(id, page, target, true, background).map_err(String::from),
+                self.pdf_page_translation_result_interruptible(id, page, target, true, background, None, expected, canceled)
+                    .map_err(String::from),
             result => result.map_err(String::from),
         }
     }
@@ -152,12 +168,13 @@ impl Store {
     pub(crate) fn pdf_page_translation_result(
         &mut self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
     ) -> std::result::Result<Vec<PdfPageTranslationRow>, TranslationBatchError> {
-        self.pdf_page_translation_result_interruptible(id, page, target, cached_only, background, None, &|| false)
+        self.pdf_page_translation_result_interruptible(id, page, target, cached_only, background, None, None, &|| false)
     }
 
     pub(crate) fn pdf_page_translation_result_interruptible(
         &mut self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
         refresh: Option<&PdfSentenceRefresh>,
+        expected: Option<&PdfTranslationSource>,
         canceled: &dyn Fn() -> bool,
     ) -> std::result::Result<Vec<PdfPageTranslationRow>, TranslationBatchError> {
         const CANCELED: &str = "Переклад сторінки скасовано.";
@@ -168,13 +185,20 @@ impl Store {
             return Err(TranslationBatchError::Failed("Повторний переклад потребує активного запиту.".into()));
         }
         let missing_selection = || "Виділене речення змінилося. Виберіть його ще раз.".to_owned();
+        let changed_source = || TranslationBatchError::Failed("Текст сторінки змінився. Відкрийте сторінку знову.".into());
         let (mut document, physical, bounds, projected_offset, boundaries, revision) = if let Some(cached) = self.detached_pdf_sentences(id, page)? {
+            if expected.is_some_and(|source| !source.matches(&cached.language, Some(&cached.revision), true)) {
+                return Err(changed_source());
+            }
             let local_start = cached.sentences.first().map_or(0, |sentence| sentence.start_utf16);
             let projection = self.project_pdf_translation_page(id, page, target, cached.text, cached.sentences, cached.language)?;
             let offset = projection.physical_sentences().first().map_or(0, |sentence| sentence.start_utf16 - local_start);
             (projection.document, projection.physical, None, offset, PageBoundaries::Projected, Some(cached.revision))
         } else {
             let document = self.translation_document(id)?;
+            if expected.is_some_and(|source| !source.matches(&document.language, document.current_revision_id.as_deref(), false)) {
+                return Err(changed_source());
+            }
             let bounds = if document.format == "pdf" {
                 crate::pdf_reading_position::page_bounds(&document, page)
             } else {

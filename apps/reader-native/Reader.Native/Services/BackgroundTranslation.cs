@@ -348,7 +348,7 @@ internal sealed class BackgroundTranslation
                     Schedule(Cadence);
                     SetStatus($"Опрацьовуємо відкриту сторінку {address.Page + 1}…", running: true);
                     visibleAttempt = (visible, now + 30);
-                    var complete = await session.PrefetchVisiblePdfTranslationAsync(address, token);
+                    var complete = await session.PrefetchVisiblePdfTranslationAsync(address, token, visible.DetachedText);
                     token.ThrowIfCancellationRequested();
                     if (enabled && !paused && visiblePdf == visible && visibleAttempt == (visible, now + 30))
                     {

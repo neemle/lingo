@@ -224,6 +224,8 @@ public partial class ReadingPage
         AppState.Session.Document is { } document && SupportsOriginalTranslationLayout(document) &&
         page.Document == document.Id &&
         page.Revision == document.CurrentRevisionId &&
+        DetachedPdfReader.IsVisible == (page.DetachedText is not null) &&
+        (!DetachedPdfReader.IsVisible || detachedAddress?.Text == page.DetachedText) &&
         target != document.Language && (!PdfPageNotice.IsVisible || DetachedPdfReader.IsVisible) &&
         (CurrentNativePdfWindow(document.Id) is not { } window || window.Center == page.Page)
             ? new(page.Document, page.Page, document.CurrentRevisionId, document.Language, target, page.DetachedText)
@@ -590,9 +592,10 @@ public partial class ReadingPage
         RefreshPdfTranslationLayout();
         try
         {
+            var source = PdfTranslationSource.FromPage(address.SourceLanguage, address.Revision, address.DetachedText);
             var translation = AppState.Session.PdfPageTranslationAsync(address.Document, address.Page,
-                address.Target, cachedOnly, cancellation?.Token ?? default, refresh?.Request);
-            if (!cachedOnly && refresh is null) _ = FollowPdfTranslationBatchesAsync(address, request, translation);
+                address.Target, cachedOnly, cancellation?.Token ?? default, refresh?.Request, source);
+            if (!cachedOnly && refresh is null) _ = FollowPdfTranslationBatchesAsync(address, source, request, translation);
             var rows = await translation;
             var displayMatches = CurrentPdfLayoutAddress() == address;
             var ownsRefresh = refresh is not null && cancellation is { IsCancellationRequested: false } &&
@@ -696,7 +699,8 @@ public partial class ReadingPage
         return cancellation;
     }
 
-    private async Task FollowPdfTranslationBatchesAsync(PdfLayoutAddress address, int request, Task translation)
+    private async Task FollowPdfTranslationBatchesAsync(PdfLayoutAddress address, PdfTranslationSource source,
+        int request, Task translation)
     {
         bool Current() => !translation.IsCompleted && readingPageActive && pdfTranslationLayout &&
             request == pdfLayoutRequestId && CurrentPdfLayoutAddress() == address &&
@@ -708,7 +712,7 @@ public partial class ReadingPage
             try
             {
                 var rows = await AppState.Session.PdfPageTranslationAsync(address.Document, address.Page,
-                    address.Target, cachedOnly: true);
+                    address.Target, cachedOnly: true, source: source);
                 if (!Current()) return;
                 if (rows.Any(row => row.Text is not null) && !pdfLayoutRows.SequenceEqual(rows))
                 {

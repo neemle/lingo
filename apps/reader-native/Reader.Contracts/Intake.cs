@@ -1,4 +1,6 @@
 using System.Text.Json.Serialization;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Reader.Contracts;
 
@@ -23,6 +25,14 @@ public sealed record PdfReadWindow(int Center, int PageCount, PdfReadPage[] Page
 public sealed record PdfSentenceRefresh(int OffsetUtf16, PdfSentenceRefreshAnchor Anchor);
 
 public sealed record PdfSentenceRefreshAnchor(string SentenceId, string SourceLanguage, string? RevisionId);
+
+public sealed record PdfTranslationSource(string Language, string? RevisionId, bool Detached)
+{
+    public static PdfTranslationSource FromPage(string language, string? revisionId, string? detachedText) =>
+        detachedText is null
+            ? new(language, revisionId, false)
+            : new(language, Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(detachedText))), true);
+}
 
 public sealed record DetachedPdfSentence(Sentence Sentence, int Position, int Total, string Language,
     bool Bookmarked = false, string? Note = null)

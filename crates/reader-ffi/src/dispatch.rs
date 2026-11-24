@@ -169,10 +169,10 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             value(store.update_detached_pdf_annotation(&id, page, &sentence_id, change)),
         Command::DetachedPdfPassage { id, page, sentence_id, target, cached_only, background } =>
             value(store.detached_pdf_passage(&id, page, &sentence_id, &target, cached_only, background)),
-        Command::PdfPageTranslation { id, page, target, cached_only, background, refresh_at, refresh, .. } => {
+        Command::PdfPageTranslation { id, page, target, cached_only, background, refresh_at, refresh, source, .. } => {
             let legacy = refresh_at.map(reader_core::PdfSentenceRefresh::at_offset);
             value(store.pdf_page_translation_until_canceled(
-                &id, page, &target, cached_only, background, refresh.as_ref().or(legacy.as_ref()), &|| false))
+                &id, page, &target, cached_only, background, refresh.as_ref().or(legacy.as_ref()), source.as_ref(), &|| false))
         }
         Command::DetachedPdfTranslation { id, page, sentence_id, target, cached_only, background } =>
             value(store.detached_pdf_translation(&id, page, &sentence_id, &target, cached_only, background)),

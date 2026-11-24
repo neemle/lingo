@@ -264,6 +264,49 @@ fn recovered_pdf_checkpoint_preserves_saved_pages_without_resolving_the_unread_t
 }
 
 #[test]
+fn pdf_translation_checks_the_displayed_page_source() {
+    let store = StoreFixture::new();
+    let path = store.dir.join("source.pdf");
+    std::fs::write(&path, b"%PDF-1.4\n").unwrap();
+    let mut pages = vec![""; 42];
+    pages[0] = "Première page.";
+    let imported = call(store.handle, json!({
+        "version":1,"operation":"import_pdf_file","name":"source.pdf","language":"fr",
+        "path":path,"pageTexts":pages,"lines":[],"deferredFrom":1,
+    }));
+    assert_eq!(imported["ok"], true, "{imported}");
+    let id = &imported["data"]["id"];
+    let revision = &imported["data"]["currentRevisionId"];
+    let cached = |page, source| call(store.handle, json!({
+        "version":1,"operation":"pdf_page_translation","id":id,"page":page,"target":"uk",
+        "cachedOnly":true,"source":source,
+    }));
+    let canonical = json!({"language":"fr","revisionId":revision,"detached":false});
+    assert_eq!(cached(0, canonical.clone())["ok"], true);
+    assert_error(&cached(0, json!({"language":"en","revisionId":revision,"detached":false})), "core_error");
+
+    let enabled = call(store.handle, json!({
+        "version":1,"operation":"update_reader_preference",
+        "change":{"field":"backgroundTranslation","value":true},
+    }));
+    assert_eq!(enabled["ok"], true, "{enabled}");
+    let cached_text = call(store.handle, json!({
+        "version":1,"operation":"cache_background_pdf_text_layer","id":id,
+        "page":40,"revision":revision,"text":"Dernière page.",
+    }));
+    assert_eq!(cached_text["data"], true, "{cached_text}");
+    let detached = call(store.handle, json!({
+        "version":1,"operation":"detached_pdf_sentence","id":id,"page":40,
+    }));
+    let detached_revision = &detached["data"]["revisionId"];
+    assert!(detached_revision.is_string(), "{detached}");
+    assert_eq!(cached(40, json!({"language":"fr","revisionId":detached_revision,"detached":true}))["ok"], true);
+    assert_error(&cached(40, canonical), "core_error");
+    assert_error(&cached(40, json!({"language":"fr","revisionId":"old","detached":true})), "core_error");
+    assert_eq!(cached(40, serde_json::Value::Null)["ok"], true);
+}
+
+#[test]
 fn manual_pdf_ocr_retry_resumes_only_the_current_window_without_waiting() {
     let store = StoreFixture::new();
     let original = store.dir.join("scan.pdf");

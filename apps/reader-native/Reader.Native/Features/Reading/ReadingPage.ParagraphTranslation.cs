@@ -633,7 +633,8 @@ public partial class ReadingPage
             {
                 var refresh = new PdfSentenceRefresh(pdf.Offset, new(key.Sentence, key.Source, pdf.Address.Revision));
                 await session.PdfPageTranslationAsync(pdf.Address.Document, pdf.Address.Page, key.Target,
-                    cachedOnly: false, refresh: refresh);
+                    cachedOnly: false, refresh: refresh,
+                    source: new PdfTranslationSource(key.Source, pdf.Address.Revision, false));
                 if (cacheRevision != AppState.StorageRevision) return;
                 refreshedPdf = (pdf.Address, source);
                 if (ActiveTranslationKey() == key) ClearTranslationFocus();

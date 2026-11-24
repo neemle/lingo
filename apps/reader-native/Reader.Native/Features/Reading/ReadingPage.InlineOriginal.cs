@@ -138,8 +138,8 @@ public partial class ReadingPage
             request = ++inlinePdfRequest;
             inlinePdfLoading = address;
             InlinePdfHighlight.IsVisible = DetachedInlinePdfHighlight.IsVisible = false;
-            if (inlinePdfAddress is { } displayed &&
-                (displayed.Document != address.Document || displayed.Page != address.Page))
+            var previous = inlinePdfAddress;
+            if (previous is not null)
             {
                 ClearInlinePdfFrame();
                 RefreshPdfTranslationLayout();
@@ -179,7 +179,7 @@ public partial class ReadingPage
             if (request != inlinePdfRequest || !showInlineOriginal || !readingPageActive ||
                 session.Document is not { } current || current.Id != address.Document ||
                 current.CurrentRevisionId != address.Revision) return;
-            var changedPage = inlinePdfAddress is not { } previous ||
+            var changedPage = previous is null ||
                 previous.Document != address.Document || previous.Page != address.Page;
             InlinePdfImage.Source = InlinePreviewSource(preview);
             DetachedInlinePdfImage.Source = InlinePreviewSource(preview);

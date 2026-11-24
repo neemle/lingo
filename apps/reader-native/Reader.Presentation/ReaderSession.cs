@@ -311,16 +311,19 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     }
 
     public Task<PdfPageTranslationRow[]> PdfPageTranslationAsync(string id, int page, string target, bool cachedOnly,
-        CancellationToken cancellationToken = default, PdfSentenceRefresh? refresh = null) =>
+        CancellationToken cancellationToken = default, PdfSentenceRefresh? refresh = null,
+        PdfTranslationSource? source = null) =>
         Task.Run(() => client.PdfPageTranslation(id, page, target, cachedOnly,
-            cancellationToken: cancellationToken, refresh: refresh),
+            cancellationToken: cancellationToken, refresh: refresh, source: source),
             cancellationToken);
 
-    public async Task<bool> PrefetchVisiblePdfTranslationAsync(BackgroundTranslatedPage address, CancellationToken cancellationToken)
+    public async Task<bool> PrefetchVisiblePdfTranslationAsync(BackgroundTranslatedPage address, CancellationToken cancellationToken,
+        string? detachedText = null)
     {
+        var source = PdfTranslationSource.FromPage(address.Source, address.RevisionId, detachedText);
         var rows = await Task.Run(() =>
             client.PdfPageTranslation(address.DocumentId, address.Page, address.Target, cachedOnly: false,
-                background: true, cancellationToken: cancellationToken), cancellationToken);
+                background: true, cancellationToken: cancellationToken, source: source), cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (rows.Any(row => row.Text is not null)) BackgroundPageTranslated?.Invoke(address);
         return rows.Length > 0 && rows.All(row => row.Text is not null && !row.LegacyGroup);

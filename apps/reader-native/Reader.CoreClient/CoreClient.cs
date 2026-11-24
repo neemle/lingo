@@ -308,11 +308,12 @@ public sealed class CoreClient : IDisposable
         Call<bool>(new { version = 1, operation = "cache_background_pdf_text_layer", id, revision, page, text });
 
     public PdfPageTranslationRow[] PdfPageTranslation(string id, int page, string target, bool cachedOnly,
-        bool background = false, CancellationToken cancellationToken = default, PdfSentenceRefresh? refresh = null)
+        bool background = false, CancellationToken cancellationToken = default, PdfSentenceRefresh? refresh = null,
+        PdfTranslationSource? source = null)
     {
         ref var sequence = ref (background ? ref nextBackgroundTranslationRequest : ref nextPdfPageTranslationRequest);
         return CallCancelable<PdfPageTranslationRow[]>(ref sequence, cancellationToken,
-            requestId => new { version = 1, operation = "pdf_page_translation", id, page, target, cachedOnly, background, refresh, requestId },
+            requestId => new { version = 1, operation = "pdf_page_translation", id, page, target, cachedOnly, background, refresh, source, requestId },
             background ? CancelBackgroundTranslationRequest
                 : requestId => new { version = 1, operation = "cancel_pdf_page_translation", requestId });
     }

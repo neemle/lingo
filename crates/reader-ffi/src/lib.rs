@@ -260,7 +260,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 return encode_job(worker.detached_pdf_passage(id, *page, sentence_id, target, *cached_only, *background));
             }
         }
-        Command::PdfPageTranslation { id, page, target, cached_only, background, refresh_at, refresh, request_id } => {
+        Command::PdfPageTranslation { id, page, target, cached_only, background, refresh_at, refresh, source, request_id } => {
             let kind = if *background { ModelRequestKind::BackgroundTranslation } else { ModelRequestKind::PdfPageTranslation };
             let canceled = request_cancellation(handle, *request_id, kind)?;
             let canceled_error = || Error::new("canceled", "Переклад сторінки скасовано.");
@@ -269,7 +269,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             if let Some(worker) = worker {
                 let legacy = refresh_at.map(reader_core::PdfSentenceRefresh::at_offset);
                 let result = worker.pdf_page_translation_until_canceled(
-                    id, *page, target, *cached_only, *background, refresh.as_ref().or(legacy.as_ref()), &canceled,
+                    id, *page, target, *cached_only, *background, refresh.as_ref().or(legacy.as_ref()), source.as_ref(), &canceled,
                 );
                 return if canceled() { Err(canceled_error()) } else { encode_job(result) };
             }

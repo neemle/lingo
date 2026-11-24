@@ -732,7 +732,7 @@ impl Store {
         &mut self, document: &Document, target: &str, page: u16, start: usize, next: usize, canceled: &dyn Fn() -> bool,
     ) -> Result<TranslationWarmStep> {
         let id = &document.id;
-        let rows = self.pdf_page_translation_result_interruptible(id, page, target, false, true, None, canceled);
+        let rows = self.pdf_page_translation_result_interruptible(id, page, target, false, true, None, None, canceled);
         if canceled() { return Err("Фоновий переклад скасовано.".into()); }
         let layout_deferred = matches!(&rows, Err(TranslationBatchError::Deferred { .. }));
         let rows = if layout_deferred {

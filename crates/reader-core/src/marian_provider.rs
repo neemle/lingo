@@ -558,16 +558,17 @@ impl StoreWorker {
     pub fn pdf_page_translation_with_priority(
         self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
     ) -> Result<Vec<crate::pdf_detached_pages::PdfPageTranslationRow>> {
-        self.pdf_page_translation_until_canceled(id, page, target, cached_only, background, None, &|| false)
+        self.pdf_page_translation_until_canceled(id, page, target, cached_only, background, None, None, &|| false)
     }
 
     pub fn pdf_page_translation_until_canceled(
         self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
         refresh: Option<&crate::PdfSentenceRefresh>,
+        expected: Option<&crate::PdfTranslationSource>,
         canceled: &dyn Fn() -> bool,
     ) -> Result<Vec<crate::pdf_detached_pages::PdfPageTranslationRow>> {
         let flags = if cached_only { OpenFlags::SQLITE_OPEN_READ_ONLY } else { OpenFlags::SQLITE_OPEN_READ_WRITE };
-        self.open(flags)?.pdf_page_translation_until_canceled(id, page, target, cached_only, background, refresh, canceled)
+        self.open(flags)?.pdf_page_translation_until_canceled(id, page, target, cached_only, background, refresh, expected, canceled)
     }
 
     pub fn translate_detached_pdf_sentence(

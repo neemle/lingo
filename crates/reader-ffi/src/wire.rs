@@ -827,6 +827,7 @@ pub enum Command {
         #[serde(rename = "refreshAtUtf16")]
         refresh_at: Option<usize>,
         refresh: Option<reader_core::PdfSentenceRefresh>,
+        source: Option<reader_core::PdfTranslationSource>,
         #[serde(rename = "requestId")]
         request_id: Option<u64>,
     },
