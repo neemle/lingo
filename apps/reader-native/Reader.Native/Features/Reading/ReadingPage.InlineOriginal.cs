@@ -553,16 +553,20 @@ public partial class ReadingPage
             if (fitted.Width <= 0 || fitted.Height <= 0) return;
             foreach (var line in lines)
             {
-                if (!Overlaps(line.SourceSpan, start, end)) continue;
+                if (!Visible(line.SourceSpan)) continue;
                 var usedWord = false;
                 foreach (var word in line.Words ?? [])
                 {
-                    if (!Overlaps(word.SourceSpan, start, end)) continue;
+                    if (!Visible(word.SourceSpan)) continue;
                     usedWord = true;
                     DrawBox(word.X, word.Y, word.Width, word.Height, word.SourceSpan, exactWord: true);
                 }
-                if (!usedWord) DrawBox(line.X, line.Y, line.Width, line.Height, line.SourceSpan, exactWord: nativeWords);
+                if (!usedWord) DrawBox(line.X, line.Y, line.Width, line.Height, line.SourceSpan,
+                    exactWord: nativeWords || !Overlaps(line.SourceSpan, start, end));
             }
+
+            // A search result can start in the active sentence and continue into the next.
+            bool Visible(OcrSpan? span) => Overlaps(span, start, end) || IsFocus(span, selectedWord);
 
             void DrawBox(double x, double y, double w, double h, OcrSpan? span, bool exactWord)
             {

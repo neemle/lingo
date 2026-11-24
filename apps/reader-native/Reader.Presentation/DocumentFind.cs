@@ -5,6 +5,8 @@ namespace Reader.Presentation;
 public static class DocumentFind
 {
     public const int PageSize = 30;
+    public sealed record PdfFindHit(int Page, TextSelection Selection, string Text);
+    public sealed record PdfFindCursor(int Page, int Offset);
 
     public static bool Contains(string text, string query)
     {
@@ -30,6 +32,54 @@ public static class DocumentFind
             positions.Add(position);
         }
         return (positions.ToArray(), null);
+    }
+
+    public static (PdfFindHit[] Matches, PdfFindCursor? Next) FindPdfPage(Document document, string query,
+        int startPage, int startUtf16, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (document.PdfPageStarts is not { } starts || string.IsNullOrWhiteSpace(query)) return ([], null);
+
+        var hits = new List<PdfFindHit>(PageSize);
+        for (var page = Math.Max(0, startPage); page < starts.Length; page++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (starts[page] is not int pageStart) continue;
+            var end = document.Text.Length;
+            for (var next = page + 1; next < starts.Length; next++)
+            {
+                if (starts[next] is not int nextStart) continue;
+                end = nextStart;
+                break;
+            }
+            if (pageStart < 0 || end <= pageStart || end > document.Text.Length) continue;
+
+            var source = document.Text[pageStart..end];
+            var minimum = page == startPage ? startUtf16 : pageStart;
+            var lastStart = -1;
+            int[]? excerptStarts = null;
+            foreach (var selection in PdfSourceMatches(source, query, document.Language, pageStart))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                // Raw text and a rejoined word may identify the same physical occurrence.
+                if (selection.StartUtf16 < minimum || selection.StartUtf16 == lastStart) continue;
+                if (hits.Count == PageSize)
+                    return (hits.ToArray(), new PdfFindCursor(page, selection.StartUtf16));
+
+                lastStart = selection.StartUtf16;
+                excerptStarts ??= System.Globalization.StringInfo.ParseCombiningCharacters(source);
+                hits.Add(new(page, selection, PdfExcerpt(source, excerptStarts, selection.StartUtf16 - pageStart)));
+            }
+        }
+        return (hits.ToArray(), null);
+    }
+
+    private static string PdfExcerpt(string source, int[] starts, int offset)
+    {
+        var first = Math.Max(0, Array.BinarySearch(starts, offset) - 8);
+        var end = first + 240;
+        var tail = end < starts.Length;
+        return (first > 0 ? "…" : "") + source[starts[first]..(tail ? starts[end] : source.Length)] + (tail ? "…" : "");
     }
 
     public static string MatchingExcerpt(string text, string query)

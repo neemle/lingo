@@ -10,7 +10,8 @@ public partial class ReadingPage
     private sealed record DocumentFindSelection(int Position, bool Translation,
         int? PhysicalPage = null, string? SentenceId = null, DetachedPdfTranslation? CachedMachine = null,
         string? Query = null, TranslationFindFragment? PdfFragment = null, string? SavedText = null,
-        TranslationAlignment? Alignment = null, string? PivotLanguage = null, string? SourceText = null);
+        TranslationAlignment? Alignment = null, string? PivotLanguage = null, string? SourceText = null,
+        TextSelection? SourceMatch = null);
     private sealed record DocumentFindFocus(string Document, string? Revision, int? Page,
         string Sentence, TextSelection? Span = null, string? Target = null, string? Query = null,
         TranslationFindFragment? PdfFragment = null, TranslationPair? Translation = null);
@@ -58,6 +59,20 @@ public partial class ReadingPage
             {
                 readingLayout = ReaderLayout.Automatic;
                 ArrangeReadingColumns();
+            }
+
+            if (match.SourceMatch is { } exact)
+            {
+                if (current.CurrentRevisionId is not { } exactRevision || exactRevision != document.CurrentRevisionId ||
+                    exact.StartUtf16 > current.Text.Length - exact.LengthUtf16 ||
+                    !current.Text.AsSpan(exact.StartUtf16, exact.LengthUtf16).SequenceEqual(exact.Text))
+                {
+                    await DisplayAlertAsync("Пошук у документі",
+                        "Текст змінився. Повторіть пошук, щоб побачити актуальні збіги.", "Гаразд");
+                    return;
+                }
+                await AnchorCanonicalFindSpanAsync(session, current.Id, exactRevision, exact);
+                return;
             }
 
 #if MACCATALYST
@@ -112,12 +127,7 @@ public partial class ReadingPage
                 DocumentFind.PdfSourceMatches(current.Sentences[position].Text, sourceQuery, current.Language,
                     current.Sentences[position].StartUtf16).FirstOrDefault() is { } sourceMatch)
             {
-                StopSpeech();
-                var cursor = await session.AnchorReadingSelectionAsync(current.Id, revision, sourceMatch);
-                if (cursor is not null && readingPageActive && session.Document is { } selected &&
-                    selected.Id == current.Id && selected.CurrentRevisionId == revision &&
-                    session.Sentence?.Id == cursor.SentenceId)
-                    RevealCanonicalFindSpan(current.Id, revision, cursor.SentenceId, sourceMatch);
+                await AnchorCanonicalFindSpanAsync(session, current.Id, revision, sourceMatch);
                 return;
             }
 #if MACCATALYST
@@ -150,6 +160,15 @@ public partial class ReadingPage
 
     private static bool MatchesFindSource(TranslationFindPage results, Document document) =>
         results.SourceRevisionId == document.CurrentRevisionId && results.SourceLanguage == document.Language;
+
+    private async Task AnchorCanonicalFindSpanAsync(ReaderSession session, string document, string revision, TextSelection match)
+    {
+        StopSpeech();
+        var cursor = await session.AnchorReadingSelectionAsync(document, revision, match);
+        if (cursor is not null && readingPageActive && session.Document is { } selected &&
+            selected.Id == document && selected.CurrentRevisionId == revision && session.Sentence?.Id == cursor.SentenceId)
+            RevealCanonicalFindSpan(document, revision, cursor.SentenceId, match);
+    }
 
     private static bool SameFindFragment(TranslationFindFragment? previous, TranslationFindFragment? latest) =>
         previous is null ? latest is null : latest is not null &&
@@ -565,12 +584,24 @@ public partial class ReadingPage
 #endif
             if (start.PhysicalPage is null)
             {
-                var pdfLanguage = document.Format == "pdf" ? document.Language : null;
-                var found = await Task.Run(() => DocumentFind.FindPage(document.Sentences, query, start.Position, token, pdfLanguage), token);
-                matches.AddRange(found.Positions.Select(position => new DocumentFindHit(document.Sentences[position].Text,
-                    new DocumentFindSelection(position, Translation: false))));
-                if (found.NextStart is int nextPosition)
-                    return new(matches.ToArray(), new DocumentFindCursor(nextPosition));
+                if (document is { Format: "pdf", PdfPageStarts: not null })
+                {
+                    var (hits, next) = await Task.Run(
+                        () => DocumentFind.FindPdfPage(document, query, start.Position, start.Offset, token), token);
+                    matches.AddRange(hits.Select(hit => new DocumentFindHit(hit.Text,
+                        new DocumentFindSelection(0, Translation: false, PhysicalPage: hit.Page, SourceMatch: hit.Selection))));
+                    if (next is { } continuation)
+                        return new(matches.ToArray(), new DocumentFindCursor(continuation.Page, Offset: continuation.Offset));
+                }
+                else
+                {
+                    var pdfLanguage = document.Format == "pdf" ? document.Language : null;
+                    var found = await Task.Run(() => DocumentFind.FindPage(document.Sentences, query, start.Position, token, pdfLanguage), token);
+                    matches.AddRange(found.Positions.Select(position => new DocumentFindHit(document.Sentences[position].Text,
+                        new DocumentFindSelection(position, Translation: false))));
+                    if (found.NextStart is int nextPosition)
+                        return new(matches.ToArray(), new DocumentFindCursor(nextPosition));
+                }
             }
             var cached = await AppendDetachedAsync(matches, query, start, null, token);
 #if MACCATALYST
