@@ -706,6 +706,8 @@ public sealed class CoreClient : IDisposable
 
     public PracticeAnswer AnswerPracticeQuestion(ulong revision, string? answer, uint elapsedMs) =>
         Call<PracticeAnswer>(new { version = 1, operation = "answer_practice_question", revision, answer, elapsedMs });
+    public void SavePracticeDraft(ulong revision, string draft) =>
+        Call<JsonElement>(new { version = 1, operation = "save_practice_draft", revision, draft });
     public void GradePractice(ulong revision, byte grade) =>
         Call<PracticeProgress>(new { version = 1, operation = "grade_practice", revision, grade });
     public void Restore(Backup backup) => Call<JsonElement>(new { version = 1, operation = "restore", backup });

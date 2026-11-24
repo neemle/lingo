@@ -22,6 +22,7 @@ public partial class PracticePage : ContentPage, IQueryAttributable
     private int loadVersion;
     private bool loading;
     private bool renderingSettings;
+    private bool restoringDraft;
     private bool grading;
     private bool visible;
     private CollectionRequest? pendingCollection;
@@ -247,7 +248,9 @@ public partial class PracticePage : ContentPage, IQueryAttributable
         EmptyAction.IsVisible = saved is null;
         Answer.Text = "";
         Answer.IsVisible = saved?.Revealed == true;
-        TypedAnswer.Text = "";
+        restoringDraft = true;
+        try { TypedAnswer.Text = saved?.Draft ?? ""; }
+        finally { restoringDraft = false; }
         Feedback.IsVisible = false;
         Choices.Children.Clear();
         QueueStatus.Text = saved is null ? "" : $"До повторення · {next.DueCount}";
@@ -283,6 +286,16 @@ public partial class PracticePage : ContentPage, IQueryAttributable
     }
 
     private async void RevealClicked(object? sender, EventArgs args) => await ShowAnswerAsync(null);
+
+    private void PracticeDraftChanged(object? sender, TextChangedEventArgs args)
+    {
+        if (!visible || restoringDraft || !Typing.IsVisible ||
+            progress is not { Question.Revealed: false } state) return;
+        var draft = args.NewTextValue ?? "";
+        if (Encoding.UTF8.GetByteCount(draft) > MaxAnswerBytes) return;
+        try { AppState.Session.SavePracticeDraft(state.Revision, draft); }
+        catch (Exception error) { QueueStatus.Text = error.Message; }
+    }
 
     private async void CheckTyped(object? sender, EventArgs args)
     {

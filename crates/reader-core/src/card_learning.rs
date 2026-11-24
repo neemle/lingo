@@ -295,6 +295,7 @@ mod tests {
                     options: Vec::new(),
                     revealed: true,
                     given_answer: Some(active.word.clone()),
+                    draft: None,
                     elapsed_ms: Some(500),
                 }),
                 collection: Some(PracticeCollection {
@@ -378,6 +379,7 @@ mod tests {
                     options: vec![],
                     revealed: true,
                     given_answer: None,
+                    draft: None,
                     elapsed_ms: None,
                 }),
                 collection: None,
@@ -492,6 +494,7 @@ mod tests {
                     options: vec![lawyer.translation.clone(), "правник".into(), "друге".into()],
                     revealed: true,
                     given_answer: Some("авокадо".into()),
+                    draft: None,
                     elapsed_ms: None,
                 }),
             })

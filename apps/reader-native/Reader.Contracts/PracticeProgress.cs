@@ -8,7 +8,7 @@ public sealed record PracticeCollection(string DocumentId, string? SourceHash = 
 public sealed record PracticeSettings(string Direction, byte Mode, PracticeCollection? Collection);
 
 public sealed record SavedQuestion(string CardId, string Prompt, string[] Answers, string[] Options,
-    bool Revealed = false, string? GivenAnswer = null, long? ElapsedMs = null);
+    bool Revealed = false, string? GivenAnswer = null, long? ElapsedMs = null, string? Draft = null);
 
 public sealed record PracticeQueue(PracticeProgress Progress, int DueCount, int TotalCards, bool? MatchesDictionary,
     string? Context = null);

@@ -65,7 +65,7 @@
       TextColor="{StaticResource Muted}" HorizontalTextAlignment="Center" LineHeight="1.2" IsVisible="False" />
      <Grid x:Name="Typing" ColumnDefinitions="*,Auto" ColumnSpacing="10" IsVisible="False"
       MaximumWidthRequest="460" HorizontalOptions="Fill">
-      <Entry x:Name="TypedAnswer" Placeholder="Ваша відповідь…" ReturnType="Done" Completed="CheckTyped"
+      <Entry x:Name="TypedAnswer" Placeholder="Ваша відповідь…" ReturnType="Done" Completed="CheckTyped" TextChanged="PracticeDraftChanged"
        SemanticProperties.Description="Ваша відповідь" />
       <Button Grid.Column="1" Text="Перевірити" Clicked="CheckTyped" Style="{StaticResource AccentButton}" />
      </Grid>

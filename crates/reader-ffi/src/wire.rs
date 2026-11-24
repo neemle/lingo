@@ -935,6 +935,10 @@ pub enum Command {
         #[serde(rename = "elapsedMs")]
         elapsed_ms: Option<u32>,
     },
+    SavePracticeDraft {
+        revision: u64,
+        draft: String,
+    },
     SetPractice {
         progress: reader_core::practice::PracticeProgress,
     },

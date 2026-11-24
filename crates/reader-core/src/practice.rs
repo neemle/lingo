@@ -39,6 +39,8 @@ pub struct SavedQuestion {
     pub revealed: bool,
     pub given_answer: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elapsed_ms: Option<u32>,
 }
 
@@ -98,6 +100,9 @@ impl PracticeProgress {
                     .any(|answer| answer.trim().is_empty())
                 || question.options.len() > 4
                 || (self.mode != 2 && !question.options.is_empty())
+                || question.draft.as_ref().is_some_and(|draft| {
+                    self.mode == 0 || question.revealed || !question.options.is_empty() || draft.len() > 2_000
+                })
                 || question.elapsed_ms.is_some_and(|elapsed| {
                     !question.revealed || elapsed > crate::review_schedule::MAX_ELAPSED_MS
                 })
@@ -417,6 +422,7 @@ impl Store {
                     options,
                     revealed: false,
                     given_answer: None,
+                    draft: None,
                     elapsed_ms: None,
                 });
                 changed = true;
@@ -434,6 +440,26 @@ impl Store {
             total_cards: cards.len(),
             context,
         })
+    }
+
+    /// Persist an unfinished typed answer without advancing the question revision.
+    pub fn save_practice_draft(&mut self, revision: u64, draft: &str) -> Result<()> {
+        if draft.len() > 2_000 {
+            return Err("Відповідь перевищує 2000 байтів.".into());
+        }
+        let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let mut progress = read(&tx)?.unwrap_or_default();
+        assert_revision(revision, progress.revision)?;
+        let question = progress.question.as_mut()
+            .filter(|question| progress.mode != 0 && !question.revealed && question.options.is_empty())
+            .ok_or("Немає відкритого запитання з введенням відповіді.")?;
+        let draft = (!draft.is_empty()).then_some(draft);
+        if question.draft.as_deref() != draft {
+            question.draft = draft.map(str::to_owned);
+            write(&tx, &progress)?;
+        }
+        tx.commit().map_err(|error| error.to_string())
     }
 
     /// Reveal and persist the answer once for the current question.
@@ -470,6 +496,7 @@ impl Store {
         }
         question.revealed = true;
         question.given_answer = answer.map(str::to_owned);
+        question.draft = None;
         question.elapsed_ms = elapsed_ms;
         let matches_dictionary = question.dictionary_match();
         progress.advance()?;
@@ -656,11 +683,21 @@ mod tests {
             direction: "reverse".into(), mode: 1, collection: None,
         })).unwrap().progress;
         assert_eq!(progress.question.unwrap().answers, ["manger", "mange", "mangeons"]);
+        store.save_practice_draft(progress.revision, "MANGE").unwrap();
+        assert!(store.save_practice_draft(progress.revision, &"é".repeat(1001)).is_err());
+        store.save_practice_draft(progress.revision, "").unwrap();
+        assert!(store.practice().unwrap().question.unwrap().draft.is_none());
+        store.save_practice_draft(progress.revision, "MANGEONS ").unwrap();
         let archive = store.export_dictionary(None).unwrap();
         drop(store);
         let mut store = Store::open(&path).unwrap();
+        let resumed = store.practice().unwrap();
+        assert_eq!(resumed.revision, progress.revision);
+        assert_eq!(resumed.question.unwrap().draft.as_deref(), Some("MANGEONS "));
         let answer = store.answer_practice_question(progress.revision, Some("MANGEONS"), None).unwrap();
         assert_eq!(answer.matches_dictionary, Some(true));
+        assert!(answer.progress.question.as_ref().unwrap().draft.is_none());
+        assert!(store.save_practice_draft(progress.revision, "stale").is_err());
         store.grade_practice(answer.progress.revision, 2).unwrap();
         let saved = store.snapshot().unwrap().vocabulary.pop().unwrap();
         assert_eq!(saved.forward.reviews, 0);
@@ -669,6 +706,7 @@ mod tests {
         let mut restored = Store::open(&root.path().join("restored.db")).unwrap();
         restored.import_dictionary(archive).unwrap();
         let resumed = restored.practice().unwrap();
+        assert_eq!(resumed.question.unwrap().draft.as_deref(), Some("MANGEONS "));
         let answer = restored.answer_practice_question(resumed.revision, Some("mangeons"), None).unwrap();
         assert_eq!(answer.matches_dictionary, Some(true));
     }
@@ -710,6 +748,7 @@ mod tests {
                     options: options.clone(),
                     revealed: false,
                     given_answer: None,
+                    draft: None,
                     elapsed_ms: None,
                 }),
             })

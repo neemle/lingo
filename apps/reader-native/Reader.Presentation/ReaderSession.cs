@@ -788,6 +788,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<PracticeAnswer> AnswerPracticeQuestionAsync(ulong revision, string? answer, uint elapsedMs) =>
         Task.Run(() => client.AnswerPracticeQuestion(revision, answer, elapsedMs));
 
+    public void SavePracticeDraft(ulong revision, string draft) => client.SavePracticeDraft(revision, draft);
+
     public Task GradePracticeAsync(ulong revision, byte grade) => RunAsync(() =>
     {
         client.GradePractice(revision, grade);
