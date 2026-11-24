@@ -587,6 +587,7 @@ public partial class ReadingPage
         if (translating || session.Busy || readiness?.Ready != true || ActiveTranslationKey() is not { } key
             || session.Document is not { } document) return;
 
+        var cacheRevision = AppState.StorageRevision;
         translating = true;
         statusKey = key;
         machineStatus = regenerate ? "Перекладаємо речення заново…"
@@ -601,6 +602,7 @@ public partial class ReadingPage
                 try
                 {
                     var result = await session.TranslateParagraphAsync(key.Document, key.Sentence, key.Target);
+                    if (cacheRevision != AppState.StorageRevision) return;
                     var paragraph = BuildParagraphWindow(document, scope, result);
                     if (paragraph.Units.Length > 0) RememberWindow(paragraph);
                     if (paragraph.UnitFor(document.Position) is { } translated && session.Document is { } current &&
@@ -612,6 +614,7 @@ public partial class ReadingPage
                 }
                 catch (Exception error)
                 {
+                    if (cacheRevision != AppState.StorageRevision) return;
                     if (ActiveTranslationKey() != key || ReviewedFor(document, key.Target, key.Sentence) is not null)
                         throw;
                     machineStatus = error.Message;
@@ -631,6 +634,7 @@ public partial class ReadingPage
                 var refresh = new PdfSentenceRefresh(pdf.Offset, new(key.Sentence, key.Source, pdf.Address.Revision));
                 await session.PdfPageTranslationAsync(pdf.Address.Document, pdf.Address.Page, key.Target,
                     cachedOnly: false, refresh: refresh);
+                if (cacheRevision != AppState.StorageRevision) return;
                 refreshedPage = pdf.Address;
                 if (ActiveTranslationKey() == key) ClearTranslationFocus();
                 machineStatus = "Речення перекладено заново.";
@@ -638,6 +642,7 @@ public partial class ReadingPage
             }
 
             var sentence = await session.TranslateSentenceAsync(key.Document, key.Sentence, key.Target, regenerate);
+            if (cacheRevision != AppState.StorageRevision) return;
             var standalone = sentence is null ? null : BuildSentenceWindow(document, scope, sentence);
             if (standalone is not null)
             {
@@ -647,7 +652,10 @@ public partial class ReadingPage
             else readinessPair = null;
             machineStatus = regenerate ? standalone is null ? "Повторний переклад недоступний." : "Речення перекладено заново." : null;
         }
-        catch (Exception error) { machineStatus = error.Message; }
+        catch (Exception error)
+        {
+            if (cacheRevision == AppState.StorageRevision) machineStatus = error.Message;
+        }
         finally
         {
             translating = false;
@@ -656,7 +664,7 @@ public partial class ReadingPage
                 NotifyPdfSentenceRefresh(address, key.Sentence);
                 if (CurrentPdfLayoutAddress() == address) RefreshCachedPdfPageLayout();
             }
-            UpdateTranslation();
+            if (readingPageActive) UpdateTranslation();
         }
     }
 

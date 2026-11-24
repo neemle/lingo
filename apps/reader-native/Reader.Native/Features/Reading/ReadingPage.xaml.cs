@@ -68,23 +68,7 @@ public partial class ReadingPage : ContentPage
     protected override void OnAppearing()
     {
         base.OnAppearing();
-        if (storageRevision != AppState.StorageRevision)
-        {
-            storageRevision = AppState.StorageRevision;
-            translationSource = null;
-            TargetCode = null;
-            translationWindows.Clear();
-            prefetchAttempts.Clear();
-            pdfLayoutRequestId++;
-            pdfLayoutRequest = null;
-            ReleasePdfLayoutTranslation()?.Cancel();
-            pdfLayoutRows = [];
-            recentPdfTranslations.Clear();
-            translationCacheVersion++;
-            lastCacheRestore = null;
-            detachedMachineTranslation = null;
-            InvalidateModelPassageCache();
-        }
+        var cacheChanged = ResetReaderViewCache();
         LoadReaderPreferences();
         inlinePdfFit = readerPreferences.PdfFit switch
         {
@@ -99,6 +83,7 @@ public partial class ReadingPage : ContentPage
             && Enum.IsDefined(storedLayout) ? storedLayout : ReaderLayout.Automatic;
         ArrangeReadingColumns();
         readingPageActive = true;
+        AppState.ReaderCacheInvalidated += ReaderCacheInvalidated;
         autoTranslate = readerPreferences.AutoTranslate ?? false;
         lastAutoTranslation = null;
         lastPrefetchOrigin = null;
@@ -118,6 +103,7 @@ public partial class ReadingPage : ContentPage
         _ = RestoreReadingWordAsync();
         readinessPair = null;
         UpdateTranslation();
+        if (cacheChanged && DetachedPdfReader.IsVisible) ResetDetachedTranslation();
         loadingSpeechPreferences = true;
         try
         {
@@ -132,6 +118,7 @@ public partial class ReadingPage : ContentPage
     protected override void OnDisappearing()
     {
         readingPageActive = false;
+        AppState.ReaderCacheInvalidated -= ReaderCacheInvalidated;
         AppState.TranslationWorker?.SetReaderTarget(null);
         readerOcrReview.CancelInference();
         CancelModelPassage();
@@ -164,9 +151,48 @@ public partial class ReadingPage : ContentPage
         base.OnDisappearing();
     }
 
+    private bool ResetReaderViewCache()
+    {
+        if (storageRevision == AppState.StorageRevision) return false;
+        storageRevision = AppState.StorageRevision;
+        translationSource = null;
+        TargetCode = null;
+        translationWindows.Clear();
+        prefetchAttempts.Clear();
+        CancelScheduledTranslation();
+        translationCacheVersion++;
+        lastCacheRestore = null;
+        lastAutoTranslation = null;
+        machineStatus = null;
+        readinessPair = null;
+        readinessRequest++;
+        if (documentFindFocus?.Translation is not null) documentFindFocus = null;
+        pdfLayoutRequestId++;
+        pdfLayoutRequest = null;
+        ReleasePdfLayoutTranslation()?.Cancel();
+        pdfLayoutRows = [];
+        pdfLayoutRowsStale = false;
+        pdfLayoutStatus = null;
+        recentPdfTranslations.Clear();
+        overflowContent = null;
+        detachedTranslationCacheVersion++;
+        detachedMachineTranslation = null;
+        InvalidateModelPassageCache();
+        return true;
+    }
+
+    private void ReaderCacheInvalidated()
+    {
+        if (!readingPageActive || !ResetReaderViewCache()) return;
+        LoadReaderPreferences();
+        UpdateTranslation();
+        if (DetachedPdfReader.IsVisible) ResetDetachedTranslation();
+    }
+
     internal void PrepareWindowClose()
     {
         readingPageActive = false;
+        AppState.ReaderCacheInvalidated -= ReaderCacheInvalidated;
         ReleasePdfLayoutTranslation()?.Cancel();
         readerOcrReview.CancelInference();
         CancelModelPassage();

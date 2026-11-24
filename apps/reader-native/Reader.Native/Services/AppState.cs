@@ -10,7 +10,13 @@ public static class AppState
     private static string[] readingHistoryDocumentIds = [];
     internal static BackgroundTranslation? TranslationWorker { get; private set; }
     internal static int StorageRevision { get; private set; }
-    internal static void InvalidateReaderCache() => StorageRevision++;
+    internal static event Action? ReaderCacheInvalidated;
+
+    internal static void InvalidateReaderCache()
+    {
+        StorageRevision++;
+        ReaderCacheInvalidated?.Invoke();
+    }
 
     internal static void StartTranslationWorker(IDispatcher dispatcher) =>
         TranslationWorker ??= new BackgroundTranslation(Session, dispatcher);

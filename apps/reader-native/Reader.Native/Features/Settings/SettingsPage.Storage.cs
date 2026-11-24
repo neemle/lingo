@@ -239,7 +239,6 @@ public partial class SettingsPage
                 await worker.PauseAsync();
             }
             var session = AppState.Session;
-            if (scope != "downloads") AppState.InvalidateReaderCache();
             try
             {
                 await session.ClearStorageAsync(scope);
@@ -272,6 +271,7 @@ public partial class SettingsPage
             {
                 if (storageOperationStarted)
                 {
+                    if (scope != "downloads") AppState.InvalidateReaderCache();
                     await RefreshStorageAsync(syncWorker: scope != "downloads");
                     if (scope != "cache")
                     {
