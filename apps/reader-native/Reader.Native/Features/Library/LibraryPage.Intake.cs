@@ -14,10 +14,19 @@ public partial class LibraryPage
     {
         if (item.DocumentId is { } completed) return completed;
         var session = AppState.Session;
+        string? selectedLanguage = null;
+        if (chooseLanguage)
+        {
+            selectedLanguage = source is not null
+                ? await ResolveImportLanguageAsync(source)
+                : await ChooseLanguageAsync("Мова оригіналу", item.Name);
+            if (selectedLanguage is null) return null;
+        }
 
-        Task<string?> ChooseAsync(Func<Task<string?>> detect) => source is not null
-            ? ResolveImportLanguageAsync(source, chooseLanguage, detect)
-            : DetectOrChooseStagedLanguageAsync(item.Name, detect);
+        Task<string?> ChooseAsync(Func<Task<string?>> detect) =>
+            selectedLanguage is not null ? Task.FromResult<string?>(selectedLanguage) :
+            source is not null ? ResolveImportLanguageAsync(source, detect) :
+            DetectOrChooseStagedLanguageAsync(item.Name, detect);
 
         switch (item.NextAction)
         {

@@ -13,6 +13,7 @@ public partial class LibraryPage
         public string Name => Native?.Name ?? Core!.Name;
         public DateTimeOffset ReceivedAt => Native?.ReceivedAt ?? DateTimeOffset.FromUnixTimeSeconds(Core!.ReceivedAt);
         public bool CanResume => Native?.Kind != "damaged";
+        public bool CanChooseLanguage => Native?.Kind == "file" || Core is { DocumentId: null };
         public string Label => Native?.Label ?? $"{Name} · {ReceivedAt.LocalDateTime:g}";
     }
 
@@ -60,17 +61,17 @@ public partial class LibraryPage
             var selected = Array.IndexOf(itemChoices, choice);
             if (selected < 0) return;
             var item = items[selected];
-            const string changeLanguage = "Змінити мову оригіналу";
-            string[] actions = !item.CanResume ? [] : item.Native?.SourceLanguage is null
-                ? ["Продовжити імпорт"] : ["Продовжити імпорт", changeLanguage];
+            const string chooseLanguage = "Вибрати мову й продовжити";
+            string[] actions = !item.CanResume ? [] : item.CanChooseLanguage
+                ? ["Продовжити імпорт", chooseLanguage] : ["Продовжити імпорт"];
             var action = await DisplayActionSheetAsync(item.Name, "Скасувати", "Видалити копію", actions);
             if (action == "Видалити копію" && await DisplayAlertAsync("Видалити вхідний матеріал?", item.Name, "Видалити", "Скасувати"))
             {
                 if (item.Native is { } native) await RemoveShareItemAsync(native);
                 else await AppState.Session.DiscardIntakeAsync(Guid.Parse(item.Core!.Id));
             }
-            if (action is "Продовжити імпорт" or changeLanguage)
-                await ImportInboxBatchAsync([item], chooseLanguage: action == changeLanguage);
+            if (action is "Продовжити імпорт" or chooseLanguage)
+                await ImportInboxBatchAsync([item], chooseLanguage: action == chooseLanguage);
         }
         catch (Exception error) { await DisplayAlertAsync("Вхідні матеріали", error.Message, "Гаразд"); }
         finally
@@ -103,7 +104,7 @@ public partial class LibraryPage
                 {
                     var imported = item.Native is { } native
                         ? await ImportInboxItemAsync(native, chooseLanguage)
-                        : await CompleteStagedIntakeAsync(item.Core!);
+                        : await CompleteStagedIntakeAsync(item.Core!, chooseLanguage: chooseLanguage);
                     lastDocument = imported ?? lastDocument;
                 }
                 catch (Exception error) { await DisplayAlertAsync(item.Name, error.Message, "Гаразд"); }

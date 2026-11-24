@@ -322,8 +322,9 @@ public partial class LibraryPage : ContentPage
     {
         var session = AppState.Session;
         await session.WaitUntilIdleAsync();
-        var language = await ResolveImportLanguageAsync(item, chooseLanguage, () => item.ScanPdf
-            ? Task.FromResult<string?>(null) : session.DetectDocumentLanguageAsync(item.Name, bytes));
+        Func<Task<string?>>? detect = chooseLanguage ? null : () => item.ScanPdf
+            ? Task.FromResult<string?>(null) : session.DetectDocumentLanguageAsync(item.Name, bytes);
+        var language = await ResolveImportLanguageAsync(item, detect);
         if (language is null) return null;
 
         ImportStatus.Text = "Відкриваємо PDF…";
@@ -344,13 +345,12 @@ public partial class LibraryPage : ContentPage
     }
 #endif
 
-    private async Task<string?> ResolveImportLanguageAsync(ShareInboxItem item, bool chooseLanguage,
-        Func<Task<string?>> detectLanguage)
+    private async Task<string?> ResolveImportLanguageAsync(ShareInboxItem item, Func<Task<string?>>? detectLanguage = null)
     {
         var saved = SupportedLanguage(item.SourceLanguage);
-        var language = saved ?? SupportedLanguage(await detectLanguage());
-        if (chooseLanguage || language is null)
-            language = await ChooseLanguageAsync("Мова оригіналу", item.Name, language);
+        var language = detectLanguage is null
+            ? await ChooseLanguageAsync("Мова оригіналу", item.Name, saved)
+            : saved ?? SupportedLanguage(await detectLanguage()) ?? await ChooseLanguageAsync("Мова оригіналу", item.Name);
         if (language is not null && item.SourceLanguage != language)
             await Task.Run(() => ShareInbox.SaveSourceLanguage(item, language));
         return language;
