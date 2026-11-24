@@ -11,13 +11,16 @@ internal static class DesktopFile
 
 internal static class DesktopImport
 {
+    internal sealed record Batch(ShareInboxItem[] Items, string? Failure);
+
     internal static readonly SemaphoreSlim Gate = new(1, 1);
-    private static readonly ConcurrentQueue<ShareInboxItem[]> Pending = new();
+    private static readonly ConcurrentQueue<Batch> Pending = new();
     private static int receiving;
     internal static event Action? Available;
     internal static bool HasPending => !Pending.IsEmpty;
     internal static bool HasIncoming => HasPending || Volatile.Read(ref receiving) > 0;
-    internal static bool TryTake(out ShareInboxItem[]? items) => Pending.TryDequeue(out items);
+    internal static bool TryPeek(out Batch? batch) => Pending.TryPeek(out batch);
+    internal static bool TryTake(out Batch? batch) => Pending.TryDequeue(out batch);
 
     internal static IDisposable TrackIncoming()
     {
@@ -39,45 +42,29 @@ internal static class DesktopImport
     {
         using var incoming = TrackIncoming();
         var staged = new List<ShareInboxItem>();
-        (string Name, Exception Error)? firstFailure = null;
-        var rejected = 0;
+        var rejected = new List<(string Name, Exception Error)>();
         foreach (var (name, stage) in inputs)
         {
             try { staged.Add(await stage().ConfigureAwait(false)); }
-            catch (Exception error)
-            {
-                firstFailure ??= (name, error);
-                rejected++;
-            }
+            catch (Exception error) { rejected.Add((name, error)); }
         }
 
-        if (firstFailure is { } failed)
-            RecordFailure(failed.Name, failed.Error, rejected);
-        PublishBatch(staged);
-        if (rejected > 0 && staged.Count == 0) Available?.Invoke();
+        PublishBatch(staged, rejected);
     }
 
-    private static string? failure;
-
-    internal static void ReportFailure(string name, Exception error)
+    internal static void PublishBatch(IEnumerable<ShareInboxItem> items,
+        IReadOnlyList<(string Name, Exception Error)>? rejected = null)
     {
-        RecordFailure(name, error, 1);
-        Available?.Invoke();
-    }
-
-    private static void RecordFailure(string name, Exception error, int rejected)
-    {
-        var detail = $"{Path.GetFileName(name)} · {error.GetBaseException().Message}";
-        Interlocked.Exchange(ref failure, rejected == 1 ? detail : $"Не збережено файлів: {rejected}. {detail}");
-    }
-
-    internal static string? TakeFailure() => Interlocked.Exchange(ref failure, null);
-
-    internal static void PublishBatch(IEnumerable<ShareInboxItem> items)
-    {
-        var batch = items.ToArray();
-        if (batch.Length == 0) return;
-        Pending.Enqueue(batch);
+        var staged = items.ToArray();
+        string? failure = null;
+        if (rejected is { Count: > 0 })
+        {
+            var (name, error) = rejected[0];
+            var detail = $"{Path.GetFileName(name)} · {error.GetBaseException().Message}";
+            failure = rejected.Count == 1 ? detail : $"Не збережено файлів: {rejected.Count}. {detail}";
+        }
+        if (staged.Length == 0 && failure is null) return;
+        Pending.Enqueue(new Batch(staged, failure));
         Available?.Invoke();
     }
 

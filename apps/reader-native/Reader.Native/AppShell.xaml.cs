@@ -87,17 +87,19 @@ public partial class AppShell : Shell
         {
             while (listening)
             {
-                if (DesktopImport.TakeFailure() is { } failure)
-                    await DisplayAlertAsync("Відкрити файл", failure, "Гаразд");
                 if (!DesktopImport.HasPending) break;
                 await DesktopImport.Gate.WaitAsync();
                 try
                 {
-                    if (!listening) return;
-                    if (CurrentPage is not LibraryPage) await GoToAsync(LibraryRoute);
-                    if (CurrentPage is not LibraryPage library || !DesktopImport.TryTake(out var items) || items is null)
-                        return;
-                    await library.ImportExternalBatchAsync(items);
+                    if (!listening || !DesktopImport.TryPeek(out var next) || next is null) return;
+                    if (next.Items.Length > 0 && CurrentPage is not LibraryPage) await GoToAsync(LibraryRoute);
+                    var library = CurrentPage as LibraryPage;
+                    if ((next.Items.Length > 0 && library is null) || !listening ||
+                        !DesktopImport.TryTake(out var batch) || batch is null) return;
+                    if (batch.Failure is { } failure)
+                        await DisplayAlertAsync("Відкрити файл", failure, "Гаразд");
+                    if (listening && batch.Items.Length > 0 && library is not null)
+                        await library.ImportExternalBatchAsync(batch.Items);
                 }
                 finally { DesktopImport.Gate.Release(); }
             }

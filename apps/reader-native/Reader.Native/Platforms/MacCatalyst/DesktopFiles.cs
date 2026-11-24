@@ -146,7 +146,7 @@ internal static class DesktopFiles
     {
         if (args.PlatformArgs?.DropSession is not { } session) return false;
         var staged = new List<ShareInboxItem>();
-        (string Name, Exception Error)? failure = null;
+        var rejected = new List<(string Name, Exception Error)>();
         foreach (var item in session.Items)
         {
             var suggested = "Документ";
@@ -176,13 +176,12 @@ internal static class DesktopFiles
             }
             catch (Exception error)
             {
-                failure ??= (suggested, error);
+                rejected.Add((suggested, error));
             }
         }
         // Import prompts can change the current page. Open them after all providers have been staged.
-        if (failure is { } failed) DesktopImport.ReportFailure(failed.Name, failed.Error);
-        DesktopImport.PublishBatch(staged);
-        return staged.Count > 0 || failure is not null;
+        DesktopImport.PublishBatch(staged, rejected);
+        return staged.Count > 0 || rejected.Count > 0;
     }
 
     private static Task<ShareInboxItem?> StageFileItemAsync(NSItemProvider provider)

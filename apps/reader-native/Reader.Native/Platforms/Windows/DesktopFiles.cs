@@ -34,6 +34,7 @@ internal static class DesktopFiles
         if (args.PlatformArgs?.DragEventArgs is not { } drag) return false;
         var deferral = drag.GetDeferral();
         var items = new List<ShareInboxItem>();
+        var rejected = new List<(string Name, Exception Error)>();
         var handled = false;
         try
         {
@@ -46,14 +47,14 @@ internal static class DesktopFiles
                     if (!DesktopFile.Supports(file.Name)) continue;
                     handled = true;
                     try { items.Add(await StageFileAsync(file)); }
-                    catch (Exception error) { DesktopImport.ReportFailure(file.Name, error); }
+                    catch (Exception error) { rejected.Add((file.Name, error)); }
                 }
             }
             if (!handled && data.Contains(StandardDataFormats.Bitmap))
             {
                 handled = true;
                 try { items.Add(await StageBitmapAsync(data, DroppedImageName)); }
-                catch (Exception error) { DesktopImport.ReportFailure(DroppedImageName, error); }
+                catch (Exception error) { rejected.Add((DroppedImageName, error)); }
             }
             else if (!containsFiles)
             {
@@ -64,7 +65,7 @@ internal static class DesktopFiles
             }
         }
         finally { deferral.Complete(); }
-        DesktopImport.PublishBatch(items);
+        DesktopImport.PublishBatch(items, rejected);
         return handled;
     }
 
