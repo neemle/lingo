@@ -117,11 +117,12 @@ internal static class TesseractOcr
     {
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         budget.CancelAfter(TimeSpan.FromSeconds(12));
-        try
+        foreach (ushort angle in new ushort[] { 180, 90, 270 })
         {
-            foreach (ushort angle in new ushort[] { 180, 90, 270 })
+            cancellation.ThrowIfCancellationRequested();
+            if (budget.IsCancellationRequested) break;
+            try
             {
-                budget.Token.ThrowIfCancellationRequested();
                 var image = RustCoreClient.RotateOcrPng(input, angle);
                 var (width, height) = ReadPngSize(image);
                 var output = await ExecuteAsync(executable,
@@ -130,13 +131,18 @@ internal static class TesseractOcr
                 var recovered = RustCoreClient.ParseOcrTsv(output, width, height, imageRotation: angle);
                 if (recovered.Length > 0) lines = RustCoreClient.MergeRotatedOcr(lines, recovered);
             }
+            catch (OperationCanceledException) when (budget.IsCancellationRequested)
+            {
+                cancellation.ThrowIfCancellationRequested();
+                break;
+            }
+            catch (Exception error) when (CanFallback(error))
+            {
+                cancellation.ThrowIfCancellationRequested();
+                Debug.WriteLine($"OCR {angle}°: {error.Message}");
+            }
         }
-        catch (Exception error) when (CanFallback(error) ||
-            error is OperationCanceledException && budget.IsCancellationRequested)
-        {
-            cancellation.ThrowIfCancellationRequested();
-            Debug.WriteLine(error.Message);
-        }
+        cancellation.ThrowIfCancellationRequested();
         return lines;
     }
 
