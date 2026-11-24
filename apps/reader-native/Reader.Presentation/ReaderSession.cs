@@ -335,6 +335,14 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         PdfOcrUpdated?.Invoke(id, page, true);
     }
 
+    public async Task<bool> RecoverPdfScanOverlayAsync(string id, int page, string revisionId, string language,
+        string expectedText, OcrLine[] lines)
+    {
+        var changed = await Task.Run(() => client.RecoverPdfScanOverlay(id, page, revisionId, language, expectedText, lines));
+        if (changed) PdfOcrUpdated?.Invoke(id, page, true);
+        return changed;
+    }
+
     public async Task<bool> SupplementPdfOcrPageAsync(string id, int page, string revisionId, string language,
         bool detached, OcrLine[] lines)
     {

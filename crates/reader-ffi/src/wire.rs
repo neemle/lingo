@@ -360,6 +360,8 @@ pub enum Command {
         #[serde(rename = "revisionId")]
         revision_id: String,
         language: String,
+        #[serde(rename = "expectedText")]
+        expected_text: Option<String>,
         lines: Vec<reader_core::ocr::OcrLine>,
     },
     SupplementPdfOcrPage {

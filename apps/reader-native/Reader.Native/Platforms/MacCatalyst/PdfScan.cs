@@ -126,8 +126,10 @@ internal static partial class PdfScan
             return (RecognizePage(document, index, language, cancellation), null);
         }, cancellation);
 
-    internal static Task<PdfTextOrderEdit[]> ReadStoredTextOrderFixesAsync(string path, int index, string storedText) =>
-        Task.Run(() =>
+    internal readonly record struct StoredLayoutInspection(PdfTextOrderEdit[] Corrections, bool IsScanOverlay = false);
+
+    internal static Task<StoredLayoutInspection> InspectStoredLayoutAsync(string path, int index, string storedText) =>
+        Task.Run<StoredLayoutInspection>(() =>
         {
             using var pool = new NSAutoreleasePool();
             using var document = Open(path);
@@ -135,26 +137,31 @@ internal static partial class PdfScan
             var raw = page.Text ?? "";
             var text = raw.Trim();
             var offset = raw.Length - raw.TrimStart().Length;
+            if (text.Length <= 160 && storedText.Length <= 320 &&
+                text.Where(ch => !char.IsWhiteSpace(ch)).SequenceEqual(storedText.Where(ch => !char.IsWhiteSpace(ch))) &&
+                IsObliqueScanOverlay(page, text, offset, CancellationToken.None))
+                return new([], IsScanOverlay: true);
+
             PdfOrderedText.WordBounds? Bounds(int start, int length) => TextBounds(page, offset + start, length);
             var accents = PdfOrderedText.Repair(text, Bounds);
-            if (text == storedText && accents.Text != text) return accents.Corrections;
+            if (text == storedText && accents.Text != text) return new(accents.Corrections);
             var joined = accents.JoinLigatures(Bounds);
-            if (accents.Text == storedText && joined.Text != storedText) return joined.Corrections;
+            if (accents.Text == storedText && joined.Text != storedText) return new(joined.Corrections);
             var width = page.GetBoundsForBox(PdfDisplayBox.Crop).Width;
             PdfOrderedText.WordBounds? LayoutBounds(int start, int length) => TextBounds(page, offset + start, length, raw);
             var layout = joined.SeparateBlocks(LayoutBounds, width);
             if (layout.Text == storedText)
             {
                 var marked = MarkNativeNoteReferences(page, raw, offset, layout);
-                return ReferenceEquals(marked, layout) ? [] : marked.Corrections;
+                return new(ReferenceEquals(marked, layout) ? [] : marked.Corrections);
             }
-            if (joined.Text == storedText) return layout.Corrections;
+            if (joined.Text == storedText) return new(layout.Corrections);
             if (accents.Text != joined.Text)
             {
                 var previousLayout = accents.SeparateBlocks(LayoutBounds, width);
-                if (previousLayout.Text == storedText) return previousLayout.JoinLigatures(Bounds).Corrections;
+                if (previousLayout.Text == storedText) return new(previousLayout.JoinLigatures(Bounds).Corrections);
             }
-            return PdfOrderedText.MissingBlockBreaks(storedText, layout.Text);
+            return new(PdfOrderedText.MissingBlockBreaks(storedText, layout.Text));
         });
 
     internal enum LanguageSample { TextLayer, PortableOcr, NativeOcr }

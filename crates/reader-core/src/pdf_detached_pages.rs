@@ -346,6 +346,28 @@ pub(crate) fn write_text_layer(db: &Connection, id: &str, page: u16, text: &str)
     write(db, id, page, text, None, None, Layout::ClosingQuotes)
 }
 
+pub(crate) fn replace_native_layer(
+    db: &Connection, id: &str, page: u16, expected: &str, language: &str,
+    lines: &[ocr::OcrLine], page_count: u16,
+) -> Result<bool> {
+    let native: bool = db.query_row(
+        "SELECT EXISTS (SELECT 1 FROM pdf_detached_pages
+         WHERE document_id=?1 AND page=?2 AND ocr_language IS NULL AND lines IS NULL AND text=?3)",
+        params![id, page, expected], |row| row.get(0),
+    ).map_err(database_error)?;
+    if !native || has_local_edits(db, id, page)? || speech_resume::read(db, id, page)?.is_some() {
+        return Ok(false);
+    }
+    let edit = ocr::TranscriptEdit { start_utf16: 0, old_len: expected.encode_utf16().count(), new_len: 0 };
+    if crate::dictionary_transfer::selection_overlaps_layout_edits(
+        db, id, Some(page), &page_revision(expected), &[edit],
+    )? {
+        return Ok(false);
+    }
+    write_ocr(db, id, page, language, lines, page_count)?;
+    Ok(true)
+}
+
 pub(crate) fn repair_cached_text_order(
     db: &Connection, id: &str, page: u16, reference: &str, corrected: &str, edits: &[ocr::TranscriptEdit],
     moves: &[ocr::TranscriptMove],

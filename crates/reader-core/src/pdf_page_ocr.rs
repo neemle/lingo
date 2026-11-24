@@ -202,6 +202,12 @@ pub(crate) struct ActiveClaim {
     _worker_lock: File,
 }
 
+struct PdfTextLayerReplacement<'a> {
+    revision: &'a str,
+    language: &'a str,
+    expected_text: Option<&'a str>,
+}
+
 pub(crate) fn initialize(db: &Connection) -> Result<()> {
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS pdf_ocr_completed_pages (
@@ -646,6 +652,7 @@ impl Store {
         text_layer: Option<String>,
     ) -> Result<Document> {
         self.commit_pdf_page(id, page, lines, token, text_layer, None)
+            .and_then(|updated| updated.ok_or_else(|| "Не вдалося оновити сторінку PDF".to_owned()))
     }
 
     pub fn replace_pdf_text_layer(
@@ -654,7 +661,23 @@ impl Store {
         if lines.is_empty() {
             return Err("Розпізнавання не знайшло тексту на сторінці.".into());
         }
-        self.commit_pdf_page(id, page, lines, None, None, Some((revision, language)))
+        let replacement = PdfTextLayerReplacement { revision, language, expected_text: None };
+        self.commit_pdf_page(id, page, lines, None, None, Some(replacement))
+            .and_then(|updated| updated.ok_or_else(|| "Не вдалося оновити сторінку PDF".to_owned()))
+    }
+
+    /// Replace a stale native layer only if the page still matches what the preview diagnosed.
+    pub fn replace_pdf_text_layer_if_current(
+        &mut self, id: &str, page: u16, revision: &str, language: &str,
+        expected_text: &str, lines: Vec<ocr::OcrLine>,
+    ) -> Result<bool> {
+        if lines.is_empty() || expected_text.trim().is_empty() { return Ok(false); }
+        if expected_text.len() > crate::MAX_IMPORT || expected_text.contains('\0') {
+            return Err("Некоректний текстовий шар сторінки PDF.".into());
+        }
+        let replacement = PdfTextLayerReplacement { revision, language, expected_text: Some(expected_text) };
+        self.commit_pdf_page(id, page, lines, None, None, Some(replacement))
+            .map(|updated| updated.is_some())
     }
 
     pub fn supplement_pdf_ocr_page(
@@ -816,8 +839,8 @@ impl Store {
 
     fn commit_pdf_page(
         &mut self, id: &str, page: u16, mut lines: Vec<ocr::OcrLine>, token: Option<&str>,
-        text_layer: Option<String>, replaces_revision: Option<(&str, &str)>,
-    ) -> Result<Document> {
+        text_layer: Option<String>, replacement: Option<PdfTextLayerReplacement<'_>>,
+    ) -> Result<Option<Document>> {
         if token.is_some_and(|token| !self.owns_pdf_ocr_claim(id, page, token)) {
             return Err("Запит OCR для цієї сторінки вже неактивний".into());
         }
@@ -867,22 +890,51 @@ impl Store {
                     return Err("Запит OCR для цієї сторінки вже неактивний".into());
                 }
             }
-            let mut pages = file_originals::native_pdf_page_text(tx, id)?
-                .ok_or("Оригінал PDF для розпізнавання недоступний")?;
-            let old_layer = pages
-                .get(usize::from(page))
-                .ok_or("Сторінку PDF не знайдено")?;
+            let expected_text = replacement.as_ref().and_then(|replacement| replacement.expected_text);
+            if let Some(replacement) = &replacement {
+                if document.current_revision_id.as_deref() != Some(replacement.revision)
+                    || document.language != replacement.language || has_ocr_lines(document, page)
+                {
+                    if expected_text.is_some() { return Ok(false); }
+                    return Err("Текст або мова PDF змінилися. Відкрийте сторінку й повторіть OCR.".into());
+                }
+            }
+            let Some(mut pages) = file_originals::native_pdf_page_text(tx, id)? else {
+                if expected_text.is_some() { return Ok(false); }
+                return Err("Оригінал PDF для розпізнавання недоступний".into());
+            };
+            let Some(old_layer) = pages.get(usize::from(page)) else {
+                if expected_text.is_some() { return Ok(false); }
+                return Err("Сторінку PDF не знайдено".into());
+            };
             let needs_text = old_layer.trim().is_empty();
-            if replaces_revision.is_some_and(|(revision, language)| {
-                document.current_revision_id.as_deref() != Some(revision)
-                    || document.language != language
-                    || needs_text || has_ocr_lines(document, page)
-            }) {
+            if let Some(expected) = expected_text {
+                let page_count = u16::try_from(pages.len()).map_err(database_error)?;
+                let recognized = ocr::recognized_lines(&lines, page_count)?;
+                if recognized == expected || !recognized.chars().any(char::is_alphanumeric) {
+                    return Ok(false);
+                }
+                if needs_text {
+                    if pdf_detached_pages::replace_native_layer(tx, id, page, expected,
+                        &document.language, &lines, page_count)?
+                    {
+                        mark_completed(tx, id, page)?;
+                        document.pdf_pending_text_pages.remove(&page);
+                        document.pdf_ocr_refresh_pages.remove(&page);
+                        updated = Some(document.clone());
+                        return Ok(true);
+                    }
+                    return Ok(false);
+                }
+                if old_layer.trim() != expected || protected_native_layer(tx, document, page)? {
+                    return Ok(false);
+                }
+            } else if replacement.is_some() && needs_text {
                 return Err("Текст або мова PDF змінилися. Відкрийте сторінку й повторіть OCR.".into());
             }
             let automatic_repair = token.is_some() && !needs_text &&
                 can_recover_text_layer(document, page, old_layer);
-            if replaces_revision.is_some() || automatic_repair {
+            if replacement.is_some() || automatic_repair {
                 if automatic_repair {
                     let old_letters = old_layer.chars().filter(|ch| ch.is_alphabetic()).count();
                     let new_letters = lines.iter().flat_map(|line| line.reading_text().chars())
@@ -894,7 +946,9 @@ impl Store {
                         return Ok(cleared_refresh);
                     }
                 }
-                reconcile_ocr_with_layer(old_layer, &mut lines);
+                if expected_text.is_none() {
+                    reconcile_ocr_with_layer(old_layer, &mut lines);
+                }
                 pages[usize::from(page)].clear();
                 let page_text = serde_json::to_string(&pages).map_err(database_error)?;
                 tx.execute("UPDATE file_originals SET pdf_page_text=?2 WHERE document_id=?1",
@@ -1011,8 +1065,31 @@ impl Store {
         if token.is_some() {
             self.active_pdf_ocr = None;
         }
-        updated.ok_or_else(|| "Не вдалося оновити сторінку PDF".to_owned())
+        Ok(updated)
     }
+}
+
+fn protected_native_layer(db: &Connection, document: &Document, page: u16) -> Result<bool> {
+    if page_has_sentence_annotations(document, page) { return Ok(true); }
+    let Some((start, end)) = crate::pdf_reading_position::page_bounds(document, page)
+        else { return Ok(true); };
+    let resume = Store::read_speech_resume(db, &document.id)?;
+    let mut protected_range = start..end;
+    for sentence in document.sentences.iter().filter(|sentence|
+        sentence.start_utf16 < end && sentence.end_utf16 > start)
+    {
+        if resume.as_ref().is_some_and(|resume| resume.sentence_id == sentence.id) {
+            return Ok(true);
+        }
+        protected_range.start = protected_range.start.min(sentence.start_utf16);
+        protected_range.end = protected_range.end.max(sentence.end_utf16);
+    }
+    let edit = ocr::TranscriptEdit {
+        start_utf16: protected_range.start, old_len: protected_range.len(), new_len: 0,
+    };
+    crate::dictionary_transfer::selection_overlaps_layout_edits(
+        db, &document.id, None, document.current_revision_id.as_deref().unwrap_or(""), &[edit],
+    )
 }
 
 fn normalized_ocr_anchor(word: &str) -> String {
@@ -1674,6 +1751,59 @@ mod drop_cap_tests {
     }
 
     #[test]
+    fn guarded_replacement_applies_only_to_the_current_unedited_native_page() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("library.db")).unwrap();
+        let original = root.path().join("library.pdf");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let previous = "DOCUMENT DE DÉMONSTRATION";
+        let recognized = "Le marin regarde le ciel.";
+        let prepared = file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "library.pdf", &original, "fr",
+            vec![previous.into(), String::new()], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let id = &document.id;
+        let revision = document.current_revision_id.as_deref().unwrap();
+        let scan = |page| vec![ocr::OcrLine {
+            page, text: recognized.into(), x: 0.1, y: 0.2, width: 0.6, height: 0.04,
+            confidence: None, rotation: None, correction: None, block_start: false,
+            words: Vec::new(), source_span: None,
+        }];
+        for (revision, language, expected, lines) in [
+            ("stale", "fr", previous, scan(0)),
+            (revision, "en", previous, scan(0)),
+            (revision, "fr", "different text", scan(0)),
+            (revision, "fr", previous, vec![]),
+        ] {
+            assert!(!store.replace_pdf_text_layer_if_current(id, 0, revision, language, expected, lines).unwrap());
+        }
+        assert_eq!(store.pdf_read_window(id, 0).unwrap().pages[0].text, previous);
+        assert!(store.replace_pdf_text_layer_if_current(id, 0, revision, "fr", previous, scan(0)).unwrap());
+        let canonical = store.pdf_read_window(id, 0).unwrap();
+        assert_eq!(canonical.pages[0].state, PdfReadPageState::Recognized);
+        assert_eq!(canonical.pages[0].text, recognized);
+
+        pdf_detached_pages::write_text_layer(&store.connection, id, 1, previous).unwrap();
+        store.set_pdf_reading_page(id, 1).unwrap();
+        let current = store.translation_document(id).unwrap();
+        let revision = current.current_revision_id.as_deref().unwrap();
+        let detached = store.detached_pdf_sentence(id, 1, None).unwrap().unwrap();
+        for (text, allowed) in [("Keep this note", false), ("", true)] {
+            store.update_detached_pdf_annotation(id, 1, &detached.sentence.id,
+                crate::DetachedPdfAnnotationChange::Note { text: text.into() }).unwrap();
+            assert_eq!(store.replace_pdf_text_layer_if_current(id, 1, revision, "fr", previous, scan(1)).unwrap(), allowed);
+        }
+        let window = store.pdf_read_window(id, 1).unwrap();
+        assert_eq!(window.pages[1].state, PdfReadPageState::Detached);
+        assert!(window.pages[1].has_ocr);
+        assert_eq!(window.pages[1].text, recognized);
+        assert_eq!(store.pdf_reading_page(id).unwrap(), Some(1));
+        assert_eq!(store.translation_document(id).unwrap().current_revision_id.as_deref(), Some(revision));
+        assert!(!store.replace_pdf_text_layer_if_current(id, 1, revision, "fr", previous, scan(1)).unwrap());
+    }
+
+    #[test]
     fn replacing_native_text_with_ocr_keeps_annotations_on_the_shifted_sentence() {
         let root = tempfile::tempdir().unwrap();
         let database = root.path().join("reader.db");
@@ -1686,8 +1816,6 @@ mod drop_cap_tests {
         ).unwrap();
         let document = store.import_pdf_file(prepared).unwrap();
         let before = &document.sentences[0];
-        store.set_bookmark(&document.id, &before.id, true).unwrap();
-        store.set_sentence_note(&document.id, &before.id, "La première page").unwrap();
         let revision = document.current_revision_id.as_deref().unwrap();
         let card = store.save_selected_word(crate::Vocabulary {
             id: String::new(), word: "marin".into(), document_id: document.id.clone(),
@@ -1703,6 +1831,10 @@ mod drop_cap_tests {
             rotation: None, block_start: false, page: 0, text: text.into(), x: 0.1, y,
             width: 0.75, height: 0.04, confidence: Some(0.99), correction: None, words: vec![], source_span: None,
         };
+        assert!(!store.replace_pdf_text_layer_if_current(&document.id, 0, revision, "fr", text,
+            vec![line("Un autre paragraphe.", 0.1)]).unwrap());
+        store.set_bookmark(&document.id, &before.id, true).unwrap();
+        store.set_sentence_note(&document.id, &before.id, "La première page").unwrap();
         // Two same-page candidates make the moved sentence ambiguous.
         assert!(store.replace_pdf_text_layer(&document.id, 0, revision, "fr",
             vec![line("Un autre paragraphe.", 0.1), line(text, 0.2), line(text, 0.3)]).is_err());

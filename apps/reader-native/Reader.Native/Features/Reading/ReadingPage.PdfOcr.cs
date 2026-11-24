@@ -244,7 +244,8 @@ public partial class ReadingPage
             }
             var window = await session.PdfReadWindowAsync(document.Id, page);
             if (!IsCurrentPdfSnapshot(session, document)) return;
-            if (await RepairStoredPdfLayoutAsync(session, document, window))
+            var (changed, scanOverlay) = await RepairStoredPdfLayoutAsync(session, document, window);
+            if (changed)
             {
                 if (!IsCurrentPdfSnapshot(session, document)) return;
                 if (!window.Pages.Any(item => item.Page == window.Center && item.State == "detached"))
@@ -260,14 +261,16 @@ public partial class ReadingPage
             pdfWindow = window;
             var translationChanged = InvalidatePdfTranslationContext(document, previousWindow, window);
             var focus = (document.Id, window.Center, document.Language);
-            if (pdfOcrFocus != focus)
+            var focusChanged = pdfOcrFocus != focus;
+            if (focusChanged)
             {
                 CancelReaderPdfOcr();
                 pdfOcrFocus = focus;
                 pdfOcrError = null;
                 pdfOcrRetryAt = default;
-                StartReaderPdfOcr(session, document);
             }
+            if (focusChanged || scanOverlay is not null)
+                StartReaderPdfOcr(session, document, scanOverlay: scanOverlay);
             var revealingText = PdfPageNotice.IsVisible;
             UpdatePdfPageDisplay();
             sentencePageUpdated?.TrySetResult();
@@ -343,32 +346,35 @@ public partial class ReadingPage
     private bool IsCurrentPdfSnapshot(ReaderSession session, Document document) =>
         readingPageActive && ReferenceEquals(pdfSnapshot, document) && ReferenceEquals(session.Document, document);
 
-    private async Task<bool> RepairStoredPdfLayoutAsync(ReaderSession session, Document document, PdfReadWindow window)
+    private async Task<(bool Changed, string? ScanOverlay)> RepairStoredPdfLayoutAsync(
+        ReaderSession session, Document document, PdfReadWindow window)
     {
         var page = window.Pages.FirstOrDefault(candidate => candidate.Page == window.Center);
         if (document.CurrentRevisionId is not { } revision ||
             page is null || page.Text.Length == 0 ||
             page is not ({ HasOcr: true } or { State: "textLayer" or "detached" }))
-            return false;
+            return default;
 
         var attempt = (document.Id, page.Page, page.Text);
-        if (attemptedPdfTextOrderRepair == attempt) return false;
+        if (attemptedPdfTextOrderRepair == attempt) return default;
         attemptedPdfTextOrderRepair = attempt;
         try
         {
             if (page.HasOcr)
-                return await session.UpgradeStoredOcrLayoutAsync(document.Id, page.Page, revision, page.Text,
-                    page.State == "detached");
+                return (await session.UpgradeStoredOcrLayoutAsync(document.Id, page.Page, revision, page.Text,
+                    page.State == "detached"), null);
             if (await session.OriginalFileAsync(document.Id) is not { } original ||
-                !IsCurrentPdfSnapshot(session, document)) return false;
-            var corrections = await PdfScan.ReadStoredTextOrderFixesAsync(original.Path, page.Page, page.Text);
-            return corrections.Length > 0 && IsCurrentPdfSnapshot(session, document) &&
-                await session.RepairStoredPdfTextOrderAsync(document.Id, page.Page, revision, page.Text, corrections);
+                !IsCurrentPdfSnapshot(session, document)) return default;
+            var inspection = await PdfScan.InspectStoredLayoutAsync(original.Path, page.Page, page.Text);
+            if (!IsCurrentPdfSnapshot(session, document)) return default;
+            if (inspection.IsScanOverlay) return (false, page.Text);
+            return (inspection.Corrections.Length > 0 && await session.RepairStoredPdfTextOrderAsync(
+                document.Id, page.Page, revision, page.Text, inspection.Corrections), null);
         }
         catch (Exception error)
         {
             System.Diagnostics.Debug.WriteLine(error.Message);
-            return false;
+            return default;
         }
     }
 
@@ -662,17 +668,19 @@ public partial class ReadingPage
 
     private static bool RequiresPdfOcr(PdfReadPage page) => page.State is "needsOcr" or "needsTextLayer" || page.RefreshPending;
 
-    private void StartReaderPdfOcr(ReaderSession session, Document document, bool retryNow = false)
+    private void StartReaderPdfOcr(ReaderSession session, Document document, bool retryNow = false, string? scanOverlay = null)
     {
-        if (readerPdfOcr is not null || document.OcrPdfPages is null || pdfWindow is not { } window ||
-            !window.Pages.Any(RequiresPdfOcr)) return;
+        if (readerPdfOcr is not null || pdfWindow is not { } window) return;
+        if (scanOverlay is null && (document.OcrPdfPages is null || !window.Pages.Any(RequiresPdfOcr))) return;
         var run = new CancellationTokenSource();
         readerPdfOcr = run;
-        readerPdfOcrTask = RecognizeReaderPdfAsync(session, document, window.Center, run, retryNow);
+        readerPdfOcrTask = RecognizeReaderPdfAsync(
+            session, document, window.Center, window.PageCount, run, retryNow, scanOverlay);
     }
 
     private async Task RecognizeReaderPdfAsync(
-        ReaderSession session, Document document, int page, CancellationTokenSource run, bool retryNow)
+        ReaderSession session, Document document, int page, int pageCount, CancellationTokenSource run, bool retryNow,
+        string? scanOverlay)
     {
         var cancellation = run.Token;
         try
@@ -682,12 +690,25 @@ public partial class ReadingPage
             if (await session.OriginalFileAsync(document.Id) is not { } original)
                 throw new InvalidDataException("Оригінал PDF для розпізнавання недоступний.");
             cancellation.ThrowIfCancellationRequested();
-            await PdfPageOcr.RecognizeWindowAsync(session, document, original.Path, page, cancellation, async () =>
+            if (scanOverlay is not null && document.CurrentRevisionId is { } revision)
+            {
+                var lines = await PdfPageOcr.RecognizePageAsync(document, original.Path, page, pageCount, cancellation);
+                cancellation.ThrowIfCancellationRequested();
+                if (lines.Length > 0 && readingPageActive && pdfWindow?.Center == page &&
+                    session.Document is { } visible && visible.Id == document.Id &&
+                    visible.CurrentRevisionId == revision && visible.Language == document.Language &&
+                    await session.RecoverPdfScanOverlayAsync(document.Id, page, revision, document.Language, scanOverlay, lines))
+                    await RefreshAsync();
+            }
+            await PdfPageOcr.RecognizeWindowAsync(session, document, original.Path, page, cancellation, RefreshAsync,
+                updateFocus: false, retryNow: retryNow);
+
+            async Task RefreshAsync()
             {
                 await session.WaitUntilIdleAsync();
                 if (!cancellation.IsCancellationRequested && readingPageActive && session.Document?.Id == document.Id)
                     await session.RefreshAsync();
-            }, updateFocus: false, retryNow: retryNow);
+            }
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) {}
         catch (Exception error) when (!cancellation.IsCancellationRequested)
