@@ -136,6 +136,55 @@ mod tests {
         assert_eq!(cursor, 0);
         assert_eq!(store.advance_background_translation(&id, &revision, "uk").unwrap().resume_at, Some(deadline));
     }
+
+    #[test]
+    fn source_language_change_restarts_progress_and_rejects_an_old_step() {
+        use std::cell::{Cell, RefCell};
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("reader.db");
+        let mut worker = Store::open(&path).unwrap();
+        let document = worker.import("reader.txt", b"Ein Schiff kommt an.", "fr").unwrap();
+        let revision = document.current_revision_id.as_deref().unwrap();
+        worker.update_reader_preference(
+            crate::reader_preferences::ReaderPreferenceChange::BackgroundTranslation { value: true },
+        ).unwrap();
+        worker.connection.execute(
+            "INSERT INTO background_translation_progress
+                (document_id,target,revision_id,cursor,incomplete,resume_at,ocr_generation,route_identity)
+             VALUES (?1,'uk',?2,8,1,0,4,'')",
+            params![document.id, revision],
+        ).unwrap();
+
+        let editor = RefCell::new(Store::open(&path).unwrap());
+        let invocations = Cell::new(0);
+        let old_step = worker.advance_background_translation_until_canceled(
+            &document.id, revision, "uk", &|| {
+                let count = invocations.get() + 1;
+                invocations.set(count);
+                if count == 2 {
+                    editor.borrow_mut().set_document_language(&document.id, "de").unwrap();
+                }
+                false
+            },
+        ).unwrap();
+        assert!(invocations.get() >= 2);
+        assert_eq!(old_step.resume_at, Some(0));
+        assert!(old_step.missing_packages.is_none());
+
+        let checkpoint = worker.connection.query_row(
+            "SELECT cursor,incomplete,resume_at,ocr_generation,route_identity
+             FROM background_translation_progress WHERE document_id=?1 AND target='uk' AND revision_id=?2",
+            params![document.id, revision],
+            |row| Ok((row.get::<_, u32>(0)?, row.get::<_, bool>(1)?, row.get::<_, i64>(2)?,
+                      row.get::<_, i64>(3)?, row.get::<_, Option<String>>(4)?)),
+        ).unwrap();
+        assert_eq!(checkpoint, (0, false, 0, 5, None));
+        let next_step = worker.advance_background_translation(&document.id, revision, "uk").unwrap();
+        assert!(next_step.resume_at.is_some_and(|due| due > 0));
+        assert!(next_step.missing_packages.is_some());
+        assert_eq!(worker.snapshot().unwrap().documents[0].language, "de");
+    }
 }
 
 impl Store {
@@ -318,6 +367,17 @@ pub(crate) fn revisit_reviewed_translation(
     Ok(())
 }
 
+pub(crate) fn restart_after_source_language_change(db: &Connection, id: &str) -> Result<()> {
+    db.execute(
+        "UPDATE background_translation_progress
+         SET cursor=0,incomplete=0,resume_at=0,route_identity=NULL,ocr_generation=ocr_generation+1
+         WHERE document_id=?1",
+        [id],
+    )
+    .map_err(database_error)?;
+    Ok(())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationWarmStep {
@@ -408,11 +468,12 @@ impl Store {
             "INSERT INTO background_translation_progress(document_id,target,revision_id,cursor,incomplete,resume_at,route_identity)
              SELECT id,?2,?3,0,0,0,?4 FROM documents
              WHERE id=?1 AND json_extract(body,'$.currentRevisionId')=?3
+               AND json_extract(body,'$.language')=?5
              ON CONFLICT(document_id,target) DO UPDATE SET revision_id=excluded.revision_id,
                cursor=0,incomplete=0,resume_at=0,route_identity=excluded.route_identity
              WHERE background_translation_progress.revision_id<>excluded.revision_id
                 OR background_translation_progress.route_identity IS NOT excluded.route_identity",
-            params![id, target, revision, route_identity],
+            params![id, target, revision, route_identity, source],
         ).map_err(database_error)?;
         let checkpoint = self.connection.query_row(
                 "SELECT cursor,incomplete,resume_at,ocr_generation FROM background_translation_progress
@@ -477,8 +538,9 @@ impl Store {
         let saved = self.connection.execute(
             "UPDATE background_translation_progress SET cursor=?4,incomplete=?5,resume_at=?6
              WHERE document_id=?1 AND target=?2 AND revision_id=?3 AND ocr_generation=?7
-               AND EXISTS(SELECT 1 FROM documents WHERE id=?1 AND json_extract(body,'$.currentRevisionId')=?3)",
-            params![id, target, revision, i64::try_from(cursor).map_err(database_error)?, incomplete, resume_at, generation],
+               AND EXISTS(SELECT 1 FROM documents WHERE id=?1 AND json_extract(body,'$.currentRevisionId')=?3
+                          AND json_extract(body,'$.language')=?8)",
+            params![id, target, revision, i64::try_from(cursor).map_err(database_error)?, incomplete, resume_at, generation, source],
         ).map_err(database_error)?;
         if saved == 0 {
             progress.resume_at = Some(0);

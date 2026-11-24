@@ -7,7 +7,7 @@ public sealed record BackgroundTranslationProgress(long? ResumeAt, int? Translat
     TranslationPair[]? MissingPackages = null, string[]? TranslatedSentenceIds = null,
     int? PendingPdfTextPage = null, bool WaitingForPdfOcr = false);
 
-public sealed record BackgroundTranslatedPage(string DocumentId, string RevisionId, int Page, string Target);
-public sealed record BackgroundTranslatedText(string DocumentId, string RevisionId, string Target, string[] SentenceIds);
+public sealed record BackgroundTranslatedPage(string DocumentId, string RevisionId, int Page, string Source, string Target);
+public sealed record BackgroundTranslatedText(string DocumentId, string RevisionId, string Source, string Target, string[] SentenceIds);
 
 public sealed record TranslationWarmStep(int? Next, bool Incomplete);

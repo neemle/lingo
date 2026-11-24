@@ -223,7 +223,7 @@ public partial class ReadingPage
         AppState.TranslationWorker?.SetVisiblePdf(readingPageActive && TranslationVisible &&
             !alreadyCached && !(autoTranslate && PdfUsesPageTranslation) &&
             address is { Revision: { } revision }
-                ? new BackgroundTranslatedPage(address.Document, revision, address.Page, address.Target) : null,
+                ? new BackgroundTranslatedPage(address.Document, revision, address.Page, address.SourceLanguage, address.Target) : null,
             address?.DetachedText);
         var available = address is not null;
         var detached = DetachedPdfReader.IsVisible;
@@ -624,7 +624,7 @@ public partial class ReadingPage
     {
         if (!readingPageActive || CurrentPdfLayoutAddress() is not { } address ||
             translated.DocumentId != address.Document || translated.RevisionId != address.Revision ||
-            translated.Target != address.Target || translated.Page != address.Page)
+            translated.Source != address.SourceLanguage || translated.Target != address.Target || translated.Page != address.Page)
             return;
 
         if (pdfTranslationLayout) RefreshCachedPdfPageLayout();

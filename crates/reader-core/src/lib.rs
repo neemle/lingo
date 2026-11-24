@@ -1110,6 +1110,7 @@ impl Store {
                 return Err("Для нової мови джерела вже збережено переклади. Збережіть їх окремо і видаліть із документа перед зміною мови.".into());
             }
             document.language = language.to_owned();
+            translation_queue::restart_after_source_language_change(tx, id)?;
             pdf_page_ocr::refresh_after_language_change(tx, document)?;
             Ok(true)
         })

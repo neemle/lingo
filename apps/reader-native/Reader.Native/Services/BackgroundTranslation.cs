@@ -31,7 +31,11 @@ internal sealed class BackgroundTranslation
     internal int ParkedDocuments => libraryFailures.Values.Count(failure => failure.RetryAt is null);
     internal event Action? StatusChanged;
 
-    private sealed record JobKey(string Document, string Revision, string Target);
+    private sealed record JobKey(string Document, string Revision, string Source, string Target)
+    {
+        public bool Matches(Document document) =>
+            Document == document.Id && Revision == document.CurrentRevisionId && Source == document.Language;
+    }
     private sealed record LibraryFailure(int Attempts, long? RetryAt);
 
     internal BackgroundTranslation(ReaderSession session, IDispatcher dispatcher)
@@ -64,7 +68,7 @@ internal sealed class BackgroundTranslation
     internal void SetReaderTarget(Document? document, string? target = null)
     {
         var next = document?.CurrentRevisionId is { } revision && target is not null && target != document.Language
-            ? new JobKey(document.Id, revision, target) : null;
+            ? new JobKey(document.Id, revision, document.Language, target) : null;
         if (readerTarget == next) return;
         readerTarget = next;
         retryAt = default;
@@ -188,7 +192,11 @@ internal sealed class BackgroundTranslation
             .Any(pair => pair.First.Id != pair.Second.Id || pair.First.Language != pair.Second.Language ||
                 pair.First.CurrentRevisionId != pair.Second.CurrentRevisionId);
         observedDocuments = documents;
-        if (changed) Wake();
+        if (changed)
+        {
+            retryAt = default;
+            Wake();
+        }
     }
 
     private void Schedule(TimeSpan delay)
@@ -264,13 +272,12 @@ internal sealed class BackgroundTranslation
             foreach (var document in session.Snapshot.Documents.OrderByDescending(doc => doc.Id == current))
             {
                 if (document.CurrentRevisionId is not { } revision) continue;
-                var target = readerTarget is { } selection && selection.Document == current &&
-                    selection.Document == document.Id && selection.Revision == revision
+                var target = readerTarget is { } selection && selection.Document == current && selection.Matches(document)
                         ? selection.Target
                         : preferences.TranslationTargets.GetValueOrDefault(document.Language)
                             ?? (document.Language == "uk" ? "fr" : "uk");
                 if (target == document.Language) continue;
-                var key = new JobKey(document.Id, revision, target);
+                var key = new JobKey(document.Id, revision, document.Language, target);
                 live.Add(key);
                 if (libraryFailures.TryGetValue(key, out var failure))
                 {
@@ -304,7 +311,7 @@ internal sealed class BackgroundTranslation
                 (visibleAttempt is not { } attempted || attempted.Page != visible || attempted.RetryAt <= now))
             {
                 var address = visible.Address;
-                var key = new JobKey(address.DocumentId, address.RevisionId, address.Target);
+                var key = new JobKey(address.DocumentId, address.RevisionId, address.Source, address.Target);
                 if (live.Contains(key) && jobs.GetValueOrDefault(key)?.MissingPackages is null)
                 {
                     prefetchingVisiblePage = true;
@@ -348,9 +355,10 @@ internal sealed class BackgroundTranslation
             libraryTimeout.CancelAfter(TimeSpan.FromMinutes(2));
             token = libraryTimeout.Token;
             SetStatus($"Опрацьовуємо «{title}»…", running: true);
-            var progress = await session.AdvanceBackgroundTranslationAsync(work.Key.Document, work.Key.Revision, work.Key.Target, token);
+            var progress = await session.AdvanceBackgroundTranslationAsync(
+                work.Key.Document, work.Key.Revision, work.Key.Source, work.Key.Target, token);
             token.ThrowIfCancellationRequested();
-            if (!enabled || paused || libraryStepInvalidated) return;
+            if (!enabled || paused || libraryStepInvalidated || !session.Snapshot.Documents.Any(work.Key.Matches)) return;
             jobs[work.Key] = progress;
             UpdateRequiredPackages();
 #if MACCATALYST
@@ -392,7 +400,7 @@ internal sealed class BackgroundTranslation
             if (!enabled || paused || cancellation.IsCancellationRequested) return;
             if (attemptedJob is { } key)
             {
-                if (libraryStepInvalidated) return;
+                if (libraryStepInvalidated || !session.Snapshot.Documents.Any(key.Matches)) return;
                 var attempts = (libraryFailures.GetValueOrDefault(key)?.Attempts ?? 0) + 1;
                 long? due = attempts < 3 ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() + attempts * 20 : null;
                 libraryFailures[key] = new(attempts, due);

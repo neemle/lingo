@@ -229,7 +229,7 @@ public partial class ReadingPage
         var session = AppState.Session;
         if (!readingPageActive || session.Document is not { } document ||
             document.Id != translated.DocumentId || document.CurrentRevisionId != translated.RevisionId ||
-            TargetCode != translated.Target || session.Sentence is not { } sentence)
+            document.Language != translated.Source || TargetCode != translated.Target || session.Sentence is not { } sentence)
             return;
 
         var window = FindTranslationWindow(document, translated.Target);

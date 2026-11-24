@@ -36,14 +36,15 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task RefreshAsync() => RunAsync(Read);
     public Task<StorageUsage> StorageUsageAsync() => Task.Run(client.StorageUsage);
     public Task ClearStorageAsync(string scope) => Task.Run(() => client.ClearStorage(scope));
-    public async Task<BackgroundTranslationProgress> AdvanceBackgroundTranslationAsync(string id, string revision, string target,
+    public async Task<BackgroundTranslationProgress> AdvanceBackgroundTranslationAsync(string id, string revision, string source, string target,
         CancellationToken cancellationToken = default)
     {
         var progress = await Task.Run(() => client.AdvanceBackgroundTranslation(id, revision, target, cancellationToken), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (progress.TranslatedPage is { } page)
-            BackgroundPageTranslated?.Invoke(new(id, revision, page, target));
+            BackgroundPageTranslated?.Invoke(new(id, revision, page, source, target));
         if (progress.TranslatedSentenceIds is { Length: > 0 } sentences)
-            BackgroundTextTranslated?.Invoke(new(id, revision, target, sentences));
+            BackgroundTextTranslated?.Invoke(new(id, revision, source, target, sentences));
         return progress;
     }
     public Task<TranslationWarmStep> WarmTranslationStepAsync(string id, string revision, string target, int start) =>
@@ -317,6 +318,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         var rows = await Task.Run(() =>
             client.PdfPageTranslation(address.DocumentId, address.Page, address.Target, cachedOnly: false,
                 background: true, cancellationToken: cancellationToken), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (rows.Any(row => row.Text is not null)) BackgroundPageTranslated?.Invoke(address);
         return rows.Length > 0 && rows.All(row => row.Text is not null);
     }
