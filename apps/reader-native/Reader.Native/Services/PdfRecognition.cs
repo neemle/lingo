@@ -27,6 +27,16 @@ internal static class PdfRecognition
             var language = SampleLanguage(votes.AsSpan(0, end));
             if (language is not null) return language;
 
+            // Individually short text layers may be conclusive together.
+            // If a sampled page lacks text, still probe it for a scanned body.
+            if (count > 1 && votes.Take(end).All(vote => vote is null)
+                && textLayers.Take(end).All(sample => !string.IsNullOrWhiteSpace(sample)))
+            {
+                language = await detect(string.Join("\n", textLayers.Take(end))).ConfigureAwait(false);
+                cancellation.ThrowIfCancellationRequested();
+                if (language is not null) return language;
+            }
+
             foreach (var read in readOcr)
             {
                 var unanswered = Enumerable.Range(start, count).Where(slot => votes[slot] is null).ToArray();
