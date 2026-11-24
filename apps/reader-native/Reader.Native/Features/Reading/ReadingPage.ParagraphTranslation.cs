@@ -594,7 +594,7 @@ public partial class ReadingPage
             : useContext ? "Перекладаємо абзац…" : "Перекладаємо речення…";
         UpdateTranslation();
         var scope = new TranslationScope(key.Document, key.Source, key.Target);
-        PdfLayoutAddress? refreshedPage = null;
+        (PdfLayoutAddress Address, Sentence Source)? refreshedPdf = null;
         try
         {
             if (useContext)
@@ -635,7 +635,7 @@ public partial class ReadingPage
                 await session.PdfPageTranslationAsync(pdf.Address.Document, pdf.Address.Page, key.Target,
                     cachedOnly: false, refresh: refresh);
                 if (cacheRevision != AppState.StorageRevision) return;
-                refreshedPage = pdf.Address;
+                refreshedPdf = (pdf.Address, source);
                 if (ActiveTranslationKey() == key) ClearTranslationFocus();
                 machineStatus = "Речення перекладено заново.";
                 return;
@@ -659,11 +659,8 @@ public partial class ReadingPage
         finally
         {
             translating = false;
-            if (refreshedPage is { } address)
-            {
-                NotifyPdfSentenceRefresh(address, key.Sentence);
-                if (CurrentPdfLayoutAddress() == address) RefreshCachedPdfPageLayout();
-            }
+            if (refreshedPdf is { } refreshed)
+                NotifyPdfSentenceRefresh(refreshed.Address, refreshed.Source);
             if (readingPageActive) UpdateTranslation();
         }
     }

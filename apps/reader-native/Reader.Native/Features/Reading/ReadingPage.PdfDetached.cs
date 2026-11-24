@@ -438,8 +438,7 @@ public partial class ReadingPage
                 UpdateDetachedControls();
             }
         }
-        NotifyPdfSentenceRefresh(refreshAddress, current.Sentence.Id);
-        if (CurrentPdfLayoutAddress() == refreshAddress) RefreshCachedPdfPageLayout();
+        NotifyPdfSentenceRefresh(refreshAddress, current.Sentence);
     }
 
     private async Task TranslateDetachedAsync(bool automatic)

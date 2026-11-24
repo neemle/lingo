@@ -17,11 +17,12 @@ public partial class ReadingPage
             document.Language == SourceLanguage && target == Target &&
             (displayed is null || displayed.Page != Page || displayed.DetachedText == DetachedText);
 
-        public bool DependsOnSentenceRefresh(PdfLayoutAddress refreshed, string sentenceId, PdfPageTranslationRow[] rows) =>
+        public bool DependsOnSentenceRefresh(PdfLayoutAddress refreshed, Sentence sentence, PdfPageTranslationRow[] rows) =>
             this == refreshed || (DetachedText is null && refreshed.DetachedText is null &&
                 (this with { Page = refreshed.Page }) == refreshed &&
-                rows.Any(row => row.SourceSentenceId == sentenceId));
+                rows.Any(row => row.SourceSentenceId == sentence.Id || IsActivePdfRow(row, sentence)));
     }
+    private sealed record PdfLayoutSentenceRefresh(Sentence Source, PdfSentenceRefresh Request);
     private sealed record PdfAutoTranslation(PdfLayoutAddress Address, int RouteRequest);
     private sealed record PdfSourceLayout(InlinePdfAddress Page, OcrLine[] Lines, int Offset, Sentence? Sentence,
         IReadOnlyDictionary<int, PdfBoxAppearance>? Appearance)
@@ -111,6 +112,7 @@ public partial class ReadingPage
         pdfTranslationLayout = !pdfTranslationLayout;
         SaveReaderPreference(ReaderPreferenceChange.PdfTranslationLayout(pdfTranslationLayout));
         RefreshPdfTranslationLayout();
+        if (pdfTranslationLayout && pdfLayoutRowsStale) RefreshCachedPdfPageLayout();
         ScheduleAutoTranslation();
         if (!pdfTranslationLayout && DetachedPdfReader.IsVisible) _ = RestoreDetachedTranslationAsync();
     }
@@ -138,7 +140,7 @@ public partial class ReadingPage
                 var offset = Math.Max(sentence.StartUtf16, row?.StartUtf16 ?? sentence.StartUtf16);
                 var revision = address.DetachedText is null ? address.Revision : detachedSentence?.RevisionId;
                 var refresh = new PdfSentenceRefresh(offset, new(sentence.Id, address.SourceLanguage, revision));
-                await LoadPdfPageLayoutAsync(address, cachedOnly: false, refresh: refresh);
+                await LoadPdfPageLayoutAsync(address, cachedOnly: false, refresh: new(sentence, refresh));
             }
         }
         else if (DetachedPdfReader.IsVisible)
@@ -559,7 +561,7 @@ public partial class ReadingPage
         label.FormattedText = formatted;
     }
 
-    private async Task LoadPdfPageLayoutAsync(PdfLayoutAddress address, bool cachedOnly, PdfSentenceRefresh? refresh = null)
+    private async Task LoadPdfPageLayoutAsync(PdfLayoutAddress address, bool cachedOnly, PdfLayoutSentenceRefresh? refresh = null)
     {
         if (cachedOnly && translatingPdfLayout == address)
         {
@@ -584,17 +586,20 @@ public partial class ReadingPage
         try
         {
             var translation = AppState.Session.PdfPageTranslationAsync(address.Document, address.Page,
-                address.Target, cachedOnly, cancellation?.Token ?? default, refresh);
+                address.Target, cachedOnly, cancellation?.Token ?? default, refresh?.Request);
             if (!cachedOnly && refresh is null) _ = FollowPdfTranslationBatchesAsync(address, request, translation);
             var rows = await translation;
+            var displayMatches = CurrentPdfLayoutAddress() == address;
+            var ownsRefresh = refresh is not null && cancellation is { IsCancellationRequested: false } &&
+                ReferenceEquals(pdfLayoutTranslationCancellation, cancellation);
             if (refresh is { } regenerated)
             {
-                NotifyPdfSentenceRefresh(address, regenerated.Anchor.SentenceId);
-                if (CurrentPdfLayoutAddress() != address && cancellation is { IsCancellationRequested: false } &&
-                    ReferenceEquals(pdfLayoutTranslationCancellation, cancellation))
+                NotifyPdfSentenceRefresh(address, regenerated.Source, applyingCurrentRows: ownsRefresh && displayMatches);
+                if (ownsRefresh && !displayMatches)
                     RememberPdfPageTranslations(address, rows);
             }
-            if (request != pdfLayoutRequestId || CurrentPdfLayoutAddress() != address ||
+            // The address can become current again before its explicit regeneration commits.
+            if ((!ownsRefresh && request != pdfLayoutRequestId) || !displayMatches ||
                 cancellation?.IsCancellationRequested == true) return;
             if (cachedOnly)
             {
@@ -632,11 +637,11 @@ public partial class ReadingPage
         }
     }
 
-    private void NotifyPdfSentenceRefresh(PdfLayoutAddress address, string sentenceId)
+    private void NotifyPdfSentenceRefresh(PdfLayoutAddress address, Sentence sentence, bool applyingCurrentRows = false)
     {
-        recentPdfTranslations.RemoveAll(entry => entry.Address.DependsOnSentenceRefresh(address, sentenceId, entry.Rows));
-        if (pdfLayoutRequest is { } displayed && displayed != address &&
-            displayed.DependsOnSentenceRefresh(address, sentenceId, pdfLayoutRows))
+        recentPdfTranslations.RemoveAll(entry => entry.Address.DependsOnSentenceRefresh(address, sentence, entry.Rows));
+        if (!applyingCurrentRows && pdfLayoutRequest is { } displayed &&
+            displayed.DependsOnSentenceRefresh(address, sentence, pdfLayoutRows))
         {
             pdfLayoutRowsStale = true;
             // Ignore cache reads started before the refresh committed.
@@ -646,7 +651,7 @@ public partial class ReadingPage
 
         if (address.DetachedText is null)
         {
-            InvalidateSentenceTranslation(new TranslationScope(address.Document, address.SourceLanguage, address.Target), sentenceId);
+            InvalidateSentenceTranslation(new TranslationScope(address.Document, address.SourceLanguage, address.Target), sentence.Id);
             if (readingPageActive) _ = RestoreCachedTranslationAsync();
         }
         else if (readingPageActive && TargetCode == address.Target && detachedAddress ==
