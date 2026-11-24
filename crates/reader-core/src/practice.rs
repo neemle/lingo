@@ -126,20 +126,23 @@ impl PracticeProgress {
     }
 }
 
-pub(crate) fn read(connection: &Connection) -> Result<Option<PracticeProgress>> {
+fn read_saved(connection: &Connection) -> Result<Option<PracticeProgress>> {
     let body: Option<String> = connection
         .query_row("SELECT body FROM practice WHERE id=1", [], |row| row.get(0))
         .optional()
         .map_err(|error| error.to_string())?;
-    body.map(|body| {
-        let mut progress = serde_json::from_str(&body).map_err(|error| error.to_string())?;
-        align_question(connection, &mut progress)?;
-        Ok(progress)
-    })
-    .transpose()
+    body.map(|body| serde_json::from_str(&body).map_err(|error| error.to_string())).transpose()
 }
 
-fn align_question(connection: &Connection, progress: &mut PracticeProgress) -> Result<()> {
+pub(crate) fn read(connection: &Connection) -> Result<Option<PracticeProgress>> {
+    let mut progress = read_saved(connection)?;
+    if let Some(progress) = &mut progress {
+        align_question(connection, progress, false)?;
+    }
+    Ok(progress)
+}
+
+fn align_question(connection: &Connection, progress: &mut PracticeProgress, refresh_revealed: bool) -> Result<()> {
     if let Some(collection) = &mut progress.collection {
         let (id, hash) = dictionary_transfer::resolve_collection(
             connection,
@@ -165,6 +168,10 @@ fn align_question(connection: &Connection, progress: &mut PracticeProgress) -> R
             } else {
                 "Словникову картку не знайдено."
             })?;
+    // Once revealed, the stored answers explain the original comparison.
+    if question.revealed && !refresh_revealed {
+        return Ok(());
+    }
     let reverse = progress.direction == "reverse";
     if !reverse {
         if let Some(id) = document_id {
@@ -364,7 +371,7 @@ impl Store {
                 question: None, collection: settings.collection,
             };
             proposed.validate()?;
-            align_question(&tx, &mut proposed)?;
+            align_question(&tx, &mut proposed, false)?;
             if proposed.direction != progress.direction || proposed.mode != progress.mode
                 || proposed.collection != progress.collection
             {
@@ -449,8 +456,14 @@ impl Store {
         }
         let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
-        let mut progress = read(&tx)?.unwrap_or_default();
+        let mut progress = read_saved(&tx)?.unwrap_or_default();
         assert_revision(revision, progress.revision)?;
+        if progress.mode == 2 && progress.question.as_ref().is_some_and(|question|
+            !question.revealed && !question.options.is_empty())
+        {
+            // Dictionary edits can invalidate the answer choices and unlock typing.
+            align_question(&tx, &mut progress, false)?;
+        }
         let question = progress.question.as_mut()
             .filter(|question| progress.mode != 0 && !question.revealed && question.options.is_empty())
             .ok_or("Немає відкритого запитання з введенням відповіді.")?;
@@ -523,7 +536,7 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
         assert_revision(progress.revision, read(&tx)?.unwrap_or_default().revision)?;
-        align_question(&tx, &mut progress)?;
+        align_question(&tx, &mut progress, true)?;
         progress.advance()?;
         write(&tx, &progress)?;
         tx.commit().map_err(|error| error.to_string())?;
@@ -576,7 +589,7 @@ pub(crate) fn restore_if_fresh(
             .ok_or("В архіві немає картки для практики.")?
             .clone();
     }
-    align_question(connection, &mut incoming)?;
+    align_question(connection, &mut incoming, false)?;
     incoming.revision = 0;
     incoming.advance()?;
     write(connection, &incoming)?;
@@ -637,13 +650,23 @@ mod tests {
         let mut store = Store::open(&path).unwrap();
         let answer = store.answer_practice_question(queue.progress.revision, Some("КНИЖКА"), None).unwrap();
         assert_eq!(answer.matches_dictionary, Some(true));
+        store.set_vocabulary_variants(&book.id, Vec::new()).unwrap();
+        let archive = store.export_dictionary(None).unwrap();
+        drop(store);
+        let mut store = Store::open(&path).unwrap();
+        let revealed = store.next_practice_question(answer.progress.revision).unwrap();
+        assert_eq!(revealed.matches_dictionary, Some(true));
+        assert_eq!(revealed.progress.question.unwrap().answers, ["фунт", "книга", "книжка"]);
+        let mut restored = Store::open(&root.path().join("restored.db")).unwrap();
+        restored.import_dictionary(archive).unwrap();
+        assert_eq!(restored.practice().unwrap().question.unwrap().dictionary_match(), Some(true));
         let progress = store.grade_practice(answer.progress.revision, 2).unwrap();
 
         let queue = store.practice_queue(progress.revision, None).unwrap();
         assert_eq!(queue.context.as_deref(), Some("Le livre est sur la table."));
         let question = queue.progress.question.as_ref().unwrap();
         assert_eq!(question.card_id, book.id);
-        assert_eq!(question.answers, ["книга", "книжка"]);
+        assert_eq!(question.answers, ["книга"]);
         let answer = store.answer_practice_question(queue.progress.revision, Some("фунт"), None).unwrap();
         assert_eq!(answer.matches_dictionary, Some(false));
     }
