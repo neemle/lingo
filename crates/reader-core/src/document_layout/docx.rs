@@ -14,7 +14,7 @@ use std::{
 mod numbering;
 use numbering::Numbering;
 
-pub(crate) const DOCX_LAYOUT_VERSION: u8 = 3;
+pub(crate) const DOCX_LAYOUT_VERSION: u8 = 4;
 
 #[derive(Clone, Default)]
 struct ParagraphProperties {
@@ -222,6 +222,7 @@ fn parse_body(xml: &str, styles: &Styles, mut numbering: Numbering) -> Result<Ex
     let mut paragraphs: Vec<Paragraph> = Vec::new();
     let mut tables: Vec<TableCursor> = Vec::new();
     let mut next_table = 0;
+    let mut run_depth = 0_usize;
     let mut in_text = false;
     let mut in_properties = false;
     let mut start = 0;
@@ -286,9 +287,11 @@ fn parse_body(xml: &str, styles: &Styles, mut numbering: Numbering) -> Result<Ex
                         }
                     }
                     b"pPr" if !empty => in_properties = true,
+                    b"r" if !empty => run_depth += 1,
                     b"t" if !empty => in_text = true,
-                    b"tab" if empty => text.push('\t'),
-                    b"br" if empty => text.push('\n'),
+                    b"tab" | b"ptab" if run_depth > 0 && !in_properties => text.push('\t'),
+                    b"br" | b"cr" if run_depth > 0 && !in_properties => text.push('\n'),
+                    b"noBreakHyphen" if run_depth > 0 && !in_properties => text.push('\u{2011}'),
                     _ if in_properties => {
                         if let Some(paragraph) = paragraphs.last_mut() {
                             paragraph.properties.read(event, decoder)?;
@@ -319,6 +322,7 @@ fn parse_body(xml: &str, styles: &Styles, mut numbering: Numbering) -> Result<Ex
                         }
                     }
                     b"pPr" => in_properties = false,
+                    b"r" => run_depth = run_depth.saturating_sub(1),
                     b"t" => in_text = false,
                     _ => {}
                 }

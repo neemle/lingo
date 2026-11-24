@@ -105,6 +105,29 @@ fn stored_and_deflated_docx_imports_preserve_text_and_originals() {
 }
 
 #[test]
+fn docx_run_controls_preserve_visible_text_and_ignore_tab_stops() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&dir.path().join("reader.db")).unwrap();
+    let bytes = docx(br#"
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body>
+            <w:p>
+              <w:pPr><w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs></w:pPr>
+              <w:r><w:t>Jean</w:t><w:noBreakHyphen/><w:t>Luc.</w:t><w:cr></w:cr>
+                <w:t>Un</w:t><w:tab/><w:t>Deux</w:t><w:ptab w:alignment="center"
+                  w:relativeTo="margin" w:leader="none"/><w:t>Trois.</w:t><w:br/>
+                <w:t>Ex</w:t><w:softHyphen/><w:t>emple.</w:t>
+              </w:r>
+            </w:p>
+          </w:body>
+        </w:document>"#, zip::CompressionMethod::Deflated);
+    let document = store.import("controls.docx", &bytes, "fr").unwrap();
+    assert_eq!(document.text, "Jean‑Luc.\nUn\tDeux\tTrois.\nExemple.\n");
+    assert_eq!(document.sentences.len(), 3);
+    assert_eq!(store.original(&document.id).unwrap().bytes, bytes);
+}
+
+#[test]
 fn truncated_docx_is_rejected_without_persisting_a_document() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(&dir.path().join("reader.db")).unwrap();
