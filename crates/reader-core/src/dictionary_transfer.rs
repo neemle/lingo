@@ -205,7 +205,7 @@ pub(crate) fn reanchor_canonical_selections(
     let Some((old_pages, new_pages)) = old_pages.zip(document.pdf_page_starts.as_deref())
         .filter(|(old, new)| old.len() == new.len())
         else { return Ok(()); };
-    let matching = crate::ocr::matching_pdf_sentence(old_pages, new_pages, &document.sentences);
+    let matching = crate::ocr::matching_pdf_sentence(old_pages, new_pages, before, &document.sentences);
     reanchor_selections(db, address, before, &document.sentences, |sentence, start, _| {
         let next = matching(sentence)?;
         document.sentences[next].start_utf16.checked_add(start.checked_sub(sentence.start_utf16)?)

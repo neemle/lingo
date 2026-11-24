@@ -1591,6 +1591,54 @@ mod drop_cap_tests {
     }
 
     #[test]
+    fn replacing_native_text_with_ocr_keeps_annotations_on_the_shifted_sentence() {
+        let root = tempfile::tempdir().unwrap();
+        let database = root.path().join("reader.db");
+        let original = root.path().join("reader.pdf");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let mut store = Store::open(&database).unwrap();
+        let text = "Le marin rentre au port.";
+        let prepared = file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "reader.pdf", &original, "fr", vec![text.into(), text.into()], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let before = &document.sentences[0];
+        store.set_bookmark(&document.id, &before.id, true).unwrap();
+        store.set_sentence_note(&document.id, &before.id, "La première page").unwrap();
+        let revision = document.current_revision_id.as_deref().unwrap();
+        let card = store.save_selected_word(crate::Vocabulary {
+            id: String::new(), word: "marin".into(), document_id: document.id.clone(),
+            language: "fr".into(), target_language: "uk".into(), translation: "моряк".into(),
+            context: String::new(), forward: Default::default(), reverse: Default::default(),
+            analysis: None, expression: None, sense: None, accepted_translations: Vec::new(),
+        }, crate::dictionary_transfer::DictionarySelection {
+            revision_id: revision.to_owned(),
+            start_utf16: "Le ".len(),
+            reconstructed_text: None,
+        }).unwrap();
+        let line = |text: &str, y| ocr::OcrLine {
+            rotation: None, block_start: false, page: 0, text: text.into(), x: 0.1, y,
+            width: 0.75, height: 0.04, confidence: Some(0.99), correction: None, words: vec![], source_span: None,
+        };
+        // Two same-page candidates make the moved sentence ambiguous.
+        assert!(store.replace_pdf_text_layer(&document.id, 0, revision, "fr",
+            vec![line("Un autre paragraphe.", 0.1), line(text, 0.2), line(text, 0.3)]).is_err());
+        let updated = store.replace_pdf_text_layer(&document.id, 0, revision, "fr",
+            vec![line("Un autre paragraphe.", 0.1), line(text, 0.2)]).unwrap();
+        assert_eq!(updated.sentences[1].text, text);
+        assert_eq!(updated.sentences[2].text, text);
+        assert_ne!(updated.sentences[1].id, before.id);
+        drop(store);
+        let reopened = Store::open(&database).unwrap();
+        let saved = reopened.translation_document(&document.id).unwrap();
+        assert_eq!(saved.bookmarks, [updated.sentences[1].id.clone()]);
+        assert_eq!(saved.notes[&updated.sentences[1].id], "La première page");
+        assert!(!saved.notes.contains_key(&updated.sentences[2].id));
+        let links = serde_json::to_value(reopened.dictionary_source_locations(&card.id).unwrap()).unwrap();
+        assert_eq!(links[0]["sentenceId"], updated.sentences[1].id);
+    }
+
+    #[test]
     fn stored_pdf_order_repair_preserves_canonical_and_detached_annotations() {
         use sha2::{Digest, Sha256};
 

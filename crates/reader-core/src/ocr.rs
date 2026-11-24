@@ -494,7 +494,7 @@ pub(crate) fn differs_by_one_glyph(left: &str, right: &str) -> bool {
         left_tail.is_some_and(|tail| Some(tail) == right_tail)
 }
 
-/// Match only sentences at the same page-relative source offset with identical text.
+/// Match unchanged sentences on the same physical page.
 pub(crate) fn corresponding_pdf_sentences<'a>(
     from: &'a crate::Document,
     to_format: &str,
@@ -506,7 +506,7 @@ pub(crate) fn corresponding_pdf_sentences<'a>(
     if from.format != "pdf" || to_format != "pdf" || old_starts.len() != new_starts.len() {
         return None;
     }
-    let matching = matching_pdf_sentence(old_starts, new_starts, to_sentences);
+    let matching = matching_pdf_sentence(old_starts, new_starts, &from.sentences, to_sentences);
     Some(from.sentences.iter().filter_map(|old| {
         let index = matching(old)?;
         Some((old.id.as_str(), to_sentences[index].id.as_str()))
@@ -514,10 +514,11 @@ pub(crate) fn corresponding_pdf_sentences<'a>(
 }
 
 pub(crate) fn matching_pdf_sentence<'a>(
-    old_starts: &[Option<usize>], new_starts: &'a [Option<usize>], sentences: &'a [crate::Sentence],
+    old_starts: &[Option<usize>], new_starts: &'a [Option<usize>],
+    before: &'a [crate::Sentence], after: &'a [crate::Sentence],
 ) -> impl Fn(&crate::Sentence) -> Option<usize> + 'a {
     let old_pages = page_anchors(old_starts);
-    move |old| match_page_sentence(&old_pages, new_starts, sentences, old)
+    move |old| match_page_sentence(&old_pages, new_starts, before, after, old)
 }
 
 fn page_anchors(starts: &[Option<usize>]) -> Vec<(usize, usize)> {
@@ -531,26 +532,34 @@ fn page_anchors(starts: &[Option<usize>]) -> Vec<(usize, usize)> {
 fn match_page_sentence(
     old_pages: &[(usize, usize)],
     starts: &[Option<usize>],
-    sentences: &[crate::Sentence],
+    before: &[crate::Sentence],
+    after: &[crate::Sentence],
     old: &crate::Sentence,
 ) -> Option<usize> {
-    let (old_start, page) = old_pages
-        .partition_point(|(start, _)| *start <= old.start_utf16)
-        .checked_sub(1)
-        .and_then(|index| old_pages.get(index).copied())?;
-    let new_start = starts
-        .get(page)
-        .copied()
-        .flatten()?
-        .checked_add(old.start_utf16.checked_sub(old_start)?)?;
-    let index = sentences
-        .binary_search_by_key(&new_start, |sentence| sentence.start_utf16)
-        .ok()?;
-    // Identical text on the following page must not inherit this page's annotations.
-    let next_page = starts[page + 1..].iter().flatten().next();
-    (sentences[index].text == old.text
-        && next_page.is_none_or(|start| new_start < *start))
-        .then_some(index)
+    let old_page = old_pages.partition_point(|(start, _)| *start <= old.start_utf16).checked_sub(1)?;
+    let (old_start, page) = old_pages[old_page];
+    let page_start = starts.get(page).copied().flatten()?;
+    let page_end = starts[page + 1..].iter().flatten().copied().next().unwrap_or(usize::MAX);
+    let expected_start = page_start.checked_add(old.start_utf16 - old_start)?;
+    if expected_start < page_end {
+        if let Ok(index) = after.binary_search_by_key(&expected_start, |sentence| sentence.start_utf16) {
+            if after[index].text == old.text { return Some(index); }
+        }
+    }
+
+    // OCR can add or remove text earlier on this page. A moved sentence must
+    // have a single exact match in each revision of this physical page.
+    let old_end = old_pages.get(old_page + 1).map_or(usize::MAX, |(start, _)| *start);
+    unique_page_sentence(before, old_start, old_end, &old.text)?;
+    unique_page_sentence(after, page_start, page_end, &old.text)
+}
+
+fn unique_page_sentence(sentences: &[crate::Sentence], start: usize, end: usize, text: &str) -> Option<usize> {
+    let first = sentences.partition_point(|sentence| sentence.start_utf16 < start);
+    let last = sentences.partition_point(|sentence| sentence.start_utf16 < end);
+    let mut matches = (first..last).filter(|&index| sentences[index].text == text);
+    let index = matches.next()?;
+    matches.next().is_none().then_some(index)
 }
 
 /// Rebuild derived sentences without dropping or guessing user annotations.
@@ -655,7 +664,7 @@ pub(crate) fn update_transcript_with_edits(
         .map(page_anchors)
         .unwrap_or_default();
     let page_match = |old: &crate::Sentence| {
-        match_page_sentence(&old_pages, starts?, &sentences, old)
+        match_page_sentence(&old_pages, starts?, &document.sentences, &sentences, old)
     };
     let by_id: HashMap<_, _> = sentences
         .iter()
