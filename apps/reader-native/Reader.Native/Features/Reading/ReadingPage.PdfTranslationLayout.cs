@@ -773,7 +773,7 @@ public partial class ReadingPage
         if (request != pdfTranslationViewportRequest || pdfTranslationScroll is not null ||
             CurrentPdfLayoutAddress() != address || CurrentSourceViewport() != source ||
             OverflowRowAtScrollPosition(viewport) is not { } row ||
-            surface.Drawable is not TranslatedPdfDrawing drawing || drawing.SourceTop(row) is null) return;
+            surface.Drawable is not TranslatedPdfDrawing drawing || drawing.SourceBounds(row) is null) return;
         if (pdfLayoutSentence is not { } active || active.StartUtf16 != row.StartUtf16 || active.EndUtf16 != row.EndUtf16)
             await SelectTranslatedPdfRowAsync(row);
     }
@@ -887,6 +887,16 @@ public partial class ReadingPage
         if (!PdfFollowsScroll || pdfTranslationScroll is not null || !original.IsVisible || !translated.IsVisible ||
             originalSurface.Height <= 0 || translatedSurface.Height <= 0) return;
 
+        var drawing = translatedSurface.Drawable as TranslatedPdfDrawing;
+        if (fromOriginal && drawing is not null &&
+            FindActiveOverflowLabel(original, originalSurface.Height, translated, drawing) is { } overflowTarget)
+        {
+            var (label, top) = overflowTarget;
+            if (label.Height > 0 && !OverflowLabelVisible(translated.ScrollY, translated.Height, top, label.Height))
+                await ScrollPdfTranslationAsync(() => translated.ScrollToAsync(label, ScrollToPosition.MakeVisible, animated: false));
+            return;
+        }
+
         var source = fromOriginal ? original : translated;
         var destination = fromOriginal ? translated : original;
         var sourceHeight = fromOriginal ? originalSurface.Height : translatedSurface.Height;
@@ -894,15 +904,40 @@ public partial class ReadingPage
         var sourcePosition = source.ScrollY * destinationHeight / sourceHeight;
         if (!fromOriginal && OverflowRowAtScrollPosition(translated) is { } row)
         {
-            if (translatedSurface.Drawable is not TranslatedPdfDrawing drawing || drawing.SourceTop(row) is not { } top)
-                return;
-            sourcePosition = top * destinationHeight - Math.Min(44, destination.Height * 0.12);
+            if (drawing?.SourceBounds(row) is not { } bounds) return;
+            sourcePosition = bounds.Y * destinationHeight - Math.Min(44, destination.Height * 0.12);
         }
         var target = Math.Clamp(sourcePosition, 0,
             Math.Max(0, destinationHeight - destination.Height));
         if (Math.Abs(destination.ScrollY - target) < 1) return;
 
         await ScrollPdfTranslationAsync(() => destination.ScrollToAsync(0, target, animated: false));
+    }
+
+    private (Label Label, double Top)? FindActiveOverflowLabel(ScrollView original, double paperHeight,
+        ScrollView translated, TranslatedPdfDrawing drawing)
+    {
+        if (pdfLayoutSentence is not { } active || original.Height <= 0 ||
+            overflowContent is not { } overflow || !overflow.Panel.IsVisible ||
+            !ReferenceEquals(overflow.Panel.Parent, translated.Content)) return null;
+
+        var top = original.ScrollY / paperHeight;
+        var bottom = (original.ScrollY + original.Height) / paperHeight;
+        for (var index = 0; index < overflow.Rows.Length; index++)
+        {
+            var row = overflow.Rows[index];
+            if (!IsActivePdfRow(row, active) || drawing.SourceBounds(row) is not { } bounds ||
+                bounds.Y >= bottom || bounds.Y + bounds.Height <= top) continue;
+            var label = overflow.Labels[index];
+            return (label, overflow.Panel.Y + label.Y);
+        }
+        return null;
+    }
+
+    private static bool OverflowLabelVisible(double viewportTop, double viewportHeight, double labelTop, double labelHeight)
+    {
+        var overlap = Math.Min(viewportTop + viewportHeight, labelTop + labelHeight) - Math.Max(viewportTop, labelTop);
+        return overlap >= Math.Min(viewportHeight, labelHeight) - 1;
     }
 
     private async Task ScrollPdfTranslationAsync(Func<Task> scroll)
@@ -1133,10 +1168,10 @@ public partial class ReadingPage
         internal RectF? ActiveBounds { get; private set; }
         internal RectF? MatchBounds { get; private set; }
 
-        internal double? SourceTop(PdfPageTranslationRow row)
+        internal PdfSampleBox? SourceBounds(PdfPageTranslationRow row)
         {
             var index = Array.IndexOf(rows, row);
-            return index >= 0 ? layout.Anchors[index].Bounds?.Y : null;
+            return index >= 0 ? layout.Anchors[index].Bounds : null;
         }
 
         internal PdfPageTranslationRow? HitTest(Point point)
