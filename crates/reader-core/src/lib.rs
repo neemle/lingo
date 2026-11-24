@@ -311,6 +311,22 @@ impl Vocabulary {
         }
     }
 
+    fn legacy_card_for_promotion(&self, connection: &Connection) -> Result<Option<Self>> {
+        if self.sense.is_some() {
+            return Ok(None);
+        }
+        let surface = self.analysis.as_ref().map(|reading| reading.surface.as_str())
+            .or_else(|| self.expression.as_ref().map(|expression| expression.surface.as_str()));
+        let Some(surface) = surface else { return Ok(None); };
+        let canonical_key = self.surface_key(&self.word);
+        let observed_key = self.surface_key(surface);
+        let legacy: Option<String> = connection.query_row(
+            "SELECT body FROM vocabulary WHERE word_key IN (?1, ?2) ORDER BY word_key<>?1 LIMIT 1",
+            params![canonical_key, observed_key], |row| row.get(0),
+        ).optional().map_err(|error| error.to_string())?;
+        legacy.map(|body| serde_json::from_str(&body).map_err(|error| error.to_string())).transpose()
+    }
+
     fn validate_annotations(&self) -> Result<()> {
         if let Some(expression) = &self.expression {
             let valid_evidence = match expression.kind.as_str() {
@@ -1476,46 +1492,33 @@ impl Store {
             tx.commit().map_err(|e| e.to_string())?;
             return Ok(card);
         }
-        if entry.sense.is_none() && (entry.analysis.is_some() || entry.expression.is_some()) {
-            let legacy_key = entry.surface_key(&entry.word);
-            let legacy: Option<String> = tx
-                .query_row(
-                    "SELECT body FROM vocabulary WHERE word_key=?1",
-                    [&legacy_key],
-                    |r| r.get(0),
-                )
-                .optional()
-                .map_err(|error| error.to_string())?;
-            if let Some(body) = legacy {
-                let mut card: Vocabulary =
-                    serde_json::from_str(&body).map_err(|error| error.to_string())?;
-                card.word.clone_from(&entry.word);
-                if entry.context != card.context || entry.document_id != card.document_id {
-                    if let Some(analysis) = &mut entry.analysis {
-                        analysis.context = Some(entry.context.clone());
-                        analysis.document_id = Some(entry.document_id.clone());
-                    }
-                    if let Some(expression) = &mut entry.expression {
-                        expression.context = Some(entry.context.clone());
-                        expression.document_id = Some(entry.document_id.clone());
-                    }
+        if let Some(mut card) = entry.legacy_card_for_promotion(&tx)? {
+            card.word.clone_from(&entry.word);
+            if entry.context != card.context || entry.document_id != card.document_id {
+                if let Some(analysis) = &mut entry.analysis {
+                    analysis.context = Some(entry.context.clone());
+                    analysis.document_id = Some(entry.document_id.clone());
                 }
-                card.merge_accepted_translations(&entry)?;
-                card.analysis = entry.analysis;
-                card.expression = entry.expression;
-                tx.execute(
-                    "UPDATE vocabulary SET word_key=?1, body=?2 WHERE id=?3",
-                    params![
-                        key,
-                        serde_json::to_string(&card).map_err(|error| error.to_string())?,
-                        card.id
-                    ],
-                )
-                .map_err(|error| error.to_string())?;
-                dictionary_transfer::remember_card_context(&tx, &card.id, &entry.document_id, &surface, &entry.context, anchor.as_ref())?;
-                tx.commit().map_err(|error| error.to_string())?;
-                return Ok(card);
+                if let Some(expression) = &mut entry.expression {
+                    expression.context = Some(entry.context.clone());
+                    expression.document_id = Some(entry.document_id.clone());
+                }
             }
+            card.merge_accepted_translations(&entry)?;
+            card.analysis = entry.analysis;
+            card.expression = entry.expression;
+            tx.execute(
+                "UPDATE vocabulary SET word_key=?1, body=?2 WHERE id=?3",
+                params![
+                    key,
+                    serde_json::to_string(&card).map_err(|error| error.to_string())?,
+                    card.id
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+            dictionary_transfer::remember_card_context(&tx, &card.id, &entry.document_id, &surface, &entry.context, anchor.as_ref())?;
+            tx.commit().map_err(|error| error.to_string())?;
+            return Ok(card);
         }
         entry.id = Uuid::new_v4().to_string();
         entry.forward = ReviewState::default();
@@ -1958,7 +1961,7 @@ mod tests {
                 accepted_translations: Vec::new(),
             };
         let legacy = db
-            .save_word(make_card("read", "читати", None, "I read every day."))
+            .save_word(make_card("reads", "читати", None, "She reads every day."))
             .unwrap();
         db.review(&legacy.id, "forward", 2).unwrap();
         let first = db
@@ -2006,6 +2009,19 @@ mod tests {
         assert_eq!(again.forward.reviews, 1);
         assert_eq!(restored.snapshot().unwrap().vocabulary.len(), 3);
         assert_eq!(restored.export().unwrap().reviews[0].entry_id, first.id);
+
+        let mut incoming = Store::open(Path::new(":memory:")).unwrap();
+        incoming.save_word(make_card("reads", "читати", Some("VERB"), "She reads.")).unwrap();
+        let mut local = Store::open(Path::new(":memory:")).unwrap();
+        let prior = local.save_word(make_card("reads", "читати", None, "She reads.")).unwrap();
+        local.review(&prior.id, "reverse", 3).unwrap();
+        local.import_dictionary(incoming.export_dictionary(None).unwrap()).unwrap();
+        let imported = local.snapshot().unwrap().vocabulary;
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].id, prior.id);
+        assert_eq!(imported[0].word, "read");
+        assert_eq!(imported[0].reverse.reviews, 1);
+        assert_eq!(local.vocabulary_review_history(&prior.id).unwrap().len(), 1);
     }
     #[test]
     fn expression_cards_reuse_canonical_identity_and_preserve_evidence() {

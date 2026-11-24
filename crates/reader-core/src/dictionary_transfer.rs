@@ -921,13 +921,7 @@ fn matching_card(db: &Connection, incoming: &Vocabulary, key: &str) -> Result<Op
             return Ok(Some(promote(card, incoming)));
         }
     }
-    if !plain(incoming) {
-        let legacy_key = incoming.surface_key(&incoming.word);
-        if let Some(card) = by_key(&legacy_key)? {
-            return Ok(Some(promote(card, incoming)));
-        }
-    }
-    Ok(None)
+    Ok(incoming.legacy_card_for_promotion(db)?.map(|card| promote(card, incoming)))
 }
 
 fn same_card_identity(local: &Vocabulary, incoming: &Vocabulary) -> bool {
