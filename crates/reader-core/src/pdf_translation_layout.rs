@@ -174,18 +174,7 @@ fn plan(fragments: &[SourceFragment]) -> Result<PageLayout> {
         region.set_font(fragments);
         page.regions.push(region);
     }
-    page.regions.retain_mut(|region| {
-        let covers_pending = page
-            .pending
-            .iter()
-            .filter_map(|&index| fragments[index].bounds)
-            .any(|bounds| region.bounds.intersects(bounds));
-        if covers_pending {
-            page.overflow.append(&mut region.fragments);
-        }
-        !covers_pending
-    });
-    remove_overlapping_regions(&mut page);
+    resolve_overlapping_regions(&mut page, fragments);
     for region in &mut page.regions {
         region.alignment = infer_alignment(
             region.fragments.iter().flat_map(|&index| fragments[index].ink_boxes.iter()
@@ -237,8 +226,11 @@ fn infer_alignment(boxes: impl Iterator<Item = Bounds>, line_height: f64) -> Ali
     Alignment::Left
 }
 
-fn remove_overlapping_regions(page: &mut PageLayout) {
-    let mut colliding = vec![false; page.regions.len()];
+fn resolve_overlapping_regions(page: &mut PageLayout, fragments: &[SourceFragment]) {
+    let mut colliding: Vec<_> = page.regions.iter().map(|region| {
+        page.pending.iter().filter_map(|&index| fragments[index].bounds)
+            .any(|bounds| region.bounds.intersects(bounds))
+    }).collect();
     for (index, region) in page.regions.iter().enumerate() {
         for (other, candidate) in page.regions.iter().enumerate().skip(index + 1) {
             if region.bounds.intersects(candidate.bounds) {
@@ -248,13 +240,30 @@ fn remove_overlapping_regions(page: &mut PageLayout) {
         }
     }
     let mut colliding = colliding.into_iter();
+    let mut recovered = Vec::new();
     page.regions.retain_mut(|region| {
-        let conflict = colliding.next().unwrap_or(false);
-        if conflict {
-            page.overflow.append(&mut region.fragments);
+        if colliding.next() != Some(true) {
+            return true;
         }
-        !conflict
+        // A paragraph rectangle can collide even when some of its individual
+        // sentence boxes are clear. Keep those translations on the page.
+        for &index in &region.fragments {
+            let fragment = &fragments[index];
+            let Some(bounds) = fragment.bounds.filter(|bounds| {
+                !fragments.iter().enumerate().any(|(other, fragment)| {
+                    other != index && fragment.bounds.is_some_and(|area| bounds.intersects(area))
+                })
+            }) else {
+                page.overflow.push(index);
+                continue;
+            };
+            let mut standalone = Region::from_fragment(index, fragment, bounds, region.rotation);
+            standalone.set_font(fragments);
+            recovered.push(standalone);
+        }
+        false
     });
+    page.regions.extend(recovered);
 }
 
 fn fits(
@@ -350,6 +359,27 @@ mod tests {
         .unwrap();
         assert_eq!(page.overflow, [0, 1]);
         assert_eq!(page.regions[0].fragments, [2]);
+    }
+
+    #[test]
+    fn preserves_clear_sentences_in_blocks_that_overlap_another_block() {
+        let fragments = [
+            fragment(0.1, 0.20, 1, 10),
+            fragment(0.1, 0.23, 1, 20),
+            fragment(0.3, 0.24, 2, 30),
+            fragment(0.3, 0.27, 2, 40),
+        ];
+        let page = plan(&fragments).unwrap();
+        assert_eq!(page.overflow, [1, 2]);
+        assert_eq!(page.regions.iter().map(|region| region.fragments.as_slice()).collect::<Vec<_>>(),
+            [&[0][..], &[3][..]]);
+
+        let mut fragments = fragments;
+        fragments[2].pending = true;
+        let page = plan(&fragments).unwrap();
+        assert_eq!(page.pending, [2]);
+        assert_eq!(page.overflow, [1]);
+        assert_eq!(page.regions.iter().map(|region| region.fragments[0]).collect::<Vec<_>>(), [3, 0]);
     }
 
     #[test]

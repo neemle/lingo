@@ -102,28 +102,13 @@ pub fn project(
         .map(|row| project_row(row, geometry, offset, &styles))
         .collect::<Vec<_>>();
     let mut layout = plan(&fragments)?;
-    if preserve_artwork {
-        let (regions, overflow) = (&mut layout.regions, &mut layout.overflow);
-        regions.retain_mut(|region| {
-            let spans = region
-                .fragments
-                .iter()
-                .map(|&index| rows[index].page_span(offset));
-            if let Some(masks) = super::masks::plan(region.bounds, spans, geometry, &styles) {
-                region.masks = masks;
-                true
-            } else {
-                overflow.append(&mut region.fragments);
-                false
-            }
-        });
-        overflow.sort_unstable_by_key(|&index| (rows[index].start_utf16, index));
-    }
-    for region in &mut layout.regions {
-        if region.fragments.len() < 2 {
-            continue;
-        }
-        region.fallback_regions = region.fragments.iter().filter_map(|&index| {
+    let mut recovered = Vec::new();
+    let (regions, overflow) = (&mut layout.regions, &mut layout.overflow);
+    regions.retain_mut(|region| {
+        let masks_for = |bounds, indices: &[usize]| super::masks::plan(
+            bounds, indices.iter().map(|&index| rows[index].page_span(offset)), geometry, &styles,
+        );
+        let standalone = |&index: &usize| {
             let fragment = &fragments[index];
             let bounds = fragment.bounds?;
             // A multiline sentence can share its rectangle with a neighboring
@@ -140,13 +125,30 @@ pub fn project(
             fallback.alignment = region.alignment;
             fallback.set_font(&fragments);
             if preserve_artwork {
-                fallback.masks = super::masks::plan(
-                    bounds, std::iter::once(rows[index].page_span(offset)), geometry, &styles,
-                )?;
+                fallback.masks = masks_for(bounds, &[index])?;
             }
             Some(fallback)
-        }).collect();
-    }
+        };
+        let fallback: Vec<_> = if region.fragments.len() >= 2 {
+            region.fragments.iter().filter_map(standalone).collect()
+        } else {
+            Vec::new()
+        };
+        if preserve_artwork {
+            let Some(masks) = masks_for(region.bounds, &region.fragments) else {
+                let retained: std::collections::HashSet<_> =
+                    fallback.iter().map(|standalone| standalone.fragments[0]).collect();
+                overflow.extend(region.fragments.iter().copied().filter(|index| !retained.contains(index)));
+                recovered.extend(fallback);
+                return false;
+            };
+            region.masks = masks;
+        }
+        region.fallback_regions = fallback;
+        true
+    });
+    regions.extend(recovered);
+    overflow.sort_unstable_by_key(|&index| (rows[index].start_utf16, index));
     let anchors = fragments
         .into_iter()
         .zip(rows)
@@ -481,5 +483,21 @@ mod tests {
         assert_eq!(protected.layout.regions.len(), 2);
         assert_eq!(protected.layout.regions[0].fragments, [0]);
         assert_eq!(protected.layout.regions[1].fragments, [2]);
+
+        let mut caption = geometry[1].clone();
+        caption.text = "Caption".into();
+        caption.source_span = None;
+        caption.x = 0.5;
+        caption.width = 0.10;
+        caption.height = 0.006;
+        caption.y = 0.28;
+        let mut with_caption = geometry.to_vec();
+        with_caption.push(caption);
+        let protected = project(&rows, &with_caption, 0, &[], true).unwrap();
+        assert_eq!(protected.layout.overflow, [1]);
+        assert_eq!(protected.layout.regions.len(), 2);
+        assert_eq!(protected.layout.regions[0].fragments, [0]);
+        assert_eq!(protected.layout.regions[1].fragments, [2]);
+        assert!(protected.layout.regions.iter().all(|region| region.masks.len() == 1));
     }
 }
