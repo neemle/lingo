@@ -13,6 +13,8 @@ const MAX_BATCH_SEGMENTS: usize = 32;
 const PAGE_BATCH_BYTES: usize = MAX_BATCH_BYTES / 4;
 const CACHE_ROWS: i64 = 128;
 const LIVE_CACHE_ROWS: i64 = 100_000;
+const DIRECT_REFRESH_REQUIRES_PACKAGE: &str =
+    "Для повторного прямого перекладу встановіть французько-український пакет або ввімкніть встановлену пряму модель.";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -729,6 +731,17 @@ pub(crate) fn regenerate_pdf_sentences(
     }
     let route = ranked_routes(&provider.installed_models()?, &document.language, target)?
         .into_iter().next().ok_or("Мовний пакет для повторного перекладу недоступний.")?;
+    if (document.language.as_str(), target) == ("fr", "uk") && route.pivot_language().is_some() {
+        if let Some(edge) = provider.catalog_direct_model(&document.language, target) {
+            let direct = Route::Direct(edge);
+            for text in &segments {
+                let key = unit_cache_key(&direct, text)?;
+                if store.cached_segments(&key, std::slice::from_ref(text), target)?.is_some() {
+                    return Err(DIRECT_REFRESH_REQUIRES_PACKAGE.into());
+                }
+            }
+        }
+    }
     let keys = segments.iter().map(|text| unit_cache_key(&route, text)).collect::<Result<Vec<_>>>()?;
     let mut pending = segments.as_slice();
     let mut output = Vec::with_capacity(segments.len());
@@ -742,8 +755,7 @@ pub(crate) fn regenerate_pdf_sentences(
         pending = rest;
     }
     checkpoint()?;
-    store.save_cached_segments(keys.iter().cloned().zip(output.iter().map(std::slice::from_ref)))?;
-    store.link_translation_cache_keys(&document.id, keys.iter().map(String::as_str))
+    store.commit_cached_segments(Some(&document.id), keys.into_iter().zip(output.iter().map(std::slice::from_ref)))
 }
 
 pub(crate) fn pdf_regeneration_input(
@@ -1876,6 +1888,16 @@ mod tests {
             "uk", PageBoundaries::Canonical, &|| calls.get() == 2).is_err());
         assert_cached(&store, &old[0]);
 
+        store.connection.execute_batch(
+            "CREATE TEMP TRIGGER fail_translation_owner BEFORE INSERT ON translation_cache_owners
+             BEGIN SELECT RAISE(ABORT, 'owner write failed'); END;",
+        ).unwrap();
+        calls.set(0);
+        assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, selection.clone(), Some(reflow_input.clone()),
+            "uk", PageBoundaries::Canonical, &|| false).unwrap_err().contains("owner write failed"));
+        assert_cached(&store, &old[0]);
+        store.connection.execute_batch("DROP TRIGGER fail_translation_owner;").unwrap();
+
         calls.set(0);
         provider.sizes.clear();
         regenerate_pdf_sentences(&mut store, &mut provider, &document, selection, Some(reflow_input),
@@ -1982,6 +2004,17 @@ mod tests {
             ("en".into(), vec!["Les marins attendent.".into()]),
             ("uk".into(), vec!["The sailors are waiting.".into()]),
         ]);
+        provider.calls.clear();
+        assert_eq!(regenerate_pdf_sentences(&mut store, &mut provider, &document, 0..1, None, "uk",
+            PageBoundaries::Canonical, &|| false).unwrap_err(), DIRECT_REFRESH_REQUIRES_PACKAGE);
+        assert!(provider.calls.is_empty());
+        let cached = routes.cached_pdf_row(&store, &document, 0, "uk", PageBoundaries::Canonical,
+            UnitGrouping::Sentence).unwrap().unwrap();
+        assert_eq!(cached.translation.as_deref(), Some("Судно прибуває."));
+
+        regenerate_pdf_sentences(&mut store, &mut provider, &document, 1..2, None, "uk",
+            PageBoundaries::Canonical, &|| false).unwrap();
+        assert_eq!(provider.calls.len(), 2);
     }
 
     #[test]
@@ -2988,17 +3021,20 @@ impl Store {
 
     fn link_translation_cache_keys<'a>(&self, document: &str, keys: impl Iterator<Item = &'a str>) -> Result<()> {
         let tx = self.connection.unchecked_transaction().map_err(|error| error.to_string())?;
-        {
-            let mut link = tx.prepare_cached(
-                "INSERT OR IGNORE INTO translation_cache_owners(cache_key,document_id)
-                 SELECT cache.key, docs.id FROM translation_cache cache, documents docs
-                 WHERE cache.key=?1 AND docs.id=?2",
-            ).map_err(|error| error.to_string())?;
-            for key in keys {
-                link.execute(params![key, document]).map_err(|error| error.to_string())?;
-            }
-        }
+        Self::link_cache_keys(&tx, document, keys)?;
         tx.commit().map_err(|error| error.to_string())
+    }
+
+    fn link_cache_keys<'a>(db: &Connection, document: &str, keys: impl Iterator<Item = &'a str>) -> Result<()> {
+        let mut link = db.prepare_cached(
+            "INSERT OR IGNORE INTO translation_cache_owners(cache_key,document_id)
+             SELECT cache.key, docs.id FROM translation_cache cache, documents docs
+             WHERE cache.key=?1 AND docs.id=?2",
+        ).map_err(|error| error.to_string())?;
+        for key in keys {
+            link.execute(params![key, document]).map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
 
     pub fn translate_aligned(
@@ -3042,6 +3078,13 @@ impl Store {
         }
         let context = context.filter(|text| !text.trim().is_empty());
         let routes = CacheRoutes::resolve(&provider.installed_models()?, catalog, source, target)?;
+        if regenerate && routes.prefer_direct_cache &&
+            routes.preferred.as_ref().is_some_and(|route| route.pivot_language().is_some()) &&
+            routes.cached_aligned(self, segments, context, target, settings, false)?
+                .is_some_and(|(cached, _)| cached.route.direct_model_revision().is_some())
+        {
+            return Err(DIRECT_REFRESH_REQUIRES_PACKAGE.into());
+        }
         if !regenerate {
             if let Some((translation, key)) = routes.cached_aligned(self, segments, context, target, settings, true)? {
                 if let Some(document) = document {
@@ -3058,10 +3101,7 @@ impl Store {
             match infer_route(provider, &route, segments, context, decode_settings) {
                 Ok(output) => {
                     let key = cache_key(&route, segments, context, settings)?;
-                    self.save_cached_segments([(key.clone(), output.as_slice())])?;
-                    if let Some(document) = document {
-                        self.link_translation_cache_keys(document, std::iter::once(key.as_str()))?;
-                    }
+                    self.commit_cached_segments(document, [(key, output.as_slice())])?;
                     return Ok(Some(AlignedTranslation::from_route(route.used_route(segments), output)));
                 }
                 Err(error) => { first_failure.get_or_insert(error); }
@@ -3127,11 +3167,10 @@ impl Store {
                 }
             }
             if !rows.is_empty() {
-                self.save_cached_segments(rows.iter().map(|(key, index)| {
-                    let output = segments[*index].as_ref().expect("completed translation");
-                    (key.clone(), std::slice::from_ref(&output.text))
+                self.commit_cached_segments(Some(document), rows.into_iter().map(|(key, index)| {
+                    let output = segments[index].as_ref().expect("completed translation");
+                    (key, std::slice::from_ref(&output.text))
                 }))?;
-                self.link_translation_cache_keys(document, rows.iter().map(|(key, _)| key.as_str()))?;
             }
             if let Some(message) = deferred {
                 return Err(TranslationBatchError::deferred(message));
@@ -3189,14 +3228,24 @@ impl Store {
             }))
     }
 
+    #[cfg(test)]
     fn save_cached_segments<'a>(
         &mut self,
+        rows: impl IntoIterator<Item = (String, &'a [String])>,
+    ) -> Result<()> {
+        self.commit_cached_segments(None, rows)
+    }
+
+    fn commit_cached_segments<'a>(
+        &mut self,
+        document: Option<&str>,
         rows: impl IntoIterator<Item = (String, &'a [String])>,
     ) -> Result<()> {
         let tx = self
             .connection
             .transaction()
             .map_err(|error| error.to_string())?;
+        let mut keys = Vec::new();
         {
             // Refresh eviction order without cascading a delete to document links.
             let mut statement = tx
@@ -3210,6 +3259,9 @@ impl Store {
                 statement
                     .execute(params![key, value])
                     .map_err(|error| error.to_string())?;
+                if document.is_some() {
+                    keys.push(key);
+                }
             }
         }
         tx.execute(
@@ -3219,6 +3271,9 @@ impl Store {
             [LIVE_CACHE_ROWS],
         )
         .map_err(|error| error.to_string())?;
+        if let Some(document) = document {
+            Self::link_cache_keys(&tx, document, keys.iter().map(String::as_str))?;
+        }
         tx.commit().map_err(|error| error.to_string())
     }
 }
