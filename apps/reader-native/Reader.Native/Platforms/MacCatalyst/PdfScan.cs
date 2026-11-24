@@ -160,7 +160,8 @@ internal static partial class PdfScan
     internal enum LanguageSample { TextLayer, PortableOcr, NativeOcr }
 
     internal static Task<string[]> ReadLanguageSamplesAsync(
-        string path, LanguageSample source, int skip = 0, int count = 5, CancellationToken cancellation = default) => Task.Run(() =>
+        string path, LanguageSample source, int[]? sampleSlots = null,
+        Func<int, string, Task<bool>>? stopAfterSample = null, CancellationToken cancellation = default) => Task.Run(() =>
     {
         cancellation.ThrowIfCancellationRequested();
         using var pool = new NSAutoreleasePool();
@@ -168,16 +169,17 @@ internal static partial class PdfScan
         var pageCount = checked((int)document.PageCount);
         PdfRecognition.CheckPageCount(pageCount);
         var lastPage = pageCount - 1;
-        int[] probes = [Math.Min(4, lastPage), pageCount / 3, 2 * pageCount / 3, Math.Min(1, lastPage), 0];
+        int[] candidates = [Math.Min(4, lastPage), pageCount / 3, 2 * pageCount / 3, Math.Min(1, lastPage), 0];
+        var probes = candidates.Distinct().ToArray();
         var samples = new List<string>(probes.Length);
-        foreach (var index in probes.Distinct().Skip(skip).Take(count))
+        foreach (var slot in sampleSlots ?? Enumerable.Range(0, probes.Length))
         {
             cancellation.ThrowIfCancellationRequested();
             using var pagePool = new NSAutoreleasePool();
             var text = "";
             try
             {
-                using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
+                using var page = document.GetPage(probes[slot]) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
                 if (source == LanguageSample.TextLayer)
                     text = page.Text?.Trim() ?? "";
                 else
@@ -201,7 +203,9 @@ internal static partial class PdfScan
             cancellation.ThrowIfCancellationRequested();
             var length = Math.Min(text.Length, 1600);
             if (length > 0 && char.IsHighSurrogate(text[length - 1])) length--;
-            samples.Add(text[..length]);
+            var sample = text[..length];
+            samples.Add(sample);
+            if (stopAfterSample?.Invoke(slot, sample).GetAwaiter().GetResult() == true) break;
         }
         return samples.ToArray();
     }, cancellation);

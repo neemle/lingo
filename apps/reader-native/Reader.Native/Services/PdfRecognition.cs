@@ -12,7 +12,7 @@ internal static class PdfRecognition
     }
 
     internal static async Task<string?> DetectSampleLanguageAsync(string[] textLayers, Func<string, Task<string?>> detect,
-        CancellationToken cancellation, params Func<int, int, Task<string[]>>[] readOcr)
+        CancellationToken cancellation, params Func<int[], Func<int, string, Task<bool>>, Task>[] readOcr)
     {
         var votes = new string?[textLayers.Length];
         var bestSamples = (string[])textLayers.Clone();
@@ -29,16 +29,21 @@ internal static class PdfRecognition
 
             foreach (var read in readOcr)
             {
-                if (Array.IndexOf(votes, null, start, count) < 0) break;
-                var samples = await read(start, count);
-                await AddLanguageVotesAsync(samples, window, detect);
+                var unanswered = Enumerable.Range(start, count).Where(slot => votes[slot] is null).ToArray();
+                if (unanswered.Length == 0) break;
+                await read(unanswered, async (slot, sample) =>
+                {
+                    cancellation.ThrowIfCancellationRequested();
+                    if (sample.Length > bestSamples[slot].Length) bestSamples[slot] = sample;
+                    if (!string.IsNullOrWhiteSpace(sample))
+                        votes[slot] = await detect(sample).ConfigureAwait(false);
+                    cancellation.ThrowIfCancellationRequested();
+                    // The other pages can no longer change the choice.
+                    return SampleLanguage(votes.AsSpan(0, end), requireAbsoluteMajority: true) is not null;
+                });
                 cancellation.ThrowIfCancellationRequested();
                 language = SampleLanguage(votes.AsSpan(0, end));
                 if (language is not null) return language;
-
-                for (var i = 0; i < samples.Length; i++)
-                    if (samples[i].Length > bestSamples[start + i].Length)
-                        bestSamples[start + i] = samples[i];
             }
 
             // Detect short snippets jointly when no individual page supplied a confident vote.
@@ -66,12 +71,13 @@ internal static class PdfRecognition
         })).ConfigureAwait(false);
     }
 
-    private static string? SampleLanguage(ReadOnlySpan<string?> votes)
+    private static string? SampleLanguage(ReadOnlySpan<string?> votes, bool requireAbsoluteMajority = false)
     {
         // One cover page cannot decide the language when we sampled a larger book.
         var recognized = votes.ToArray().OfType<string>().ToArray();
         if (recognized.Length == 1 && votes.Length >= 3) return null;
+        var total = requireAbsoluteMajority ? votes.Length : recognized.Length;
         return recognized.GroupBy(language => language, StringComparer.Ordinal)
-            .FirstOrDefault(group => group.Count() > recognized.Length / 2)?.Key;
+            .FirstOrDefault(group => group.Count() > total / 2)?.Key;
     }
 }

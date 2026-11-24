@@ -122,10 +122,10 @@ public partial class LibraryPage
                 var samples = await PdfScan.ReadLanguageSamplesAsync(path, PdfScan.LanguageSample.TextLayer, cancellation: token);
                 Task<string?> DetectAsync(string sample) => ImportLanguageDetection.DetectAsync(session, sample);
                 return await PdfRecognition.DetectSampleLanguageAsync(samples, DetectAsync, token,
-                    (start, count) => PdfScan.ReadLanguageSamplesAsync(path, PdfScan.LanguageSample.PortableOcr,
-                        skip: start, count: count, cancellation: token),
-                    (start, count) => PdfScan.ReadLanguageSamplesAsync(path, PdfScan.LanguageSample.NativeOcr,
-                        skip: start, count: count, cancellation: token));
+                    (slots, stop) => PdfScan.ReadLanguageSamplesAsync(path, PdfScan.LanguageSample.PortableOcr,
+                        slots, stop, token),
+                    (slots, stop) => PdfScan.ReadLanguageSamplesAsync(path, PdfScan.LanguageSample.NativeOcr,
+                        slots, stop, token));
             });
             if (language is null) return false;
             await session.WaitUntilIdleAsync();
