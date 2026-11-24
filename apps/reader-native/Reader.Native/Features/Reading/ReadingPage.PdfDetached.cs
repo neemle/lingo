@@ -790,6 +790,7 @@ public partial class ReadingPage
             if (run != detachedAudioRun) return false;
             var voice = SelectedVoice();
             string? status = null;
+            var modelStarted = false;
             if (voice?.Engine is { } engine)
             {
                 try
@@ -804,6 +805,7 @@ public partial class ReadingPage
                     DetachedSentenceStatus.Text = $"Речення {current.Position + 1} із {current.Total}";
                     status = await detachedSpeech.PlayWaveAsync(audio, startAtMs, actualStartMs =>
                     {
+                        modelStarted = true;
                         if (run != detachedAudioRun || token.IsCancellationRequested) return;
                         var lastPosition = actualStartMs;
                         checkpointDetachedSpeech = () =>
@@ -827,7 +829,7 @@ public partial class ReadingPage
                 catch (Exception error) { status = $"Локальний голос недоступний. {error.Message}"; }
             }
             if (run != detachedAudioRun || token.IsCancellationRequested) return false;
-            var fallback = voice?.Engine is not null && status is not null && status != LocalSpeech.CompletedStatus;
+            var fallback = !modelStarted && voice?.Engine is not null && status is not null && status != LocalSpeech.CompletedStatus;
             if (voice?.Engine is null || fallback)
             {
                 var modelError = fallback ? status : null;

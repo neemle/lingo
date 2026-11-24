@@ -161,7 +161,7 @@ public partial class ReadingPage
         session.Document is { } document && session.Sentence is { } sentence &&
         source == SpeechSourceFor(document, sentence);
 
-    private async Task<string?> PlayModelAsync(ReaderSession session, Document document, Sentence sentence,
+    private async Task<(string? Status, bool Started)> PlayModelAsync(ReaderSession session, Document document, Sentence sentence,
         VoiceChoice voice, int ratePercent, int startAtMs, string textHash, int request, bool singleSentence,
         CancellationToken token)
     {
@@ -169,6 +169,7 @@ public partial class ReadingPage
         var key = new ClipKey(source, voice.Engine!, voice.Speaker, ratePercent / 100f);
         var audio = PrepareAudio(session, key, token);
         IDispatcherTimer? timer = null;
+        var started = false;
         var playbackStartMs = 0;
         var lastCheckpointMs = startAtMs;
         void CapturePosition()
@@ -185,9 +186,10 @@ public partial class ReadingPage
         try
         {
             var clip = await audio.WaitAsync(token);
-            if (request != speechRequest || !IsSpeechSourceCurrent(session, source)) return null;
-            return await speech.PlayWaveAsync(clip, startAtMs, actualStartMs =>
+            if (request != speechRequest || !IsSpeechSourceCurrent(session, source)) return (null, false);
+            var status = await speech.PlayWaveAsync(clip, startAtMs, actualStartMs =>
             {
+                started = true;
                 if (request != speechRequest || token.IsCancellationRequested) return;
                 playbackStartMs = lastCheckpointMs = actualStartMs;
                 checkpointModelSpeech = capture;
@@ -200,9 +202,10 @@ public partial class ReadingPage
                 if (!singleSentence && ContinueSpeech.IsChecked)
                     _ = PrefetchNextAudioAsync(session, key, token);
             });
+            return (status, started);
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { return null; }
-        catch (Exception error) { return $"Локальний голос недоступний. {error.Message}"; }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { return (null, started); }
+        catch (Exception error) { return ($"Локальний голос недоступний. {error.Message}", started); }
         finally
         {
             timer?.Stop();

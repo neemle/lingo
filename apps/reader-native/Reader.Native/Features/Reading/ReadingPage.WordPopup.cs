@@ -245,6 +245,7 @@ public partial class ReadingPage
             token.ThrowIfCancellationRequested();
             if (voice?.Engine is { } engine)
             {
+                var modelStarted = false;
                 try
                 {
                     await modelInference.WaitAsync(token);
@@ -256,11 +257,11 @@ public partial class ReadingPage
                     }
                     finally { modelInference.Release(); }
                     token.ThrowIfCancellationRequested();
-                    status = await wordPopupSpeech.PlayWaveAsync(clip, 0, _ => { });
+                    status = await wordPopupSpeech.PlayWaveAsync(clip, 0, _ => modelStarted = true);
                 }
                 catch (Exception error) when (!token.IsCancellationRequested) { status = error.Message; }
                 token.ThrowIfCancellationRequested();
-                if (status is not null && status != LocalSpeech.CompletedStatus)
+                if (!modelStarted && status is not null && status != LocalSpeech.CompletedStatus)
                 {
                     var fallback = await SpeakSystemVoiceAsync(null);
                     status = fallback is null || fallback == LocalSpeech.CompletedStatus ? fallback : $"{status} {fallback}";

@@ -1165,14 +1165,15 @@ public partial class ReadingPage : ContentPage
 
             RecordReadingActivity();
             status = LocalSpeech.CompletedStatus;
+            var modelStarted = false;
             if (speakable && modelVoice)
             {
                 lastUsedSystemVoice = false;
-                status = await PlayModelAsync(session, doc, sentence, voice!, ratePercent, startAtMs, textHash, request,
+                (status, modelStarted) = await PlayModelAsync(session, doc, sentence, voice!, ratePercent, startAtMs, textHash, request,
                     singleSentence, token);
                 if (request != speechRequest || token.IsCancellationRequested) return;
             }
-            var fallbackReason = status is not null && status != LocalSpeech.CompletedStatus ? status : null;
+            var fallbackReason = !modelStarted && status is not null && status != LocalSpeech.CompletedStatus ? status : null;
             if (speakable && (!modelVoice || fallbackReason is not null))
             {
                 lastUsedSystemVoice = true;
