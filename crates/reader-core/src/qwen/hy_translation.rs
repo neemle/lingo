@@ -108,14 +108,26 @@ pub(super) enum Model {
 
 impl Model {
     pub(super) fn installed(store: &Store) -> Option<Self> {
-        let large = store.has_optional_model_files(LARGE_MODEL_ID);
-        if store.has_optional_model_files(SMALL_MODEL_ID)
-            && !(large && store.optional_model_memory_ready(LARGE_MODEL_ID))
-        {
-            Some(Self::Small)
-        } else {
-            large.then_some(Self::Large)
+        Self::preferred(
+            |model| store.has_optional_model_files(model.id()),
+            |model| match model {
+                Some(model) => store.optional_model_memory_ready(model.id()),
+                None => store.has_optional_model_files(super::HINT_GENERATION_MODEL)
+                    && store.optional_model_memory_ready(super::HINT_GENERATION_MODEL),
+            },
+        )
+    }
+
+    fn preferred(installed: impl Fn(Self) -> bool, ready: impl Fn(Option<Self>) -> bool) -> Option<Self> {
+        let available = [Self::Large, Self::Small].map(|model| installed(model).then_some(model));
+        if let Some(model) = available.into_iter().flatten().find(|&model| ready(Some(model))) {
+            return Some(model);
         }
+        if ready(None) {
+            return None;
+        }
+        // Keep the installed model's memory error if no alternative can run.
+        available.into_iter().rev().flatten().next()
     }
 
     pub(super) fn id(self) -> &'static str {
@@ -242,4 +254,20 @@ pub(crate) fn smoke(directory: &Path, small: bool, interrupted: &dyn Fn() -> boo
             Err("Hy-MT2 не переклав контрольне речення українською.".into())
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Model::{self, Large, Small};
+
+    #[test]
+    fn passage_model_respects_memory_and_retains_an_installed_model_error() {
+        let both = |_| true;
+        assert!(Model::preferred(both, |_| true) == Some(Large));
+        assert!(Model::preferred(both, |model| model != Some(Large)) == Some(Small));
+        assert!(Model::preferred(|model| model == Large, |model| model.is_none()).is_none());
+        assert!(Model::preferred(|model| model == Small, |model| model.is_none()).is_none());
+        assert!(Model::preferred(|model| model == Large, |_| false) == Some(Large));
+        assert!(Model::preferred(both, |_| false) == Some(Small));
+    }
 }
