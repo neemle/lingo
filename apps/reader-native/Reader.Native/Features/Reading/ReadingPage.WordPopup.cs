@@ -187,7 +187,7 @@ public partial class ReadingPage
         {
             var sentence = Array.Find(document.Sentences, item =>
                 item.StartUtf16 <= selected.StartUtf16 && item.EndUtf16 > selected.StartUtf16);
-            if (sentence is not null)
+            if (sentence is not null && !IsFootnote(document, sentence))
                 await SpeakWordDetailAsync(ReadingPronunciation(document, sentence, EffectiveSpeechText(document, sentence)),
                     document.Language, sender as Button);
         }
@@ -284,12 +284,14 @@ public partial class ReadingPage
         if (!token.IsCancellationRequested && status is not null && status != LocalSpeech.CompletedStatus)
             await (Navigation.ModalStack.LastOrDefault() ?? this).DisplayAlertAsync("Озвучення", status, "Гаразд");
 
-        Task<string?> SpeakSystemVoiceAsync(string? voiceId)
+        async Task<string?> SpeakSystemVoiceAsync(string? voiceId)
         {
+            token.ThrowIfCancellationRequested();
+            var pronounced = await LocalSpeech.PrepareSystemSpeechAsync(AppState.Session, language, text).WaitAsync(token);
             token.ThrowIfCancellationRequested();
             wordPopupSpeech.Rate = rate;
             wordPopupSpeech.PreferredVoice = voiceId == LocalSpeech.SystemDefaultVoice ? null : voiceId;
-            return wordPopupSpeech.SpeakAsync(text, language);
+            return await wordPopupSpeech.SpeakAsync(pronounced, language);
         }
     }
 
