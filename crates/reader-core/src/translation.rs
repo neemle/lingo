@@ -2491,9 +2491,12 @@ mod tests {
         assert_eq!(rows[0]["endUtf16"], first.end_utf16);
         assert!(rows[1]["text"].is_null());
         assert_eq!(rows[1]["sourceText"], document.sentences[1].text);
+        assert!(rows[0]["failure"].is_null());
+        assert!(rows[1]["failure"].as_str().is_some_and(|error| !error.is_empty()));
         let background = store.pdf_page_translation_with_priority(&document.id, 0, "uk", false, true).unwrap();
         assert_eq!(background[0].text.as_deref(), Some("Корабель прибуває."));
         assert!(background[1].text.is_none());
+        assert_eq!(serde_json::to_value(&background[1]).unwrap()["failure"], rows[1]["failure"]);
     }
 
     #[test]
@@ -3193,6 +3196,9 @@ impl Store {
                 Ok(outcomes) => (outcomes, None),
                 Err(TranslationBatchError::Deferred { message, completed }) => (completed, Some(message)),
                 Err(TranslationBatchError::Failed(error)) => {
+                    for index in pending {
+                        failures[index].get_or_insert_with(|| error.clone());
+                    }
                     first_failure.get_or_insert(error);
                     continue;
                 }
