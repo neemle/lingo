@@ -3030,7 +3030,8 @@ mod tests {
 
     #[test]
     fn pdf_translation_search_resumes_inside_a_split_sentence() {
-        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
         let text = format!("{}bateau.", "bateau ".repeat(30));
         let mut document = store.import("page.txt", text.as_bytes(), "fr").unwrap();
         assert_eq!(document.sentences.len(), 1);
@@ -3048,19 +3049,40 @@ mod tests {
                 }),
             }
         }).collect());
-        let edge = ModelEdge { source: "fr".into(), target: "uk".into(), revision: "test".into(), quality: None };
-        let route = Route::Direct(edge.clone());
+        let route = french_uk_route_with_invalid_assets(&store);
+        let Route::Direct(edge) = &route else { unreachable!() };
         let output = ["судно".into()];
         store.save_cached_segments(["bateau", "bateau."].map(|text|
             (unit_cache_key(&route, text).unwrap(), output.as_slice()))).unwrap();
-        let models = [edge];
-        let first = search_cached_translation(&store, &models, &[], &document, "uk", "судно", (0, 0)).unwrap();
+        let models = std::slice::from_ref(edge);
+        let first = search_cached_translation(&store, models, &[], &document, "uk", "судно", (0, 0)).unwrap();
         assert_eq!(first.matches.len(), 30);
         assert_eq!((first.next_start, first.next_offset), (Some(0), Some(210)));
-        let second = search_cached_translation(&store, &models, &[], &document, "uk", "судно", (0, 210)).unwrap();
+        let second = search_cached_translation(&store, models, &[], &document, "uk", "судно", (0, 210)).unwrap();
         assert_eq!(second.matches.len(), 1);
         assert_eq!(second.matches[0].pdf_fragment.as_ref().unwrap().start_utf16, 210);
         assert_eq!((second.next_start, second.next_offset), (None, None));
+
+        let file = root.path().join("scan.pdf");
+        std::fs::write(&file, b"%PDF-1.4\n").unwrap();
+        let prepared = crate::file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "scan.pdf", &file, "fr", vec![String::new()], vec![],
+        ).unwrap();
+        let detached = store.import_pdf_file(prepared).unwrap();
+        crate::pdf_detached_pages::write_ocr(&store.connection, &detached.id, 0, "fr",
+            document.ocr_lines.as_deref().unwrap(), 1).unwrap();
+        let start = crate::DetachedPdfFindCursor { page: 0, position: 0, offset: 0 };
+        let first = store.find_detached_pdf_text(&detached.id, "судно", start, 30, Some("uk")).unwrap();
+        let first = serde_json::to_value(first).unwrap();
+        assert_eq!(first["matches"].as_array().unwrap().len(), 30);
+        assert_eq!(first["next"], serde_json::json!({"page": 0, "position": 0, "offset": 210}));
+        let next = serde_json::from_value(first["next"].clone()).unwrap();
+        let second = store.find_detached_pdf_text(&detached.id, "судно", next, 1, Some("uk")).unwrap();
+        let second = serde_json::to_value(second).unwrap();
+        assert_eq!(second["matches"].as_array().unwrap().len(), 1);
+        assert_eq!(second["matches"][0]["pdfFragment"]["startUtf16"], 210);
+        assert_eq!(second["matches"][0]["sourceText"], "bateau.");
+        assert!(second["next"].is_null());
     }
 
     #[test]

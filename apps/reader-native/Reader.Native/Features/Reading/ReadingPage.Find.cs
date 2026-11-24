@@ -246,6 +246,11 @@ public partial class ReadingPage
             pdfTranslationLayout = false;
             RefreshPdfTranslationLayout();
         }
+        else if (PdfUsesPageTranslation && match.PdfFragment is { } fragmentHit &&
+            !PageShowsSavedTranslation(selected with { StartUtf16 = fragmentHit.StartUtf16, EndUtf16 = fragmentHit.EndUtf16 }, saved))
+        {
+            RefreshCachedPdfPageLayout();
+        }
         if (page is null)
         {
             UpdateHighlight();
