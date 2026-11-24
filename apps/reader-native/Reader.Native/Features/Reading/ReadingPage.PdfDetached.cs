@@ -20,7 +20,8 @@ public partial class ReadingPage
     private bool translatingDetachedSentence;
     private DetachedPdfTranslation? detachedMachineTranslation;
     private string detachedTranslationLabel = "";
-    private int? detachedCacheLookupRun;
+    private int detachedTranslationCacheVersion;
+    private (int Run, int CacheVersion)? detachedCacheLookup;
     private (int Sentence, int Readiness)? detachedAutoAttempt;
     private bool speakingDetachedSentence;
     private bool detachedPaused;
@@ -405,7 +406,10 @@ public partial class ReadingPage
 
     private async Task RefreshDetachedSentenceTranslationAsync()
     {
-        if (detachedAddress is not { } address || detachedSentence is not { } current || TargetCode is not { } target) return;
+        if (detachedAddress is not { } address || detachedSentence is not { } current || TargetCode is not { } target ||
+            AppState.Session.Document is not { } document || document.Id != address.Document) return;
+        var refreshAddress = new PdfLayoutAddress(address.Document, address.Page, document.CurrentRevisionId,
+            address.Language, target, address.Text);
         var run = ++detachedTranslationRun;
         translatingDetachedSentence = true;
         UpdateDetachedControls();
@@ -413,8 +417,7 @@ public partial class ReadingPage
         {
             await AppState.Session.PdfPageTranslationAsync(address.Document, address.Page, target,
                 cachedOnly: false, refreshAtUtf16: current.Sentence.StartUtf16);
-            if (run != detachedTranslationRun) return;
-            ClearPdfFragmentFocus();
+            if (run == detachedTranslationRun) ClearPdfFragmentFocus();
         }
         catch (Exception error)
         {
@@ -429,7 +432,8 @@ public partial class ReadingPage
                 UpdateDetachedControls();
             }
         }
-        if (run == detachedTranslationRun) await RestoreDetachedTranslationAsync(allowAutoTranslate: false);
+        NotifyPdfSentenceRefresh(refreshAddress, current.Sentence.Id);
+        if (CurrentPdfLayoutAddress() == refreshAddress) RefreshCachedPdfPageLayout();
     }
 
     private async Task TranslateDetachedAsync(bool automatic)
@@ -437,6 +441,7 @@ public partial class ReadingPage
         if (!DetachedTranslate.IsEnabled || detachedAddress is not { } address ||
             detachedSentence is not { } current || TargetCode is not { } target) return;
         var run = ++detachedTranslationRun;
+        var cacheVersion = detachedTranslationCacheVersion;
         translatingDetachedSentence = true;
         UpdateDetachedControls();
         if (CurrentDetachedTranslation() is null) ShowDetachedTranslation("Перекладаємо офлайн…");
@@ -444,7 +449,7 @@ public partial class ReadingPage
         {
             var translated = await AppState.Session.DetachedPdfPassageAsync(
                 address.Document, address.Page, current.Sentence.Id, target, cachedOnly: false);
-            if (run != detachedTranslationRun) return;
+            if (run != detachedTranslationRun || cacheVersion != detachedTranslationCacheVersion) return;
             RenderDetachedPassage(address, current, translated.Rows);
             if (ReviewedDetachedTranslation() is not null)
                 ShowDetachedReviewedTranslation();
@@ -462,7 +467,8 @@ public partial class ReadingPage
         }
         catch (Exception error)
         {
-            if (run == detachedTranslationRun && ReviewedDetachedTranslation() is null &&
+            if (run == detachedTranslationRun && cacheVersion == detachedTranslationCacheVersion &&
+                ReviewedDetachedTranslation() is null &&
                 (!automatic || detachedMachineTranslation is null))
                 ShowDetachedTranslation(error.Message);
         }
@@ -472,6 +478,8 @@ public partial class ReadingPage
             {
                 translatingDetachedSentence = false;
                 UpdateDetachedControls();
+                if (cacheVersion != detachedTranslationCacheVersion)
+                    _ = RestoreDetachedTranslationAsync(allowAutoTranslate: false);
             }
         }
     }
@@ -479,15 +487,18 @@ public partial class ReadingPage
     private async Task RestoreDetachedTranslationAsync(bool allowAutoTranslate = true)
     {
         if (!readingPageActive || loadingDetachedSentence || translatingDetachedSentence ||
-            detachedAddress is not { } address || detachedSentence is not { Footnote: false } current || TargetCode is not { } target ||
-            detachedCacheLookupRun == detachedTranslationRun) return;
+            detachedAddress is not { } address || detachedSentence is not { Footnote: false } current || TargetCode is not { } target)
+            return;
         var run = detachedTranslationRun;
-        detachedCacheLookupRun = run;
+        var cacheVersion = detachedTranslationCacheVersion;
+        var request = (run, cacheVersion);
+        if (detachedCacheLookup == request) return;
+        detachedCacheLookup = request;
         try
         {
             var cached = await AppState.Session.DetachedPdfPassageAsync(
                 address.Document, address.Page, current.Sentence.Id, target, cachedOnly: true);
-            if (run != detachedTranslationRun) return;
+            if (run != detachedTranslationRun || cacheVersion != detachedTranslationCacheVersion) return;
             RenderDetachedPassage(address, current, cached.Rows);
             if (cached.Active is { } active && ReviewedDetachedTranslation() is null)
             {
@@ -502,11 +513,12 @@ public partial class ReadingPage
         }
         finally
         {
-            if (detachedCacheLookupRun == run) detachedCacheLookupRun = null;
+            if (detachedCacheLookup == request) detachedCacheLookup = null;
         }
         if (!allowAutoTranslate) return;
         var attempt = (detachedSentenceRequest, readinessRequest);
         bool CanRefresh() => detachedAutoAttempt != attempt && run == detachedTranslationRun &&
+            cacheVersion == detachedTranslationCacheVersion &&
             readingPageActive && autoTranslate && !PdfUsesPageTranslation && !speakingDetachedSentence &&
             DetachedTranslate.IsEnabled && readinessPair == (current.Language, target) &&
             readiness is { Ready: true } preferred && ReviewedDetachedTranslation() is null &&

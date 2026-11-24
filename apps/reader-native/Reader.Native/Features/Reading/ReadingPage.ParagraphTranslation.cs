@@ -28,6 +28,7 @@ public partial class ReadingPage
     private SourceViewportScope? sourceViewportMovement;
     private bool selectingPreviewRow;
     private bool restoringTranslationCache;
+    private int translationCacheVersion;
     private CachedWindowRequest? lastCacheRestore;
 
     private sealed record PreviewRow(int Position, VisualElement View);
@@ -36,7 +37,7 @@ public partial class ReadingPage
 
     private sealed record TranslationKey(string Document, string Sentence, string Source, string Target, string Text);
     private sealed record TranslationScope(string Document, string Source, string Target);
-    private sealed record CachedWindowRequest(TranslationKey Key, string? Revision, int ReadinessRequest);
+    private sealed record CachedWindowRequest(TranslationKey Key, string? Revision, int ReadinessRequest, int CacheVersion);
     private sealed record PrefetchCandidate(int Position, TranslationKey Key, string? Pivot);
     private sealed record AutoTranslationRequest(TranslationKey Active, PrefetchCandidate? Lookahead = null);
     private sealed record PendingTranslation(AutoTranslationRequest Request, CancellationTokenSource Cancellation);
@@ -249,7 +250,7 @@ public partial class ReadingPage
             readinessPair != (key.Source, key.Target) || session.Document is not { } document)
             return;
 
-        var request = new CachedWindowRequest(key, document.CurrentRevisionId, readinessRequest);
+        var request = new CachedWindowRequest(key, document.CurrentRevisionId, readinessRequest, translationCacheVersion);
         if (lastCacheRestore == request) return;
         if (FindTranslationWindow(document, key.Target) is { IsParagraph: true } existing && IsPreferredRoute(existing) &&
             !HasUntranslatedUnits(document, existing) &&
@@ -263,7 +264,7 @@ public partial class ReadingPage
         {
             var cached = await session.ReadCachedTranslationAsync(key.Document, key.Sentence, key.Target);
             if (!readingPageActive || translating || ActiveTranslationKey() != key ||
-                request.ReadinessRequest != readinessRequest ||
+                request.ReadinessRequest != readinessRequest || request.CacheVersion != translationCacheVersion ||
                 session.Document is not { } current || current.Position != document.Position ||
                 current.CurrentRevisionId != request.Revision || current.Text != document.Text)
                 return;
@@ -298,6 +299,24 @@ public partial class ReadingPage
             restoringTranslationCache = false;
             if (readingPageActive) UpdateTranslation();
         }
+    }
+
+    private void InvalidateSentenceTranslation(TranslationScope scope, string sentenceId)
+    {
+        translationCacheVersion++;
+        lastCacheRestore = null;
+        for (var i = 0; i < translationWindows.Count; i++)
+        {
+            var window = translationWindows[i];
+            if (window.Scope != scope || !window.Units.Any(Stale)) continue;
+            translationWindows[i] = window with
+            {
+                Units = Array.ConvertAll(window.Units, unit => Stale(unit) ? unit with { MachineText = null } : unit),
+            };
+        }
+
+        bool Stale(AlignedUnit unit) =>
+            unit.MachineText is not null && unit.Sources.Any(sentence => sentence.Id == sentenceId);
     }
 
     private TranslationKey? PendingAutoTranslation() =>
@@ -377,6 +396,7 @@ public partial class ReadingPage
         var key = candidate.Key;
         prefetching = true;
         lastPrefetchOrigin = origin;
+        var cacheVersion = translationCacheVersion;
         try
         {
             var result = await session.PrefetchTranslationWindowAsync(key.Document, key.Sentence, revision, key.Target);
@@ -384,6 +404,7 @@ public partial class ReadingPage
             if (prefetchAttempts.Count >= 2 * TranslationWindowLimit) prefetchAttempts.Dequeue();
             prefetchAttempts.Enqueue((key, candidate.Pivot));
             if (!readingPageActive || !autoTranslate || !TranslationVisible || ActiveTranslationKey() != origin ||
+                cacheVersion != translationCacheVersion ||
                 TargetCode != key.Target ||
                 readiness is not { Ready: true } route || readinessPair != (key.Source, key.Target) ||
                 route.PivotLanguage != candidate.Pivot || result.PivotLanguage != candidate.Pivot ||
