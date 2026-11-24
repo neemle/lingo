@@ -2499,6 +2499,82 @@ mod tests {
     }
 
     #[test]
+    fn pdf_translation_cache_follows_reordered_columns_after_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        let database = root.path().join("reader.sqlite");
+        let file = root.path().join("columns.pdf");
+        std::fs::write(&file, b"%PDF-1.4\n").unwrap();
+        let mut store = Store::open(&database).unwrap();
+        let source = "Le bateau arrive. La gare ouvre.\nLes marins attendent. Le train part.";
+        let reordered = "Le bateau arrive.\nLes marins attendent.\n\nLa gare ouvre.\nLe train part.";
+        let rows = [
+            ("Le bateau arrive.", "Корабель прибуває."),
+            ("La gare ouvre.", "Станція відчиняється."),
+            ("Les marins attendent.", "Моряки чекають."),
+            ("Le train part.", "Потяг вирушає."),
+        ];
+        let prepared = crate::file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "columns.pdf", &file, "fr", vec![source.into(), String::new()], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let id = &document.id;
+        crate::pdf_detached_pages::write_text_layer(&store.connection, id, 1, source).unwrap();
+        let route = french_uk_route_with_invalid_assets(&store);
+        let cache = rows.map(|(input, translation)| {
+            (unit_cache_key(&route, input).unwrap(), [translation.to_owned()])
+        });
+        store.commit_cached_segments(Some(id), cache.iter().map(|(key, text)| (key.clone(), text.as_slice()))).unwrap();
+        assert!(store.remove_translation_package("fr", "uk").unwrap());
+
+        let check_page = |store: &mut Store, page, text: &str, order: [usize; 4]| {
+            let translated = store.pdf_page_translation(id, page, "uk", true).unwrap();
+            assert_eq!(translated.len(), order.len());
+            let mut blocks = Vec::new();
+            for (translated, index) in translated.iter().zip(order) {
+                let (source, translation) = rows[index];
+                let first = text.find(source).unwrap();
+                let start = text[..first].encode_utf16().count();
+                assert_eq!(translated.text.as_deref(), Some(translation));
+                let geometry = serde_json::to_value(translated).unwrap();
+                assert_eq!(geometry["sourceText"], source);
+                assert_eq!(geometry["startUtf16"], start);
+                assert_eq!(geometry["endUtf16"], start + source.encode_utf16().count());
+                assert_eq!(geometry["legacyGroup"], false);
+                blocks.push(geometry["sourceBlockIndex"].as_u64());
+            }
+            blocks
+        };
+        for page in 0..2 { check_page(&mut store, page, source, [0, 1, 2, 3]); }
+
+        let slices: Vec<_> = rows.iter().map(|(sentence, _)| {
+            let start = source.find(sentence).unwrap();
+            serde_json::json!({
+                "startUtf16": start, "endUtf16": start + sentence.len(),
+                "replacementStartUtf16": reordered.find(sentence).unwrap(),
+            })
+        }).collect();
+        let repair: Vec<crate::pdf_page_ocr::PdfTextOrderEdit> = serde_json::from_value(serde_json::json!([{
+            "startUtf16": 0, "endUtf16": source.len(), "replacement": reordered, "preservedSlices": slices,
+        }])).unwrap();
+        for page in 0..2 {
+            let document = store.translation_document(id).unwrap();
+            let revision = document.current_revision_id.as_deref().unwrap();
+            assert!(store.repair_stored_pdf_text_order(id, page, revision, source, &repair).unwrap());
+        }
+        drop(store);
+
+        let mut store = Store::open(&database).unwrap();
+        assert!(!store.translation_readiness("fr", "uk").unwrap().ready);
+        for page in 0..2 {
+            let blocks = check_page(&mut store, page, reordered, [0, 2, 1, 3]);
+            assert!(blocks.iter().all(Option::is_some));
+            assert_eq!(blocks[0], blocks[1]);
+            assert_eq!(blocks[2], blocks[3]);
+            assert_ne!(blocks[1], blocks[2]);
+        }
+    }
+
+    #[test]
     fn legacy_detached_passage_is_available_with_an_installed_route_after_reopen() {
         let root = tempfile::tempdir().unwrap();
         let database = root.path().join("reader.sqlite");
