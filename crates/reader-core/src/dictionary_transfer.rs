@@ -706,15 +706,16 @@ fn restore_archive(
             continue;
         }
         tx.execute(
-            "INSERT INTO review_events(entry_id,direction,grade,reviewed_at,answer,elapsed_ms)
-             VALUES (?1,?2,?3,?4,?5,?6)",
+            "INSERT INTO review_events(entry_id,direction,grade,reviewed_at,answer,elapsed_ms,matches_dictionary)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
             params![
                 review.event.entry_id,
                 review.event.direction,
                 review.event.grade,
                 review.event.reviewed_at,
                 review.event.answer,
-                review.event.elapsed_ms
+                review.event.elapsed_ms,
+                review.event.matches_dictionary
             ],
         )
         .map_err(error)?;
@@ -1139,7 +1140,7 @@ fn review_rows(db: &Connection) -> Result<Vec<(i64, DictionaryReview)>> {
                  ROW_NUMBER() OVER (
                      PARTITION BY e.entry_id,e.direction,e.grade,e.reviewed_at ORDER BY e.id
                  ),
-                 e.id,e.answer,e.elapsed_ms
+                 e.id,e.answer,e.elapsed_ms,e.matches_dictionary
          FROM review_events e JOIN vocabulary v ON v.id=e.entry_id
          LEFT JOIN dictionary_review_origins o ON o.event_id=e.id ORDER BY e.id",
         )
@@ -1153,6 +1154,7 @@ fn review_rows(db: &Connection) -> Result<Vec<(i64, DictionaryReview)>> {
                 reviewed_at: row.get(3)?,
                 answer: row.get(7)?,
                 elapsed_ms: row.get(8)?,
+                matches_dictionary: row.get(9)?,
             };
             let origin: Option<String> = row.get(4)?;
             let ordinal: i64 = row.get(5)?;
@@ -1249,6 +1251,7 @@ fn validate_archive(archive: &DictionaryArchive) -> Result<()> {
             || !matches!(event.direction.as_str(), "forward" | "reverse")
             || event.grade > 3
             || event.reviewed_at < 0
+            || (event.matches_dictionary.is_some() && event.answer.is_none())
             || event
                 .answer
                 .as_deref()
@@ -1275,17 +1278,20 @@ fn merge_review_details(
         || local.reviewed_at != incoming.reviewed_at
         || matches!((&local.answer, &incoming.answer), (Some(a), Some(b)) if a != b)
         || matches!((local.elapsed_ms, incoming.elapsed_ms), (Some(a), Some(b)) if a != b)
+        || matches!((local.matches_dictionary, incoming.matches_dictionary), (Some(a), Some(b)) if a != b)
     {
         return Err("Конфлікт ідентифікаторів історії повторень".into());
     }
     // Older archives omit these values but carry the same review identity.
     if (local.answer.is_none() && incoming.answer.is_some())
         || (local.elapsed_ms.is_none() && incoming.elapsed_ms.is_some())
+        || (local.matches_dictionary.is_none() && incoming.matches_dictionary.is_some())
     {
         tx.execute(
-            "UPDATE review_events SET answer=COALESCE(answer,?1), elapsed_ms=COALESCE(elapsed_ms,?2)
-             WHERE id=?3",
-            params![incoming.answer, incoming.elapsed_ms, row_id],
+            "UPDATE review_events SET answer=COALESCE(answer,?1), elapsed_ms=COALESCE(elapsed_ms,?2),
+                                      matches_dictionary=COALESCE(matches_dictionary,?3)
+             WHERE id=?4",
+            params![incoming.answer, incoming.elapsed_ms, incoming.matches_dictionary, row_id],
         )
         .map_err(error)?;
     }

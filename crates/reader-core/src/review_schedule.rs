@@ -43,12 +43,13 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
     let tx = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(storage_error)?;
-    let (has_answer, has_elapsed) = tx
+    let (has_answer, has_elapsed, has_match) = tx
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('review_events') WHERE name='answer'),
-                    EXISTS(SELECT 1 FROM pragma_table_info('review_events') WHERE name='elapsed_ms')",
+                    EXISTS(SELECT 1 FROM pragma_table_info('review_events') WHERE name='elapsed_ms'),
+                    EXISTS(SELECT 1 FROM pragma_table_info('review_events') WHERE name='matches_dictionary')",
             [],
-            |row| Ok((row.get::<_, bool>(0)?, row.get::<_, bool>(1)?)),
+            |row| Ok((row.get::<_, bool>(0)?, row.get::<_, bool>(1)?, row.get::<_, bool>(2)?)),
         )
         .map_err(storage_error)?;
     if !has_answer {
@@ -62,6 +63,13 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
         )
         .map_err(storage_error)?;
     }
+    if !has_match {
+        tx.execute(
+            "ALTER TABLE review_events ADD COLUMN matches_dictionary INTEGER CHECK(matches_dictionary IN (0,1))",
+            [],
+        )
+        .map_err(storage_error)?;
+    }
     tx.commit().map_err(storage_error)
 }
 
@@ -70,7 +78,7 @@ impl Store {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT direction, grade, reviewed_at, answer, elapsed_ms FROM review_events
+                "SELECT direction, grade, reviewed_at, answer, elapsed_ms, matches_dictionary FROM review_events
              WHERE entry_id=?1 ORDER BY reviewed_at DESC, id DESC LIMIT 20",
             )
             .map_err(storage_error)?;
@@ -83,6 +91,7 @@ impl Store {
                     reviewed_at: row.get(2)?,
                     answer: row.get(3)?,
                     elapsed_ms: row.get(4)?,
+                    matches_dictionary: row.get(5)?,
                 })
             })
             .map_err(storage_error)?;

@@ -42,11 +42,15 @@ public partial class VocabularyPage
                     3 => "Легко",
                     _ => "Невідома оцінка",
                 };
-                var details = $"{LocalDate(review.ReviewedAt)} · {direction} · {grade}";
+                var details = $"{LocalDate(review.ReviewedAt)} · {direction} · Самооцінка «{grade}»";
                 if (review.ElapsedMs is >= 0 and <= 86_400_000)
                     details += $" · {review.ElapsedMs.Value / 1000d:N1} с";
                 if (review.Answer is { Length: > 0 } answer)
                     details += $"{Environment.NewLine}Відповідь: {answer}";
+                if (review.MatchesDictionary is { } matches)
+                    details += Environment.NewLine + (matches
+                        ? "Відповідь збіглася зі словником."
+                        : "Відповідь не збіглася зі словником.");
                 body.Children.Add(new Label { Text = details });
             }
             var page = new ContentPage { Title = "Історія повторень", Content = new ScrollView { Content = body } };

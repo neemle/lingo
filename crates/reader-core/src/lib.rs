@@ -430,6 +430,8 @@ pub struct ReviewEvent {
     pub answer: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elapsed_ms: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matches_dictionary: Option<bool>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1569,7 +1571,7 @@ impl Store {
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
-        Self::record_review(&tx, id, direction, grade, None, None)?;
+        Self::record_review(&tx, id, direction, grade, None, None, None)?;
         tx.commit().map_err(|error| error.to_string())
     }
 
@@ -1580,6 +1582,7 @@ impl Store {
         grade: u8,
         answer: Option<&str>,
         elapsed_ms: Option<u32>,
+        matches_dictionary: Option<bool>,
     ) -> Result<()> {
         if !["forward", "reverse"].contains(&direction) || grade > 3 {
             return Err("Некоректна відповідь".into());
@@ -1603,9 +1606,9 @@ impl Store {
             .map_err(|e| e.to_string())?;
         connection
             .execute(
-                "INSERT INTO review_events(entry_id,direction,grade,reviewed_at,answer,elapsed_ms)
-             VALUES (?1,?2,?3,?4,?5,?6)",
-                params![id, direction, grade, time, answer, elapsed_ms],
+                "INSERT INTO review_events(entry_id,direction,grade,reviewed_at,answer,elapsed_ms,matches_dictionary)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                params![id, direction, grade, time, answer, elapsed_ms, matches_dictionary],
             )
             .map_err(|e| e.to_string())?;
         Ok(())

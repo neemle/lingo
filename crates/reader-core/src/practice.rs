@@ -555,17 +555,16 @@ impl Store {
             .take()
             .filter(|question| question.revealed)
             .ok_or("Спочатку відкрийте відповідь.")?;
+        // A question persisted by an older build may contain an unbounded answer.
+        let answer = question.given_answer.as_deref().filter(|answer| crate::review_schedule::valid_answer(answer));
         Self::record_review(
             &tx,
             &question.card_id,
             &progress.direction,
             grade,
-            // A question persisted by an older build may contain an unbounded answer.
-            question
-                .given_answer
-                .as_deref()
-                .filter(|answer| crate::review_schedule::valid_answer(answer)),
+            answer,
             question.elapsed_ms,
+            answer.and_then(|_| question.dictionary_match()),
         )?;
         progress.advance()?;
         write(&tx, &progress)?;
@@ -661,6 +660,7 @@ mod tests {
         restored.import_dictionary(archive).unwrap();
         assert_eq!(restored.practice().unwrap().question.unwrap().dictionary_match(), Some(true));
         let progress = store.grade_practice(answer.progress.revision, 2).unwrap();
+        assert_eq!(store.vocabulary_review_history(&pound.id).unwrap()[0].matches_dictionary, Some(true));
 
         let queue = store.practice_queue(progress.revision, None).unwrap();
         assert_eq!(queue.context.as_deref(), Some("Le livre est sur la table."));
@@ -822,6 +822,7 @@ mod tests {
             .unwrap();
         assert_eq!(review.answer.as_deref(), Some("merci"));
         assert_eq!(review.elapsed_ms, Some(1250));
+        assert_eq!(review.matches_dictionary, Some(false));
 
         let mut full = Store::open(&root.path().join("completed.sqlite")).unwrap();
         full.restore(completed).unwrap();
@@ -832,12 +833,14 @@ mod tests {
             .unwrap();
         assert_eq!(restored.answer, review.answer);
         assert_eq!(restored.elapsed_ms, review.elapsed_ms);
+        assert_eq!(restored.matches_dictionary, review.matches_dictionary);
 
         let detailed = store.export_dictionary(None).unwrap();
         let origin = detailed.reviews[0].id.clone();
         let mut legacy = detailed.clone();
         legacy.reviews[0].event.answer = None;
         legacy.reviews[0].event.elapsed_ms = None;
+        legacy.reviews[0].event.matches_dictionary = None;
         let mut dictionary = Store::open(&root.path().join("dictionary.sqlite")).unwrap();
         assert_eq!(
             dictionary
@@ -861,6 +864,7 @@ mod tests {
         assert_eq!(upgraded.reviews[0].id, origin);
         assert_eq!(upgraded.reviews[0].event.answer, review.answer);
         assert_eq!(upgraded.reviews[0].event.elapsed_ms, review.elapsed_ms);
+        assert_eq!(upgraded.reviews[0].event.matches_dictionary, review.matches_dictionary);
 
         let mut clean = Store::open(&root.path().join("restored.sqlite")).unwrap();
         clean.restore(archive.clone()).unwrap();

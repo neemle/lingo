@@ -6,4 +6,5 @@ public sealed record ReviewEvent(
     byte Grade,
     long ReviewedAt,
     string? Answer = null,
-    long? ElapsedMs = null);
+    long? ElapsedMs = null,
+    bool? MatchesDictionary = null);
