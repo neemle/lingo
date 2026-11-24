@@ -16,6 +16,11 @@ public partial class ReadingPage
             document is not null && document.Id == Document && document.CurrentRevisionId == Revision &&
             document.Language == SourceLanguage && target == Target &&
             (displayed is null || displayed.Page != Page || displayed.DetachedText == DetachedText);
+
+        public bool DependsOnSentenceRefresh(PdfLayoutAddress refreshed, string sentenceId, PdfPageTranslationRow[] rows) =>
+            this == refreshed || (DetachedText is null && refreshed.DetachedText is null &&
+                (this with { Page = refreshed.Page }) == refreshed &&
+                rows.Any(row => row.SourceSentenceId == sentenceId));
     }
     private sealed record PdfAutoTranslation(PdfLayoutAddress Address, int RouteRequest);
     private sealed record PdfSourceLayout(InlinePdfAddress Page, OcrLine[] Lines, int Offset, Sentence? Sentence,
@@ -34,6 +39,7 @@ public partial class ReadingPage
     private const int RecentPdfTranslationLimit = 3;
     private readonly List<(PdfLayoutAddress Address, PdfPageTranslationRow[] Rows)> recentPdfTranslations = [];
     private PdfPageTranslationRow[] pdfLayoutRows = [];
+    private bool pdfLayoutRowsStale;
     private PhotoPreview? pdfTranslationBackgroundPreview;
     private (PdfPageTranslationRow[] Rows, PdfSourceLayout? Source, bool PreserveArtwork, PdfTranslationLayout Plan)? pdfDrawingPlan;
     private PdfSourceLayout? pdfSourceLayout;
@@ -276,16 +282,8 @@ public partial class ReadingPage
         var translatingPage = translatingPdfLayout == address && address is not null;
         if (address != pdfLayoutRequest)
         {
-            if (pdfLayoutRequest is { } previous)
-            {
-                recentPdfTranslations.RemoveAll(entry => entry.Address == previous);
-                if (pdfLayoutRows.Any(HasPdfTranslation))
-                {
-                    recentPdfTranslations.Insert(0, (previous, pdfLayoutRows));
-                    if (recentPdfTranslations.Count > RecentPdfTranslationLimit)
-                        recentPdfTranslations.RemoveAt(RecentPdfTranslationLimit);
-                }
-            }
+            if (!pdfLayoutRowsStale && pdfLayoutRequest is { } previous)
+                RememberPdfPageTranslations(previous, pdfLayoutRows);
             pdfLayoutRequest = address;
             pdfFragmentFocus = null;
             pendingPdfCacheRefresh = null;
@@ -294,6 +292,7 @@ public partial class ReadingPage
             pdfLayoutRows = address is not null
                 ? recentPdfTranslations.Find(entry => entry.Address == address).Rows ?? []
                 : [];
+            pdfLayoutRowsStale = false;
             pdfDrawingPlan = null;
             PdfTranslationSurface.Drawable = DetachedPdfTranslationSurface.Drawable = null;
             PdfTranslationBackground.Source = DetachedPdfTranslationBackground.Source = null;
@@ -589,7 +588,12 @@ public partial class ReadingPage
             if (!cachedOnly && refresh is null) _ = FollowPdfTranslationBatchesAsync(address, request, translation);
             var rows = await translation;
             if (refresh is { } regenerated)
+            {
                 NotifyPdfSentenceRefresh(address, regenerated.Anchor.SentenceId);
+                if (CurrentPdfLayoutAddress() != address && cancellation is { IsCancellationRequested: false } &&
+                    ReferenceEquals(pdfLayoutTranslationCancellation, cancellation))
+                    RememberPdfPageTranslations(address, rows);
+            }
             if (request != pdfLayoutRequestId || CurrentPdfLayoutAddress() != address ||
                 cancellation?.IsCancellationRequested == true) return;
             if (cachedOnly)
@@ -601,6 +605,7 @@ public partial class ReadingPage
                     ? row with { Failure = failure } : row);
             }
             pdfLayoutRows = rows;
+            pdfLayoutRowsStale = false;
             pdfLayoutStatus = rows.Length == 0 ? "На сторінці немає тексту для перекладу."
                 : refresh is not null ? "Речення перекладено заново."
                 : !cachedOnly && rows.All(row => row.Text is null) ? "Переклад сторінки поки недоступний." : "";
@@ -629,7 +634,16 @@ public partial class ReadingPage
 
     private void NotifyPdfSentenceRefresh(PdfLayoutAddress address, string sentenceId)
     {
-        recentPdfTranslations.RemoveAll(entry => entry.Address == address);
+        recentPdfTranslations.RemoveAll(entry => entry.Address.DependsOnSentenceRefresh(address, sentenceId, entry.Rows));
+        if (pdfLayoutRequest is { } displayed && displayed != address &&
+            displayed.DependsOnSentenceRefresh(address, sentenceId, pdfLayoutRows))
+        {
+            pdfLayoutRowsStale = true;
+            // Ignore cache reads started before the refresh committed.
+            pdfLayoutRequestId++;
+            RefreshCachedPdfPageLayout();
+        }
+
         if (address.DetachedText is null)
         {
             InvalidateSentenceTranslation(new TranslationScope(address.Document, address.SourceLanguage, address.Target), sentenceId);
@@ -640,6 +654,15 @@ public partial class ReadingPage
         {
             RecheckDetachedTranslationCache();
         }
+    }
+
+    private void RememberPdfPageTranslations(PdfLayoutAddress address, PdfPageTranslationRow[] rows)
+    {
+        recentPdfTranslations.RemoveAll(entry => entry.Address == address);
+        if (!rows.Any(HasPdfTranslation)) return;
+        recentPdfTranslations.Insert(0, (address, rows));
+        if (recentPdfTranslations.Count > RecentPdfTranslationLimit)
+            recentPdfTranslations.RemoveAt(RecentPdfTranslationLimit);
     }
 
     private CancellationTokenSource? ReleasePdfLayoutTranslation()
