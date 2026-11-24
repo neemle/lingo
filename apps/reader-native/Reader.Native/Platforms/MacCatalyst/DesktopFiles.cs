@@ -156,7 +156,7 @@ internal static class DesktopFiles
                 suggested = Path.GetFileName(provider.SuggestedName ?? suggested);
                 var hasFileUrl = provider.HasItemConformingTo("public.file-url");
                 if (DropFileRepresentation(suggested, provider.RegisteredTypeIdentifiers, hasFileUrl) is { } file)
-                    staged.Add(await StageProviderAsync(provider, file.Type, file.Name));
+                    staged.Add(await StageProviderAsync(provider, file.Type, file.Name, hasFileUrl));
                 else if (hasFileUrl)
                 {
                     if (await StageFileItemAsync(provider) is { } original)
@@ -233,19 +233,25 @@ internal static class DesktopFiles
         return completion.Task;
     }
 
-    private static async Task<ShareInboxItem> StageProviderAsync(NSItemProvider provider, string type, string name)
+    private static async Task<ShareInboxItem> StageProviderAsync(
+        NSItemProvider provider, string type, string name, bool hasFileUrl)
     {
         var completion = new TaskCompletionSource<ShareInboxItem?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        string? unavailable = null;
         provider.LoadInPlaceFileRepresentation(type, (url, _, error) =>
         {
             if (error is not null || url is null)
             {
-                completion.TrySetException(new IOException(error?.LocalizedDescription ?? "Не вдалося прочитати перетягнутий файл."));
+                unavailable = error?.LocalizedDescription ?? "Не вдалося прочитати перетягнутий файл.";
+                completion.TrySetResult(null);
                 return;
             }
             StageInCallback(completion, url, name);
         });
-        return (await completion.Task.ConfigureAwait(false))!;
+        if (await completion.Task.ConfigureAwait(false) is { } item) return item;
+        // Advertising a type does not guarantee that its in-place representation is available.
+        if (hasFileUrl && await StageFileItemAsync(provider).ConfigureAwait(false) is { } original) return original;
+        throw new IOException(unavailable);
     }
 
     private static void StageInCallback(TaskCompletionSource<ShareInboxItem?> completion, NSUrl url, string name)
