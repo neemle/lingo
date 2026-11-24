@@ -270,6 +270,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             }
             None => value(store.set_speech_resume(&id, &sentence_id, &text_hash, offset_utf16)),
         },
+        Command::ClearSpeechResume { id, page, sentence_id, text_hash, source_language } =>
+            value(store.clear_speech_resume_for_source(&id, page, &sentence_id, &text_hash, &source_language)),
         Command::SetSpeechText {
             id,
             sentence_id,

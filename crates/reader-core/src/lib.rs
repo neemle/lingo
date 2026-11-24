@@ -1261,6 +1261,27 @@ impl Store {
         tx.commit().map_err(|error| error.to_string())
     }
 
+    pub fn clear_speech_resume_for_source(
+        &self, id: &str, page: Option<u16>, sentence_id: &str, text_hash: &str, source_language: &str,
+    ) -> Result<bool> {
+        let cleared = if let Some(page) = page {
+            self.connection.execute(
+                "DELETE FROM pdf_detached_speech_resume WHERE document_id=?1 AND page=?2
+                 AND json_extract(body,'$.resume.sentenceId')=?3 AND json_extract(body,'$.resume.textHash')=?4
+                 AND EXISTS(SELECT 1 FROM documents WHERE id=?1 AND json_extract(body,'$.language')=?5)",
+                params![id, page, sentence_id, text_hash, source_language],
+            )
+        } else {
+            self.connection.execute(
+                "DELETE FROM speech_resume WHERE document_id=?1
+                 AND json_extract(body,'$.sentenceId')=?2 AND json_extract(body,'$.textHash')=?3
+                 AND EXISTS(SELECT 1 FROM documents WHERE id=?1 AND json_extract(body,'$.language')=?4)",
+                params![id, sentence_id, text_hash, source_language],
+            )
+        };
+        cleared.map(|count| count != 0).map_err(|error| error.to_string())
+    }
+
     fn write_speech_resume(connection: &Connection, id: &str, resume: &SpeechResume) -> Result<()> {
         let body = serde_json::to_string(resume).map_err(|e| e.to_string())?;
         connection.execute(
@@ -2195,9 +2216,41 @@ mod tests {
         assert_eq!(db.pdf_reading_page(&doc.id).unwrap(), Some(1));
         let saved = db.speech_resume(&doc.id).unwrap().unwrap().model.unwrap();
         assert_eq!((saved.language.as_str(), saved.position_ms), ("en", 500));
+        assert!(!db.clear_speech_resume_for_source(&doc.id, None, &sentence.id, &hash, "fr").unwrap());
+        assert_eq!(db.speech_resume(&doc.id).unwrap().unwrap().model.unwrap().position_ms, 500);
+        assert!(db.clear_speech_resume_for_source(&doc.id, None, &sentence.id, &hash, "en").unwrap());
+        assert!(db.speech_resume(&doc.id).unwrap().is_none());
         db.set_speech_resume(&doc.id, &sentence.id, &hash, Some(3)).unwrap();
         db.set_document_language(&doc.id, "fr").unwrap();
         assert_eq!(db.speech_resume(&doc.id).unwrap().unwrap().offset_utf16, 3);
+    }
+
+    #[test]
+    fn detached_pdf_speech_completion_checks_the_current_language_and_spoken_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = dir.path().join("scan.pdf");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let mut db = Store::open(&dir.path().join("reader.db")).unwrap();
+        let prepared = file_originals::prepare_pdf_import(
+            db.pdf_original_root(), "scan.pdf", &original, "fr", vec![String::new()], vec![],
+        ).unwrap();
+        let doc = db.import_pdf_file(prepared).unwrap();
+        pdf_detached_pages::write_text_layer(&db.connection, &doc.id, 0, "La mer est calme.").unwrap();
+        let current = db.detached_pdf_sentence(&doc.id, 0, None).unwrap().unwrap();
+        let sentence = &current.sentence;
+        let hash = format!("{:x}", Sha256::digest(sentence.text.as_bytes()));
+        db.set_document_language(&doc.id, "en").unwrap();
+        db.set_detached_pdf_speech_resume(&doc.id, 0, &sentence.id, Some(SpeechResume {
+            sentence_id: sentence.id.clone(), text_hash: hash.clone(), offset_utf16: 3,
+            model: None, boundary_text: None,
+        })).unwrap();
+        for (language, text_hash) in [("fr", hash.as_str()), ("en", "old hash")] {
+            assert!(!db.clear_speech_resume_for_source(&doc.id, Some(0), &sentence.id, text_hash, language).unwrap());
+            let saved = db.detached_pdf_sentence(&doc.id, 0, None).unwrap().unwrap();
+            assert_eq!(saved.speech_resume.unwrap().offset_utf16, 3);
+        }
+        assert!(db.clear_speech_resume_for_source(&doc.id, Some(0), &sentence.id, &hash, "en").unwrap());
+        assert!(db.detached_pdf_sentence(&doc.id, 0, None).unwrap().unwrap().speech_resume.is_none());
     }
 
     #[test]

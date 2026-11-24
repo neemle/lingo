@@ -476,6 +476,8 @@ public sealed class CoreClient : IDisposable
         Call<SpeechResume?>(new { version = 1, operation = "speech_resume", id });
     public void SetSpeechResume(string id, string sentenceId, string textHash, int? offsetUtf16) =>
         Call<JsonElement>(new { version = 1, operation = "set_speech_resume", id, sentenceId, textHash, offsetUtf16 });
+    public bool ClearSpeechResume(string id, int? page, string sentenceId, string textHash, string sourceLanguage) =>
+        Call<bool>(new { version = 1, operation = "clear_speech_resume", id, page, sentenceId, textHash, sourceLanguage });
     public void SetModelSpeechResume(string id, string sentenceId, string textHash, ModelSpeechResume model) =>
         Call<JsonElement>(new { version = 1, operation = "set_speech_resume", id, sentenceId, textHash, model });
     public void SetBookmark(string id, string sentenceId, bool saved) =>

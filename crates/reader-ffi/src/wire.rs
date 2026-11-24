@@ -477,6 +477,16 @@ pub enum Command {
         #[serde(default)]
         model: Option<reader_core::ModelSpeechResume>,
     },
+    ClearSpeechResume {
+        id: String,
+        page: Option<u16>,
+        #[serde(rename = "sentenceId")]
+        sentence_id: String,
+        #[serde(rename = "textHash")]
+        text_hash: String,
+        #[serde(rename = "sourceLanguage")]
+        source_language: String,
+    },
     SetSpeechText {
         id: String,
         #[serde(rename = "sentenceId")]

@@ -1155,7 +1155,7 @@ public partial class ReadingPage : ContentPage
             {
                 RecordReadingActivity();
                 pendingSpeechResume = null;
-                try { session.SetSpeechResume(doc.Id, sentence.Id, textHash, null); }
+                try { session.ClearSpeechResume(doc.Id, null, sentence.Id, textHash, doc.Language); }
                 catch (Exception error)
                 {
                     status = $"Не вдалося очистити позицію озвучення. {error.Message}";

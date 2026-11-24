@@ -743,7 +743,10 @@ public partial class ReadingPage
         {
             try
             {
-                session.SetDetachedPdfSpeechResume(address.Document, address.Page, sentence.Id, resume);
+                if (resume is not null)
+                    session.SetDetachedPdfSpeechResume(address.Document, address.Page, sentence.Id, resume);
+                else if (!session.ClearSpeechResume(address.Document, address.Page, sentence.Id, hash, current.Language))
+                    return true;
                 if (detachedAddress == address && detachedSentence is { } loaded && loaded.Sentence.Id == sentence.Id)
                     detachedSentence = loaded with { SpeechResume = resume };
                 pending = null;

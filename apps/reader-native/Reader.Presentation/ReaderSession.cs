@@ -440,6 +440,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public void SetSpeechResume(string id, string sentenceId, string textHash, int? offsetUtf16) =>
         client.SetSpeechResume(id, sentenceId, textHash, offsetUtf16);
 
+    public bool ClearSpeechResume(string id, int? page, string sentenceId, string textHash, string sourceLanguage) =>
+        client.ClearSpeechResume(id, page, sentenceId, textHash, sourceLanguage);
+
     public void SetModelSpeechResume(string id, string sentenceId, string textHash, ModelSpeechResume model) =>
         client.SetModelSpeechResume(id, sentenceId, textHash, model);
 
