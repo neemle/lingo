@@ -158,21 +158,29 @@ internal sealed class BackgroundTranslation
         session.PropertyChanged -= OnSessionChanged;
     }
 
-    private void OnPdfOcrUpdated(string documentId, int page)
+    private void OnPdfOcrUpdated(string documentId, int page, bool textChanged)
     {
         if (dispatcher.IsDispatchRequired)
         {
-            dispatcher.Dispatch(() => OnPdfOcrUpdated(documentId, page));
+            dispatcher.Dispatch(() => OnPdfOcrUpdated(documentId, page, textChanged));
             return;
         }
         if (!enabled) return;
         foreach (var key in jobs.Keys.Where(key => key.Document == documentId).ToArray()) jobs.Remove(key);
+        var previouslyParked = ParkedDocuments;
+        if (textChanged)
+        {
+            foreach (var key in libraryFailures.Keys.Where(key => key.Document == documentId).ToArray())
+                libraryFailures.Remove(key);
+            retryAt = default;
+        }
         if (lastLibraryJob?.Document == documentId) libraryStepInvalidated = true;
         // A neighbouring page can supply the rest of a sentence crossing the page break.
         if (visibleAttempt is { Page.Address: var address } && address.DocumentId == documentId &&
             Math.Abs(address.Page - page) <= 1)
             visibleAttempt = null;
         UpdateRequiredPackages();
+        if (ParkedDocuments != previouslyParked) StatusChanged?.Invoke();
         Wake();
     }
 

@@ -15,7 +15,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public event Action<BackgroundTranslatedPage>? BackgroundPageTranslated;
     public event Action<BackgroundTranslatedText>? BackgroundTextTranslated;
     public event Action<string, int>? BackgroundPdfTextCached;
-    public event Action<string, int>? PdfOcrUpdated;
+    public event Action<string, int, bool>? PdfOcrUpdated;
     public Snapshot Snapshot => snapshot;
     public Document? Document => snapshot.Documents.FirstOrDefault(item => item.Id == selectedId);
     public Sentence? Sentence => Document?.Sentences.ElementAtOrDefault(Document.Position);
@@ -276,7 +276,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         string id, int page, string revision, int index, string? correction)
     {
         var updated = await Task.Run(() => client.CorrectDetachedPdfOcr(id, page, revision, index, correction));
-        PdfOcrUpdated?.Invoke(id, page);
+        PdfOcrUpdated?.Invoke(id, page, true);
         return updated;
     }
 
@@ -303,7 +303,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public async Task CacheBackgroundPdfTextLayerAsync(string id, string revision, int page, string text)
     {
         if (!await Task.Run(() => client.CacheBackgroundPdfTextLayer(id, revision, page, text))) return;
-        PdfOcrUpdated?.Invoke(id, page);
+        PdfOcrUpdated?.Invoke(id, page, !string.IsNullOrWhiteSpace(text));
         BackgroundPdfTextCached?.Invoke(id, page);
     }
 
@@ -326,14 +326,14 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public async Task ReplacePdfTextLayerAsync(string id, int page, string revisionId, string language, OcrLine[] lines)
     {
         await Task.Run(() => client.ReplacePdfTextLayer(id, page, revisionId, language, lines));
-        PdfOcrUpdated?.Invoke(id, page);
+        PdfOcrUpdated?.Invoke(id, page, true);
     }
 
     public async Task<bool> SupplementPdfOcrPageAsync(string id, int page, string revisionId, string language,
         bool detached, OcrLine[] lines)
     {
         var updated = await Task.Run(() => client.SupplementPdfOcrPage(id, page, revisionId, language, detached, lines));
-        if (updated) PdfOcrUpdated?.Invoke(id, page);
+        if (updated) PdfOcrUpdated?.Invoke(id, page, true);
         return updated;
     }
 
@@ -341,7 +341,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         string reference, bool detached)
     {
         var changed = await Task.Run(() => client.ReconcilePdfOcrPage(id, page, revisionId, language, reference, detached));
-        if (changed) PdfOcrUpdated?.Invoke(id, page);
+        if (changed) PdfOcrUpdated?.Invoke(id, page, true);
         return changed;
     }
 
@@ -349,7 +349,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         string reference, PdfTextOrderEdit[] changes)
     {
         var changed = await Task.Run(() => client.RepairStoredPdfTextOrder(id, page, revisionId, reference, changes));
-        if (changed) PdfOcrUpdated?.Invoke(id, page);
+        if (changed) PdfOcrUpdated?.Invoke(id, page, true);
         return changed;
     }
 
@@ -359,7 +359,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public async Task CachePdfOcrPageAsync(string id, PdfOcrRequest claim, OcrLine[] lines, string? textLayer = null)
     {
         await Task.Run(() => client.CachePdfOcrPage(id, claim, lines, textLayer));
-        PdfOcrUpdated?.Invoke(id, claim.Page);
+        var hasNewText = !string.IsNullOrWhiteSpace(textLayer) || lines.Any(line => !string.IsNullOrWhiteSpace(line.Text));
+        PdfOcrUpdated?.Invoke(id, claim.Page, hasNewText);
     }
 
     public Task ReleasePdfOcrPageAsync(string id, PdfOcrRequest claim, bool canceled) =>
@@ -410,7 +411,7 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
             return Read();
         });
         if (Error.Length == 0 && Document is { Format: "pdf" } document && document.Id == id)
-            PdfOcrUpdated?.Invoke(id, page);
+            PdfOcrUpdated?.Invoke(id, page, true);
     }
 
     public Task MoveAsync(int delta) => SelectSentenceAsync((Document?.Position ?? 0) + delta);
