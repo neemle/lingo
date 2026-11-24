@@ -139,7 +139,8 @@ internal static partial class PdfScan
             var offset = raw.Length - raw.TrimStart().Length;
             if (text.Length <= 160 && storedText.Length <= 320 &&
                 text.Where(ch => !char.IsWhiteSpace(ch)).SequenceEqual(storedText.Where(ch => !char.IsWhiteSpace(ch))) &&
-                FindObliqueScanOverlay(page, text, offset, CancellationToken.None) is not null)
+                FindObliqueScanOverlays(page, text, offset, CancellationToken.None)
+                    .Exists(overlay => overlay.StartUtf16 == 0 && overlay.EndUtf16 == text.Length))
                 return new([], IsScanOverlay: true);
 
             PdfOrderedText.WordBounds? Bounds(int start, int length) => TextBounds(page, offset + start, length);
@@ -350,36 +351,49 @@ internal static partial class PdfScan
         var text = raw.Trim();
         var nativeOffset = raw.Length - raw.TrimStart().Length;
         offset = nativeOffset;
-        if (expected.IsEmpty && FindObliqueScanOverlay(page, text, nativeOffset, cancellation) is not null)
-            return new("");
+        var original = new PdfOrderedText(text);
         // Existing libraries may already be anchored to PDFKit's original order.
-        if (expected.Span.StartsWith(text.AsSpan(), StringComparison.Ordinal))
-            return new(text);
+        if (text.Length == 0 || Matches(original)) return original;
+        var overlays = FindObliqueScanOverlays(page, text, nativeOffset, cancellation);
+        if (overlays.Count == 0) return Format(original, out _);
+        if (!expected.IsEmpty)
+        {
+            var legacy = Format(original, out var matched);
+            if (matched) return legacy;
+        }
+        var filtered = original.OmitRanges(overlays.Select(overlay => (overlay.StartUtf16, overlay.EndUtf16)).ToArray());
+        return Format(filtered, out _);
+
+        bool Matches(PdfOrderedText layout) => !expected.IsEmpty &&
+            expected.Span.StartsWith(layout.Text.AsSpan(), StringComparison.Ordinal);
+
         PdfOrderedText.WordBounds? Bounds(int start, int length)
         {
             cancellation.ThrowIfCancellationRequested();
             return TextBounds(page, nativeOffset + start, length);
         }
-        var accents = PdfOrderedText.Repair(text, Bounds);
-        if (expected.Span.StartsWith(accents.Text.AsSpan(), StringComparison.Ordinal)) return accents;
-        var joined = accents.JoinLigatures(Bounds);
-        if (expected.Span.StartsWith(joined.Text.AsSpan(), StringComparison.Ordinal)) return joined;
-        var width = page.GetBoundsForBox(PdfDisplayBox.Crop).Width;
         PdfOrderedText.WordBounds? LayoutBounds(int start, int length)
         {
             cancellation.ThrowIfCancellationRequested();
             return TextBounds(page, nativeOffset + start, length, raw);
         }
-        var layout = joined.SeparateBlocks(LayoutBounds, width);
-        if (expected.Span.StartsWith(layout.Text.AsSpan(), StringComparison.Ordinal)) return layout;
-        var marked = MarkNativeNoteReferences(page, raw, nativeOffset, layout, cancellation);
-        if (expected.IsEmpty || accents.Text == joined.Text ||
-            expected.Span.StartsWith(marked.Text.AsSpan(), StringComparison.Ordinal))
-            return marked;
-        var previousLayout = accents.SeparateBlocks(LayoutBounds, width);
-        if (expected.Span.StartsWith(previousLayout.Text.AsSpan(), StringComparison.Ordinal)) return previousLayout;
-        var upgraded = previousLayout.JoinLigatures(Bounds);
-        return expected.Span.StartsWith(upgraded.Text.AsSpan(), StringComparison.Ordinal) ? upgraded : marked;
+        PdfOrderedText Format(PdfOrderedText source, out bool matched)
+        {
+            if ((matched = Matches(source))) return source;
+            var accents = source.Repair(Bounds);
+            if ((matched = Matches(accents))) return accents;
+            var joined = accents.JoinLigatures(Bounds);
+            if ((matched = Matches(joined))) return joined;
+            var width = page.GetBoundsForBox(PdfDisplayBox.Crop).Width;
+            var layout = joined.SeparateBlocks(LayoutBounds, width);
+            if ((matched = Matches(layout))) return layout;
+            var marked = MarkNativeNoteReferences(page, raw, nativeOffset, layout, cancellation);
+            if ((matched = Matches(marked)) || expected.IsEmpty || accents.Text == joined.Text) return marked;
+            var previousLayout = accents.SeparateBlocks(LayoutBounds, width);
+            if ((matched = Matches(previousLayout))) return previousLayout;
+            var upgraded = previousLayout.JoinLigatures(Bounds);
+            return (matched = Matches(upgraded)) ? upgraded : marked;
+        }
     }
 
     private static PdfOrderedText MarkNativeNoteReferences(PdfPage page, string raw, int offset, PdfOrderedText layout,
@@ -457,13 +471,13 @@ internal static partial class PdfScan
         using var pool = new NSAutoreleasePool();
         using var source = document.GetPage(page) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
         var raw = source.Text ?? "";
-        var overlay = FindObliqueScanOverlay(source, raw.Trim(), raw.Length - raw.TrimStart().Length, cancellation);
+        var overlays = FindObliqueScanOverlays(source, raw.Trim(), raw.Length - raw.TrimStart().Length, cancellation);
         using var image = Thumbnail(source, 2600);
         var rendered = EncodePreview(image);
         cancellation.ThrowIfCancellationRequested();
         var recognized = PhotoOcr.RecognizePdfPage(rendered, language, cancellation);
         cancellation.ThrowIfCancellationRequested();
-        return recognized.Where(line => overlay is null || !overlay.Matches(line))
+        return recognized.Where(line => !overlays.Exists(overlay => overlay.Matches(line)))
             .Select(line => line with { Page = page }).ToArray();
     }
 

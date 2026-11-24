@@ -78,6 +78,35 @@ public sealed class PdfOrderedText
         return null;
     }
 
+    public PdfOrderedText OmitRanges(IReadOnlyList<(int Start, int End)> ranges)
+    {
+        if (ranges.Count == 0) return this;
+        var output = new StringBuilder(Text.Length);
+        var sources = new List<SourceSlice>();
+        var cursor = 0;
+        foreach (var (start, end) in ranges)
+        {
+            if (start < cursor || end < start || end > Text.Length)
+                throw new ArgumentOutOfRangeException(nameof(ranges));
+            AppendSource(output, sources, cursor, start);
+            cursor = end;
+        }
+        AppendSource(output, sources, cursor, Text.Length);
+        var retained = output.ToString();
+        var head = retained.Length - retained.TrimStart().Length;
+        var body = retained.Trim();
+        if (body.Length == 0) return new("");
+        var mapped = new List<SourceSlice>();
+        foreach (var slice in sources)
+        {
+            var left = Math.Max(head, slice.OutputStart);
+            var right = Math.Min(head + body.Length, slice.OutputStart + slice.Length);
+            if (left < right)
+                mapped.Add(new(left - head, slice.SourceStart + left - slice.OutputStart, right - left));
+        }
+        return new(body, originalText, mapped.ToArray(), []);
+    }
+
     public PdfOrderedText JoinLigatures(Func<int, int, WordBounds?> bounds)
     {
         if (Text.Length == 0 || Text.Length > 24000) return this;
@@ -206,10 +235,14 @@ public sealed class PdfOrderedText
         output.Append(Text, start, end - start);
     }
 
-    public static PdfOrderedText Repair(string text, Func<int, int, WordBounds?> bounds)
+    public static PdfOrderedText Repair(string text, Func<int, int, WordBounds?> bounds) =>
+        new PdfOrderedText(text).Repair(bounds);
+
+    public PdfOrderedText Repair(Func<int, int, WordBounds?> bounds)
     {
+        var text = Text;
         var accents = IsolatedAccent.Matches(text);
-        if (accents.Count == 0) return new(text);
+        if (accents.Count == 0) return this;
         var words = Tokens.Matches(text).ToArray();
         var edits = new List<Edit>();
         var corrections = new List<PdfTextOrderEdit>();
@@ -221,17 +254,17 @@ public sealed class PdfOrderedText
             var letter = accent.Groups[1];
             while (index < words.Length && words[index].Index < letter.Index) index++;
             if (index < 2 || index == words.Length || words[index].Index != letter.Index ||
-                bounds(letter.Index, letter.Length) is not { } position) continue;
+                BoundsAt(letter.Index, letter.Length) is not { } position) continue;
             var insertion = index;
             while (insertion > 0 && index - insertion < 12 &&
-                bounds(words[insertion - 1].Index, words[insertion - 1].Length) is { } prior &&
+                BoundsAt(words[insertion - 1].Index, words[insertion - 1].Length) is { } prior &&
                 SameLine(position, prior) && prior.Left >= position.Right)
                 insertion--;
             if (insertion == index || insertion == 0) continue;
             var left = words[insertion - 1];
             var leftEnd = left.Index + left.Length;
-            if (leftEnd < lastEdit || bounds(left.Index, left.Length) is not { } before ||
-                bounds(words[insertion].Index, words[insertion].Length) is not { } after ||
+            if (leftEnd < lastEdit || BoundsAt(left.Index, left.Length) is not { } before ||
+                BoundsAt(words[insertion].Index, words[insertion].Length) is not { } after ||
                 !SameLine(position, before) || before.Right > position.Left ||
                 position.Left - before.Right > position.Height || after.Left - position.Right > position.Height)
                 continue;
@@ -247,30 +280,26 @@ public sealed class PdfOrderedText
                  new(letter.Index - leftEnd, lastEdit - leftEnd, 1)]));
         }
 
-        if (edits.Count == 0) return new(text);
+        if (edits.Count == 0) return this;
         var output = new StringBuilder(text.Length);
         var sources = new List<SourceSlice>();
         var cursor = 0;
         foreach (var edit in edits)
         {
-            AppendSource(cursor, edit.Start - cursor);
+            AppendSource(output, sources, cursor, edit.Start);
             if (edit.MovedWord is int source)
             {
                 output.Append(' ');
-                AppendSource(source, 1);
+                AppendSource(output, sources, source, source + 1);
                 output.Append(' ');
             }
             cursor = edit.End;
         }
-        AppendSource(cursor, text.Length - cursor);
-        return new(output.ToString(), text, sources.ToArray(), corrections.ToArray());
+        AppendSource(output, sources, cursor, text.Length);
+        return new(output.ToString(), originalText, sources.ToArray(), corrections.ToArray());
 
-        void AppendSource(int start, int length)
-        {
-            if (length <= 0) return;
-            sources.Add(new(output.Length, start, length));
-            output.Append(text, start, length);
-        }
+        WordBounds? BoundsAt(int start, int length) => OriginalRange(start, length) is { } original
+            ? bounds(original.Start, original.Length) : null;
     }
 
     private static bool SameLine(WordBounds a, WordBounds b) =>
