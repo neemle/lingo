@@ -1315,6 +1315,11 @@ impl TranslationProvider for MarianProvider<'_> {
         Ok(automatic.chain(packages).collect())
     }
 
+    fn catalog_direct_model(&self, source: &str, target: &str) -> Option<ModelEdge> {
+        catalog::PACKAGES.iter().find(|package| package.source == source && package.target == target)
+            .map(Package::edge)
+    }
+
     fn allow_alternative_routes(&self) -> bool {
         !self.background
     }

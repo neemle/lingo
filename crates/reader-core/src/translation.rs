@@ -439,6 +439,11 @@ pub trait TranslationProvider {
     /// Inspect the local inventory without downloading or loading models for inference.
     fn installed_models(&self) -> Result<Vec<ModelEdge>>;
 
+    /// Identify a recognized direct model whose cache can be read without installing it.
+    fn catalog_direct_model(&self, _source: &str, _target: &str) -> Option<ModelEdge> {
+        None
+    }
+
     /// Low-priority jobs can yield after the first attempt.
     fn allow_alternative_routes(&self) -> bool {
         true
@@ -774,6 +779,7 @@ pub(crate) struct CacheRoutes {
     preferred: Option<Route>,
     installed_count: usize,
     candidates: Vec<Route>,
+    prefer_direct_cache: bool,
 }
 
 impl CacheRoutes {
@@ -797,7 +803,16 @@ impl CacheRoutes {
             preferred,
             installed_count,
             candidates,
+            prefer_direct_cache: (source, target) == ("fr", "uk"),
         })
+    }
+
+    fn cache_order(&self) -> impl Iterator<Item = &Route> {
+        // Keep inference candidates in installed order. Only cache lookup can
+        // use a direct model whose files have been removed.
+        let direct = |route: &Route| self.prefer_direct_cache && matches!(route, Route::Direct(_));
+        self.candidates.iter().filter(move |route| direct(route))
+            .chain(self.candidates.iter().filter(move |route| !direct(route)))
     }
 
     pub(crate) fn cached_window(
@@ -864,7 +879,7 @@ impl CacheRoutes {
         computing: bool,
     ) -> Result<Option<(AlignedTranslation, String)>> {
         let prefer_hy = computing && self.preferred.as_ref().is_some_and(Route::uses_automatic_hy);
-        for route in self.candidates.iter().take(if prefer_hy { 1 } else { self.candidates.len() }) {
+        for route in self.cache_order().take(if prefer_hy { 1 } else { self.candidates.len() }) {
             let key = cache_key(route, input, context, settings)?;
             if let Some(segments) = store.cached_segments(&key, input, target)? {
                 return Ok(Some((AlignedTranslation::from_route(route.used_route(input), segments), key)));
@@ -939,7 +954,7 @@ fn read_cached_plan(
     };
     let mut sentence = None;
     let mut anchored_route = None;
-    for route in &routes.candidates {
+    for route in routes.cache_order() {
         if let Some((index, text)) = active_input {
             if let Some(translation) = cached_unit(route, text)? {
                 let unit = &mut paragraph.units[*index];
@@ -971,8 +986,11 @@ fn read_cached_plan(
     if matches!(scope, CacheScope::Window) {
         // Prefer the active sentence's route when it has neighboring translations.
         // Fill missing neighbors from other cached routes with their own provenance.
+        let anchored_route = anchored_route.filter(|route| {
+            !routes.prefer_direct_cache || matches!(route, Route::Direct(_))
+        });
         let neighbors = anchored_route.into_iter().chain(
-            routes.candidates.iter().filter(|route| Some(*route) != anchored_route)
+            routes.cache_order().filter(|route| Some(*route) != anchored_route)
         );
         for route in neighbors {
             for (index, text) in &pending {
@@ -1912,6 +1930,58 @@ mod tests {
         assert!(preferred.cached_sentence(&store, text, "uk").unwrap().is_none());
         store.save_cached_segments([(key.clone(), &["Она будет женой капитана. Ви мене почули.".into()][..])]).unwrap();
         assert!(store.cached_segments(&key, &[text], "uk").unwrap().is_none());
+    }
+
+    #[test]
+    fn french_pdf_page_keeps_cached_direct_output_after_model_removal() {
+        struct Provider {
+            models: [ModelEdge; 3],
+            calls: Vec<(String, Vec<String>)>,
+        }
+        impl TranslationProvider for Provider {
+            fn installed_models(&self) -> Result<Vec<ModelEdge>> { Ok(self.models[..2].to_vec()) }
+
+            fn catalog_direct_model(&self, source: &str, target: &str) -> Option<ModelEdge> {
+                self.models.iter().find(|model| model.source == source && model.target == target).cloned()
+            }
+
+            fn translate(&mut self, edge: &ModelEdge, segments: &[String], _: Option<&str>,
+                _: TranslationSettings) -> Result<Vec<String>> {
+                self.calls.push((edge.target.clone(), segments.to_vec()));
+                Ok(vec![if edge.target == "en" { "The sailors are waiting." } else { "Моряки чекають." }.into()])
+            }
+        }
+
+        let models = [("fr", "en"), ("en", "uk"), ("fr", "uk")].map(|(source, target)| ModelEdge {
+            source: source.into(), target: target.into(), revision: "test".into(), quality: None,
+        });
+        let pivot = Route::Pivot { first: models[0].clone(), second: models[1].clone() };
+        let direct = Route::Direct(models[2].clone());
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let document = store.import("page.txt", "Le bateau arrive. Les marins attendent.".as_bytes(), "fr").unwrap();
+        let opening = &document.sentences[0].text;
+        for (route, output) in [(&direct, "Судно прибуває."), (&pivot, "Корабель прибуває.")] {
+            store.save_cached_segments([(unit_cache_key(route, opening).unwrap(), &[output.into()][..])]).unwrap();
+        }
+
+        let routes = CacheRoutes::resolve(&models[..2], &models, "fr", "uk").unwrap();
+        let cached = routes.cached_pdf_row(&store, &document, 0, "uk", PageBoundaries::Canonical,
+            UnitGrouping::Sentence).unwrap().unwrap();
+        assert_eq!(cached.translation.as_deref(), Some("Судно прибуває."));
+        assert_eq!(cached.pivot_language, None);
+        assert_eq!(cached.direct_model_revision.as_deref(), Some("test"));
+
+        let mut provider = Provider { models, calls: Vec::new() };
+        let page = translate_pdf_page(&mut store, &mut provider, &document, 0..2, "uk",
+            PageBoundaries::Canonical, &|| false).unwrap();
+        assert_eq!(page[0].translation.as_deref(), Some("Судно прибуває."));
+        assert_eq!(page[0].pivot_language, None);
+        assert_eq!(page[1].translation.as_deref(), Some("Моряки чекають."));
+        assert_eq!(page[1].pivot_language.as_deref(), Some("en"));
+        assert_eq!(provider.calls, [
+            ("en".into(), vec!["Les marins attendent.".into()]),
+            ("uk".into(), vec!["The sailors are waiting.".into()]),
+        ]);
     }
 
     #[test]
@@ -3014,6 +3084,11 @@ impl Store {
         let preferred_pivot = routes.first().and_then(Route::pivot_language).map(str::to_owned);
         let prefer_hy = routes.first().is_some_and(Route::uses_automatic_hy);
         let mut first_failure = None;
+        if (source, target) == ("fr", "uk") && !direct_french_ukrainian(source, target, routes.first()) {
+            if let Some(edge) = provider.catalog_direct_model(source, target) {
+                self.reuse_unit_cache(document, target, &Route::Direct(edge), input, &mut segments)?;
+            }
+        }
         // A cached fallback remains reusable even if the preferred package is present.
         for route in routes.iter().take(if prefer_hy { 1 } else { routes.len() }) {
             self.reuse_unit_cache(document, target, route, input, &mut segments)?;
