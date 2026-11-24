@@ -95,6 +95,10 @@ pub enum Command {
     FindIntake {
         id: String,
     },
+    SaveIntakeSourceLanguage {
+        id: String,
+        language: String,
+    },
     IntakePayload {
         id: String,
     },

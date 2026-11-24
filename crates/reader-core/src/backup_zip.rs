@@ -747,6 +747,42 @@ mod tests {
     use crate::inspect_backup_file;
 
     #[test]
+    fn pending_pdf_keeps_its_source_language_on_reopen_and_archive_restore() {
+        use crate::intake::{IntakeImport, IntakeInput, PdfTextDraft};
+
+        let root = tempfile::tempdir().unwrap();
+        let database = root.path().join("source.db");
+        let input = root.path().join("source.pdf");
+        fs::write(&input, b"%PDF-1.7\n").unwrap();
+        let mut source = Store::open(&database).unwrap();
+        let pending = source.stage_intake(IntakeInput::PdfFile {
+            name: "source.pdf".into(), path: input,
+        }).unwrap();
+        source.save_intake_pdf_text(&pending.id, PdfTextDraft {
+            page_texts: vec!["Das Schiff kommt an.".into(), String::new()],
+            deferred_from: Some(1),
+        }).unwrap();
+        source.save_intake_source_language(&pending.id, "fr").unwrap();
+        source.save_intake_source_language(&pending.id, "de").unwrap();
+        assert!(source.save_intake_source_language(&pending.id, "invalid").is_err());
+        drop(source);
+        let source = Store::open(&database).unwrap();
+        let item = serde_json::to_value(source.intake_item(&pending.id).unwrap()).unwrap();
+        assert_eq!(item["sourceLanguage"], "de");
+
+        let archive = root.path().join("library.zip");
+        source.export_backup_file(&archive).unwrap();
+        let mut restored = Store::open(&root.path().join("restored.db")).unwrap();
+        restored.restore_backup_file(&archive).unwrap();
+        let item = restored.list_intake(0).unwrap().pop().unwrap();
+        let item = serde_json::to_value(item).unwrap();
+        assert_eq!(item["sourceLanguage"], "de");
+        assert!(restored.intake_pdf_text_sample(&pending.id).unwrap().is_some());
+        restored.complete_intake(&pending.id, IntakeImport::StagedPdf { language: None }).unwrap();
+        assert_eq!(restored.snapshot().unwrap().documents[0].language, "de");
+    }
+
+    #[test]
     fn portable_archive_round_trips_large_pdf_and_legacy_originals() {
         let root = tempfile::tempdir().unwrap();
         let mut source = Store::open(&root.path().join("source.db")).unwrap();

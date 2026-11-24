@@ -182,6 +182,9 @@ public sealed class CoreClient : IDisposable
     public IntakeItem? FindIntake(Guid id) =>
         Call<IntakeItem?>(new { version = 1, operation = "find_intake", id });
 
+    public void SaveIntakeSourceLanguage(string id, string language) =>
+        Call<JsonElement>(new { version = 1, operation = "save_intake_source_language", id, language });
+
     public IntakeFile IntakeFile(string id) =>
         Call<IntakeFile>(new { version = 1, operation = "intake_payload", id });
 

@@ -33,7 +33,7 @@ pub enum IntakeImport {
     StagedArticle { language: Option<String> },
     Photo { lines: Vec<ocr::OcrLine>, language: Option<String> },
     StagedPhoto { language: String },
-    StagedPdf { language: String },
+    StagedPdf { language: Option<String> },
     Pdf {
         #[serde(rename = "pageTexts")]
         page_texts: Vec<String>,
@@ -75,6 +75,8 @@ struct Metadata {
     kind: IntakeKind,
     bytes: u64,
     received_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_language: Option<String>,
 }
 
 #[derive(Serialize)]

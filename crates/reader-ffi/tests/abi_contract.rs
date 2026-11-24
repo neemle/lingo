@@ -209,6 +209,10 @@ fn full_reset_allows_staged_file_and_pdf_import_on_the_same_handle() {
     let text_done = complete(&new_text["data"]["id"], json!({"kind": "document", "language": "fr"}));
     assert_eq!(text_done["ok"], true, "{text_done}");
     let pdf_id = &new_pdf["data"]["id"];
+    let saved_language = call(store.handle, json!({
+        "version": 1, "operation": "save_intake_source_language", "id": pdf_id, "language": "fr",
+    }));
+    assert_eq!(saved_language["ok"], true, "{saved_language}");
     let mut pages = vec![""; 42];
     pages[1] = "Premier chapitre.";
     let prepared = call(store.handle, json!({
@@ -216,8 +220,9 @@ fn full_reset_allows_staged_file_and_pdf_import_on_the_same_handle() {
         "draft": { "pageTexts": pages, "deferredFrom": 2 },
     }));
     assert_eq!(prepared["ok"], true, "{prepared}");
-    let pdf_done = complete(pdf_id, json!({"kind": "stagedPdf", "language": "fr"}));
+    let pdf_done = complete(pdf_id, json!({"kind": "stagedPdf"}));
     assert_eq!(pdf_done["ok"], true, "{pdf_done}");
+    assert_eq!(pdf_done["data"]["sourceLanguage"], "fr");
     let file = call(store.handle, json!({
         "version": 1, "operation": "original_file", "id": pdf_done["data"]["documentId"],
     }));

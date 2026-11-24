@@ -58,6 +58,7 @@ pub fn prepare_for_request(
             kind: material.kind,
             bytes,
             received_at: crate::now(),
+            source_language: None,
         },
         payload,
         file,
@@ -268,6 +269,24 @@ impl Store {
     pub fn intake_item_for_request(&self, id: &str) -> Result<Option<IntakeItem>> {
         let id = Uuid::parse_str(id).map_err(intake_error)?.to_string();
         intake_item(&self.connection, &id)
+    }
+
+    pub fn save_intake_source_language(&mut self, id: &str, language: &str) -> Result<()> {
+        crate::valid_language(language)?;
+        let _guard = self.lock_intake()?;
+        let tx = self.connection.transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(intake_error)?;
+        let mut item = intake_item(&tx, id)?.ok_or("Вхідний матеріал не знайдено.")?;
+        if item.document_id.is_some() {
+            return Err("Матеріал уже імпортовано.".into());
+        }
+        if item.metadata.source_language.as_deref() != Some(language) {
+            item.metadata.source_language = Some(language.to_owned());
+            let metadata = serde_json::to_string(&item.metadata).map_err(intake_error)?;
+            tx.execute("UPDATE intake SET metadata=?2 WHERE id=?1", params![id, metadata])
+                .map_err(intake_error)?;
+        }
+        tx.commit().map_err(intake_error)
     }
 
     pub fn discard_intake(&self, id: &str) -> Result<bool> {

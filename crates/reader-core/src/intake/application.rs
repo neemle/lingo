@@ -36,9 +36,12 @@ pub(super) fn complete(
         return Ok(item);
     }
     let payload = payload.ok_or("Відсутній вміст матеріалу.")?;
+    let source_language = item.metadata.source_language.clone();
     let result = match result {
         IntakeImport::StagedPdf { language } if matches!(item.metadata.kind, IntakeKind::Pdf) => {
             let PdfTextDraft { page_texts, deferred_from } = ports.load_pdf_text(id)?;
+            let language = language.or_else(|| source_language.clone())
+                .ok_or("Виберіть мову PDF перед завершенням імпорту.")?;
             IntakeImport::Pdf { page_texts, deferred_from, language }
         }
         result => result,
@@ -49,7 +52,7 @@ pub(super) fn complete(
             IntakePayload::Bytes { bytes },
             IntakeImport::Document { language },
         ) => ImportMaterial::Document {
-            name: item.metadata.name.clone(), bytes, language,
+            name: item.metadata.name.clone(), bytes, language: language.or(source_language),
         },
         (
             IntakeKind::Link,
@@ -59,7 +62,7 @@ pub(super) fn complete(
             let url = source_url.unwrap_or(url);
             validate_article_url(&url)?;
             ImportMaterial::Article {
-                name: text_name(&name)?, bytes: text_bytes(text)?, url, language,
+                name: text_name(&name)?, bytes: text_bytes(text)?, url, language: language.or(source_language),
             }
         }
         (IntakeKind::Link, IntakePayload::Link { .. }, IntakeImport::StagedArticle { language }) => {
@@ -69,12 +72,12 @@ pub(super) fn complete(
                 name: text_name(&draft.title)?,
                 bytes: draft.text.into_bytes(),
                 url: draft.source_url,
-                language,
+                language: language.or(source_language),
             }
         }
         (IntakeKind::Photo, IntakePayload::Bytes { bytes }, IntakeImport::Photo { lines, language }) => {
             ImportMaterial::Photo {
-                name: item.metadata.name.clone(), bytes, lines, language,
+                name: item.metadata.name.clone(), bytes, lines, language: language.or(source_language),
             }
         }
         (IntakeKind::Photo, IntakePayload::Bytes { bytes }, IntakeImport::StagedPhoto { language }) => {
@@ -157,7 +160,7 @@ pub(super) fn classify_file(name: &str, bytes: &[u8]) -> Result<IntakeKind> {
     let extension = extension(name).to_ascii_lowercase();
     match extension.as_str() {
         "pdf" if bytes.starts_with(b"%PDF-") => Ok(IntakeKind::Pdf),
-        "txt" if std::str::from_utf8(bytes).is_ok_and(|text| !text.trim().is_empty()) => Ok(IntakeKind::Txt),
+        "txt" if !crate::document_layout::decode_txt(bytes)?.trim().is_empty() => Ok(IntakeKind::Txt),
         "docx" if bytes.starts_with(b"PK\x03\x04") => Ok(IntakeKind::Docx),
         ext if ocr::valid_image_source(ext, bytes, None) => Ok(IntakeKind::Photo),
         _ => Err("Формат вхідного файлу пошкоджено або він не підтримується.".into()),

@@ -180,6 +180,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
 
     public Task<IntakeItem?> FindIntakeAsync(Guid id) => Task.Run(() => client.FindIntake(id));
 
+    public Task SaveIntakeSourceLanguageAsync(string id, string language) =>
+        Task.Run(() => client.SaveIntakeSourceLanguage(id, language));
+
     public Task<IntakeFile> IntakeFileAsync(string id) => Task.Run(() => client.IntakeFile(id));
 
     public Task<byte[]> ReadIntakeBytesAsync(string id) => Task.Run(() => client.ReadIntakeBytes(id));

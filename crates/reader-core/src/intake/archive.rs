@@ -287,6 +287,9 @@ fn copy_pdf(header: &Header, mut input: impl Read, output: impl Write) -> Result
 impl Header {
     fn payload_size(&self) -> Result<u64> {
         let metadata = &self.metadata;
+        if let Some(language) = &metadata.source_language {
+            crate::valid_language(language)?;
+        }
         match &self.checkpoint {
             Some(Checkpoint::Article(article)) if matches!(metadata.kind, IntakeKind::Link) => {
                 validate_article_draft(article)?;

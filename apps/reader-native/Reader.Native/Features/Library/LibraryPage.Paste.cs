@@ -56,6 +56,7 @@ public partial class LibraryPage
         var session = AppState.Session;
         var intake = await session.StageTextIntakeAsync(source?.Id ?? Guid.NewGuid(), pasted.Name, pasted.Text);
         if (intake.DocumentId is { } completed) return completed;
+        await session.SaveIntakeSourceLanguageAsync(intake.Id, pasted.Language);
         await session.WaitUntilIdleAsync();
         await session.CompleteDocumentIntakeAsync(intake.Id, pasted.Language);
         if (session.Error.Length > 0) throw new InvalidDataException(session.Error);

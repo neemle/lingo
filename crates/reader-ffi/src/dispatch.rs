@@ -84,6 +84,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::ListIntake { start } => value(store.list_intake(start)),
         Command::IntakeItem { id } => value(store.intake_item(&id)),
         Command::FindIntake { id } => value(store.intake_item_for_request(&id)),
+        Command::SaveIntakeSourceLanguage { id, language } => value(store.save_intake_source_language(&id, &language)),
         Command::IntakePayload { id } => value(store.intake_payload(&id)),
         Command::IntakeArticle { id } => value(store.intake_article(&id)),
         Command::SaveIntakeArticle { id, draft } => value(store.save_intake_article(&id, draft)),

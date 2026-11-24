@@ -7,7 +7,7 @@ public sealed record ImportLanguageSample(string? Language, string Sample);
 public sealed record IntakeArticleDraft(string Title, string Text, string SourceUrl);
 
 public sealed record IntakeItem(string Id, string Name, string Kind, long Bytes,
-    string NextAction, string? DocumentId, long ReceivedAt);
+    string NextAction, string? DocumentId, long ReceivedAt, string? SourceLanguage = null);
 
 public sealed record IntakeFile(string Kind, string Path);
 public sealed record IntakeBytes(string Kind, int[] Bytes);

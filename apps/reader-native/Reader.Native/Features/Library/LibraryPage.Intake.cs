@@ -14,19 +14,29 @@ public partial class LibraryPage
     {
         if (item.DocumentId is { } completed) return completed;
         var session = AppState.Session;
-        string? selectedLanguage = null;
+        var selectedLanguage = SupportedLanguage(item.SourceLanguage) ?? SupportedLanguage(source?.SourceLanguage);
+
+        async Task<string?> SaveChoiceAsync(string? language)
+        {
+            if (language is not null && item.SourceLanguage != language)
+                await session.SaveIntakeSourceLanguageAsync(item.Id, language);
+            return language;
+        }
+
         if (chooseLanguage)
         {
-            selectedLanguage = source is not null
-                ? await ResolveImportLanguageAsync(source)
-                : await ChooseLanguageAsync("Мова оригіналу", item.Name);
+            selectedLanguage = await SaveChoiceAsync(
+                await ChooseLanguageAsync("Мова оригіналу", item.Name, selectedLanguage));
             if (selectedLanguage is null) return null;
         }
 
-        Task<string?> ChooseAsync(Func<Task<string?>> detect) =>
-            selectedLanguage is not null ? Task.FromResult<string?>(selectedLanguage) :
-            source is not null ? ResolveImportLanguageAsync(source, detect) :
-            DetectOrChooseStagedLanguageAsync(item.Name, detect);
+        async Task<string?> ChooseAsync(Func<Task<string?>> detect)
+        {
+            if (chooseLanguage) return selectedLanguage;
+            var language = selectedLanguage ?? SupportedLanguage(await detect()) ??
+                await ChooseLanguageAsync("Мова оригіналу", item.Name);
+            return await SaveChoiceAsync(language);
+        }
 
         switch (item.NextAction)
         {
@@ -155,7 +165,4 @@ public partial class LibraryPage
         }
     }
 #endif
-
-    private async Task<string?> DetectOrChooseStagedLanguageAsync(string name, Func<Task<string?>> detect) =>
-        SupportedLanguage(await detect()) ?? await ChooseLanguageAsync("Мова оригіналу", name);
 }

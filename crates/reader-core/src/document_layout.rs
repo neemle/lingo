@@ -138,7 +138,7 @@ pub(crate) fn parse(name: &str, bytes: &[u8]) -> Result<Extracted> {
     Ok(parsed)
 }
 
-fn decode_txt(bytes: &[u8]) -> Result<String> {
+pub(crate) fn decode_txt(bytes: &[u8]) -> Result<String> {
     const INVALID: &str = "Некоректне кодування TXT. Підтримуються UTF-8, UTF-16 та UTF-32 з позначкою BOM для UTF-16/32.";
     match bytes {
         // Check UTF-32 first because its little-endian BOM starts with the UTF-16 BOM.
@@ -942,9 +942,12 @@ mod tests {
         let mut store = Store::open(Path::new(":memory:")).unwrap();
         for bytes in [&little16, &big16, &little32, &big32] {
             assert_eq!(language_detection::detect_document("book.txt", bytes), Some("uk"));
-            let document = store.import("book.txt", bytes, "uk").unwrap();
-            assert_eq!(document.text, text);
-            assert_eq!(store.original(&document.id).unwrap().bytes, *bytes);
+            let staged = store.stage_intake(crate::intake::IntakeInput::File {
+                name: "book.txt".into(), bytes: bytes.to_vec(),
+            }).unwrap();
+            store.complete_intake(&staged.id, crate::intake::IntakeImport::Document {
+                language: Some("uk".into()),
+            }).unwrap();
         }
         let mut restored = Store::open(Path::new(":memory:")).unwrap();
         restored.restore(store.export().unwrap()).unwrap();

@@ -50,6 +50,7 @@ fn validate(command: &Command) -> Result<()> {
         }
         Command::IntakeItem { id }
         | Command::FindIntake { id }
+        | Command::SaveIntakeSourceLanguage { id, .. }
         | Command::IntakePayload { id }
         | Command::IntakeArticle { id }
         | Command::SaveIntakeArticle { id, .. }
