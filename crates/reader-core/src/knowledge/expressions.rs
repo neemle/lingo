@@ -16,6 +16,19 @@ pub struct ExpressionMatch {
     pub(super) part_starts_utf16: Vec<usize>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) token_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_name: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_revision: Option<&'static str>,
+}
+
+impl ExpressionMatch {
+    pub(super) fn dictionary(text: String, canonical: String, part_starts_utf16: Vec<usize>,
+        source_name: &'static str, source_revision: &'static str) -> Self {
+        Self { text, canonical, kind: "dictionary".into(), observations: 0,
+            part_starts_utf16, token_ids: Vec::new(), source_name: Some(source_name),
+            source_revision: Some(source_revision) }
+    }
 }
 
 struct CorpusToken {
@@ -208,6 +221,8 @@ pub(super) fn lookup(
             observations,
             part_starts_utf16,
             token_ids: Vec::new(),
+            source_name: None,
+            source_revision: None,
         })
         .collect();
     matches.sort_by(|left, right| {

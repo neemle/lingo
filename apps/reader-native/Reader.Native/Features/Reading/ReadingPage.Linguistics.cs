@@ -82,6 +82,10 @@ public partial class ReadingPage
 
     private ExpressionMatch[] selectedExpressions = [];
 
+    private static ExpressionSnapshot ExpressionCard(ExpressionMatch expression, KnowledgePackage package) =>
+        new(expression.Canonical, expression.Text, expression.Kind, expression.Observations,
+            expression.SourceName ?? package.Name, expression.SourceRevision ?? $"{package.Version} · {package.Revision}");
+
     private void ShowExpressionOptions(WordLookup? lookup, TextSelection selected)
     {
         selectedExpressions = lookup?.Expressions.Where(expression => expression.PartStartsUtf16.Length >= 2)
@@ -290,7 +294,8 @@ public partial class ReadingPage
                     if (displayedHints.Add(hint)) Add(hint);
                 if (page.SyntaxParse is { } parse) ShowParse(parse);
                 foreach (var expression in page.Expressions)
-                    Add($"«{expression.Text}» · сталий вираз · {expression.Observations} збігів");
+                    Add(expression.Kind == "dictionary" ? $"«{expression.Text}» · словниковий вираз"
+                        : $"«{expression.Text}» · сталий вираз · {expression.Observations} збігів");
                 foreach (var suggestion in page.SpacingSuggestions)
                     if (displayedSpacing.Add((suggestion.Span.StartUtf16, suggestion.Span.EndUtf16, suggestion.Replacement)))
                         Add($"Пробіли · «{suggestion.Source}» → «{suggestion.Replacement}»");

@@ -16,7 +16,8 @@ public sealed record WordAnalysis(string Lemma, string PartOfSpeech, string Feat
 
 public sealed record WordContext(string Sentence, int StartUtf16);
 
-public sealed record ExpressionMatch(string Text, string Canonical, string Kind, int Observations)
+public sealed record ExpressionMatch(string Text, string Canonical, string Kind, int Observations,
+    string? SourceName = null, string? SourceRevision = null)
 {
     public int[] PartStartsUtf16 { get; init; } = [];
     public string[] TokenIds { get; init; } = [];

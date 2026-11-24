@@ -194,6 +194,14 @@ public partial class ReadingPage
             {
                 detail.Children.Remove(label);
                 detail.Children.Add(WordDetailAudioRow(gloss, target, 17));
+                var evidence = meaning.Confidence switch
+                {
+                    "contextual" => "Є збіги з контекстом",
+                    "dictionary" => "Є у словнику",
+                    _ => "Можливе значення",
+                };
+                if (meaning.MatchedExpression is { } expression) evidence = $"«{expression}» · {evidence}";
+                detail.Children.Add(new Label { Text = evidence, Style = (Style)Resources["ReaderMeta"], FontSize = 11 });
                 var pick = new Button
                 {
                     Text = "Використати значення", HorizontalOptions = LayoutOptions.Start,

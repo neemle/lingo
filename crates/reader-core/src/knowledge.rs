@@ -520,7 +520,7 @@ impl Store {
             if syntax_hint.is_none() && !lexicon::available(&self.knowledge_directory, language) {
                 return Ok(None);
             }
-            let (lexical_package, meanings) = lexicon::lookup(
+            let (lexical_package, meanings, expressions) = lexicon::lookup(
                 &self.knowledge_directory,
                 language,
                 &key,
@@ -533,7 +533,7 @@ impl Store {
                 package: pack.describe(0),
                 total_observations: 0,
                 analyses: Vec::new(),
-                expressions: Vec::new(),
+                expressions,
                 syntax_evidence: Vec::new(),
                 syntax_hint,
                 spelling_suggestions: Vec::new(),
@@ -591,7 +591,7 @@ impl Store {
         let previous = previous.map(word_key);
         let cue = grammar_cues::GrammarCue::infer(language, previous.as_deref(), &analyses);
         grammar_cues::order_readings(&mut analyses, cue);
-        let expressions = match context {
+        let mut expressions = match context {
             Some(context) if index_version >= 3 => expressions::lookup(db, context, &key)?,
             _ => Vec::new(),
         };
@@ -599,7 +599,7 @@ impl Store {
             Some(context) if index_version >= 4 => syntax::lookup(db, context, &key)?,
             _ => Vec::new(),
         };
-        let (lexical_package, meanings) = lexicon::lookup(
+        let (lexical_package, meanings, dictionary_expressions) = lexicon::lookup(
             &self.knowledge_directory,
             language,
             &key,
@@ -608,6 +608,13 @@ impl Store {
             context,
             cue,
         )?;
+        for expression in dictionary_expressions {
+            if !expressions.iter().any(|observed| observed.canonical == expression.canonical
+                && observed.part_starts_utf16 == expression.part_starts_utf16)
+            {
+                expressions.push(expression);
+            }
+        }
         let spelling_suggestions =
             if analyses.is_empty() && meanings.is_empty() && neighbors.is_some() {
                 ocr_suggestions::suggest_spelling(db, language, word, &key, left, right)?

@@ -1,11 +1,11 @@
-use super::{word_key, WordAnalysis, WordContext};
+use super::{expressions::ExpressionMatch, word_key, WordAnalysis, WordContext};
 use crate::{model_storage::lock_package, space::ensure_capacity, Result, Store};
 use flate2::read::MultiGzDecoder;
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fmt::{Display, Write as _},
     fs,
     io::{self, BufRead, BufReader, Read, Seek},
@@ -16,6 +16,7 @@ use unicode_segmentation::UnicodeSegmentation;
 mod search;
 
 const REVISION: &str = "enwiktionary-2026-10-01-kaikki-2026-10-30";
+const SOURCE_NAME: &str = "English Wiktionary via Kaikki/Wiktextract";
 const INDEX_VERSION: u32 = 2;
 const LEGACY_INDEX_VERSION: u32 = 1;
 const MAX_UNPACKED_BYTES: u64 = 5 * 1024 * 1024 * 1024;
@@ -153,6 +154,8 @@ pub struct WordMeaning {
     source_revision: &'static str,
     confidence: &'static str,
     context_matches: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    matched_expression: Option<String>,
 }
 
 impl WordMeaning {
@@ -501,12 +504,12 @@ pub(super) fn lookup(
     expressions: &[super::expressions::ExpressionMatch],
     context: Option<&WordContext>,
     cue: Option<super::grammar_cues::GrammarCue>,
-) -> Result<(Option<LexicalPackage>, Vec<WordMeaning>)> {
+) -> Result<(Option<LexicalPackage>, Vec<WordMeaning>, Vec<ExpressionMatch>)> {
     let Some(pack) = find_pack(language) else {
-        return Ok((None, Vec::new()));
+        return Ok((None, Vec::new(), Vec::new()));
     };
     let Some((db, version)) = pack.open(root)? else {
-        return Ok((Some(pack.describe(false)), Vec::new()));
+        return Ok((Some(pack.describe(false)), Vec::new(), Vec::new()));
     };
 
     let context = context.filter(|context| context.neighbors(selected).is_some());
@@ -518,6 +521,8 @@ pub(super) fn lookup(
         content_words(language, &context.sentence)
     });
     let mut keys = BTreeSet::from([selected.clone()]);
+    let mut phrases = context.map_or_else(BTreeMap::new, |context| surrounding_phrases(language, context));
+    keys.extend(phrases.keys().cloned());
     let grammar: Vec<_> = analyses
         .iter()
         .map(|analysis| (lexical_key(language, &analysis.lemma), analysis))
@@ -625,8 +630,10 @@ pub(super) fn lookup(
 
             candidates.push((
                 sense,
+                key.clone(),
                 example_matches,
                 (
+                    phrases.get(&key).map_or(0, |phrase| phrase.part_starts_utf16.len()),
                     grammar_priority,
                     gloss_matches,
                     example_matches,
@@ -639,13 +646,24 @@ pub(super) fn lookup(
 
     // Keep lexical alternatives even when one sense has contextual evidence.
     // Dictionary order breaks ties without implying corpus frequency.
-    candidates.sort_by_key(|(_, _, rank)| std::cmp::Reverse(*rank));
+    candidates.sort_by_key(|(_, _, _, rank)| std::cmp::Reverse(*rank));
     let only_candidate = candidates.len() == 1;
+    let mut phrase_senses = 0;
+    let mut matched_phrases = Vec::new();
     let meanings = candidates
         .into_iter()
+        .filter(|(_, _, _, rank)| {
+            if rank.0 == 0 { return true; }
+            phrase_senses += 1;
+            phrase_senses <= 4
+        })
         .take(MAX_RESULTS)
-        .map(|(sense, context_matches, rank)| {
-            let confidence = if context_matches >= 2 && (cue.is_none() || rank.0 > 0) {
+        .map(|(sense, key, context_matches, rank)| {
+            let matched_expression = (rank.0 > 0).then(|| sense.lemma.clone());
+            if let Some(expression) = phrases.remove(&key) {
+                matched_phrases.push(expression);
+            }
+            let confidence = if context_matches >= 2 && (cue.is_none() || rank.1 > 0) {
                 "contextual"
             } else if only_candidate {
                 "dictionary"
@@ -656,15 +674,44 @@ pub(super) fn lookup(
                 source_url: article_url(&sense.lemma, pack.name),
                 sense,
                 gloss_language: "en",
-                source_name: "English Wiktionary via Kaikki/Wiktextract",
+                source_name: SOURCE_NAME,
                 source_license: "CC BY-SA 4.0",
                 source_revision: REVISION,
                 confidence,
                 context_matches,
+                matched_expression,
             }
         })
         .collect();
-    Ok((Some(pack.describe(true)), meanings))
+    Ok((Some(pack.describe(true)), meanings, matched_phrases))
+}
+
+fn surrounding_phrases(language: &str, context: &WordContext) -> BTreeMap<String, ExpressionMatch> {
+    const MAX_WORDS: usize = 5;
+    let mut phrases = BTreeMap::new();
+    if context.sentence.len() > 4096 { return phrases; }
+    let words: Vec<_> = crate::document_tokens::word_parts(&context.sentence).collect();
+    let Some(focus) = words.iter().position(|&(_, offset, _)| offset == context.start_utf16) else {
+        return phrases;
+    };
+    for first in focus.saturating_sub(MAX_WORDS - 1)..=focus {
+        let end = words.len().min(first + MAX_WORDS);
+        for last in focus.max(first + 1)..end {
+            let entries = &words[first..=last];
+            if entries.windows(2).any(|pair| {
+                let (start, _, token) = pair[0];
+                let gap = &context.sentence[start + token.len()..pair[1].0];
+                gap.is_empty() || !gap.chars().all(char::is_whitespace)
+            }) {
+                break;
+            }
+            let text = entries.iter().map(|&(_, _, word)| word).collect::<Vec<_>>().join(" ");
+            let key = lexical_key(language, &text);
+            let offsets = entries.iter().map(|&(_, offset, _)| offset).collect();
+            phrases.insert(key.clone(), ExpressionMatch::dictionary(text, key, offsets, SOURCE_NAME, REVISION));
+        }
+    }
+    phrases
 }
 
 pub(super) fn index_identity(root: &Path, language: &str) -> Option<(&'static str, u32)> {
@@ -888,5 +935,32 @@ mod tests {
             }
             assert!(find(None).iter().all(|row| row.sense.gloss != gloss));
         }
+    }
+
+    #[test]
+    fn contextual_lookup_keeps_attested_phrase_and_literal_meanings_separate() {
+        let directory = tempfile::tempdir().unwrap();
+        let pack = find_pack("en").unwrap();
+        let path = pack.path(directory.path(), INDEX_VERSION);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let data = ["kick", "kick the bucket"].into_iter().zip(["To strike with a foot.", "To die."])
+            .map(|(word, gloss)| serde_json::json!({
+                "word": word, "lang_code": "en", "pos": "verb", "senses": [{"glosses": [gloss]}],
+            }).to_string())
+            .collect::<Vec<_>>().join("\n");
+        build_index(&path, "en", data.as_bytes()).unwrap();
+        let find = |sentence| lookup(
+            directory.path(), "en", "kick", &[], &[], Some(&WordContext::at(sentence, 3)), None,
+        ).unwrap();
+        let (_, meanings, phrases) = find("😀 kick the bucket");
+        assert_eq!(meanings[0].sense.gloss, "To die.");
+        assert_eq!(meanings[0].matched_expression.as_deref(), Some("kick the bucket"));
+        assert_eq!(meanings[1].sense.gloss, "To strike with a foot.");
+        assert_eq!(phrases[0].part_starts_utf16, [3, 8, 12]);
+
+        let (_, meanings, phrases) = find("😀 kick, the bucket");
+        assert_eq!(meanings.len(), 1);
+        assert!(meanings[0].matched_expression.is_none());
+        assert!(phrases.is_empty());
     }
 }

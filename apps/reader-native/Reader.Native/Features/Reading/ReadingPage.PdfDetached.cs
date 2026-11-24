@@ -281,9 +281,8 @@ public partial class ReadingPage
                         package.Name, version)))];
         }
         return [surface, .. details.Expressions.DistinctBy(expression => (expression.Canonical, expression.Kind))
-            .Select(expression => new VocabularyReadingOption($"Сталий вираз · {expression.Text}",
-                Expression: new ExpressionSnapshot(expression.Canonical, expression.Text, expression.Kind,
-                    expression.Observations, package.Name, version)))];
+            .Select(expression => new VocabularyReadingOption($"Вираз · {expression.Text}",
+                Expression: ExpressionCard(expression, package)))];
     }
 
     private async void DetachedBookmarkClicked(object? sender, EventArgs args)

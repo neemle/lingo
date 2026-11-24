@@ -313,10 +313,14 @@ impl Vocabulary {
 
     fn validate_annotations(&self) -> Result<()> {
         if let Some(expression) = &self.expression {
+            let valid_evidence = match expression.kind.as_str() {
+                "dictionary" => expression.observations == 0,
+                "fixed" | "particle" => expression.observations > 0,
+                _ => false,
+            };
             if self.analysis.is_some()
                 || self.word != expression.canonical
-                || !["fixed", "particle"].contains(&expression.kind.as_str())
-                || expression.observations == 0
+                || !valid_evidence
             {
                 return Err("Некоректний вираз словникової картки".into());
             }

@@ -676,7 +676,8 @@ public partial class ReadingPage : ContentPage
                 : $"{string.Join(Environment.NewLine, readings)}{Environment.NewLine}Частота в корпусі · {source}";
             if (lookup.Expressions.Length > 0)
                 KnowledgeAnalysis.Text += Environment.NewLine + string.Join(Environment.NewLine, lookup.Expressions.Select(expression =>
-                    $"{(expression.Kind == "particle" ? "Дієслово з часткою" : "Сталий вираз")} · {expression.Text} · у корпусі: {expression.Observations}"));
+                    expression.Kind == "dictionary" ? $"Словниковий вираз · {expression.Text}"
+                        : $"{(expression.Kind == "particle" ? "Дієслово з часткою" : "Сталий вираз")} · {expression.Text} · у корпусі: {expression.Observations}"));
             var version = $"{lookup.Package.Version} · {lookup.Package.Revision}";
             var lemmas = lookup.Analyses.DistinctBy(analysis => (analysis.Lemma, analysis.PartOfSpeech))
                 .Select(analysis => new VocabularyReadingOption($"Лема · {analysis.Lemma} · {analysis.PartOfSpeech}",
@@ -684,8 +685,7 @@ public partial class ReadingPage : ContentPage
                         analysis.Features, lookup.Package.Name, version)));
             var expressions = lookup.Expressions.DistinctBy(expression => (expression.Canonical, expression.Kind))
                 .Select(expression => new VocabularyReadingOption($"Вираз · {expression.Text}",
-                    Expression: new ExpressionSnapshot(expression.Canonical, expression.Text, expression.Kind,
-                        expression.Observations, lookup.Package.Name, version)));
+                    Expression: ExpressionCard(expression, lookup.Package)));
             vocabularyReadings = lemmas.Concat(expressions)
                 .ToArray();
             if (vocabularyReadings.Length > 0)

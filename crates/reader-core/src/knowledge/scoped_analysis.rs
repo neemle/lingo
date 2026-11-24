@@ -17,8 +17,8 @@ const SENTENCE_PAGE_SIZE: usize = 24;
 const MAX_READINGS: usize = 8;
 const MAX_PREFETCH_SENTENCE_BYTES: usize = 4096;
 // Bump when generated annotations or their serialized representation changes.
-const SENTENCE_ANNOTATION_VERSION: u32 = 3;
-const SELECTION_ANNOTATION_VERSION: u32 = 4;
+const SENTENCE_ANNOTATION_VERSION: u32 = 4;
+const SELECTION_ANNOTATION_VERSION: u32 = 5;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]

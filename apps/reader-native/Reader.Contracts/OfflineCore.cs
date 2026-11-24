@@ -29,7 +29,7 @@ public sealed record LexicalPackage(string Language, string Name, string SourceU
 public sealed record MeaningExample(string Text, string? Translation);
 public sealed record WordMeaning(string Id, string Lemma, string PartOfSpeech, string Gloss,
     string GlossLanguage, MeaningExample[] Examples, string[] Tags, string SourceName, string SourceUrl,
-    string SourceLicense, string SourceRevision, string Confidence, int ContextMatches);
+    string SourceLicense, string SourceRevision, string Confidence, int ContextMatches, string? MatchedExpression = null);
 
 public sealed record DictionaryArchive(int Version, Vocabulary[] Entries, DictionaryReview[] Reviews,
     DictionarySource[] Sources,
