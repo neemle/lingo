@@ -120,7 +120,7 @@ public partial class LibraryPage : ContentPage
     private async void ImportClicked(object? sender, EventArgs args) => await ImportAsync(scanPdf: false);
     private async void ChooseImportSourceClicked(object? sender, EventArgs args)
     {
-        if (choosingImportSource || importing || changingLanguage || !AppState.Session.CanInteract) return;
+        if (choosingImportSource || importing || changingLanguage) return;
 
         const string files = "Вибрати файли або фотографії";
         const string scan = "Розпізнати сканований PDF";
@@ -132,6 +132,8 @@ public partial class LibraryPage : ContentPage
         choosingImportSource = true;
         try
         {
+            await AppState.Session.WaitUntilIdleAsync();
+            if (!ReferenceEquals(Shell.Current?.CurrentPage, this) || importing || changingLanguage) return;
             choice = await NativeChoices.ChooseAsync(this, "Додати документ", null,
                 new[] { files, scan, text, image, article }.Select(label => (label, label)));
         }
@@ -173,7 +175,12 @@ public partial class LibraryPage : ContentPage
 
     private async Task ImportAsync(bool scanPdf)
     {
-        if (importing || changingLanguage || AppState.Session.Busy || !DesktopImport.Gate.Wait(0)) return;
+        if (importing || changingLanguage) return;
+        if (AppState.Session.Busy || !DesktopImport.Gate.Wait(0))
+        {
+            ImportStatus.Text = "Зачекайте, поки завершиться поточна операція, і повторіть імпорт.";
+            return;
+        }
         importing = true;
         pauseExternalBatch = false;
         PauseExternalBatch.IsEnabled = true;

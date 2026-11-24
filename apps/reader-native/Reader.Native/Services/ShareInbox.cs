@@ -61,8 +61,16 @@ internal static class ShareInbox
         finally { Staging.Release(); }
     }
 
-    internal static ShareInboxItem[] List() => EntryFolders().Select(ReadItem)
-        .OrderBy(item => item.ReceivedAt).ToArray();
+    internal static async Task<ShareInboxItem[]> ListAsync()
+    {
+        await Staging.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            return await Task.Run(() => EntryFolders().Select(ReadItem)
+                .OrderBy(item => item.ReceivedAt).ToArray()).ConfigureAwait(false);
+        }
+        finally { Staging.Release(); }
+    }
 
     internal static async Task<byte[]> ReadAsync(ShareInboxItem item)
     {

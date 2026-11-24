@@ -18,7 +18,7 @@ public partial class LibraryPage
 
     private async Task<InboxEntry[]> ReadInboxAsync()
     {
-        var native = await Task.Run(ShareInbox.List);
+        var native = await ShareInbox.ListAsync();
         var core = await AppState.Session.ListIntakeAsync();
         var captured = native.Select(item => item.Id.ToString("D")).ToHashSet(StringComparer.Ordinal);
         return native.Select(item => new InboxEntry(item, null))

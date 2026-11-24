@@ -146,6 +146,54 @@ fn canceling_sentence_review_leaves_word_explanations_and_later_reviews_availabl
 }
 
 #[test]
+fn full_reset_allows_staged_file_and_pdf_import_on_the_same_handle() {
+    let store = StoreFixture::new();
+    let pdf = store.dir.join("source.pdf");
+    let original = mixed_pdf_fixture();
+    std::fs::write(&pdf, &original).unwrap();
+
+    let stage = |request_id, input| call(store.handle, json!({
+        "version": 1, "operation": "stage_intake", "requestId": request_id, "input": input,
+    }));
+    let txt_request = "b122e518-3ffe-4957-8b75-3e0ef1b92bef";
+    let pdf_request = "95f32703-4c2e-428b-b057-51e6dea95fef";
+    let txt_input = json!({"kind": "file", "name": "source.txt", "bytes": "Le bateau revient.".as_bytes()});
+    let pdf_input = json!({"kind": "pdfFile", "name": "source.pdf", "path": pdf});
+    assert_eq!(stage(txt_request, txt_input.clone())["ok"], true);
+    assert_eq!(stage(pdf_request, pdf_input.clone())["ok"], true);
+
+    let reset = call(store.handle, json!({"version": 1, "operation": "clear_storage", "scope": "all"}));
+    assert_eq!(reset["ok"], true, "{reset}");
+    let empty = call(store.handle, json!({"version": 1, "operation": "list_intake", "start": 0}));
+    assert_eq!(empty["data"], json!([]));
+
+    let new_text = stage(txt_request, txt_input);
+    let new_pdf = stage(pdf_request, pdf_input);
+    assert_eq!(new_text["ok"], true, "{new_text}");
+    assert_eq!(new_pdf["ok"], true, "{new_pdf}");
+    let complete = |id, result| call(store.handle, json!({
+        "version": 1, "operation": "complete_intake", "id": id, "result": result,
+    }));
+    let text_done = complete(&new_text["data"]["id"], json!({"kind": "document", "language": "fr"}));
+    assert_eq!(text_done["ok"], true, "{text_done}");
+    let pdf_id = &new_pdf["data"]["id"];
+    let mut pages = vec![""; 42];
+    pages[1] = "Premier chapitre.";
+    let prepared = call(store.handle, json!({
+        "version": 1, "operation": "save_intake_pdf_text", "id": pdf_id,
+        "draft": { "pageTexts": pages, "deferredFrom": 2 },
+    }));
+    assert_eq!(prepared["ok"], true, "{prepared}");
+    let pdf_done = complete(pdf_id, json!({"kind": "stagedPdf", "language": "fr"}));
+    assert_eq!(pdf_done["ok"], true, "{pdf_done}");
+    let file = call(store.handle, json!({
+        "version": 1, "operation": "original_file", "id": pdf_done["data"]["documentId"],
+    }));
+    assert_eq!(file["ok"], true, "{file}");
+    assert_eq!(std::fs::read(file["data"]["path"].as_str().unwrap()).unwrap(), original);
+}
+
+#[test]
 fn recovered_pdf_checkpoint_preserves_saved_pages_without_resolving_the_unread_tail() {
     let mut store = StoreFixture::new();
     let original = store.dir.join("checkpoint.pdf");

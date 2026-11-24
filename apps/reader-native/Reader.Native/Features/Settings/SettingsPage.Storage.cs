@@ -260,13 +260,6 @@ public partial class SettingsPage
                     await session.RefreshAsync();
                     (Shell.Current as AppShell)?.RefreshRecent();
                 }
-                if (scope != "cache")
-                {
-                    await RefreshTranslationPackagesAsync();
-                    await RefreshKnowledgePackagesAsync();
-                    await RefreshLexicalPackagesAsync();
-                    await RefreshOptionalModelsAsync();
-                }
             }
         }
         catch (Exception error) { StorageStatus.Text = error.Message; }
@@ -277,8 +270,19 @@ public partial class SettingsPage
             if (importGateHeld) DesktopImport.Gate.Release();
             try
             {
-                if (storageOperationStarted) await RefreshStorageAsync(syncWorker: scope != "downloads");
+                if (storageOperationStarted)
+                {
+                    await RefreshStorageAsync(syncWorker: scope != "downloads");
+                    if (scope != "cache")
+                    {
+                        await RefreshTranslationPackagesAsync();
+                        await RefreshKnowledgePackagesAsync();
+                        await RefreshLexicalPackagesAsync();
+                        await RefreshOptionalModelsAsync();
+                    }
+                }
             }
+            catch (Exception error) { StorageStatus.Text = error.Message; }
             finally
             {
                 pausedWorker?.Resume(clearProgress: true);
