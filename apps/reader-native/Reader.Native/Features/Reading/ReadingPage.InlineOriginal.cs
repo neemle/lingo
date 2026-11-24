@@ -137,7 +137,7 @@ public partial class ReadingPage
                     inlinePdfLoad?.Cancel();
                 }
                 InlinePdfToggle.Text = "Розпізнаний текст";
-                PendingInlinePdfViewport.IsVisible = PdfPageNotice.IsVisible && !DetachedPdfReader.IsVisible;
+                ShowActiveInlinePdfFrame();
                 ResizeInlinePdf();
                 UpdateInlinePdfHighlight();
                 return;
@@ -207,12 +207,6 @@ public partial class ReadingPage
                 current.CurrentRevisionId != address.Revision) return;
             var changedPage = previous is null ||
                 previous.Document != address.Document || previous.Page != address.Page;
-            InlinePdfImage.Source = InlinePreviewSource(preview);
-            DetachedInlinePdfImage.Source = InlinePreviewSource(preview);
-            PendingInlinePdfImage.Source = InlinePreviewSource(preview);
-            InlinePdfViewport.IsVisible = DetachedInlinePdfViewport.IsVisible = true;
-            PendingInlinePdfViewport.IsVisible = PdfPageNotice.IsVisible && !DetachedPdfReader.IsVisible;
-            SourceText.IsVisible = DetachedPdfText.IsVisible = false;
             inlinePdfAddress = address;
             inlinePdfLoading = null;
             inlinePdfPreview = preview;
@@ -221,6 +215,7 @@ public partial class ReadingPage
             inlineNativeText = nativeText;
             inlinePdfAppearance = appearance;
             lastInlinePdfFollow = null;
+            ShowActiveInlinePdfFrame();
             InlinePdfFitToggle.IsVisible = true;
             UpdateInlinePdfFitLabel();
             InlinePdfToggle.Text = "Розпізнаний текст";
@@ -252,6 +247,27 @@ public partial class ReadingPage
     private bool CanReuseInlinePdfFrame(InlinePdfAddress address) => address.DetachedText is null &&
         CurrentNativePdfWindow(address.Document)?.Pages.Any(page => page.Page == address.Page &&
             page is { State: "textLayer", HasOcr: false, RefreshPending: false }) == true;
+
+    private void ShowActiveInlinePdfFrame()
+    {
+        if (inlinePdfPreview is not { } preview) return;
+        var (viewport, _) = ActiveInlinePdf();
+        var canonical = viewport == InlinePdfViewport;
+        var detached = viewport == DetachedInlinePdfViewport;
+        var pending = viewport == PendingInlinePdfViewport;
+        if (!canonical) InlinePdfImage.Source = null;
+        if (!detached) DetachedInlinePdfImage.Source = null;
+        if (!pending) PendingInlinePdfImage.Source = null;
+
+        var image = canonical ? InlinePdfImage : detached ? DetachedInlinePdfImage : PendingInlinePdfImage;
+        if (image.Source is null)
+            image.Source = InlinePreviewSource(preview);
+
+        SourceText.IsVisible = DetachedPdfText.IsVisible = false;
+        InlinePdfViewport.IsVisible = canonical;
+        DetachedInlinePdfViewport.IsVisible = detached;
+        PendingInlinePdfViewport.IsVisible = pending;
+    }
 
     private static ImageSource InlinePreviewSource(PhotoPreview preview) =>
         ImageSource.FromStream(() => new MemoryStream(preview.Bytes, writable: false));
