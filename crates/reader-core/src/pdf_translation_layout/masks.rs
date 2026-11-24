@@ -38,6 +38,7 @@ pub(super) fn plan(
             .any(|range| range.start <= span.start_utf16 && span.end_utf16 <= range.end)
     };
     let background = |span: OcrSpan| styles.get(&span.start_utf16).map(|style| style.background);
+    let mask_safe = |span: OcrSpan| styles.get(&span.start_utf16).is_none_or(|style| style.mask_safe);
     let in_area = |x, y, width, height| {
         let (width, height) = area.overlap(Bounds { x, y, width, height });
         width > 0.0001 && height > 0.0001
@@ -62,9 +63,9 @@ pub(super) fn plan(
         let mixed_background = line
             .words
             .iter()
-            .filter_map(|word| word.source_span.and_then(background))
-            .any(|color| different_color(color, line_background));
-        if contains(span) && !mixed_background {
+            .filter_map(|word| word.source_span)
+            .any(|span| !mask_safe(span) || background(span).is_some_and(|color| different_color(color, line_background)));
+        if contains(span) && mask_safe(span) && !mixed_background {
             masks.push(BackgroundMask {
                 bounds: clipped(line.x, line.y, line.width, line.height)?,
                 background: line_background,
@@ -80,7 +81,7 @@ pub(super) fn plan(
                 }
                 continue;
             }
-            if !contains(word_span) {
+            if !contains(word_span) || !mask_safe(word_span) {
                 return None;
             }
             masks.push(BackgroundMask {
@@ -162,5 +163,13 @@ mod tests {
         assert_eq!(part.len(), 1);
         assert!((part[0].bounds.x - 0.6).abs() < 0.001);
         assert!(plan(right, std::iter::once(5..7), &geometry, &styles).is_none());
+
+        let mut unsafe_green = green;
+        unsafe_green.mask_safe = false;
+        let styles = BTreeMap::from([(5, &unsafe_green)]);
+        assert!(plan(area, std::iter::once(0..8), &geometry, &styles).is_none());
+        assert!(plan(right, std::iter::once(5..8), &geometry, &styles).is_none());
+        let left = Bounds { width: 0.2, ..area };
+        assert_eq!(plan(left, std::iter::once(0..4), &geometry, &styles).unwrap().len(), 1);
     }
 }

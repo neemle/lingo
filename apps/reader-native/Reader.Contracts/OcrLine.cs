@@ -20,10 +20,10 @@ public sealed record OcrWord(string Text, double X, double Y, double Width, doub
 
 public sealed record OcrSpan(int StartUtf8, int EndUtf8, int StartUtf16, int EndUtf16);
 public sealed record PdfSampleBox(double X, double Y, double Width, double Height);
-public sealed record PdfSampleColors(uint Background, uint? Ink);
+public sealed record PdfSampleColors(uint Background, uint? Ink, bool MaskSafe);
 public sealed record PdfTranslationSourceRow(int StartUtf16, int EndUtf16, int? BlockIndex, bool Pending);
 public sealed record PdfTranslationSourceStyle(string? FontFamily, double? FontHeight, int Weight, bool Italic,
-    double[]? Ink, double[] Background);
+    double[]? Ink, double[] Background, bool MaskSafe = true);
 public sealed record PdfTranslationStyleAnchor(int StartUtf16, PdfTranslationSourceStyle Style);
 public sealed record PdfTranslationAnchor(PdfSampleBox? Bounds, PdfTranslationSourceStyle? Style,
     PdfTranslationMask[]? PendingMasks = null);

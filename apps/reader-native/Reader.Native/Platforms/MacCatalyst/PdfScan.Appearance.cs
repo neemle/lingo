@@ -82,8 +82,8 @@ internal static partial class PdfScan
                 var background = Rgb(sampled.Background);
                 var ink = sampled.Ink is { } measured ? Rgb(measured) : null;
                 appearance[key] = appearance.TryGetValue(key, out var style)
-                    ? style with { Background = background, Ink = style.Ink ?? ink }
-                    : new(null, 0, 400, false, ink, background);
+                    ? style with { Background = background, Ink = style.Ink ?? ink, MaskSafe = sampled.MaskSafe }
+                    : new(null, 0, 400, false, ink, background, sampled.MaskSafe);
             }
 
             void Add(OcrSpan? span, double x, double y, double w, double h)

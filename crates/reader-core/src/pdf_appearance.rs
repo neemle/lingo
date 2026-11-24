@@ -13,6 +13,8 @@ pub struct SampleBox {
 pub struct SampledColors {
     pub background: u32,
     pub ink: Option<u32>,
+    #[serde(rename = "maskSafe")]
+    pub mask_safe: bool,
 }
 
 pub fn sample_backgrounds(
@@ -24,7 +26,7 @@ pub fn sample_backgrounds(
     validate_image(pixels, width, height, boxes)?;
     Ok(boxes
         .iter()
-        .map(|bounds| background(pixels, width, height, bounds))
+        .map(|bounds| background(pixels, width, height, bounds).0)
         .collect())
 }
 
@@ -39,13 +41,13 @@ pub fn sample_colors(
     Ok(boxes
         .iter()
         .map(|bounds| {
-            let background = background(pixels, width, height, bounds);
+            let (background, mask_safe) = background(pixels, width, height, bounds);
             let ink = if valid(bounds) {
                 ink(pixels, width, height, bounds, background, &mut samples)
             } else {
                 None
             };
-            SampledColors { background, ink }
+            SampledColors { background, ink, mask_safe }
         })
         .collect())
 }
@@ -69,9 +71,9 @@ fn valid(bounds: &SampleBox) -> bool {
         && bounds.height > 0.0
 }
 
-fn background(pixels: &[u8], width: usize, height: usize, bounds: &SampleBox) -> u32 {
+fn background(pixels: &[u8], width: usize, height: usize, bounds: &SampleBox) -> (u32, bool) {
     if !valid(bounds) {
-        return 0xff_ff_ff;
+        return (0xff_ff_ff, false);
     }
     let mut samples = [0u64; 40];
     let sample_at = |x: f64, y: f64| {
@@ -121,7 +123,7 @@ fn background(pixels: &[u8], width: usize, height: usize, bounds: &SampleBox) ->
             .all(|side| side.iter().filter(matches_paper).count() >= 6)
             && samples.iter().filter(matches_paper).count() >= 4
         {
-            return (paper & 0xff_ff_ff) as u32;
+            return ((paper & 0xff_ff_ff) as u32, true);
         }
     }
 
@@ -136,7 +138,14 @@ fn background(pixels: &[u8], width: usize, height: usize, bounds: &SampleBox) ->
         }
         start = end;
     }
-    (samples[best.1] & 0xff_ff_ff) as u32
+    let paper = samples[best.1];
+    // A narrow box next to a border may have no usable paper samples outside it.
+    // A solid panel still has a consistent color inside the text box.
+    let uniform_inside = samples.iter().filter(|&&sample| {
+        [0, 8, 16].into_iter()
+            .all(|shift| ((sample >> shift) & 255).abs_diff((paper >> shift) & 255) <= 16)
+    }).count() >= 30;
+    ((paper & 0xff_ff_ff) as u32, uniform_inside)
 }
 
 fn ink(
@@ -265,6 +274,29 @@ mod tests {
         assert_eq!(colors[1].background, 0x26_20_41);
         assert_eq!(colors[1].ink, Some(0xf6_ee_d9));
         assert_eq!(colors[2].ink, None);
+        assert!(colors.iter().all(|color| color.mask_safe));
+    }
+
+    #[test]
+    fn only_marks_solid_backgrounds_safe_for_an_overlay() {
+        let (width, height) = (96, 32);
+        let mut pixels = Vec::new();
+        for y in 0..height {
+            for x in 0..width {
+                let rgb = if (13..18).contains(&y) && x % 8 < 3 {
+                    [12, 12, 12]
+                } else if x < 48 {
+                    [240, 245, 222]
+                } else {
+                    [30 + ((x - 48) * 4) as u8, 105, 175]
+                };
+                pixels.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+            }
+        }
+        let boxes = [0.025, 0.525].map(|x| SampleBox { x, y: 0.34, width: 0.45, height: 0.27 });
+        let colors = sample_colors(&pixels, width, height, &boxes).unwrap();
+        assert!(colors[0].mask_safe);
+        assert!(!colors[1].mask_safe);
     }
 
     #[test]

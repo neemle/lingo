@@ -22,7 +22,11 @@ pub struct SourceStyle {
     italic: bool,
     ink: Option<[f64; 4]>,
     pub(super) background: [f64; 4],
+    #[serde(default = "mask_safe_default")]
+    pub(super) mask_safe: bool,
 }
+
+fn mask_safe_default() -> bool { true }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,7 +37,7 @@ pub struct SourceStyleAnchor {
 
 impl SourceStyle {
     pub(super) fn differs_from(&self, other: &Self) -> bool {
-        different_color(self.background, other.background)
+        self.mask_safe != other.mask_safe || different_color(self.background, other.background)
             || self
                 .ink
                 .zip(other.ink)
@@ -60,6 +64,7 @@ impl SourceStyle {
             italic: false,
             ink: None,
             background: [r, g, b, 1.0],
+            mask_safe: true,
         }
     }
 }
@@ -202,6 +207,7 @@ fn project_row(
         heights.push(if rotation % 180 == 0 { bounds.height } else { bounds.width });
         if let Some(found) = span.and_then(|span| styles.get(&span.start_utf16).copied()) {
             let style = fragment.style.get_or_insert_with(|| found.clone());
+            style.mask_safe &= found.mask_safe;
             if style.ink.is_none() {
                 style.ink = found.ink;
             }
@@ -463,5 +469,17 @@ mod tests {
         let overlapping = draw(&geometry, true);
         assert_eq!(overlapping.fallback_regions.len(), 1);
         assert_eq!(overlapping.fallback_regions[0].fragments, [0]);
+
+        geometry[2].y = 0.31;
+        let styles = [0, 8, 16].map(|start_utf16| {
+            let mut style = SourceStyle::test_style([1.0; 3], 0.016);
+            style.mask_safe = start_utf16 != 8;
+            SourceStyleAnchor { start_utf16, style }
+        });
+        let protected = project(&rows, &geometry, 0, &styles, true).unwrap();
+        assert_eq!(protected.layout.overflow, [1]);
+        assert_eq!(protected.layout.regions.len(), 2);
+        assert_eq!(protected.layout.regions[0].fragments, [0]);
+        assert_eq!(protected.layout.regions[1].fragments, [2]);
     }
 }

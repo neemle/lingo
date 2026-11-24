@@ -994,7 +994,7 @@ public partial class ReadingPage
         {
             var style = entry.Value;
             return new PdfTranslationSourceStyle(style.FontFamily, style.RelativeFontSize, style.Weight,
-                style.Italic, style.Ink is { } ink ? Rgba(ink) : null, Rgba(style.Background));
+                style.Italic, style.Ink is { } ink ? Rgba(ink) : null, Rgba(style.Background), style.MaskSafe);
         }) ?? [];
         return CoreClient.CoreClient.PlanPdfTranslationLayout(spans, source?.Lines ?? [], source?.Offset ?? 0,
             styles, preserveArtwork);
