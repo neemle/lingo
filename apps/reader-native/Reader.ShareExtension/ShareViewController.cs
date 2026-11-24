@@ -17,7 +17,7 @@ public sealed class ShareViewController(ObjCRuntime.NativeHandle handle) : UIVie
         base.ViewDidLoad();
         var view = View!;
         view.BackgroundColor = UIColor.SystemBackground;
-        status = new UILabel { Text = "Додати PDF або фото до «Читай»?", Lines = 0 };
+        status = new UILabel { Text = "Додати вибрані файли до «Читай»?", Lines = 0 };
         add = UIButton.FromType(UIButtonType.System);
         add.SetTitle("Додати до вхідних матеріалів", UIControlState.Normal);
         add.TouchUpInside += AddClicked;
@@ -49,17 +49,16 @@ public sealed class ShareViewController(ObjCRuntime.NativeHandle handle) : UIVie
         using var operation = new CancellationTokenSource();
         saving = operation;
         add.Enabled = false;
-        status.Text = "Копіюємо файл…";
+        status.Text = "Копіюємо файли…";
         try
         {
-            var context = ExtensionContext;
-            var provider = (context?.InputItems.FirstOrDefault() as NSExtensionItem)?.Attachments?.FirstOrDefault()
-                ?? throw new InvalidDataException("Відсутній PDF або файл зображення.");
-            var type = provider.HasItemConformingTo(UTTypes.Pdf.Identifier) ? UTTypes.Pdf : UTTypes.Image;
-            using var incoming = await OpenAsync(provider, type.Identifier, operation.Token);
+            var providers = ExtensionContext?.InputItems.OfType<NSExtensionItem>()
+                .SelectMany(item => item.Attachments ?? []).ToArray() ?? [];
+            if (providers.Length is 0 or > SharedImportFolder.MaxItems)
+                throw new InvalidDataException($"Виберіть від 1 до {SharedImportFolder.MaxItems} файлів.");
             var root = SharedImportFolder.GetPath()
                 ?? throw new IOException("Не вдалося відкрити спільну папку Читай.");
-            await StoreAsync(root, incoming, operation.Token);
+            await StoreBatchAsync(root, providers, operation.Token);
             Complete();
         }
         catch (OperationCanceledException) when (operation.IsCancellationRequested) { Complete(); }
@@ -87,7 +86,8 @@ public sealed class ShareViewController(ObjCRuntime.NativeHandle handle) : UIVie
             {
                 if (error is not null || url?.Path is not { } path)
                     throw new IOException(error?.LocalizedDescription ?? "Не вдалося відкрити файл.");
-                var extension = Path.GetExtension(path).ToLowerInvariant();
+                var extension = type == SharedImportFolder.WordDocumentType ? ".docx"
+                    : type == UTTypes.PlainText.Identifier ? ".txt" : Path.GetExtension(path).ToLowerInvariant();
                 var title = Path.GetFileName(provider.SuggestedName)?.Trim();
                 if (string.IsNullOrWhiteSpace(title))
                 {
@@ -113,7 +113,45 @@ public sealed class ShareViewController(ObjCRuntime.NativeHandle handle) : UIVie
         return await completion.Task;
     }
 
-    private static async Task StoreAsync(string root, Incoming incoming, CancellationToken cancellation)
+    private static async Task StoreBatchAsync(string root, NSItemProvider[] providers, CancellationToken cancellation)
+    {
+        Directory.CreateDirectory(root);
+        EnsureCapacity();
+        var id = Guid.NewGuid().ToString("N");
+        var temporary = Path.Combine(root, "." + id);
+        Directory.CreateDirectory(temporary);
+        try
+        {
+            string[] types = [UTTypes.Pdf.Identifier, SharedImportFolder.WordDocumentType,
+                UTTypes.Image.Identifier, UTTypes.PlainText.Identifier];
+            foreach (var provider in providers)
+            {
+                var type = types.FirstOrDefault(provider.HasItemConformingTo)
+                    ?? throw new InvalidDataException("Цей формат файлу не підтримується.");
+                using var incoming = await OpenAsync(provider, type, cancellation).ConfigureAwait(false);
+                await StoreAsync(Path.Combine(temporary, Guid.NewGuid().ToString("N")), incoming, cancellation)
+                    .ConfigureAwait(false);
+            }
+            cancellation.ThrowIfCancellationRequested();
+            using var publication = File.Open(Path.Combine(root, ".publish"), FileMode.OpenOrCreate,
+                FileAccess.ReadWrite, FileShare.None);
+            EnsureCapacity();
+            Directory.Move(temporary, Path.Combine(root, SharedImportFolder.BatchPrefix + id));
+        }
+        finally
+        {
+            if (Directory.Exists(temporary)) Directory.Delete(temporary, recursive: true);
+        }
+
+        void EnsureCapacity()
+        {
+            var remaining = SharedImportFolder.MaxItems - providers.Length;
+            if (SharedImportFolder.QueuedFiles(root).Take(remaining + 1).Count() > remaining)
+                throw new IOException("Спільна черга заповнена. Відкрийте «Читай» і звільніть місце.");
+        }
+    }
+
+    private static async Task StoreAsync(string directory, Incoming incoming, CancellationToken cancellation)
     {
         var limit = SharedImportFolder.Capacity(incoming.Name);
         var length = incoming.Stream.Length;
@@ -121,37 +159,22 @@ public sealed class ShareViewController(ObjCRuntime.NativeHandle handle) : UIVie
             throw new InvalidDataException($"Максимальний розмір файлу — {limit / 1048576} МіБ.");
         if (System.Text.Encoding.UTF8.GetByteCount(incoming.Name) > SharedImportFolder.NameLimit)
             throw new InvalidDataException("Ім’я файлу задовге.");
-        Directory.CreateDirectory(root);
-        if (Directory.EnumerateDirectories(root).Where(path => Guid.TryParseExact(Path.GetFileName(path), "N", out _))
-            .Take(16).Count() == 16)
-            throw new IOException("Спільна черга заповнена. Відкрийте «Читай» і звільніть місце.");
-        var id = Guid.NewGuid().ToString("N");
-        var temporary = Path.Combine(root, "." + id);
-        Directory.CreateDirectory(temporary);
-        try
+        Directory.CreateDirectory(directory);
+        await using (var destination = File.Create(Path.Combine(directory, SharedImportFolder.Payload)))
         {
-            await using (var destination = File.Create(Path.Combine(temporary, SharedImportFolder.Payload)))
+            var buffer = new byte[64 * 1024];
+            var remaining = length;
+            while (remaining > 0)
             {
-                var buffer = new byte[64 * 1024];
-                var remaining = length;
-                while (remaining > 0)
-                {
-                    var chunk = buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining));
-                    await incoming.Stream.ReadExactlyAsync(chunk, cancellation).ConfigureAwait(false);
-                    await destination.WriteAsync(chunk, cancellation).ConfigureAwait(false);
-                    remaining -= chunk.Length;
-                }
-                if (incoming.Stream.Length != length) throw new IOException("Файл змінився під час копіювання.");
-                destination.Flush(flushToDisk: true);
+                var chunk = buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining));
+                await incoming.Stream.ReadExactlyAsync(chunk, cancellation).ConfigureAwait(false);
+                await destination.WriteAsync(chunk, cancellation).ConfigureAwait(false);
+                remaining -= chunk.Length;
             }
-            await File.WriteAllTextAsync(Path.Combine(temporary, SharedImportFolder.Name), incoming.Name, cancellation)
-                .ConfigureAwait(false);
-            cancellation.ThrowIfCancellationRequested();
-            Directory.Move(temporary, Path.Combine(root, id));
+            if (incoming.Stream.Length != length) throw new IOException("Файл змінився під час копіювання.");
+            destination.Flush(flushToDisk: true);
         }
-        finally
-        {
-            if (Directory.Exists(temporary)) Directory.Delete(temporary, recursive: true);
-        }
+        await File.WriteAllTextAsync(Path.Combine(directory, SharedImportFolder.Name), incoming.Name, cancellation)
+            .ConfigureAwait(false);
     }
 }

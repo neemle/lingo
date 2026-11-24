@@ -14,10 +14,8 @@ internal static class IosSharedImports
         try
         {
             if (SharedImportFolder.GetPath() is not { } root || !Directory.Exists(root)) return null;
-            foreach (var directory in Directory.EnumerateDirectories(root))
+            foreach (var (directory, id, batch) in SharedImportFolder.QueuedFiles(root).ToArray())
             {
-                if (!Guid.TryParseExact(Path.GetFileName(directory), "N", out var id) ||
-                    File.GetAttributes(directory).HasFlag(FileAttributes.ReparsePoint)) continue;
                 var name = "Спільний матеріал";
                 try
                 {
@@ -37,6 +35,8 @@ internal static class IosSharedImports
                         item = await ShareInbox.StageAsync("file", name, source, stagedId: id).ConfigureAwait(false);
                     Directory.Delete(directory, recursive: true);
                     received.Items.Add(item);
+                    if (batch is not null && !Directory.EnumerateFileSystemEntries(batch).Any())
+                        Directory.Delete(batch);
                 }
                 catch (ShareInboxFullException) { break; }
                 catch (Exception error) { received.Rejected.Add((name, error)); }

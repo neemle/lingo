@@ -13,7 +13,7 @@
         <key>NSExtensionAttributes</key>
         <dict>
             <key>NSExtensionActivationRule</key>
-            <string>extensionItems.@count == 1 AND SUBQUERY(extensionItems, $item, $item.attachments.@count == 1 AND SUBQUERY($item.attachments, $attachment, ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.adobe.pdf" OR ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.image").@count == 1).@count == 1</string>
+            <string>extensionItems.@count &gt; 0 AND SUBQUERY(extensionItems, $item, $item.attachments.@count &gt; 0 AND $item.attachments.@count &lt;= 16 AND SUBQUERY($item.attachments, $attachment, ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.adobe.pdf" OR ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.image" OR ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.plain-text" OR ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "org.openxmlformats.wordprocessingml.document").@count == $item.attachments.@count).@count == extensionItems.@count</string>
         </dict>
     </dict>
 </dict>
