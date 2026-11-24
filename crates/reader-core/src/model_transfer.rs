@@ -192,10 +192,21 @@ impl ModelTransfer {
                 if plan.status != TransferStatus::ReadyToInstall {
                     return Err("Завершіть завантаження всіх файлів пакета.".into());
                 }
-                match self.installer {
-                    Installer::Optional(job) => job.run()?,
+                let installed = match self.installer {
+                    Installer::Optional(job) => job.run(),
                     Installer::Translation { files, source, target } =>
-                        files.install_downloaded(&source, &target, &self.stage)?,
+                        files.install_downloaded(&source, &target, &self.stage),
+                };
+                if let Err(error) = installed {
+                    // Recheck staged bytes only on failure. Successful activation already verifies them.
+                    return Err(match discard_damaged_assets(&self.stage, &self.manifest) {
+                        Ok(damaged) if !damaged.is_empty() => format!(
+                            "{error} Продовжіть завантаження, щоб отримати пошкоджені файли повторно: {}.",
+                            damaged.join(", "),
+                        ),
+                        Ok(_) => error,
+                        Err(recovery) => format!("{error} Не вдалося відновити кеш завантаження. {recovery}"),
+                    });
                 }
                 let _ = fs::remove_dir_all(&self.stage);
                 Ok(TransferPlan { status: TransferStatus::Installed, ..plan })
@@ -289,8 +300,7 @@ fn part_path(stage: &Path, asset: &DownloadAsset) -> PathBuf {
 
 fn promote(stage: &Path, asset: &DownloadAsset) -> Result<bool> {
     let part = part_path(stage, asset);
-    let (size, digest) = copy_and_hash(File::open(&part).map_err(model_error)?, io::sink(), asset.size)?;
-    if size != asset.size || digest != asset.sha256 {
+    if !asset_matches(&part, asset)? {
         fs::remove_file(part).map_err(model_error)?;
         return Ok(false);
     }
@@ -299,11 +309,63 @@ fn promote(stage: &Path, asset: &DownloadAsset) -> Result<bool> {
     Ok(true)
 }
 
+fn asset_matches(path: &Path, asset: &DownloadAsset) -> Result<bool> {
+    let (size, digest) = copy_and_hash(File::open(path).map_err(model_error)?, io::sink(), asset.size)?;
+    Ok(size == asset.size && digest == asset.sha256)
+}
+
+fn discard_damaged_assets(stage: &Path, manifest: &DownloadManifest) -> Result<Vec<&'static str>> {
+    let mut damaged = Vec::new();
+    for asset in &manifest.assets {
+        let path = stage.join(asset.name);
+        let Some(size) = file_length(&path)? else { continue; };
+        if size == asset.size && asset_matches(&path, asset)? {
+            continue;
+        }
+        fs::remove_file(path).map_err(model_error)?;
+        damaged.push(asset.name);
+    }
+    if !damaged.is_empty() {
+        sync_directory(stage)?;
+    }
+    Ok(damaged)
+}
+
 fn file_length(path: &Path) -> Result<Option<u64>> {
     match path.symlink_metadata() {
         Ok(metadata) if metadata.is_file() => Ok(Some(metadata.len())),
         Ok(_) => Err("Дані пакета мають бути звичайним файлом.".into()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(model_error(error)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_activation_recovery_discards_only_damaged_verified_staging_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let stage = directory.path();
+        let asset = |name| DownloadAsset {
+            name,
+            url: String::new(),
+            size: 3,
+            sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        };
+        let manifest = DownloadManifest {
+            revision: "fixture",
+            assets: vec![asset("config.json"), asset("model.safetensors"), asset("vocab.json")],
+        };
+        fs::write(stage.join("config.json"), b"xyz").unwrap();
+        fs::write(stage.join("model.safetensors"), b"abc").unwrap();
+        fs::write(stage.join(".vocab.json.part"), b"ab").unwrap();
+
+        assert_eq!(discard_damaged_assets(stage, &manifest).unwrap(), ["config.json"]);
+        assert!(!stage.join("config.json").exists());
+        assert_eq!(fs::read(stage.join("model.safetensors")).unwrap(), b"abc");
+        assert_eq!(fs::read(stage.join(".vocab.json.part")).unwrap(), b"ab");
+        assert!(discard_damaged_assets(stage, &manifest).unwrap().is_empty());
     }
 }
