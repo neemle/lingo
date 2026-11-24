@@ -125,13 +125,7 @@ pub(crate) fn parse(name: &str, bytes: &[u8]) -> Result<Extracted> {
         .unwrap_or_default()
         .to_ascii_lowercase();
     let parsed = match extension.as_str() {
-        "txt" => {
-            let text = std::str::from_utf8(bytes)
-                .map_err(|_| "TXT має бути в кодуванні UTF-8")?
-                .trim_start_matches('\u{feff}')
-                .to_owned();
-            from_transcript(text, None)
-        }
+        "txt" => from_transcript(decode_txt(bytes)?, None),
         "docx" => docx::parse(bytes)?,
         "pdf" => parse_pdf(bytes)?,
         _ => return Err("Формат документа не підтримується.".into()),
@@ -142,6 +136,34 @@ pub(crate) fn parse(name: &str, bytes: &[u8]) -> Result<Extracted> {
         );
     }
     Ok(parsed)
+}
+
+fn decode_txt(bytes: &[u8]) -> Result<String> {
+    const INVALID: &str = "Некоректне кодування TXT. Підтримуються UTF-8, UTF-16 та UTF-32 з позначкою BOM для UTF-16/32.";
+    match bytes {
+        // Check UTF-32 first because its little-endian BOM starts with the UTF-16 BOM.
+        [0xff, 0xfe, 0x00, 0x00, rest @ ..] | [0x00, 0x00, 0xfe, 0xff, rest @ ..] => {
+            let (units, partial) = rest.as_chunks::<4>();
+            if !partial.is_empty() {
+                return Err(INVALID.into());
+            }
+            let decode = if bytes[0] == 0xff { u32::from_le_bytes } else { u32::from_be_bytes };
+            units.iter().map(|&unit| char::from_u32(decode(unit)).ok_or_else(|| INVALID.to_owned())).collect()
+        }
+        [0xff, 0xfe, rest @ ..] | [0xfe, 0xff, rest @ ..] => {
+            let (units, partial) = rest.as_chunks::<2>();
+            if !partial.is_empty() {
+                return Err(INVALID.into());
+            }
+            let decode = if bytes[0] == 0xff { u16::from_le_bytes } else { u16::from_be_bytes };
+            char::decode_utf16(units.iter().copied().map(decode))
+                .map(|character| character.map_err(|_| INVALID.to_owned()))
+                .collect()
+        }
+        _ => std::str::from_utf8(bytes)
+            .map(|text| text.trim_start_matches('\u{feff}').to_owned())
+            .map_err(|_| INVALID.into()),
+    }
 }
 
 pub(crate) fn from_transcript(text: String, page_starts: Option<Vec<Option<usize>>>) -> Extracted {
@@ -898,6 +920,46 @@ fn parse_pdf(bytes: &[u8]) -> Result<Extracted> {
 mod tests {
     use super::*;
     use crate::ocr::{OcrLine, OcrSpan};
+
+    #[test]
+    fn unicode_txt_uses_one_transcript_for_language_detection_and_backup() {
+        use crate::{language_detection, Store};
+
+        let text = "Бібліотека 📖 відчинена. Сьогодні я читаю книжку українською мовою.";
+        let mut little16 = vec![0xff, 0xfe];
+        let mut big16 = vec![0xfe, 0xff];
+        for unit in text.encode_utf16() {
+            little16.extend(unit.to_le_bytes());
+            big16.extend(unit.to_be_bytes());
+        }
+        let mut little32 = vec![0xff, 0xfe, 0, 0];
+        let mut big32 = vec![0, 0, 0xfe, 0xff];
+        for character in text.chars().map(u32::from) {
+            little32.extend(character.to_le_bytes());
+            big32.extend(character.to_be_bytes());
+        }
+
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        for bytes in [&little16, &big16, &little32, &big32] {
+            assert_eq!(language_detection::detect_document("book.txt", bytes), Some("uk"));
+            let document = store.import("book.txt", bytes, "uk").unwrap();
+            assert_eq!(document.text, text);
+            assert_eq!(store.original(&document.id).unwrap().bytes, *bytes);
+        }
+        let mut restored = Store::open(Path::new(":memory:")).unwrap();
+        restored.restore(store.export().unwrap()).unwrap();
+        let documents = restored.snapshot().unwrap().documents;
+        assert_eq!(documents.len(), 4);
+        for document in documents {
+            assert_eq!(document.text, text);
+            let original = restored.original(&document.id).unwrap();
+            assert!([&little16, &big16, &little32, &big32].contains(&&original.bytes));
+        }
+        assert!(parse("broken.txt", &[0xff, 0xfe, 0x41]).is_err());
+        assert!(parse("broken.txt", &[0xfe, 0xff, 0xd8, 0x00]).is_err());
+        assert!(parse("broken.txt", &[0xff, 0xfe, 0, 0, 0x41]).is_err());
+        assert!(parse("broken.txt", &[0, 0, 0xfe, 0xff, 0, 0x11, 0, 0]).is_err());
+    }
 
     #[test]
     fn flattened_ocr_keeps_unpunctuated_dialogue_turns_and_inline_asides() {
