@@ -73,9 +73,10 @@ public static class LanguageCapabilities
                 PackageCapability(grammar?.Name, grammar?.Installed == true, knowledge is not null,
                     grammar?.Revision, "Пакет містить словоформи, леми й граматичні ознаки."),
                 PackageCapability(grammar?.Name, grammar?.SyntaxAvailable == true, knowledge is not null,
-                    grammar?.Revision, "Підказки за спостереженими зв’язками Universal Dependencies між словами поблизу виділення."),
-                PackageCapability(grammar?.Name, grammar?.ExpressionsAvailable == true, knowledge is not null,
-                    grammar?.Revision, "Індекс містить сталі вирази. Стару версію пакета можна оновити."),
+                    grammar?.Revision, grammar?.DependencyParseAvailable == true
+                        ? "Доступне дерево залежностей речення та підказки для виділення."
+                        : "Підказки за зв’язками між словами поблизу виділення."),
+                ExpressionCapability(grammar, dictionary, knowledge is not null || lexical is not null),
                 PackageCapability(dictionary?.Name, dictionary?.Installed == true, lexical is not null,
                     dictionary?.Revision, "Приклади відображаються для тих значень Wiktionary, де їх наведено."),
                 outgoing, incoming);
@@ -132,11 +133,49 @@ public static class LanguageCapabilities
             return Unavailable(voiceError ?? (models is null
                 ? "Каталог локальних голосів недоступний." : "Системних голосів і пакетів немає."));
 
-        var descriptions = native.Select(voice => $"{voice.Name} ({voice.Language})").Concat(packages.Select(model =>
-            $"{model.Name} · {(model.FilesPresent ? "файли на місці" : "доступно для завантаження")}"));
-        return new LanguageCapability(installed ? CapabilityLevel.Installed : CapabilityLevel.Available,
+        var descriptions = native.Select(voice => $"{voice.Name} ({voice.Language})")
+            .Concat(packages.Select(ModelSpeechDescription));
+        var available = packages.Any(model => FitsHardware(model.Memory));
+        return new LanguageCapability(installed ? CapabilityLevel.Installed
+            : available ? CapabilityLevel.Available : CapabilityLevel.Unavailable,
             string.Join(Environment.NewLine, descriptions),
             native.Select(voice => voice.Id).Concat(packages.Select(model => model.Id)).ToArray());
+    }
+
+    private static bool FitsHardware(ModelMemory? memory) =>
+        memory?.TotalMib is not long total || total >= memory.MinimumTotalMib;
+
+    private static string ModelSpeechDescription(OptionalModel model)
+    {
+        var memory = model.Memory;
+        if (memory is not null && !FitsHardware(memory))
+            return $"{model.Name} · потрібно щонайменше {memory.MinimumTotalMib} МіБ RAM";
+        if (!model.FilesPresent)
+            return $"{model.Name} · доступно для завантаження";
+        if (memory?.Ready == true)
+            return $"{model.Name} · встановлено";
+        return memory?.AvailableMib is long available
+            ? $"{model.Name} · встановлено, зараз доступно {available} із потрібних {memory.RequiredMib} МіБ RAM"
+            : $"{model.Name} · встановлено, доступну пам’ять не вдалося визначити";
+    }
+
+    private static LanguageCapability ExpressionCapability(KnowledgePackage? grammar, LexicalPackage? lexical,
+        bool catalogKnown)
+    {
+        if (grammar is null && lexical is null)
+            return PackageCapability(null, false, catalogKnown, null, "");
+        var corpus = grammar is null ? null : PackageCapability(grammar.Name, grammar.ExpressionsAvailable, true,
+            grammar.Revision, grammar.ExpressionsAvailable
+                ? "Вирази, зафіксовані в корпусі." : "Для корпусних виразів потрібен актуальний індекс.");
+        var dictionary = lexical is null ? null : PackageCapability(lexical.Name, lexical.Installed, true,
+            lexical.Revision, lexical.Installed
+                ? "Словникові вирази в контексті, зокрема підтримувані змінені форми."
+                : "Встановіть словниковий пакет для пошуку виразів у контексті.");
+        if (corpus is null) return dictionary!;
+        if (dictionary is null) return corpus;
+        return new LanguageCapability((CapabilityLevel)Math.Max((int)corpus.Level, (int)dictionary.Level),
+            $"{corpus.Detail}{Environment.NewLine}{dictionary.Detail}",
+            corpus.Identifiers.Concat(dictionary.Identifiers).Distinct(StringComparer.Ordinal).ToArray());
     }
 
     private static LanguageCapability PackageCapability(string? name, bool installed, bool catalogKnown,
