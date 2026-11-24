@@ -81,6 +81,8 @@ impl Store {
     fn passage_translation_job(
         &self, id: &str, page: Option<u16>, sentence_id: &str, target: &str, mode: HintCacheMode,
     ) -> Result<TranslatePassageJob> {
+        // Read the source, OCR geometry and all cache chunks from one snapshot.
+        let snapshot = self.connection.unchecked_transaction().map_err(|error| error.to_string())?;
         let (language, text) = self.passage_translation_source(id, page, sentence_id)?;
         let source_name = language_name(&language)?;
         let target_name = language_name(target)?;
@@ -93,8 +95,6 @@ impl Store {
         } else {
             None
         };
-        // Read all chunk entries from the same generation while a refresh may be publishing.
-        let snapshot = self.connection.unchecked_transaction().map_err(|error| error.to_string())?;
         let pieces = passage_chunks(&text)?;
         let separators = pieces.iter().map(|chunk| chunk.separator).collect();
         let prepare = |hy_model: Option<hy_translation::Model>, mode| -> Result<Vec<HintWork<TranslationChunk>>> {
@@ -670,6 +670,40 @@ mod tests {
         assert_eq!(cached.text, "15 лютого 1815 року двері відчинені. Моряк заходить.");
         assert_eq!(cached.source_text, document.text);
         assert!(reopened.cached_passage_translation(&document.id, None, second, "de").unwrap().is_none());
+    }
+
+    #[test]
+    fn detached_pdf_passage_replays_cache_only_for_the_same_source() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("reader.db");
+        let pdf = folder.path().join("scan.pdf");
+        std::fs::write(&pdf, b"%PDF-1.4\n").unwrap();
+        let mut store = Store::open(&path).unwrap();
+        let prepared = crate::file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "scan.pdf", &pdf, "fr", vec![String::new(); 2], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let source = "La porte est ouverte. Le marin entre.";
+        crate::pdf_detached_pages::write_text_layer(&store.connection, &document.id, 1, source).unwrap();
+        let page = store.detached_pdf_sentences(&document.id, 1).unwrap().unwrap();
+        let work = store.prepare_passage_translation(&document.id, Some(1), &page.sentences[0].id, "uk", true).unwrap();
+        let [HintWork::Generate { cache, .. }] = work.chunks.as_slice() else {
+            panic!("expected a single passage chunk");
+        };
+        let translation = "Двері відчинені. Моряк заходить.";
+        cache.save(&TranslationChunk { text: translation.into() }).unwrap();
+        drop(store);
+
+        let store = Store::open(&path).unwrap();
+        let second = &page.sentences[1].id;
+        let saved = store.cached_passage_translation(&document.id, Some(1), second, "uk").unwrap().unwrap();
+        assert_eq!(saved.source_text, source);
+        assert_eq!(saved.text, translation);
+        assert!(saved.cached);
+        crate::pdf_detached_pages::write_text_layer(&store.connection, &document.id, 1, "La porte est fermée. Le marin attend.").unwrap();
+        assert!(store.cached_passage_translation(&document.id, Some(1), second, "uk").is_err());
+        let updated = store.detached_pdf_sentences(&document.id, 1).unwrap().unwrap();
+        assert!(store.cached_passage_translation(&document.id, Some(1), &updated.sentences[1].id, "uk").unwrap().is_none());
     }
 
     #[test]

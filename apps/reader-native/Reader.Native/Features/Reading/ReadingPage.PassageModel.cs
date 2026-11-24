@@ -21,7 +21,11 @@ public partial class ReadingPage
         var session = AppState.Session;
         if (TargetCode is not { } target || session.Document is not { } document) return null;
         if (DetachedPdfReader.IsVisible)
-            return detachedAddress is { } address && detachedSentence is { Footnote: false, RevisionId: { } revision } current
+            return !loadingDetachedSentence && detachedAddress is { } address &&
+                address.Document == document.Id && address.Language == document.Language &&
+                address.Text == DetachedPdfText.Text &&
+                detachedSentence is { Footnote: false, RevisionId: { } revision } current &&
+                current.Language == address.Language && revision == address.RevisionId
                 ? new ModelPassage(document.Id, address.Page, current.Sentence.Id, revision, address.Language, target)
                 : null;
         return !PdfPageNotice.IsVisible && session.Sentence is { } sentence && !IsFootnote(document, sentence) &&
@@ -67,6 +71,8 @@ public partial class ReadingPage
         {
             passageCancellation = null;
             runningPassage = null;
+            if (requestedCachedPassage == address && CurrentModelTranslation(address) is null)
+                requestedCachedPassage = null;
             if (readingPageActive) UpdateModelTranslation();
         }
     }

@@ -31,7 +31,10 @@ public sealed record PdfTranslationSource(string Language, string? RevisionId, b
     public static PdfTranslationSource FromPage(string language, string? revisionId, string? detachedText) =>
         detachedText is null
             ? new(language, revisionId, false)
-            : new(language, Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(detachedText))), true);
+            : new(language, DetachedRevision(detachedText), true);
+
+    public static string DetachedRevision(string text) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
 }
 
 public sealed record DetachedPdfSentence(Sentence Sentence, int Position, int Total, string Language,

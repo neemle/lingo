@@ -6,7 +6,10 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage
 {
-    private sealed record DetachedAddress(string Document, int Page, string Text, string Language);
+    private sealed record DetachedAddress(string Document, int Page, string Text, string Language)
+    {
+        public string RevisionId { get; } = PdfTranslationSource.DetachedRevision(Text);
+    }
     private readonly LocalSpeech detachedSpeech = new();
     private DetachedAddress? detachedAddress;
     private DetachedPdfSentence? detachedSentence;
@@ -36,9 +39,10 @@ public partial class ReadingPage
     private void ShowDetachedPdfPage(Document document, PdfReadPage page)
     {
         DetachedPdfText.Blocks = page.Blocks ?? [];
-        var address = new DetachedAddress(document.Id, page.Page, page.Text, document.Language);
-        if (detachedAddress == address) return;
+        if (detachedAddress is { } current && current.Document == document.Id && current.Page == page.Page &&
+            current.Text == page.Text && current.Language == document.Language) return;
 
+        var address = new DetachedAddress(document.Id, page.Page, page.Text, document.Language);
         StopDetachedPdfReader();
         detachedAddress = address;
         detachedInitialSentence = LoadDetachedSentenceAsync(address, position: null, automatic: true);
