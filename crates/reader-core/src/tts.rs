@@ -88,7 +88,7 @@ impl SpeechJob {
         let spoken = ukrainian_narration(&self.text);
         let synthesis_rate = model_synthesis_rate(self.rate);
         let cache = cache::SpeechCacheKey::new(
-            "piper-uk-narration-v4",
+            "piper-uk-narration-v5",
             self.model.revision(),
             "uk",
             &self.speaker.to_string(),
@@ -508,36 +508,7 @@ impl PiperConfig {
             return Err("У реченні немає тексту, який можна озвучити цим голосом".into());
         }
 
-        let mut chunks = Vec::new();
-        let mut current = String::new();
-        let mut count = 0;
-        for word in normalized.split_whitespace() {
-            let length = word.chars().count();
-            if count + 1 + length > MAX_PHONEMES_PER_CHUNK && !current.is_empty() {
-                chunks.push(std::mem::take(&mut current));
-                count = 0;
-            }
-            if !current.is_empty() {
-                current.push(' ');
-                count += 1;
-            }
-            for grapheme in word.graphemes(true) {
-                let size = grapheme.chars().count();
-                if size > MAX_PHONEMES_PER_CHUNK {
-                    return Err("Речення містить надто довгий символ для озвучення".into());
-                }
-                if count + size > MAX_PHONEMES_PER_CHUNK {
-                    chunks.push(std::mem::take(&mut current));
-                    count = 0;
-                }
-                current.push_str(grapheme);
-                count += size;
-            }
-        }
-        if !current.is_empty() {
-            chunks.push(current);
-        }
-        Ok(chunks)
+        piper_phrases(&normalized)
     }
 
     fn encode(&self, text: &str) -> Result<Vec<i64>> {
@@ -553,6 +524,45 @@ impl PiperConfig {
         ids.push(2);
         Ok(ids)
     }
+}
+
+fn piper_phrases(text: &str) -> Result<Vec<String>> {
+    let words: Vec<_> = text.split_whitespace().collect();
+    let mut remaining = words.as_slice();
+    let mut phrases = Vec::new();
+    while !remaining.is_empty() {
+        let mut width = 0;
+        let mut fitting = 0;
+        let mut sentence_end = None;
+        let mut clause_end = None;
+        for word in remaining {
+            width += word.chars().count() + usize::from(fitting > 0);
+            if width > MAX_PHONEMES_PER_CHUNK {
+                break;
+            }
+            fitting += 1;
+            if width >= MAX_PHONEMES_PER_CHUNK / 2 {
+                let trailing = word.trim_end_matches(['"', '»', '”', ')']);
+                if trailing.ends_with(['.', '?', '!']) {
+                    sentence_end = Some(fitting);
+                } else if trailing.ends_with([',', ';', ':']) {
+                    clause_end = Some(fitting);
+                }
+            }
+        }
+        if fitting == 0 {
+            return Err("Речення містить надто довге слово для озвучення Piper.".into());
+        }
+        if fitting < remaining.len() {
+            fitting = sentence_end.or(clause_end).unwrap_or(fitting);
+        }
+        let (phrase, rest) = remaining.split_at(fitting);
+        if phrase.iter().any(|word| word.chars().any(char::is_alphabetic)) {
+            phrases.push(phrase.join(" "));
+        }
+        remaining = rest;
+    }
+    Ok(phrases)
 }
 
 pub(crate) fn speech_signal_bounds(samples: &[f32]) -> Result<(f32, f32)> {
@@ -610,6 +620,18 @@ fn speech_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::{speech_signal_bounds, to_wav, ukrainian_stress, SAMPLE_RATE};
+
+    #[test]
+    fn piper_splits_at_a_pause_without_repeating_words_or_losing_stress() {
+        let opening = format!("{}ві́кна,", "вечоріло тихо ".repeat(6));
+        let rest = format!("{}зачинилися.", "і човен повернувся ".repeat(4));
+        let sample = format!("{opening} {rest}");
+        let phrases = super::piper_phrases(&sample).unwrap();
+        assert_eq!(phrases, [opening, rest]);
+        assert_eq!(phrases.join(" "), sample);
+        assert!(phrases.iter().all(|phrase| phrase.chars().count() <= super::MAX_PHONEMES_PER_CHUNK));
+        assert!(super::piper_phrases(&"а".repeat(super::MAX_PHONEMES_PER_CHUNK + 1)).is_err());
+    }
 
     #[test]
     fn silent_phrase_cannot_hide_between_audible_phrases() {

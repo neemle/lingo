@@ -141,7 +141,7 @@ public partial class ReadingPage
         {
             "supertonic-3" when language == "uk" => 10,
             "supertonic-3" => 9,
-            _ => 4,
+            _ => 5,
         };
         return $"{voice.Revision}:narration-v{profile}";
     }
