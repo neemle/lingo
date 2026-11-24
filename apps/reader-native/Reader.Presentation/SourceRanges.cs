@@ -45,17 +45,7 @@ public sealed class SourceRanges(string text)
         {
             var originalStarts = StringInfo.ParseCombiningCharacters(source);
             var spokenStarts = StringInfo.ParseCombiningCharacters(spoken);
-            if (originalStarts.Length == spokenStarts.Length)
-            {
-                var first = Array.BinarySearch(originalStarts, sourceOffset);
-                if (first >= 0)
-                {
-                    var from = spokenStarts[first];
-                    return (spoken[from..],
-                        MapSpeechBoundary(source.Length, spoken.Length, originalStarts, spokenStarts, from, boundary));
-                }
-            }
-            else if (TryMapOcrPronunciation(source, spoken, originalStarts, spokenStarts) is { } map)
+            if (MapPronunciation(source, spoken, originalStarts, spokenStarts) is { } map)
             {
                 var first = CeilingIndex(map.Starts, sourceOffset);
                 if (first == spokenStarts.Length) return ("", null);
@@ -71,10 +61,10 @@ public sealed class SourceRanges(string text)
         return (source[sourceOffset..], (start, length) => boundary(sourceOffset + start, length));
     }
 
-    private static (int[] Starts, int[] Ends)? TryMapOcrPronunciation(
+    private static (int[] Starts, int[] Ends)? MapPronunciation(
         string source, string spoken, int[] originalStarts, int[] spokenStarts)
     {
-        if (spokenStarts.Length >= originalStarts.Length) return null;
+        if (spokenStarts.Length > originalStarts.Length) return null;
 
         var starts = new int[spokenStarts.Length];
         var ends = new int[spokenStarts.Length];
@@ -89,10 +79,7 @@ public sealed class SourceRanges(string text)
                 var from = spokenStarts[matched];
                 var to = matched + 1 < spokenStarts.Length ? spokenStarts[matched + 1] : spoken.Length;
                 var pronounced = spoken.AsSpan(from, to - from);
-                // The core may insert a Ukrainian stress mark or blank a classified note number.
-                if (original.TrimEnd('\u0301').SequenceEqual(pronounced.TrimEnd('\u0301')) ||
-                    char.IsWhiteSpace(pronounced[0]) &&
-                    (char.IsWhiteSpace(original[0]) || char.IsNumber(original[0])))
+                if (SamePronunciationElement(original, pronounced))
                 {
                     starts[matched] = start;
                     ends[matched++] = end;
@@ -100,7 +87,7 @@ public sealed class SourceRanges(string text)
                 }
             }
 
-            if (char.IsWhiteSpace(original[0]) || char.IsNumber(original[0])) continue;
+            if (IsSilentLayoutElement(original[0])) continue;
             if (original is "-" or "\u00ad" or "\u2010")
             {
                 var tail = source.AsSpan(end);
@@ -110,6 +97,22 @@ public sealed class SourceRanges(string text)
         }
         return matched == spokenStarts.Length ? (starts, ends) : null;
     }
+
+    private static bool SamePronunciationElement(ReadOnlySpan<char> original, ReadOnlySpan<char> pronounced)
+    {
+        if (original.SequenceEqual(pronounced)) return true;
+        if (char.IsWhiteSpace(pronounced[0]) && IsSilentLayoutElement(original[0])) return true;
+        // Ukrainian stress is added to the pronunciation without changing the source letter.
+        if (original[0] is >= '\u0400' and <= '\u052F')
+        {
+            original = original.TrimEnd('\u0301');
+            pronounced = pronounced.TrimEnd('\u0301');
+        }
+        return original.ToString().Normalize() == pronounced.ToString().Normalize();
+    }
+
+    private static bool IsSilentLayoutElement(char character) =>
+        char.IsWhiteSpace(character) || char.IsNumber(character) || character == '\uFFFC';
 
     private static Action<int, int> MapSpeechBoundary(int originalLength, int spokenLength,
         int[] originalStarts, int[] spokenStarts, int spokenOffset, Action<int, int> boundary,
