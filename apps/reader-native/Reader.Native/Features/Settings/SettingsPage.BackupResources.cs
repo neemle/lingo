@@ -11,7 +11,7 @@ public partial class SettingsPage
 
     private async void RestoreClicked(object? sender, EventArgs args)
     {
-        if (restoringBackup) return;
+        if (restoringBackup || changingStorage) return;
         restoringBackup = true;
         RestoreBackup.IsEnabled = false;
         DirectoryInfo? directory = null;
@@ -39,15 +39,7 @@ public partial class SettingsPage
             if (!await DisplayAlertAsync("Відновити архів?", summary, "Відновити", "Скасувати")) return;
 
             Status.Text = "Відновлюємо архів…";
-            var resources = await session.RestoreBackupFileAsync(path);
-            Status.Text = resources is null ? "Відновлення не підтверджено." : "Архів відновлено.";
-            if (resources is not null)
-            {
-                AppState.TranslationWorker?.TranslationRoutesChanged();
-                await AppState.RefreshRecentReadingHistoryAsync();
-                (Shell.Current as AppShell)?.RefreshRecent();
-                await RefreshStorageAsync(syncWorker: true);
-            }
+            var resources = await RestoreStagedBackupAsync(session, path);
             if (resources is { Length: > 0 }) await ReportBackupResourcesAsync(resources);
         }
         catch (Exception error)
@@ -64,6 +56,41 @@ public partial class SettingsPage
             {
                 Status.Text += "\nНе вдалося видалити тимчасову копію архіву.";
             }
+        }
+    }
+
+    private async Task<BackupResource[]?> RestoreStagedBackupAsync(ReaderSession session, string path)
+    {
+        if (!DesktopImport.Gate.Wait(0))
+        {
+            Status.Text = "Дочекайтеся завершення імпорту й повторіть відновлення.";
+            return null;
+        }
+
+        var worker = AppState.TranslationWorker;
+        BackupResource[]? resources = null;
+        try
+        {
+            if (worker is not null) await worker.PauseAsync();
+            await session.WaitUntilIdleAsync();
+            resources = await session.RestoreBackupFileAsync(path);
+            if (resources is null)
+            {
+                Status.Text = session.Error.Length > 0 ? session.Error : "Відновлення не підтверджено.";
+                return null;
+            }
+
+            AppState.InvalidateReaderCache();
+            Status.Text = "Архів відновлено.";
+            await AppState.RefreshRecentReadingHistoryAsync();
+            (Shell.Current as AppShell)?.RefreshRecent();
+            await RefreshStorageAsync(syncWorker: true);
+            return resources;
+        }
+        finally
+        {
+            DesktopImport.Gate.Release();
+            worker?.Resume(clearProgress: resources is not null);
         }
     }
 
