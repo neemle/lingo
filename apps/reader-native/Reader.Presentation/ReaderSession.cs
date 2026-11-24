@@ -711,13 +711,14 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         Task.Run(() => client.TranslateWithModel(id, page, sentenceId, target, regenerate, cancellationToken, revisionId, sourceLanguage), cancellationToken);
 
     public Task<OfflinePassageTranslation?> TranslateOfflinePassageAsync(string id, int? page, string sentenceId, string target,
-        CancellationToken cancellationToken = default) =>
-        Task.Run(() => client.TranslateOfflinePassage(id, page, sentenceId, target, cancellationToken), cancellationToken);
+        CancellationToken cancellationToken = default, string? revisionId = null, string? sourceLanguage = null) =>
+        Task.Run(() => client.TranslateOfflinePassage(id, page, sentenceId, target, cancellationToken, revisionId, sourceLanguage), cancellationToken);
     public Task<ModelPassageTranslation?> CachedModelTranslationAsync(string id, int? page, string sentenceId, string target,
         string? revisionId = null, string? sourceLanguage = null) =>
         Task.Run(() => client.CachedModelTranslation(id, page, sentenceId, target, revisionId, sourceLanguage));
-    public Task<string> PassageSourceAsync(string id, int? page, string sentenceId) =>
-        Task.Run(() => client.PassageSource(id, page, sentenceId));
+    public Task<string> PassageSourceAsync(string id, int? page, string sentenceId,
+        string? revisionId = null, string? sourceLanguage = null) =>
+        Task.Run(() => client.PassageSource(id, page, sentenceId, revisionId, sourceLanguage));
 
     public Task<MachineTranslation?> TranslateDictionaryGlossAsync(string id, string source, string gloss, string target = "uk") =>
         Task.Run(() => client.TranslateDictionaryGloss(id, source, gloss, target));

@@ -662,12 +662,13 @@ public sealed class CoreClient : IDisposable
     public ModelPassageTranslation? CachedModelTranslation(string id, int? page, string sentenceId, string target,
         string? revisionId = null, string? sourceLanguage = null) =>
         CallIndependent<ModelPassageTranslation?>(new { version = 1, operation = "translate_with_model", id, page, sentenceId, target, cachedOnly = true, revisionId, sourceLanguage });
-    public string PassageSource(string id, int? page, string sentenceId) =>
-        Call<string>(new { version = 1, operation = "passage_source", id, page, sentenceId });
+    public string PassageSource(string id, int? page, string sentenceId,
+        string? revisionId = null, string? sourceLanguage = null) =>
+        Call<string>(new { version = 1, operation = "passage_source", id, page, sentenceId, revisionId, sourceLanguage });
     public OfflinePassageTranslation? TranslateOfflinePassage(string id, int? page, string sentenceId, string target,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default, string? revisionId = null, string? sourceLanguage = null) =>
         CallCancelable<OfflinePassageTranslation?>(ref nextOfflinePassageRequest, cancellationToken,
-            requestId => new { version = 1, operation = "translate_offline_passage", id, page, sentenceId, target, requestId },
+            requestId => new { version = 1, operation = "translate_offline_passage", id, page, sentenceId, target, requestId, revisionId, sourceLanguage },
             requestId => new { version = 1, operation = "cancel_offline_passage", requestId });
     public MachineTranslation? TranslateDictionaryGloss(string id, string source, string gloss, string target = "uk") =>
         CallIndependent<MachineTranslation?>(new { version = 1, operation = "translate_dictionary_gloss", id, source, gloss, target });

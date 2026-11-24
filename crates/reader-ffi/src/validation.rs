@@ -294,11 +294,13 @@ fn validate(command: &Command) -> Result<()> {
             Err(Error::new("invalid_argument", "Invalid PDF annotation address"))
         }
         Command::TranslateWithModel { revision_id, source_language, .. }
+        | Command::TranslateOfflinePassage { revision_id, source_language, .. }
+        | Command::PassageSource { revision_id, source_language, .. }
             if revision_id.is_some() != source_language.is_some()
                 || revision_id.as_ref().is_some_and(|id| id.len() != 64 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()))
                 || source_language.as_ref().is_some_and(|language| language.len() > 8 || language.is_empty()) =>
         {
-            Err(Error::new("invalid_argument", "Invalid model translation source"))
+            Err(Error::new("invalid_argument", "Invalid passage translation source"))
         }
         Command::TranslateDetachedPdfSentence { id, sentence_id, target, .. }
         | Command::TranslateWithModel { id, sentence_id, target, .. }

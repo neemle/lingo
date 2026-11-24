@@ -410,10 +410,12 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             value(store.translate_dictionary_glosses(&id, &source, &target, &glosses)),
         Command::TranslateSelection { id, target, selection, .. } =>
             selected_translation(store.translate_selected_text(&id, &target, &selection)),
-        Command::TranslateOfflinePassage { id, page, sentence_id, target, .. } =>
-            value(store.translate_offline_passage(&id, page, &sentence_id, &target)),
-        Command::PassageSource { id, page, sentence_id } =>
-            value(store.passage_source(&id, page, &sentence_id)),
+        Command::TranslateOfflinePassage { id, page, sentence_id, target, revision_id, source_language, .. } =>
+            value(store.translate_offline_passage_until_canceled(&id, page, &sentence_id, &target,
+                revision_id.as_deref().zip(source_language.as_deref()), &|| false)),
+        Command::PassageSource { id, page, sentence_id, revision_id, source_language } =>
+            value(store.passage_source_for_revision(&id, page, &sentence_id,
+                revision_id.as_deref().zip(source_language.as_deref()))),
         Command::ScheduleTranslationWindow { id, sentence_id, revision_id, target } => {
             value(store.schedule_translation_window(&id, &sentence_id, &revision_id, &target))
         }

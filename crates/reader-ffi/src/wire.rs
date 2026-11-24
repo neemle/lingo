@@ -546,6 +546,10 @@ pub enum Command {
         #[serde(rename = "sentenceId")]
         sentence_id: String,
         target: String,
+        #[serde(rename = "revisionId")]
+        revision_id: Option<String>,
+        #[serde(rename = "sourceLanguage")]
+        source_language: Option<String>,
         #[serde(rename = "requestId")]
         request_id: Option<u64>,
     },
@@ -558,6 +562,10 @@ pub enum Command {
         page: Option<u16>,
         #[serde(rename = "sentenceId")]
         sentence_id: String,
+        #[serde(rename = "revisionId")]
+        revision_id: Option<String>,
+        #[serde(rename = "sourceLanguage")]
+        source_language: Option<String>,
     },
     CancelModelTranslation {
         #[serde(rename = "requestId")]

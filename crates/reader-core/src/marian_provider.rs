@@ -500,14 +500,15 @@ impl StoreWorker {
     pub fn translate_offline_passage(
         self, id: &str, page: Option<u16>, sentence_id: &str, target: &str,
     ) -> Result<Option<OfflinePassageTranslation>> {
-        self.translate_offline_passage_until_canceled(id, page, sentence_id, target, &|| false)
+        self.translate_offline_passage_until_canceled(id, page, sentence_id, target, None, &|| false)
     }
 
     pub fn translate_offline_passage_until_canceled(
-        self, id: &str, page: Option<u16>, sentence_id: &str, target: &str, canceled: &dyn Fn() -> bool,
+        self, id: &str, page: Option<u16>, sentence_id: &str, target: &str,
+        expected: Option<(&str, &str)>, canceled: &dyn Fn() -> bool,
     ) -> Result<Option<OfflinePassageTranslation>> {
         self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?
-            .translate_offline_passage_until_canceled(id, page, sentence_id, target, canceled)
+            .translate_offline_passage_until_canceled(id, page, sentence_id, target, expected, canceled)
     }
 
     pub fn lookup_detached_pdf_word(
@@ -1180,17 +1181,18 @@ impl Store {
     pub fn translate_offline_passage(
         &mut self, id: &str, page: Option<u16>, sentence_id: &str, target: &str,
     ) -> Result<Option<OfflinePassageTranslation>> {
-        self.translate_offline_passage_until_canceled(id, page, sentence_id, target, &|| false)
+        self.translate_offline_passage_until_canceled(id, page, sentence_id, target, None, &|| false)
     }
 
     pub fn translate_offline_passage_until_canceled(
-        &mut self, id: &str, page: Option<u16>, sentence_id: &str, target: &str, canceled: &dyn Fn() -> bool,
+        &mut self, id: &str, page: Option<u16>, sentence_id: &str, target: &str,
+        expected: Option<(&str, &str)>, canceled: &dyn Fn() -> bool,
     ) -> Result<Option<OfflinePassageTranslation>> {
         if canceled() {
             return Err("Офлайн-переклад уривка скасовано.".into());
         }
         crate::valid_language(target)?;
-        let (source, source_text) = self.passage_translation_source(id, page, sentence_id, None)?;
+        let (source, source_text) = self.passage_source_snapshot(id, page, sentence_id, expected)?;
         if source == target {
             return Err("Виберіть іншу мову перекладу.".into());
         }

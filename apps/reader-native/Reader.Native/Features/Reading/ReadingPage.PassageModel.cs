@@ -188,7 +188,8 @@ public partial class ReadingPage
         {
             var source = translation?.SourceText;
             if (string.IsNullOrWhiteSpace(source))
-                source = await AppState.Session.PassageSourceAsync(address.Document, address.Page, address.Sentence);
+                source = await AppState.Session.PassageSourceAsync(address.Document, address.Page, address.Sentence,
+                    address.Revision, address.SourceLanguage);
             if (!readingPageActive || CurrentModelPassage() != address) return;
 
             var modelText = translation?.Text;
@@ -229,7 +230,8 @@ public partial class ReadingPage
             await Navigation.PushModalAsync(page);
             presented = true;
             var offline = await AppState.Session.TranslateOfflinePassageAsync(
-                address.Document, address.Page, address.Sentence, address.Target, cancellation.Token);
+                address.Document, address.Page, address.Sentence, address.Target, cancellation.Token,
+                address.Revision, address.SourceLanguage);
             if (cancellation.IsCancellationRequested) return;
             if (offline is null)
                 offlineText.Text = "Офлайн-переклад уривка недоступний. Перевірте мовні пакети в налаштуваннях.";

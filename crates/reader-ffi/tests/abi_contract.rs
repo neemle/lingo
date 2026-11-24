@@ -356,6 +356,28 @@ fn pdf_translation_checks_the_displayed_page_source() {
         assert!(stale["error"]["message"].as_str().unwrap().contains("мова оригіналу змінилися"), "{stale}");
     }
     assert_error(&model(Some(40), detached_sentence, &serde_json::Value::Null, "fr", true), "invalid_argument");
+
+    for operation in ["passage_source", "translate_offline_passage"] {
+        let compare = |revision, language| {
+            let mut input = json!({
+                "version":1,"operation":operation,"id":id,"page":40,"sentenceId":detached_sentence,
+                "revisionId":revision,"sourceLanguage":language,
+            });
+            if operation == "translate_offline_passage" {
+                input["target"] = json!("uk");
+            }
+            call(store.handle, input)
+        };
+        let current = compare(detached_revision, "fr");
+        assert_eq!(current["ok"], true, "{current}");
+        if operation == "passage_source" {
+            assert_eq!(current["data"], "Dernière page.");
+        }
+        for stale in [compare(revision, "fr"), compare(detached_revision, "en")] {
+            assert_error(&stale, "core_error");
+            assert!(stale["error"]["message"].as_str().unwrap().contains("мова оригіналу змінилися"), "{stale}");
+        }
+    }
 }
 
 #[test]

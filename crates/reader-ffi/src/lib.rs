@@ -305,13 +305,14 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 return if canceled() { Err(canceled_error()) } else { dispatch::selected_translation(result) };
             }
         }
-        Command::TranslateOfflinePassage { id, page, sentence_id, target, request_id } => {
+        Command::TranslateOfflinePassage { id, page, sentence_id, target, revision_id, source_language, request_id } => {
             let canceled = request_cancellation(handle, *request_id, ModelRequestKind::OfflinePassage)?;
             let canceled_error = || Error::new("canceled", "Офлайн-переклад уривка скасовано.");
             if canceled() { return Err(canceled_error()); }
             let worker = registry::lock()?.store(handle)?.prepare_translation_worker();
             if let Some(worker) = worker {
-                let result = worker.translate_offline_passage_until_canceled(id, *page, sentence_id, target, &canceled);
+                let expected = revision_id.as_deref().zip(source_language.as_deref());
+                let result = worker.translate_offline_passage_until_canceled(id, *page, sentence_id, target, expected, &canceled);
                 return if canceled() { Err(canceled_error()) } else { encode_job(result) };
             }
         }

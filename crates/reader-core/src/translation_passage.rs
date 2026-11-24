@@ -3,9 +3,24 @@ use std::ops::Range;
 
 impl Store {
     pub fn passage_source(&self, id: &str, page: Option<u16>, sentence_id: &str) -> Result<String> {
-        let (_, text) = self.passage_translation_source(id, page, sentence_id, None)?;
+        self.passage_source_for_revision(id, page, sentence_id, None)
+    }
+
+    pub fn passage_source_for_revision(
+        &self, id: &str, page: Option<u16>, sentence_id: &str, expected: Option<(&str, &str)>,
+    ) -> Result<String> {
+        let (_, text) = self.passage_source_snapshot(id, page, sentence_id, expected)?;
         passage_chunks(&text)?;
         Ok(text)
+    }
+
+    pub(crate) fn passage_source_snapshot(
+        &self, id: &str, page: Option<u16>, sentence_id: &str, expected: Option<(&str, &str)>,
+    ) -> Result<(String, String)> {
+        let snapshot = self.connection.unchecked_transaction().map_err(|error| error.to_string())?;
+        let source = self.passage_translation_source(id, page, sentence_id, expected)?;
+        snapshot.commit().map_err(|error| error.to_string())?;
+        Ok(source)
     }
 
     pub(crate) fn passage_translation_source(
