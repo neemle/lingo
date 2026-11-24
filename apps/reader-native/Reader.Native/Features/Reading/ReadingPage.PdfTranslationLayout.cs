@@ -26,7 +26,7 @@ public partial class ReadingPage
             Page.Revision == address.Revision && Page.DetachedText == address.DetachedText;
     }
     private bool pdfTranslationLayout = true;
-    private bool syncingPdfTranslationScroll;
+    private TaskCompletionSource? pdfTranslationScroll;
     private PdfLayoutAddress? pdfLayoutRequest;
     private PdfLayoutAddress? translatingPdfLayout;
     private bool refreshingPdfSentence;
@@ -617,6 +617,16 @@ public partial class ReadingPage
         if (TranslationPaneHeader is null || DetachedTranslationPaneHeader is null || !showInlineOriginal) return;
         AlignPdfViewports();
         ResizeInlinePdf();
+        if (overflowContent is { Active: { } active } overflow && active == pdfLayoutSentence)
+        {
+            var index = Array.FindIndex(overflow.Rows, row =>
+                row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16);
+            if (index >= 0)
+            {
+                FollowOverflowSelection(overflow.Panel, active, overflow.Labels[index]);
+                return;
+            }
+        }
         if (ActiveInlinePdf().Viewport.IsVisible) _ = FollowPdfTranslationScrollAsync(fromOriginal: true);
     }
 
@@ -783,7 +793,7 @@ public partial class ReadingPage
     {
         var (original, originalSurface) = ActiveInlinePdf();
         var (translated, translatedSurface) = ActivePdfTranslationLayout();
-        if (!PdfFollowsScroll || syncingPdfTranslationScroll || !original.IsVisible || !translated.IsVisible ||
+        if (!PdfFollowsScroll || pdfTranslationScroll is not null || !original.IsVisible || !translated.IsVisible ||
             originalSurface.Height <= 0 || translatedSurface.Height <= 0) return;
 
         var source = fromOriginal ? original : translated;
@@ -799,10 +809,25 @@ public partial class ReadingPage
             Math.Max(0, destinationHeight - destination.Height));
         if (Math.Abs(destination.ScrollY - target) < 1) return;
 
-        syncingPdfTranslationScroll = true;
-        try { await destination.ScrollToAsync(0, target, animated: false); }
+        await ScrollPdfTranslationAsync(() => destination.ScrollToAsync(0, target, animated: false));
+    }
+
+    private async Task ScrollPdfTranslationAsync(Func<Task> scroll)
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        pdfTranslationScroll = completion;
+        try { await scroll(); }
         catch (Exception error) when (error is InvalidOperationException or OperationCanceledException) { }
-        finally { syncingPdfTranslationScroll = false; }
+        finally
+        {
+            pdfTranslationScroll = null;
+            completion.TrySetResult();
+        }
+    }
+
+    private async Task WaitForPdfTranslationScrollAsync()
+    {
+        while (pdfTranslationScroll is { } scroll) await scroll.Task;
     }
 
     private PdfPageTranslationRow? OverflowRowAtScrollPosition(ScrollView viewport, double paperHeight)
@@ -859,7 +884,7 @@ public partial class ReadingPage
                 ShowPdfTranslationOverflow(overflow, rows, bounds is not null, query);
                 if (bounds is { } activeBounds && pdfLayoutSentence is { } active &&
                     !rows.Any(row => row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16))
-                    _ = FollowRenderedPdfSentenceAsync(viewport, surface, active, activeBounds);
+                    _ = FollowRenderedPdfSentenceAsync(viewport, surface, drawing, active, activeBounds);
                 else
                     lastPdfTranslationFollow = null;
             }
@@ -868,9 +893,12 @@ public partial class ReadingPage
         surface.Invalidate();
     }
 
-    private async Task FollowRenderedPdfSentenceAsync(ScrollView viewport, GraphicsView surface, Sentence active, RectF bounds)
+    private async Task FollowRenderedPdfSentenceAsync(ScrollView viewport, GraphicsView surface,
+        TranslatedPdfDrawing drawing, Sentence active, RectF bounds)
     {
-        if (!PdfFollowsScroll || syncingPdfTranslationScroll || viewport.Height <= 0 ||
+        await WaitForPdfTranslationScrollAsync();
+        if (!PdfFollowsScroll || !viewport.IsVisible || viewport.Height <= 0 ||
+            !ReferenceEquals(surface.Drawable, drawing) || pdfLayoutSentence != active ||
             pdfLayoutRequest is not { } address) return;
         var key = (address, active.Id, bounds, viewport.Height);
         if (lastPdfTranslationFollow == key) return;
@@ -881,10 +909,7 @@ public partial class ReadingPage
             bounds.Bottom <= viewport.ScrollY + viewport.Height - margin) return;
         var target = Math.Clamp(bounds.Top - margin, 0, Math.Max(0, surface.Height - viewport.Height));
         if (Math.Abs(viewport.ScrollY - target) < 1) return;
-        syncingPdfTranslationScroll = true;
-        try { await viewport.ScrollToAsync(0, target, animated: false); }
-        catch (Exception error) when (error is InvalidOperationException or OperationCanceledException) { }
-        finally { syncingPdfTranslationScroll = false; }
+        await ScrollPdfTranslationAsync(() => viewport.ScrollToAsync(0, target, animated: false));
     }
 
     private void ShowPdfTranslationOverflow(VerticalStackLayout panel, PdfPageTranslationRow[] rows, bool hasRenderedActive,
@@ -934,13 +959,14 @@ public partial class ReadingPage
             row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16) == true;
         if ((activeLabel is not null || !hasRenderedActive) &&
             (previous?.Active != active || previous?.Panel != panel || previous?.Query != query ||
+                (activeLabel is not null && previous?.Labels != labels) ||
                 previouslyInOverflow != (activeLabel is not null)))
             FollowOverflowSelection(panel, active, activeLabel);
     }
 
     private void FollowOverflowSelection(VerticalStackLayout panel, Sentence? active, Label? label)
     {
-        if (active is null) return;
+        if (active is null || pdfLayoutRequest is not { } address) return;
         if (label is { Height: <= 0 })
         {
             EventHandler? measured = null;
@@ -948,7 +974,7 @@ public partial class ReadingPage
             {
                 if (label.Height <= 0) return;
                 label.SizeChanged -= measured;
-                FollowOverflowSelection(panel, active, label);
+                if (pdfLayoutRequest == address) FollowOverflowSelection(panel, active, label);
             };
             label.SizeChanged += measured;
             return;
@@ -956,9 +982,11 @@ public partial class ReadingPage
 
         Dispatcher.Dispatch(async () =>
         {
+            await WaitForPdfTranslationScrollAsync();
             var (viewport, surface) = ActivePdfTranslationLayout();
-            if (!viewport.IsVisible || syncingPdfTranslationScroll || overflowContent is not { } current ||
-                current.Panel != panel || current.Active != active || (label is not null && !current.Labels.Contains(label))) return;
+            if (!viewport.IsVisible || pdfLayoutRequest != address || pdfLayoutSentence != active ||
+                overflowContent is not { } current || current.Panel != panel || current.Active != active ||
+                (label is not null && !current.Labels.Contains(label))) return;
             if (label is null)
             {
                 if (viewport.ScrollY <= Math.Max(0, surface.Height - viewport.Height) + 1) return;
@@ -969,14 +997,8 @@ public partial class ReadingPage
                 }
             }
 
-            syncingPdfTranslationScroll = true;
-            try
-            {
-                if (label is null) await viewport.ScrollToAsync(0, 0, animated: false);
-                else await viewport.ScrollToAsync(label, ScrollToPosition.MakeVisible, animated: false);
-            }
-            catch (Exception error) when (error is InvalidOperationException or OperationCanceledException) { }
-            finally { syncingPdfTranslationScroll = false; }
+            await ScrollPdfTranslationAsync(() => label is null ? viewport.ScrollToAsync(0, 0, animated: false)
+                : viewport.ScrollToAsync(label, ScrollToPosition.MakeVisible, animated: false));
         });
     }
 
