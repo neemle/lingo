@@ -86,7 +86,8 @@ public sealed class LocalSpeech : IDisposable
 
     internal TimeSpan? WavePosition => wave.Position;
 
-    internal Task<string?> PlayWaveAsync(SpeechAudio audio, int startAtMs, Action<int> started) => playback.PlayAsync(async token =>
+    internal Task<string?> PlayWaveAsync(SpeechAudio audio, int startAtMs, Action<int> started,
+        Action? interrupted = null) => playback.PlayAsync(async token =>
     {
         if (audio.SampleRate is <= 0 or > 48_000 || audio.Samples <= 0 ||
             !float.IsFinite(audio.PlaybackRate) || audio.PlaybackRate is < 0.5f or > 2 ||
@@ -110,7 +111,7 @@ public sealed class LocalSpeech : IDisposable
             BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(4, 4), wav.Length - 8);
             BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(40, 4), payloadBytes);
         }
-        await wave.PlayAsync(wav, audio.PlaybackRate, () => started(startAtMs), token);
+        await wave.PlayAsync(wav, audio.PlaybackRate, () => started(startAtMs), token, interrupted);
         return CompletedStatus;
     });
 

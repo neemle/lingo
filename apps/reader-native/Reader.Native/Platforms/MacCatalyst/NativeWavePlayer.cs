@@ -18,7 +18,7 @@ internal sealed class NativeWavePlayer
 
     internal bool Resume() => active?.Play() == true;
 
-    internal async Task PlayAsync(byte[] wav, float rate, Action? started, CancellationToken token)
+    internal async Task PlayAsync(byte[] wav, float rate, Action? started, CancellationToken token, Action? interrupted = null)
     {
         using var data = NSData.FromArray(wav);
         using var player = AVAudioPlayer.FromData(data, out var error);
@@ -46,6 +46,11 @@ internal sealed class NativeWavePlayer
             if (!player.Play()) throw new InvalidOperationException("Не вдалося запустити аудіо.");
             started?.Invoke();
             await completed.Task;
+        }
+        catch (Exception) when (!token.IsCancellationRequested)
+        {
+            if (ReferenceEquals(active, player)) interrupted?.Invoke();
+            throw;
         }
         finally
         {

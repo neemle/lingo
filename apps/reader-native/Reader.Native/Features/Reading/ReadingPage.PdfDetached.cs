@@ -823,6 +823,9 @@ public partial class ReadingPage
                         timer.Start();
                         if (!singleSentence && ContinueSpeech.IsChecked)
                             _ = PrefetchNextAudioAsync(session, key, token, address.Page);
+                    }, interrupted: () =>
+                    {
+                        if (run == detachedAudioRun) checkpointDetachedSpeech?.Invoke();
                     });
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { return false; }

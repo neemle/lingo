@@ -172,12 +172,13 @@ public partial class ReadingPage
         var started = false;
         var playbackStartMs = 0;
         var lastCheckpointMs = startAtMs;
+        long clipDurationMs = 0;
         void CapturePosition()
         {
             if (request != speechRequest || !IsSpeechSourceCurrent(session, source) || speech.WavePosition is not { } position)
                 return;
             var millis = playbackStartMs + (int)position.TotalMilliseconds;
-            if (millis <= lastCheckpointMs || millis >= LocalSpeech.MaxModelAudioSeconds * 1000) return;
+            if (millis <= lastCheckpointMs || millis >= clipDurationMs) return;
             lastCheckpointMs = millis;
             var model = new ModelSpeechResume(voice.Id, ModelTimelineRevision(voice, document.Language), document.Language, ratePercent, millis);
             pendingSpeechResume = (document.Id, new(sentence.Id, textHash, 0, model));
@@ -187,6 +188,7 @@ public partial class ReadingPage
         {
             var clip = await audio.WaitAsync(token);
             if (request != speechRequest || !IsSpeechSourceCurrent(session, source)) return (null, false);
+            if (clip.SampleRate > 0) clipDurationMs = (long)clip.Samples * 1000 / clip.SampleRate;
             var status = await speech.PlayWaveAsync(clip, startAtMs, actualStartMs =>
             {
                 started = true;
@@ -201,7 +203,7 @@ public partial class ReadingPage
                 SpeechStatus.Text = "Озвучення поточного речення…";
                 if (!singleSentence && ContinueSpeech.IsChecked)
                     _ = PrefetchNextAudioAsync(session, key, token);
-            });
+            }, interrupted: capture);
             return (status, started);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { return (null, started); }

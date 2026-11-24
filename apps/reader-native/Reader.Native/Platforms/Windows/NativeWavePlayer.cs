@@ -24,7 +24,7 @@ internal sealed class NativeWavePlayer
         return true;
     }
 
-    internal async Task PlayAsync(byte[] wav, float rate, Action? started, CancellationToken token)
+    internal async Task PlayAsync(byte[] wav, float rate, Action? started, CancellationToken token, Action? interrupted = null)
     {
         using var stream = new InMemoryRandomAccessStream();
         using (var writer = new DataWriter(stream))
@@ -50,6 +50,11 @@ internal sealed class NativeWavePlayer
             player.Play();
             started?.Invoke();
             await completed.Task;
+        }
+        catch (Exception) when (!token.IsCancellationRequested)
+        {
+            if (ReferenceEquals(active, player)) interrupted?.Invoke();
+            throw;
         }
         finally
         {
