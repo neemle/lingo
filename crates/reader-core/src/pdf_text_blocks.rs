@@ -151,10 +151,10 @@ fn separate_positioned_blocks(units: &[u16], words: &[PositionedWord], page_widt
         if has_text {
             let row = &remaining[..count];
             let mut start = 0;
-            for split in 2..=row.len().saturating_sub(2) {
+            for split in 1..row.len() {
                 let left = row[split - 1];
                 let right = row[split];
-                if split - start >= 2 && left.end < right.start &&
+                if left.end < right.start &&
                     same_baseline(left, right) && wide_gap(left, right, page_width) &&
                     whitespace(&units[left.end..right.start])
                 {
@@ -185,7 +185,7 @@ fn separate_positioned_blocks(units: &[u16], words: &[PositionedWord], page_widt
                 let left = *line.last().expect("line has text");
                 let right = next[0];
                 let gap = &units[left.end..right.start];
-                let newlines = gap.iter().filter(|&&unit| unit == 10).count();
+                let newlines = line_break_count(gap);
                 let parallel = newlines <= 1 && same_baseline(left, right) && wide_gap(left, right, page_width);
                 if !gap.is_empty() && whitespace(gap) &&
                     (parallel ||
@@ -267,7 +267,7 @@ fn parallel_lines(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) -
         _ => (*second, None, remaining),
     };
     let [left_bottom, right_bottom, ..] = following else { return None; };
-    if [left_top, right_top, left_bottom, right_bottom].iter().any(|line| line.len() < 2) {
+    if left_top.len() < 2 || right_top.len() < 2 || !column_continuation(left_bottom, right_bottom) {
         return None;
     }
     let left = left_top[0];
@@ -318,7 +318,7 @@ fn parallel_lines(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) -
     let mut previous_left = left;
     for pair in following.chunks_exact(2).take(23) {
         let [next_left, next_right] = pair else { break; };
-        if next_left.len() < 2 || next_right.len() < 2 ||
+        if !column_continuation(next_left, next_right) ||
             !aligned(left, next_left[0]) || !aligned(right, next_right[0]) ||
             !next_line(previous_left, next_left[0]) ||
             !same_baseline(next_left[0], next_right[0]) ||
@@ -346,6 +346,11 @@ fn parallel_lines(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) -
         cursor = part.end;
     }
     Some((BlockEdit { start, end, slices: left_pieces }, line_count))
+}
+
+// A confirmed pair of text columns can end in a single-word wrapped line.
+fn column_continuation(left: &[PositionedWord], right: &[PositionedWord]) -> bool {
+    !left.is_empty() && !right.is_empty() && (left.len() >= 2 || right.len() >= 2)
 }
 
 fn gutter_label(left: PositionedWord, label: PositionedWord, right: PositionedWord) -> bool {
@@ -458,6 +463,37 @@ mod tests {
                 .map(|part| format!("{}{}", part.separator, &text[part.start..part.end])).collect::<String>();
             assert_eq!(reordered, "Left starts\nLeft ends\n\nRight starts\nRight ends");
         }
+    }
+
+    #[test]
+    fn keeps_short_wrapped_lines_in_their_columns() {
+        let text = "Left starts Right starts\r\nword Right continues\r\nLeft continues end\r\nFooter text";
+        let coordinates = [
+            (12.0, 10.0), (30.0, 10.0), (145.0, 10.0), (175.0, 10.0),
+            (12.0, 24.0), (145.0, 24.0), (175.0, 24.0),
+            (12.0, 38.0), (30.0, 38.0), (145.0, 38.0),
+            (12.0, 80.0), (42.0, 80.0),
+        ];
+        let mut cursor = 0;
+        let words = text.split_whitespace().zip(coordinates).map(|(token, (left, center_y))| {
+            let start = cursor + text[cursor..].find(token).unwrap();
+            cursor = start + token.len();
+            PositionedWord { start, end: cursor, left, right: left + 3.0 * token.len() as f64,
+                center_y, height: 10.0, rotation: None }
+        }).collect::<Vec<_>>();
+        let edits = separate_blocks(text, &words, 240.0).unwrap();
+        let output = edits[0].slices.iter().map(|piece|
+            format!("{}{}", piece.separator, &text[piece.start..piece.end])).collect::<String>();
+        assert_eq!(output, "Left starts\nword\nLeft continues\n\nRight starts\nRight continues\nend");
+        assert_eq!(&text[edits[0].end..], "\r\nFooter text");
+
+        // A single pair of widely spaced words has no corroborating column geometry.
+        let lone_row = "word Right";
+        let single_pair = [
+            PositionedWord { start: 0, end: 4, ..words[4] },
+            PositionedWord { start: 5, end: 10, ..words[5] },
+        ];
+        assert!(separate_blocks(lone_row, &single_pair, 240.0).unwrap().is_empty());
     }
 
     #[test]
