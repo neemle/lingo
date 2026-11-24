@@ -42,6 +42,7 @@ public partial class ReadingPage
         ? PdfHighlightSentence(source.Page, source.Sentence) : null;
     private string? pdfLayoutStatus;
     private int pdfLayoutRequestId;
+    private int pdfTranslationViewportRequest;
     private bool refreshingPdfLayout;
     private bool openingPdfTranslationText;
     private PdfLayoutAddress? pendingPdfCacheRefresh;
@@ -751,8 +752,30 @@ public partial class ReadingPage
 
     private async void PdfTranslationViewportScrolled(object? sender, ScrolledEventArgs args)
     {
-        if (ReferenceEquals(sender, ActivePdfTranslationLayout().Viewport))
-            await FollowPdfTranslationScrollAsync(fromOriginal: false);
+        var (viewport, surface) = ActivePdfTranslationLayout();
+        if (!ReferenceEquals(sender, viewport) || !PdfFollowsScroll || pdfTranslationScroll is not null ||
+            CurrentPdfLayoutAddress() is not { } address || address != pdfLayoutRequest) return;
+
+        var request = ++pdfTranslationViewportRequest;
+        var source = CurrentSourceViewport();
+        var overflow = OverflowRowAtScrollPosition(viewport);
+        if (overflow is not null) sourceViewportMovement = null;
+        await FollowPdfTranslationScrollAsync(fromOriginal: false);
+        if (source is null || request != pdfTranslationViewportRequest || CurrentSourceViewport() != source) return;
+
+        if (overflow is null)
+        {
+            ScheduleSourceViewportSync(source.View);
+            return;
+        }
+
+        await Task.Delay(220);
+        if (request != pdfTranslationViewportRequest || pdfTranslationScroll is not null ||
+            CurrentPdfLayoutAddress() != address || CurrentSourceViewport() != source ||
+            OverflowRowAtScrollPosition(viewport) is not { } row ||
+            surface.Drawable is not TranslatedPdfDrawing drawing || drawing.SourceTop(row) is null) return;
+        if (pdfLayoutSentence is not { } active || active.StartUtf16 != row.StartUtf16 || active.EndUtf16 != row.EndUtf16)
+            await SelectTranslatedPdfRowAsync(row);
     }
 
     private async void TranslatedPdfTapped(object? sender, TappedEventArgs args)
@@ -869,10 +892,12 @@ public partial class ReadingPage
         var sourceHeight = fromOriginal ? originalSurface.Height : translatedSurface.Height;
         var destinationHeight = fromOriginal ? translatedSurface.Height : originalSurface.Height;
         var sourcePosition = source.ScrollY * destinationHeight / sourceHeight;
-        if (!fromOriginal && translatedSurface.Drawable is TranslatedPdfDrawing drawing &&
-            OverflowRowAtScrollPosition(translated, translatedSurface.Height) is { } row &&
-            drawing.SourceTop(row) is { } top)
+        if (!fromOriginal && OverflowRowAtScrollPosition(translated) is { } row)
+        {
+            if (translatedSurface.Drawable is not TranslatedPdfDrawing drawing || drawing.SourceTop(row) is not { } top)
+                return;
             sourcePosition = top * destinationHeight - Math.Min(44, destination.Height * 0.12);
+        }
         var target = Math.Clamp(sourcePosition, 0,
             Math.Max(0, destinationHeight - destination.Height));
         if (Math.Abs(destination.ScrollY - target) < 1) return;
@@ -898,14 +923,16 @@ public partial class ReadingPage
         while (pdfTranslationScroll is { } scroll) await scroll.Task;
     }
 
-    private PdfPageTranslationRow? OverflowRowAtScrollPosition(ScrollView viewport, double paperHeight)
+    private PdfPageTranslationRow? OverflowRowAtScrollPosition(ScrollView viewport)
     {
         if (overflowContent is not { } overflow || overflow.Labels.Length == 0 || !overflow.Panel.IsVisible ||
-            !ReferenceEquals(overflow.Panel.Parent, viewport.Content) ||
-            viewport.ScrollY <= Math.Max(0, paperHeight - viewport.Height) + 1)
+            !ReferenceEquals(overflow.Panel.Parent, viewport.Content))
             return null;
 
-        var offset = Math.Max(0, viewport.ScrollY - overflow.Panel.Y);
+        // Track the reading position inside the viewport, even while the paper's
+        // bottom edge and the first overflow entries are both visible.
+        var offset = viewport.ScrollY + viewport.Height * 0.25 - overflow.Panel.Y;
+        if (offset < 0) return null;
         var index = Array.FindIndex(overflow.Labels, label => label.Height > 0 && label.Y + label.Height > offset);
         return index >= 0 ? overflow.Rows[index] : null;
     }

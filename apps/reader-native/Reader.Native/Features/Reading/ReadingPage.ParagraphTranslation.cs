@@ -47,8 +47,12 @@ public partial class ReadingPage
         var viewport = ActiveInlinePdf().Viewport;
         if (!showInlineOriginal || !ReferenceEquals(sender, viewport)) return;
         PositionWordPopup();
-        if (followingInlinePdf == 0) _ = FollowPdfTranslationScrollAsync(fromOriginal: true);
-        ScheduleSourceViewportSync(viewport);
+        if (followingInlinePdf == 0 && pdfTranslationScroll is null)
+        {
+            ++pdfTranslationViewportRequest;
+            _ = FollowPdfTranslationScrollAsync(fromOriginal: true);
+            ScheduleSourceViewportSync(viewport);
+        }
     }
 
     private async void ScheduleSourceViewportSync(VisualElement view)
