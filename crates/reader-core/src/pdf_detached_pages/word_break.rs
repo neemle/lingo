@@ -61,7 +61,8 @@ pub(crate) fn canonical_edge_fragments(
     store: &Store, document: &Document, target: Option<&str>,
     first: Option<&Sentence>, last: Option<&Sentence>,
 ) -> Result<(Option<String>, Option<String>)> {
-    canonical_edges(&store.connection, document, EdgeUse::Lookup(target), first, last)
+    let clipped = target.and_then(|_| last.and_then(|sentence| canonical_body_sentence(document, sentence)));
+    canonical_edges(&store.connection, document, EdgeUse::Lookup(target), first, clipped.as_ref().or(last))
 }
 
 fn canonical_edges(
@@ -127,12 +128,20 @@ pub(crate) fn canonical_narration(
     if document.speech_text_overrides.contains_key(&sentence.id) {
         return Ok(None);
     }
+    let clipped = canonical_body_sentence(document, sentence);
+    let source = clipped.as_ref().unwrap_or(sentence);
+    let (previous, next) = canonical_edges(db, document, EdgeUse::Speech, Some(source), Some(source))?;
+    Ok(narration_fragments(document, &source.text, source.start_utf8, previous.as_deref(), next.as_deref())
+        .or_else(|| clipped.as_ref().map(|source| speech_slice(document, &source.text, source.start_utf8).into_owned())))
+}
+
+fn canonical_body_sentence(document: &Document, sentence: &Sentence) -> Option<Sentence> {
     let body = sentence.end_utf16.checked_sub(1)
         .and_then(|offset| pdf_reading_position::page_for_offset(document, offset))
         .and_then(|page| canonical_body_range(document, page));
     // A stored sentence can end in the footnote even though the body ends in a hyphen.
-    // Use the clipped source only for speech so bookmarks and sentence IDs still resolve.
-    let clipped = body.filter(|body| sentence.start_utf8 < body.end && body.end < sentence.end_utf8)
+    // Only the derived text uses the clipped source so sentence IDs still resolve.
+    body.filter(|body| sentence.start_utf8 < body.end && body.end < sentence.end_utf8)
         .and_then(|body| document.text.get(sentence.start_utf8..body.end))
         .map(str::trim_end)
         .filter(|text| !text.is_empty())
@@ -141,11 +150,7 @@ pub(crate) fn canonical_narration(
             end_utf8: sentence.start_utf8 + text.len(),
             end_utf16: sentence.start_utf16 + text.encode_utf16().count(),
             ..sentence.clone()
-        });
-    let source = clipped.as_ref().unwrap_or(sentence);
-    let (previous, next) = canonical_edges(db, document, EdgeUse::Speech, Some(source), Some(source))?;
-    Ok(narration_fragments(document, &source.text, source.start_utf8, previous.as_deref(), next.as_deref())
-        .or_else(|| clipped.as_ref().map(|source| speech_slice(document, &source.text, source.start_utf8).into_owned())))
+        })
 }
 
 fn narration_fragments(
@@ -308,10 +313,7 @@ fn excerpt(
             EdgeUse::Speech if annotations::speech_text(db, id, page, offset)?.is_some() => return Ok(None),
             _ => {}
         }
-        return Ok(Some(match usage {
-            EdgeUse::Speech => speech_slice(&layout, part, start).into_owned(),
-            EdgeUse::Lookup(_) => part.to_owned(),
-        }));
+        return Ok(Some(excerpt_text(&layout, part, start, usage)));
     }
 
     // Read the canonical body only when the immediate neighbor has a text span.
@@ -345,10 +347,16 @@ fn excerpt(
             return Ok(None);
         }
     }
-    Ok(Some(match usage {
-        EdgeUse::Speech => speech_slice(&document, part, absolute).into_owned(),
-        EdgeUse::Lookup(_) => part.to_owned(),
-    }))
+    Ok(Some(excerpt_text(&document, part, absolute, usage)))
+}
+
+fn excerpt_text(document: &Document, part: &str, start: usize, usage: EdgeUse<'_>) -> String {
+    match usage {
+        EdgeUse::Speech => speech_slice(document, part, start).into_owned(),
+        EdgeUse::Lookup(Some(_)) => document_layout::mask_pdf_translation_input(document, part, start)
+            .unwrap_or_else(|| part.to_owned()),
+        EdgeUse::Lookup(None) => part.to_owned(),
+    }
 }
 
 fn canonical_body_range(document: &Document, page: u16) -> Option<Range<usize>> {

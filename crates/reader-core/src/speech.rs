@@ -361,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn narration_joins_a_canonical_page_when_a_note_shares_its_last_sentence() {
+    fn narration_and_translation_join_a_canonical_page_with_a_trailing_note() {
         let root = tempfile::tempdir().unwrap();
         let original = root.path().join("book.pdf");
         std::fs::write(&original, b"%PDF-1.4\n").unwrap();
@@ -374,14 +374,21 @@ mod tests {
         let sentence = &document.sentences[0];
         assert!(sentence.text.contains("2 Quai"));
         crate::pdf_detached_pages::write_text_layer(&store.connection, &document.id, 1,
-            "dises depuis 1815.").unwrap();
+            "dises près des mâts¹ depuis 1815.\n1 Mât : pièce du navire.").unwrap();
         let expected = "Sur le quai , on décharge des marchandises";
         assert_eq!(store.speech_narration(&document.id, &sentence.id).unwrap().as_deref(), Some(expected));
         let (id, source) = store.speech_source(&document.id, &sentence.id, false).unwrap().unwrap();
         assert_eq!(id, sentence.id);
         assert_eq!(source.text, expected);
         let next = store.detached_pdf_sentence(&document.id, 1, Some(0)).unwrap().unwrap();
-        assert_eq!(next.narration_text.as_deref(), Some("depuis 1815."));
+        assert_eq!(next.narration_text.as_deref(), Some("près des mâts  depuis 1815."));
+
+        let source = store.translation_document(&document.id).unwrap();
+        let (text, ids) = crate::translation::sentence_source(
+            &store, &source, 0, "uk", crate::translation::PageBoundaries::Canonical,
+        ).unwrap();
+        assert_eq!(text, "Sur le quai , on décharge des marchandises près des mâts depuis 1815.");
+        assert_eq!(ids, [sentence.id.clone()]);
     }
 
     #[test]
