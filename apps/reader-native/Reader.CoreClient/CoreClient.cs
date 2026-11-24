@@ -18,6 +18,7 @@ public sealed class CoreClient : IDisposable
     private long nextOcrPageReviewRequest;
     private long nextWordExplanationRequest;
     private long nextSentenceReviewRequest;
+    private long nextSelectionTranslationRequest;
     private long nextSpeechRequest;
     private long nextSpeechPrefetchRequest;
     public const int MaxImportBytes = 20 * 1024 * 1024;
@@ -664,11 +665,14 @@ public sealed class CoreClient : IDisposable
     public string?[] TranslateDictionaryGlosses(string id, string source, string target, string[] glosses) =>
         CallIndependent<string?[]>(new { version = 1, operation = "translate_dictionary_glosses", id, source, target, glosses });
     public MachineTranslation? TranslateSelection(string id, string target, string revisionId, int startUtf16, string text,
-        int? page = null) => CallIndependent<MachineTranslation?>(new
-        {
-            version = 1, operation = "translate_selection", id, target,
-            selection = new { revisionId, startUtf16, text, page },
-        });
+        int? page = null, CancellationToken cancellationToken = default) =>
+        CallCancelable<MachineTranslation?>(ref nextSelectionTranslationRequest, cancellationToken,
+            requestId => new
+            {
+                version = 1, operation = "translate_selection", id, target, requestId,
+                selection = new { revisionId, startUtf16, text, page },
+            },
+            requestId => new { version = 1, operation = "cancel_selection_translation", requestId });
     public WordLookup? LookupDetachedPdfWord(string id, int page, int startUtf16, string text) =>
         CallIndependent<WordLookup?>(new { version = 1, operation = "lookup_detached_pdf_word", id, page, startUtf16, text });
 

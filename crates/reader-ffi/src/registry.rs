@@ -21,6 +21,7 @@ pub enum ModelRequestKind {
     OcrPageReview,
     WordExplanation,
     SentenceReview,
+    SelectionTranslation,
 }
 
 impl ModelCancellation {
@@ -35,7 +36,7 @@ impl ModelCancellation {
 
 struct OpenStore {
     store: gateway::Store,
-    model_cancellations: [Arc<ModelCancellation>; ModelRequestKind::SentenceReview as usize + 1],
+    model_cancellations: [Arc<ModelCancellation>; ModelRequestKind::SelectionTranslation as usize + 1],
 }
 
 #[derive(Default)]

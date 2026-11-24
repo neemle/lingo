@@ -7,7 +7,14 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage
 {
     private static readonly Color TranslationGlossHighlight = Color.FromArgb("#FFE48B");
-    private int popupTranslationRequest;
+    private CancellationTokenSource? popupTranslation;
+
+    private void CancelPopupTranslation()
+    {
+        var request = popupTranslation;
+        popupTranslation = null;
+        request?.Cancel();
+    }
     private sealed record PopupTranslation(string Document, int? Page, string Revision, TextSelection Selection,
         string Target, string Text, string Source, bool Saved);
     private PopupTranslation? wordTranslation;
@@ -27,7 +34,7 @@ public partial class ReadingPage
 
     private async Task LoadPopupTranslationAsync(bool detached)
     {
-        var request = ++popupTranslationRequest;
+        CancelPopupTranslation();
         var session = AppState.Session;
         var card = detached ? DetachedWordCard : WordCard;
         var selected = detached ? detachedSelection : selection;
@@ -45,8 +52,12 @@ public partial class ReadingPage
             return;
         }
 
-        bool Current() => request == popupTranslationRequest && readingPageActive && card.IsVisible &&
-            TargetCode == target && session.Document?.Id == document.Id &&
+        using var request = new CancellationTokenSource();
+        popupTranslation = request;
+        var token = request.Token;
+        bool Current() => ReferenceEquals(popupTranslation, request) && !token.IsCancellationRequested &&
+            readingPageActive && card.IsVisible && TargetCode == target &&
+            session.Document is { } active && active.Id == document.Id && active.Language == source &&
             (detached
                 ? ReferenceEquals(detachedAddress, address) && detachedSelection == selected && detachedSentence?.RevisionId == revision
                 : selection == selected && session.Document?.CurrentRevisionId == revision);
@@ -54,10 +65,10 @@ public partial class ReadingPage
         UpdatePopupGloss(detached, "Перекладаємо виділене…");
         try
         {
-            await Task.Delay(120);
+            await Task.Delay(120, token);
             if (!Current()) return;
             var result = await session.TranslateSelectionAsync(document.Id, target, revision, selected,
-                detached ? address?.Page : null);
+                detached ? address?.Page : null, token);
             if (!Current()) return;
             if (result is null)
             {
@@ -75,9 +86,14 @@ public partial class ReadingPage
             }
             UpdatePopupGloss(detached);
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception error)
         {
             if (Current()) UpdatePopupGloss(detached, error.Message);
+        }
+        finally
+        {
+            if (ReferenceEquals(popupTranslation, request)) popupTranslation = null;
         }
     }
 

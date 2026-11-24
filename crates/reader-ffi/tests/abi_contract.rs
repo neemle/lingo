@@ -146,6 +146,38 @@ fn canceling_sentence_review_leaves_word_explanations_and_later_reviews_availabl
 }
 
 #[test]
+fn canceled_selection_does_not_hide_a_new_translation_or_other_model_requests() {
+    let store = StoreFixture::new();
+    let imported = call(store.handle, json!({
+        "version": 1, "operation": "import", "name": "phrase.txt", "language": "fr",
+        "bytes": b"Il a dix-neuf ans.",
+    }));
+    assert_eq!(imported["ok"], true, "{imported}");
+    let id = &imported["data"]["id"];
+    let revision = &imported["data"]["currentRevisionId"];
+    let cancel = call(store.handle, json!({
+        "version": 1, "operation": "cancel_selection_translation", "requestId": 5,
+    }));
+    assert_eq!(cancel["ok"], true, "{cancel}");
+    let translate = |request_id| call(store.handle, json!({
+        "version": 1, "operation": "translate_selection", "id": id, "target": "uk",
+        "requestId": request_id, "selection": {"revisionId": revision, "startUtf16": 5, "text": "dix-neuf"},
+    }));
+    assert_error(&translate(Some(0)), "invalid_argument");
+    assert_error(&translate(Some(5)), "canceled");
+    for request_id in [Some(6), None] {
+        let fresh = translate(request_id);
+        assert_eq!(fresh["ok"], true, "{fresh}");
+        assert_eq!(fresh["data"]["text"], "дев’ятнадцять");
+    }
+    let explanation = call(store.handle, json!({
+        "version": 1, "operation": "explain_word", "model": "qwen-2b", "document": id,
+        "sentence": imported["data"]["sentences"][0]["id"], "word": "dix-neuf", "cachedOnly": true, "requestId": 5,
+    }));
+    assert_eq!(explanation["ok"], true, "{explanation}");
+}
+
+#[test]
 fn full_reset_allows_staged_file_and_pdf_import_on_the_same_handle() {
     let store = StoreFixture::new();
     let pdf = store.dir.join("source.pdf");

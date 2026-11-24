@@ -42,6 +42,7 @@ public partial class ReadingPage
         if (!WordOverlay.IsVisible)
         {
             StopWordDetail();
+            CancelPopupTranslation();
             CancelWordExplanation();
             CancelSyntaxExplanation();
         }

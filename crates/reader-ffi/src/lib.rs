@@ -95,6 +95,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
     let cancellation = match &command {
         Command::CancelModelTranslation { request_id } => Some((ModelRequestKind::Passage, *request_id)),
         Command::CancelOcrPageReview { request_id } => Some((ModelRequestKind::OcrPageReview, *request_id)),
+        Command::CancelSelectionTranslation { request_id } => Some((ModelRequestKind::SelectionTranslation, *request_id)),
         Command::CancelSentenceReview { request_id } => Some((ModelRequestKind::SentenceReview, *request_id)),
         Command::CancelWordExplanation { request_id } => Some((ModelRequestKind::WordExplanation, *request_id)),
         Command::CancelPdfPageTranslation { request_id } => Some((ModelRequestKind::PdfPageTranslation, *request_id)),
@@ -293,10 +294,14 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
                 return encode_job(worker.translate_dictionary_glosses(id, source, target, glosses));
             }
         }
-        Command::TranslateSelection { id, target, selection } => {
+        Command::TranslateSelection { id, target, selection, request_id } => {
+            let canceled = request_cancellation(handle, *request_id, ModelRequestKind::SelectionTranslation)?;
+            let canceled_error = || Error::new("canceled", "Переклад виділення скасовано.");
+            if canceled() { return Err(canceled_error()); }
             let worker = registry::lock()?.store(handle)?.prepare_translation_worker();
             if let Some(worker) = worker {
-                return dispatch::selected_translation(worker.translate_selection(id, target, selection));
+                let result = worker.translate_selection(id, target, selection, &canceled);
+                return if canceled() { Err(canceled_error()) } else { dispatch::selected_translation(result) };
             }
         }
         Command::TranslateOfflinePassage { id, page, sentence_id, target } => {

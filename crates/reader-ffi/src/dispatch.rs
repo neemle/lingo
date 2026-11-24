@@ -298,6 +298,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         | Command::CancelWordExplanation { .. }
         | Command::ReviewSentence { .. }
         | Command::CancelSentenceReview { .. }
+        | Command::CancelSelectionTranslation { .. }
         | Command::ReviewOcrWord { .. }
         | Command::ReviewOcrLine { .. }
         | Command::ReviewOcrPage { .. }
@@ -405,7 +406,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             sentence_translation(store.translate_dictionary_gloss_to(&id, &source, &gloss, target.as_deref().unwrap_or("uk"))),
         Command::TranslateDictionaryGlosses { id, source, target, glosses } =>
             value(store.translate_dictionary_glosses(&id, &source, &target, &glosses)),
-        Command::TranslateSelection { id, target, selection } =>
+        Command::TranslateSelection { id, target, selection, .. } =>
             selected_translation(store.translate_selected_text(&id, &target, &selection)),
         Command::TranslateOfflinePassage { id, page, sentence_id, target } =>
             value(store.translate_offline_passage(&id, page, &sentence_id, &target)),

@@ -135,6 +135,7 @@ public partial class ReadingPage : ContentPage
         AppState.TranslationWorker?.SetReaderTarget(null);
         readerOcrReview.CancelInference();
         CancelModelPassage();
+        CancelPopupTranslation();
         CancelWordExplanation();
         CancelSyntaxExplanation();
         RestoreCachedModelTranslation(null);
@@ -169,6 +170,7 @@ public partial class ReadingPage : ContentPage
         ReleasePdfLayoutTranslation()?.Cancel();
         readerOcrReview.CancelInference();
         CancelModelPassage();
+        CancelPopupTranslation();
         CancelWordExplanation();
         CancelSyntaxExplanation();
         CancelScheduledTranslation();
@@ -565,6 +567,7 @@ public partial class ReadingPage : ContentPage
                 current.Id != document.Id || current.Language != document.Language) return;
 
             TargetCode = target;
+            CancelPopupTranslation();
             CancelWordExplanation();
             SetSelectedSense(null);
             WordMeanings.Children.Clear();

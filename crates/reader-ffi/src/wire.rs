@@ -882,6 +882,12 @@ pub enum Command {
         id: String,
         target: String,
         selection: reader_core::translation::TranslationSelection,
+        #[serde(rename = "requestId")]
+        request_id: Option<u64>,
+    },
+    CancelSelectionTranslation {
+        #[serde(rename = "requestId")]
+        request_id: u64,
     },
     LookupDetachedPdfWord {
         id: String,

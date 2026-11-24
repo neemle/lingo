@@ -491,9 +491,10 @@ impl StoreWorker {
     }
 
     pub fn translate_selection(
-        self, id: &str, target: &str, selection: &TranslationSelection,
+        self, id: &str, target: &str, selection: &TranslationSelection, canceled: &dyn Fn() -> bool,
     ) -> Result<Option<SelectedTranslation>> {
-        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?.translate_selected_text(id, target, selection)
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?
+            .translate_selected_text_until_canceled(id, target, selection, canceled)
     }
 
     pub fn translate_offline_passage(
@@ -1017,7 +1018,15 @@ impl Store {
     pub fn translate_selected_text(
         &mut self, id: &str, target: &str, selection: &TranslationSelection,
     ) -> Result<Option<SelectedTranslation>> {
+        self.translate_selected_text_until_canceled(id, target, selection, &|| false)
+    }
+
+    fn translate_selected_text_until_canceled(
+        &mut self, id: &str, target: &str, selection: &TranslationSelection, canceled: &dyn Fn() -> bool,
+    ) -> Result<Option<SelectedTranslation>> {
         use crate::pdf_detached_pages::word_break;
+        if canceled() { return Err("Переклад виділення скасовано.".into()); }
+
         fn resolve<'a>(sentences: &'a [crate::Sentence], revision: Option<&str>, selection: &TranslationSelection) -> Result<&'a crate::Sentence> {
             if revision != Some(selection.revision_id.as_str()) {
                 return Err("Текст змінився. Виділіть фрагмент знову.".into());
@@ -1062,6 +1071,7 @@ impl Store {
             let (source, context) = cleaned(&document, sentence, projected);
             (document.language, source, context)
         };
+        if canceled() { return Err("Переклад виділення скасовано.".into()); }
         if source.is_empty() {
             return Ok(None);
         }
@@ -1081,7 +1091,7 @@ impl Store {
         let directory = self.model_directory.clone();
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
         let result = self.translate_aligned_with_catalog(
-            &mut MarianProvider::interactive(&directory),
+            &mut MarianProvider { canceled, ..MarianProvider::interactive(&directory) },
             TranslationRequest {
                 source: &language,
                 target,
@@ -1386,7 +1396,12 @@ impl MarianProvider<'_> {
                     && package.target == edge.target
             })
             .ok_or_else(|| TranslationBatchError::Failed("Невідомий мовний пакет".into()))?;
-        let _interactive = (!self.background).then(|| RESOURCES.interactive());
+        let _interactive = if self.background {
+            None
+        } else {
+            Some(RESOURCES.interactive_until(self.canceled)
+                .ok_or_else(|| TranslationBatchError::deferred("Переклад скасовано.".into()))?)
+        };
         // A background job can wait for package management without owning the compute permit.
         let _lock = self.lock(package, false)?;
         let optional = self.background.then(|| RESOURCES.optional()).transpose()

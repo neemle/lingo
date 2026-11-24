@@ -354,6 +354,7 @@ public partial class ReadingPage
         StopSpeech();
         CancelScheduledTranslation();
         CancelModelPassage();
+        CancelPopupTranslation();
         CancelWordExplanation();
         pdfLayoutTranslationCancellation?.Cancel();
         selection = null;
