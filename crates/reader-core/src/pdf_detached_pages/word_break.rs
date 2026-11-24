@@ -117,8 +117,8 @@ pub(super) fn narration(
             db, id, page, EdgeUse::Speech, Neighbor::Next, source.len(),
         )).transpose()?.flatten()
     } else { None };
-    Ok(narration_fragments(source, previous.as_deref(), next.as_deref())
-        .or_else(|| (source != sentence.text).then(|| source.to_owned())))
+    Ok(narration_fragments(layout, source, sentence.start_utf8, previous.as_deref(), next.as_deref())
+        .or_else(|| (source != sentence.text).then(|| speech_slice(layout, source, sentence.start_utf8).into_owned())))
 }
 
 pub(crate) fn canonical_narration(
@@ -128,20 +128,29 @@ pub(crate) fn canonical_narration(
         return Ok(None);
     }
     let (previous, next) = canonical_edges(db, document, EdgeUse::Speech, Some(sentence), Some(sentence))?;
-    Ok(narration_fragments(&sentence.text, previous.as_deref(), next.as_deref()))
+    Ok(narration_fragments(document, &sentence.text, sentence.start_utf8, previous.as_deref(), next.as_deref()))
 }
 
-fn narration_fragments(source: &str, previous: Option<&str>, next: Option<&str>) -> Option<String> {
-    let mut text = Cow::Borrowed(source);
+fn narration_fragments(
+    document: &Document, source: &str, start: usize, previous: Option<&str>, next: Option<&str>,
+) -> Option<String> {
+    let mut text = source;
     if let Some(consumed) = continuation(source, previous.and_then(word_hyphen)) {
-        text = Cow::Borrowed(source[consumed.len()..].trim_start());
+        text = source[consumed.len()..].trim_start();
     }
-    if let (Some(next), Some(prefix)) = (next, word_hyphen(&text)) {
+    // Keep the original offset until the last borrowed slice is known. Once
+    // the word is joined, the full source sentence no longer matches the audio text.
+    let offset = start + source.len() - text.len();
+    if let (Some(next), Some(prefix)) = (next, word_hyphen(text)) {
         if let Some(added) = continuation(next, Some(prefix)) {
-            text = Cow::Owned(format!("{prefix}{added}"));
+            return Some(format!("{}{added}", speech_slice(document, prefix, offset)));
         }
     }
-    (text != source).then(|| text.into_owned())
+    (text != source).then(|| speech_slice(document, text, offset).into_owned())
+}
+
+fn speech_slice<'a>(document: &Document, source: &'a str, start: usize) -> Cow<'a, str> {
+    document_layout::mask_pdf_non_text(document, source, start).map_or(Cow::Borrowed(source), Cow::Owned)
 }
 
 fn continuation<'a>(text: &'a str, prefix: Option<&str>) -> Option<&'a str> {
@@ -282,7 +291,10 @@ fn excerpt(
             EdgeUse::Speech if annotations::speech_text(db, id, page, offset)?.is_some() => return Ok(None),
             _ => {}
         }
-        return Ok(Some(part.to_owned()));
+        return Ok(Some(match usage {
+            EdgeUse::Speech => speech_slice(&layout, part, start).into_owned(),
+            EdgeUse::Lookup(_) => part.to_owned(),
+        }));
     }
 
     // Read the canonical body only when the immediate neighbor has a text span.
@@ -316,7 +328,10 @@ fn excerpt(
             return Ok(None);
         }
     }
-    Ok(Some(part.to_owned()))
+    Ok(Some(match usage {
+        EdgeUse::Speech => speech_slice(&document, part, absolute).into_owned(),
+        EdgeUse::Lookup(_) => part.to_owned(),
+    }))
 }
 
 fn canonical_body_range(document: &Document, page: u16) -> Option<Range<usize>> {
@@ -372,6 +387,27 @@ pub(super) fn boundary_sentence(text: &str, id: &str, page: u16) -> Sentence {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn joined_narration_silences_footnote_references_on_both_sides_of_a_break() {
+        let notes = "\n1 Mât : pièce du navire.\n2 Quai : bord du port.";
+        let incoming = "dises sont près du quai² depuis 1815.";
+        let document = document_layout::detached_pdf_document(format!("{incoming}{notes}"), "fr", None);
+        let speech = narration_fragments(&document, incoming, 0, Some("Les marchan-"), None).unwrap();
+        assert_eq!(speech, "sont près du quai  depuis 1815.");
+
+        let outgoing = "Sur les mâts¹ il reste des marchan-";
+        let heading = "Note de voyage.\n";
+        let mut document = document_layout::detached_pdf_document(format!("{heading}{outgoing}{notes}"), "fr", None);
+        let start_utf8 = heading.len() + outgoing.find('¹').unwrap();
+        let start_utf16 = document.text[..start_utf8].encode_utf16().count();
+        let block = document.blocks.iter_mut().find(|block| block.start_utf8 <= start_utf8 && start_utf8 < block.end_utf8).unwrap();
+        block.footnote_references.push(ocr::OcrSpan {
+            start_utf8, end_utf8: start_utf8 + '¹'.len_utf8(), start_utf16, end_utf16: start_utf16 + 1,
+        });
+        let speech = narration_fragments(&document, outgoing, heading.len(), None, Some(incoming)).unwrap();
+        assert_eq!(speech, "Sur les mâts  il reste des marchandises");
+    }
 
     #[test]
     fn selected_wrapped_word_is_reconstructed_at_its_original_anchor() {
