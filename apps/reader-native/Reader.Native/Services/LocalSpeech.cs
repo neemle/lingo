@@ -24,6 +24,20 @@ public sealed class LocalSpeech : IDisposable
     internal static SpeechVoice[] VoicesForLanguage(string language) =>
         SpeechVoice.ForLanguage(NativeSpeech.InstalledVoices(), language);
 
+    private static readonly object VoiceScanGate = new();
+    private static Task<SpeechVoice[]>? voiceScan;
+
+    private static Task<SpeechVoice[]> ReadSystemVoicesAsync()
+    {
+        lock (VoiceScanGate)
+        {
+            // Share any pending OS query. A timed-out caller cannot cancel the native enumeration.
+            if (voiceScan is not { IsCompleted: false })
+                voiceScan = Task.Run(NativeSpeech.InstalledVoices);
+            return voiceScan.WaitAsync(TimeSpan.FromSeconds(4));
+        }
+    }
+
     internal static async Task<(VoiceChoice[] Voices, string? Error)> ReadVoicesAsync(ReaderSession session, string? language)
     {
         var voices = new List<VoiceChoice>();
@@ -32,11 +46,13 @@ public sealed class LocalSpeech : IDisposable
         {
             try
             {
-                voices.AddRange(VoicesForLanguage(language).Select(voice =>
+                var installed = await ReadSystemVoicesAsync();
+                voices.AddRange(SpeechVoice.ForLanguage(installed, language).Select(voice =>
                     new VoiceChoice(voice.Id, $"{voice.Name} ({voice.Language})")));
                 if (voices.Count > 0)
                     voices.Insert(0, new VoiceChoice(SystemDefaultVoice, "Системний вибір"));
             }
+            catch (TimeoutException) { error = "Система не повернула список голосів. Спробуйте знову пізніше."; }
             catch (Exception problem) { error = $"Не вдалося отримати системні голоси. {problem.Message}"; }
 
             try
