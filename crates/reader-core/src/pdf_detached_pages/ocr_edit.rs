@@ -211,7 +211,7 @@ fn save_ocr_edits(
     }
     let encoded = serde_json::to_string(&lines).map_err(database_error)?;
     if old_text != text {
-        move_sentence_anchors(db, id, page, old_text, &text, edits)?;
+        move_sentence_anchors(db, id, page, old_text, &text, Some(edits))?;
     }
     db.execute(
         "UPDATE pdf_detached_pages SET text=?3,lines=?4 WHERE document_id=?1 AND page=?2",
@@ -294,20 +294,66 @@ fn sentence_at(sentences: &[Sentence], offset: usize) -> Option<usize> {
         .or_else(|| sentences.len().checked_sub(1))
 }
 
+pub(super) fn reanchor_replaced_ocr(db: &Connection, id: &str, page: u16, old: &str, new: &str) -> Result<()> {
+    move_sentence_anchors(db, id, page, old, new, None)
+}
+
+fn replacement_edits(old: &str, new: &str, before: &[Sentence], after: &[Sentence]) -> Vec<Edit> {
+    use std::collections::HashMap;
+
+    let mut old_counts = HashMap::new();
+    for sentence in before {
+        *old_counts.entry(sentence.text.as_str()).or_insert(0usize) += 1;
+    }
+    let mut new_sentences = HashMap::new();
+    for sentence in after {
+        new_sentences.entry(sentence.text.as_str())
+            .and_modify(|entry| *entry = None)
+            .or_insert(Some(sentence));
+    }
+    let mut edits = Vec::new();
+    let (mut old_end, mut old_offset, mut new_end) = (0, 0, 0);
+    for sentence in before {
+        let key = sentence.text.as_str();
+        let Some(Some(matching)) = new_sentences.get(key) else { continue; };
+        if old_counts[key] != 1 || matching.start_utf8 < new_end {
+            continue;
+        }
+        let previous = &old[old_end..sentence.start_utf8];
+        let refreshed = &new[new_end..matching.start_utf8];
+        if previous != refreshed {
+            edits.extend(Edit::for_line(old_offset, previous, refreshed));
+        }
+        (old_end, old_offset, new_end) = (sentence.end_utf8, sentence.end_utf16, matching.end_utf8);
+    }
+    if old[old_end..] != new[new_end..] {
+        edits.extend(Edit::for_line(old_offset, &old[old_end..], &new[new_end..]));
+    }
+    edits
+}
+
 fn move_sentence_anchors(
     db: &Connection,
     id: &str,
     page: u16,
     old: &str,
     new: &str,
-    edits: &[Edit],
+    edits: Option<&[Edit]>,
 ) -> Result<()> {
-    let map_start = |offset| edits.iter().rev().fold(offset, |offset, edit| edit.map_start(offset));
     let layout = super::page_layout(db, id, page)?;
     let old_revision = page_revision(old);
     let new_revision = page_revision(new);
     let old_sentences = layout.segment(old, &super::sentence_prefix(id, page, &old_revision));
     let new_sentences = layout.segment(new, &super::sentence_prefix(id, page, &new_revision));
+    let replacement;
+    let edits = match edits {
+        Some(edits) => edits,
+        None => {
+            replacement = replacement_edits(old, new, &old_sentences, &new_sentences);
+            &replacement
+        }
+    };
+    let map_start = |offset| edits.iter().rev().fold(offset, |offset, edit| edit.map_start(offset));
     crate::dictionary_transfer::reanchor_selections(
         db, (id, Some(page), &old_revision, &new_revision), &old_sentences, &new_sentences,
         |_, start, length| {
@@ -407,6 +453,19 @@ fn move_sentence_anchors(
 mod tests {
     use super::*;
     use crate::{file_originals, pdf_detached_pages::DetachedPdfAnnotationChange};
+
+    #[test]
+    fn replacement_edits_keep_a_unique_sentence_between_changed_regions() {
+        let old = "Le vieux phare est ouvert. Le marin rentre. Le bateau part.";
+        let new = "Intro. La vieille tour est fermée. Le marin rentre. Un voilier a quitté le port.";
+        let before = crate::pdf_sentences::Layout::ClosingQuotes.segment(old, "old");
+        let after = crate::pdf_sentences::Layout::ClosingQuotes.segment(new, "new");
+        let edits = replacement_edits(old, new, &before, &after);
+        let start = old[..old.find("marin").unwrap()].encode_utf16().count();
+        let mapped = edits.iter().rev().fold(start, |offset, edit| edit.map_start(offset));
+        assert_eq!(mapped, new[..new.find("marin").unwrap()].encode_utf16().count());
+        assert!(edits.iter().all(|edit| edit.old_end <= start || edit.start >= start + 5));
+    }
 
     #[test]
     fn supplemental_ocr_keeps_a_detached_note_and_the_saved_correction() {

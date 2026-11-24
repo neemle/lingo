@@ -407,6 +407,11 @@ pub(crate) fn write_ocr(
 ) -> Result<()> {
     let text = ocr::recognized_lines(lines, page_count)?;
     let payload = serde_json::to_string(lines).map_err(database_error)?;
+    if let Some((previous, _)) = read(db, id, page)? {
+        if previous != text {
+            ocr_edit::reanchor_replaced_ocr(db, id, page, &previous, &text)?;
+        }
+    }
     write(db, id, page, &text, Some(language), Some(&payload), Layout::ClosingQuotes)
 }
 
