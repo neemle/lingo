@@ -248,19 +248,34 @@ pub(crate) fn valid_image_source(extension: &str, bytes: &[u8], pdf_pages: Optio
         ("png", None) => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
         ("jpg" | "jpeg", None) => bytes.starts_with(b"\xff\xd8\xff"),
         ("webp", None) => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"),
-        ("heic" | "heif", None) => {
-            bytes.get(4..8) == Some(b"ftyp")
-                && bytes.get(8..32).is_some_and(|brands| {
-                    brands.chunks_exact(4).any(|brand| {
-                        matches!(
-                            brand,
-                            b"heic" | b"heix" | b"hevc" | b"hevx" | b"mif1" | b"msf1"
-                        )
-                    })
-                })
-        }
+        ("heic" | "heif", None) => has_heif_file_type(bytes),
         _ => false,
     }
+}
+
+fn has_heif_file_type(bytes: &[u8]) -> bool {
+    let Some(header) = bytes.first_chunk::<8>() else { return false; };
+    if &header[4..] != b"ftyp" {
+        return false;
+    }
+    let size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
+    let (header_len, size) = if size == 1 {
+        let Some(extended) = bytes.get(8..).and_then(<[u8]>::first_chunk::<8>) else { return false; };
+        (16, u64::from_be_bytes(*extended))
+    } else {
+        (8, u64::from(size))
+    };
+    let Ok(end) = usize::try_from(size) else { return false; };
+    let Some(payload) = bytes.get(header_len..end) else { return false; };
+    let Some(compatible) = payload.get(8..) else { return false; };
+    if compatible.len() % 4 != 0 {
+        return false;
+    }
+    // The minor version between the major and compatible brands is an integer.
+    let heif_brand = |brand: &[u8]| matches!(brand,
+        b"heic" | b"heix" | b"heim" | b"heis" | b"hevc" | b"hevx" | b"mif1" | b"mif2" | b"msf1"
+    );
+    heif_brand(&payload[..4]) || compatible.chunks_exact(4).any(heif_brand)
 }
 
 pub(crate) fn recognized_lines(lines: &[OcrLine], pages: u16) -> Result<String> {
@@ -816,6 +831,19 @@ pub(crate) fn update_transcript_with_edits(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn heif_brands_follow_the_file_type_box_boundaries() {
+        let short = b"\x00\x00\x00\x14ftypheic\0\0\0\0mif1";
+        assert!(super::valid_image_source("heic", short, None));
+        let late = b"\x00\x00\x00\x28ftypiso8\0\0\0\0isomiso8miafMiHBMiHEmif2";
+        assert!(super::valid_image_source("heif", late, None));
+        let extended = b"\x00\x00\x00\x01ftyp\0\0\0\0\0\0\0\x1ciso8\0\0\0\0heim";
+        assert!(super::valid_image_source("heic", extended, None));
+        let following_box = b"\x00\x00\x00\x14ftyppmp4heiciso8\0\0\0\x0cfreemif1";
+        assert!(!super::valid_image_source("heif", following_box, None));
+        assert!(!super::valid_image_source("heif", &late[..late.len() - 1], None));
+    }
+
     use super::*;
     use std::path::Path;
 
