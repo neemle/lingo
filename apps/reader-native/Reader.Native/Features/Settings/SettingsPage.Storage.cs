@@ -310,8 +310,7 @@ public partial class SettingsPage
     private static IEnumerable<FileSystemInfo> DownloadStaging()
     {
         var root = new DirectoryInfo(FileSystem.CacheDirectory);
-        if (!root.Exists) yield break;
-        foreach (var entry in root.EnumerateFileSystemInfos())
+        foreach (var entry in StorageEntries(root))
         {
             var name = entry.Name;
             if (entry is DirectoryInfo && (TemporaryDownloads.Contains(name) ||
@@ -330,7 +329,7 @@ public partial class SettingsPage
         try
         {
             if (entry.Attributes.HasFlag(FileAttributes.ReparsePoint)) return 0;
-            return entry is FileInfo file ? file.Length : FolderSize(entry.FullName);
+            return entry is FileInfo file ? file.Length : StorageEntries((DirectoryInfo)entry).Sum(EntrySize);
         }
         catch (FileNotFoundException) { return 0; }
         catch (DirectoryNotFoundException) { return 0; }
@@ -343,17 +342,17 @@ public partial class SettingsPage
             directory.Delete(recursive: !directory.Attributes.HasFlag(FileAttributes.ReparsePoint));
     }
 
-    private static long FolderSize(string path)
+    private static long FolderSize(string path) => EntrySize(new DirectoryInfo(path));
+
+    private static FileSystemInfo[] StorageEntries(DirectoryInfo directory)
     {
-        if (!Directory.Exists(path)) return 0;
-        var options = new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint };
         try
         {
-            var directory = new DirectoryInfo(path);
-            return directory.Attributes.HasFlag(FileAttributes.ReparsePoint)
-                ? 0 : directory.EnumerateFiles("*", options).Sum(EntrySize);
+            if (directory.Attributes.HasFlag(FileAttributes.ReparsePoint)) return [];
+            return directory.GetFileSystemInfos();
         }
-        catch (DirectoryNotFoundException) { return 0; }
+        catch (FileNotFoundException) { return []; }
+        catch (DirectoryNotFoundException) { return []; }
     }
 
     private static string DisplaySize(long bytes)

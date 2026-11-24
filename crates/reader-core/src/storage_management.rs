@@ -192,9 +192,19 @@ fn measure(path: &Path, split_audio: bool) -> Result<(u64, u64)> {
     if split_audio && path.file_name().is_some_and(|name| name == ".speech-cache") {
         return Ok((0, measure(path, false)?.0));
     }
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((0, 0)),
+        Err(error) => return Err(storage_error(error)),
+    };
     let mut total = (0, 0);
-    for child in fs::read_dir(path).map_err(storage_error)? {
-        let (bytes, audio) = measure(&child.map_err(storage_error)?.path(), split_audio)?;
+    for child in entries {
+        let child = match child {
+            Ok(child) => child,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(storage_error(error)),
+        };
+        let (bytes, audio) = measure(&child.path(), split_audio)?;
         total.0 += bytes;
         total.1 += audio;
     }
