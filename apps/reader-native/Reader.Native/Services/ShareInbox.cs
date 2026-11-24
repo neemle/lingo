@@ -24,14 +24,25 @@ internal static class ShareInbox
     internal static void ResumeStaging() => Staging.Release();
 
     internal static async Task<ShareInboxItem> StageAsync(string kind, string name, Stream source, bool scanPdf = false,
-        CancellationToken cancellation = default, IProgress<long>? progress = null)
+        CancellationToken cancellation = default, IProgress<long>? progress = null, Guid? stagedId = null)
     {
-        var id = Guid.NewGuid();
+        var id = stagedId ?? Guid.NewGuid();
         name = SafeName(name);
         var maximum = Limit(kind, name);
         await Staging.WaitAsync(cancellation).ConfigureAwait(false);
         try
         {
+            if (stagedId is not null && Directory.Exists(Folder(id)))
+            {
+                var existing = ReadItem(Folder(id));
+                if (existing.Kind == kind && existing.Name == name && source.CanSeek &&
+                    existing.Bytes == source.Length - source.Position)
+                {
+                    _ = PayloadPath(existing);
+                    return existing;
+                }
+                throw new InvalidDataException("Збережена копія вхідного матеріалу не збігається з оригіналом.");
+            }
             if (EntryFolders().Take(MaxItems).Count() == MaxItems)
                 throw new ShareInboxFullException();
             var temporary = Path.Combine(Storage.Value, $".incoming-{id:N}");

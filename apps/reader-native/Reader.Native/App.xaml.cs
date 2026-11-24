@@ -12,6 +12,8 @@ public partial class App : Application
         };
 #if IOS
         shell.FlyoutBehavior = FlyoutBehavior.Flyout;
+        _ = ReceiveSharedFilesAsync();
+        window.Activated += ReceiveSharedFiles;
 #else
         window.Width = 1160;
         window.Height = 820;
@@ -26,11 +28,28 @@ public partial class App : Application
         window.Activated += Activate;
         window.Destroying += (_, _) =>
         {
+#if IOS
+            window.Activated -= ReceiveSharedFiles;
+#endif
             window.Activated -= Activate;
             shell.StopListening();
             if (shell.CurrentPage is Features.Reading.ReadingPage reading) reading.PrepareWindowClose();
             Services.AppState.StopTranslationWorker();
         };
         return window;
+
+#if IOS
+        void ReceiveSharedFiles(object? sender, EventArgs args) => _ = ReceiveSharedFilesAsync();
+
+        async Task ReceiveSharedFilesAsync()
+        {
+            var batch = await Task.Run(Services.IosSharedImports.ReceiveAsync).ConfigureAwait(false);
+            if (batch is not null)
+                window.Dispatcher.Dispatch(() =>
+                {
+                    if (!shell.IsClosing) Services.DesktopImport.PublishBatch(batch.Items, batch.Rejected);
+                });
+        }
+#endif
     }
 }

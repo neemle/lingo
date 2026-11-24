@@ -111,6 +111,9 @@ public partial class SettingsPage
             {
                 var downloads = DownloadStaging().Sum(EntrySize);
                 var intake = LocalIntake.Sum(name => FolderSize(Path.Combine(FileSystem.AppDataDirectory, name)));
+#if IOS
+                if (SharedImportFolder.GetPath() is { } shared) intake += FolderSize(shared);
+#endif
                 var exports = FolderSize(NativeFiles.ExportRoot);
                 return (downloads, intake, exports);
             });
@@ -302,8 +305,13 @@ public partial class SettingsPage
                 else entry.Delete();
             }
         if (scope == "all")
+        {
             foreach (var name in LocalIntake)
                 RemoveFolder(Path.Combine(FileSystem.AppDataDirectory, name));
+#if IOS
+            if (SharedImportFolder.GetPath() is { } shared) RemoveFolder(shared);
+#endif
+        }
         if (scope != "downloads") NativeFiles.ClearPausedExports();
     }
 

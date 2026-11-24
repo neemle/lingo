@@ -57,11 +57,13 @@
     </NativeReference>
   </ItemGroup>
   <PropertyGroup Condition="$(TargetFramework.Contains('-ios'))">
+    <CodesignEntitlements>Platforms/iOS/ShareEntitlements.plist</CodesignEntitlements>
     <AppleRustTarget Condition="'$(RuntimeIdentifier)' == 'ios-arm64'">aarch64-apple-ios</AppleRustTarget>
     <AppleRustTarget Condition="'$(RuntimeIdentifier)' == 'iossimulator-arm64'">aarch64-apple-ios-sim</AppleRustTarget>
     <AppleRustTarget Condition="'$(RuntimeIdentifier)' == 'iossimulator-x64'">x86_64-apple-ios</AppleRustTarget>
   </PropertyGroup>
   <ItemGroup Condition="$(TargetFramework.Contains('-ios'))">
+    <ProjectReference Include="../Reader.ShareExtension/Reader.ShareExtension.csproj" IsAppExtension="true" />
     <NativeReference Include="../../../target/$(AppleRustTarget)/release/libreader_ffi.a">
       <Kind>Static</Kind><SmartLink>false</SmartLink>
       <Frameworks>Accelerate Foundation Metal</Frameworks>
