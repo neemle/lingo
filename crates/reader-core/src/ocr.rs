@@ -156,7 +156,7 @@ impl crate::Store {
             refresh_provenance(document);
             crate::document_revisions::append(document, tx)?;
             crate::dictionary_transfer::reanchor_canonical_selections(
-                tx, previous_revision.as_deref(), document, &before, None, &edits,
+                tx, previous_revision.as_deref(), document, &before, None, &edits, &[],
             )?;
             Self::discard_changed_speech_resume(tx, document)?;
             Ok(true)
@@ -677,6 +677,21 @@ pub(crate) fn map_unchanged_range_start(start: usize, length: usize, edits: &[Tr
         mapped = mapped.checked_sub(edit.old_len)?.checked_add(edit.new_len)?;
     }
     Some(mapped)
+}
+
+pub(crate) struct TranscriptMove {
+    pub before: std::ops::Range<usize>,
+    pub after: usize,
+}
+
+pub(crate) fn map_preserved_range_start(
+    start: usize, length: usize, edits: &[TranscriptEdit], moves: &[TranscriptMove],
+) -> Option<usize> {
+    map_unchanged_range_start(start, length, edits).or_else(|| {
+        let moved = moves.get(moves.partition_point(|moved| moved.before.end <= start))?;
+        if start < moved.before.start || start.checked_add(length)? > moved.before.end { return None; }
+        Some(moved.after + (start - moved.before.start))
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -52,14 +52,27 @@ pub struct PdfTextOrderEdit {
     start_utf16: usize,
     end_utf16: usize,
     replacement: String,
+    preserved_slices: Option<Vec<PdfTextOrderSlice>>,
 }
 
-fn repair_text_order(old: &str, changes: &[PdfTextOrderEdit]) -> Result<(String, Vec<ocr::TranscriptEdit>)> {
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PdfTextOrderSlice {
+    start_utf16: usize,
+    end_utf16: usize,
+    replacement_start_utf16: usize,
+}
+
+fn repair_text_order(old: &str, changes: &[PdfTextOrderEdit])
+    -> Result<(String, Vec<ocr::TranscriptEdit>, Vec<ocr::TranscriptMove>)>
+{
     let invalid = || "Некоректні виправлення порядку слів PDF.".to_owned();
     let mut cursor = 0;
     let mut offset = 0;
     let mut text = String::with_capacity(old.len());
     let mut edits = Vec::new();
+    let mut moves = Vec::new();
+    let mut output_offset = 0;
     for change in changes {
         let skip = change.start_utf16.checked_sub(offset).ok_or_else(invalid)?;
         let length = change.end_utf16.checked_sub(change.start_utf16).ok_or_else(invalid)?;
@@ -76,17 +89,61 @@ fn repair_text_order(old: &str, changes: &[PdfTextOrderEdit]) -> Result<(String,
             return Err(invalid());
         }
         text.push_str(&old[cursor..start]);
+        output_offset += skip;
+        if let Some(slices) = change.preserved_slices.as_deref().filter(|slices| !slices.is_empty()) {
+            moves.extend(checked_text_moves(original, &change.replacement, slices, change.start_utf16, output_offset)
+                .ok_or_else(invalid)?);
+        }
         text.push_str(&change.replacement);
+        let new_len = change.replacement.encode_utf16().count();
         edits.push(ocr::TranscriptEdit {
             start_utf16: change.start_utf16,
             old_len: length,
-            new_len: change.replacement.encode_utf16().count(),
+            new_len,
         });
+        output_offset += new_len;
         cursor = end;
         offset = change.end_utf16;
     }
     text.push_str(&old[cursor..]);
-    Ok((text, edits))
+    Ok((text, edits, moves))
+}
+
+fn checked_text_moves(
+    original: &str, replacement: &str, slices: &[PdfTextOrderSlice], old_base: usize, new_base: usize,
+) -> Option<Vec<ocr::TranscriptMove>> {
+    let original = original.encode_utf16().collect::<Vec<_>>();
+    let replacement = replacement.encode_utf16().collect::<Vec<_>>();
+    if slices.len() > original.len() { return None; }
+    let mut moves = Vec::with_capacity(slices.len());
+    let mut destinations = Vec::with_capacity(slices.len());
+    for slice in slices {
+        let source = slice.start_utf16..slice.end_utf16;
+        let length = source.end.checked_sub(source.start).filter(|&length| length > 0)?;
+        let end = slice.replacement_start_utf16.checked_add(length)?;
+        let destination = slice.replacement_start_utf16..end;
+        let is_boundary = |text: &[u16], index| text.get(index)
+            .is_none_or(|unit| !(0xdc00..=0xdfff).contains(unit));
+        if original.get(source.clone())? != replacement.get(destination.clone())? ||
+            !is_boundary(&original, source.start) || !is_boundary(&original, source.end) ||
+            !is_boundary(&replacement, destination.start) || !is_boundary(&replacement, destination.end)
+        {
+            return None;
+        }
+        moves.push(ocr::TranscriptMove {
+            before: old_base + source.start..old_base + source.end,
+            after: new_base + destination.start,
+        });
+        destinations.push(destination);
+    }
+    moves.sort_unstable_by_key(|moved| moved.before.start);
+    destinations.sort_unstable_by_key(|range| range.start);
+    if moves.windows(2).any(|pair| pair[0].before.end > pair[1].before.start) ||
+        destinations.windows(2).any(|pair| pair[0].end > pair[1].start)
+    {
+        return None;
+    }
+    Some(moves)
 }
 
 fn valid_pdf_order_edit(original: &str, replacement: &str) -> bool {
@@ -628,7 +685,7 @@ impl Store {
                 else { return Ok(false); };
             for edit in &mut edits { edit.start_utf16 += start; }
             existing.splice(first..end, merged);
-            reflow_pdf_document(tx, document, pages, &edits, page)?;
+            reflow_pdf_document(tx, document, pages, &edits, &[], page)?;
             updated = true;
             Ok(true)
         })?;
@@ -642,7 +699,7 @@ impl Store {
         if reference.len() > crate::MAX_IMPORT || reference.contains('\0') {
             return Err("Некоректний текстовий шар сторінки PDF.".into());
         }
-        let (corrected, mut edits) = repair_text_order(reference, changes)?;
+        let (corrected, mut edits, mut moves) = repair_text_order(reference, changes)?;
         let mut changed = false;
         self.edit_document(id, |document, tx| {
             if document.current_revision_id.as_deref() != Some(revision)
@@ -652,15 +709,20 @@ impl Store {
             let Some(mut pages) = file_originals::native_pdf_page_text(tx, id)? else { return Ok(false); };
             let Some(old) = pages.get_mut(usize::from(page)) else { return Ok(false); };
             if old.trim().is_empty() {
-                changed = pdf_detached_pages::repair_cached_text_order(tx, id, page, reference, &corrected, &edits)?;
+                changed = pdf_detached_pages::repair_cached_text_order(tx, id, page, reference, &corrected, &edits, &moves)?;
                 return Ok(false);
             }
             if old.trim() != reference { return Ok(false); }
             let Some((start, _)) = crate::pdf_reading_position::page_bounds(document, page) else { return Ok(false); };
             for edit in &mut edits { edit.start_utf16 += start; }
+            for moved in &mut moves {
+                moved.before.start += start;
+                moved.before.end += start;
+                moved.after += start;
+            }
             *old = corrected;
             let page_text = serde_json::to_string(&pages).map_err(database_error)?;
-            reflow_pdf_document(tx, document, pages, &edits, page)?;
+            reflow_pdf_document(tx, document, pages, &edits, &moves, page)?;
             tx.execute("UPDATE file_originals SET pdf_page_text=?2 WHERE document_id=?1",
                 params![id, page_text]).map_err(database_error)?;
             changed = true;
@@ -700,7 +762,7 @@ impl Store {
                 return Ok(false);
             }
             document.ocr_lines.as_mut().expect("verified OCR lines").splice(first..end, rebuilt);
-            reflow_pdf_document(tx, document, pages, &edits, page)?;
+            reflow_pdf_document(tx, document, pages, &edits, &[], page)?;
             updated = true;
             Ok(true)
         })?;
@@ -745,7 +807,7 @@ impl Store {
             changed = reconcile(page_lines)?;
             if changed {
                 let edits = ocr::line_transcript_edits(page_lines, &previous)?;
-                reflow_pdf_document(tx, document, pages, &edits, page)?;
+                reflow_pdf_document(tx, document, pages, &edits, &[], page)?;
             }
             Ok(changed)
         })?;
@@ -1197,7 +1259,7 @@ fn reconcile_ocr_words(reference: &str, lines: &mut [ocr::OcrLine]) -> bool {
 }
 
 fn update_focused_page(db: &Connection, document: &mut Document, page: u16, pages: Vec<String>) -> Result<()> {
-    reflow_pdf_document(db, document, pages, &[], page)?;
+    reflow_pdf_document(db, document, pages, &[], &[], page)?;
     let focused: bool = db.query_row(
         "SELECT EXISTS(SELECT 1 FROM pdf_reading_positions WHERE document_id=?1 AND page=?2)",
         params![document.id, page],
@@ -1361,7 +1423,7 @@ pub(crate) fn merge_cached_pages(
         lines.sort_by_key(|line| line.page);
     }
     if layers_changed || has_added_ocr {
-        reflow_pdf_document(db, &mut local, pages, &[], first_changed)?;
+        reflow_pdf_document(db, &mut local, pages, &[], &[], first_changed)?;
     }
     let body = serde_json::to_string(&local).map_err(database_error)?;
     db.execute(
@@ -1373,7 +1435,8 @@ pub(crate) fn merge_cached_pages(
 }
 
 fn reflow_pdf_document(
-    db: &Connection, document: &mut Document, pages: Vec<String>, edits: &[ocr::TranscriptEdit], first_changed: u16,
+    db: &Connection, document: &mut Document, pages: Vec<String>, edits: &[ocr::TranscriptEdit],
+    moves: &[ocr::TranscriptMove], first_changed: u16,
 ) -> Result<()> {
     let previous_revision = document.current_revision_id.clone();
     let lines = document.ocr_lines.as_deref().unwrap_or_default();
@@ -1394,7 +1457,7 @@ fn reflow_pdf_document(
     if changed {
         document_revisions::append(document, db)?;
         crate::dictionary_transfer::reanchor_canonical_selections(
-            db, previous_revision.as_deref(), document, &before, old_pages.as_deref(), edits,
+            db, previous_revision.as_deref(), document, &before, old_pages.as_deref(), edits, moves,
         )?;
     }
     if let (Some(previous), Some(revision)) = (previous_revision.as_deref(), document.current_revision_id.as_deref()) {
@@ -1671,11 +1734,26 @@ mod drop_cap_tests {
         ).unwrap();
         let document = store.import_pdf_file(prepared).unwrap();
         let revision = document.current_revision_id.as_deref().unwrap();
-        let repairs = [PdfTextOrderEdit {
+        let selected = old.rfind("Right").unwrap();
+        let moved = restored.rfind("Right").unwrap();
+        let card = store.save_selected_word(crate::Vocabulary {
+            id: String::new(), word: "Right".into(), document_id: document.id.clone(),
+            language: "en".into(), target_language: "uk".into(), translation: "правий".into(),
+            context: String::new(), forward: Default::default(), reverse: Default::default(),
+            analysis: None, expression: None, sense: None, accepted_translations: Vec::new(),
+        }, crate::dictionary_transfer::DictionarySelection {
+            revision_id: revision.to_owned(), start_utf16: selected, reconstructed_text: None,
+        }).unwrap();
+        let mut repairs = [PdfTextOrderEdit {
             start_utf16: 0,
             end_utf16: old.encode_utf16().count(),
             replacement: restored.into(),
+            preserved_slices: Some(vec![
+                PdfTextOrderSlice { start_utf16: selected, end_utf16: selected + "Right".len(), replacement_start_utf16: 0 },
+            ]),
         }];
+        assert!(store.repair_stored_pdf_text_order(&document.id, 0, revision, old, &repairs).is_err());
+        repairs[0].preserved_slices.as_mut().unwrap()[0].replacement_start_utf16 = moved;
         assert!(store.repair_stored_pdf_text_order(&document.id, 0, revision, old, &repairs).unwrap());
         let mut changed = repairs;
         changed[0].replacement = restored.replace("word", "invented");
@@ -1690,6 +1768,9 @@ mod drop_cap_tests {
         let document = reopened.translation_document(&document.id).unwrap();
         assert_eq!(document.text, restored);
         assert_eq!(document.pdf_page_starts, Some(vec![Some(0)]));
+        let links = serde_json::to_value(reopened.dictionary_source_locations(&card.id).unwrap()).unwrap();
+        assert_eq!(links.as_array().unwrap().len(), 1);
+        assert_eq!(links[0]["selection"]["startUtf16"], moved);
     }
 
     #[test]
@@ -1705,6 +1786,10 @@ mod drop_cap_tests {
             start_utf16: "Il est mort".len(),
             end_utf16: "Il est mort\n  Naples\nà".encode_utf16().count(),
             replacement: " à Naples".into(),
+            preserved_slices: Some(vec![
+                PdfTextOrderSlice { start_utf16: 3, end_utf16: 9, replacement_start_utf16: 3 },
+                PdfTextOrderSlice { start_utf16: 10, end_utf16: 11, replacement_start_utf16: 1 },
+            ]),
         }];
         let prepared = file_originals::prepare_pdf_import(
             store.pdf_original_root(), "library.pdf", &original, "fr", vec![old.into(), "".into()], vec![],
@@ -1737,11 +1822,19 @@ mod drop_cap_tests {
         assert_eq!(links[0]["sentenceId"], updated.sentences[1].id);
         assert_eq!(links[0]["selection"]["startUtf16"],
             updated.text[..updated.text.rfind("marin").unwrap()].encode_utf16().count());
-        assert!(store.dictionary_source_locations(&moved_inside_edit.id).unwrap().is_empty());
+        let links = serde_json::to_value(store.dictionary_source_locations(&moved_inside_edit.id).unwrap()).unwrap();
+        assert_eq!(links.as_array().unwrap().len(), 1);
+        assert_eq!(links[0]["sentenceId"], sentence.id);
+        let start = updated.text.find("Naples").unwrap();
+        assert_eq!(links[0]["selection"]["startUtf16"], updated.text[..start].encode_utf16().count());
         assert!(!store.repair_stored_pdf_text_order(&document.id, 0, revision, old, &edits).unwrap());
 
         pdf_detached_pages::write_text_layer(&store.connection, &document.id, 1, old).unwrap();
         let page = store.detached_pdf_sentences(&document.id, 1).unwrap().unwrap();
+        store.save_detached_pdf_word(&document.id, 1, serde_json::from_value(serde_json::json!({
+            "startUtf16": old.find("Naples").unwrap(), "selectedText": "Naples",
+            "revisionId": page.revision, "translation": "переклад", "target": "uk",
+        })).unwrap()).unwrap();
         store.select_detached_pdf_sentence(&document.id, 1, Some(1), None).unwrap();
         let spoken = &page.sentences[1];
         store.set_detached_pdf_speech_resume(&document.id, 1, &spoken.id, Some(crate::SpeechResume {
@@ -1764,6 +1857,11 @@ mod drop_cap_tests {
         assert_eq!(detached["note"], "keep detached");
         assert_eq!(detached["speechResume"]["offsetUtf16"], 3);
         assert_eq!(detached["speechResume"]["sentenceId"], page.sentences[1].id);
+        let links = serde_json::to_value(store.dictionary_source_locations(&moved_inside_edit.id).unwrap()).unwrap();
+        let link = links.as_array().unwrap().iter().find(|link| link["page"] == 1).unwrap();
+        assert_eq!(link["sentenceId"], page.sentences[0].id);
+        let start = page.text.find("Naples").unwrap();
+        assert_eq!(link["selection"]["startUtf16"], page.text[..start].encode_utf16().count());
     }
 
     #[test]

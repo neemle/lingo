@@ -193,6 +193,7 @@ fn location_in_revision(
 pub(crate) fn reanchor_canonical_selections(
     db: &Connection, previous_revision: Option<&str>, document: &Document,
     before: &[crate::Sentence], old_pages: Option<&[Option<usize>]>, edits: &[crate::ocr::TranscriptEdit],
+    moves: &[crate::ocr::TranscriptMove],
 ) -> Result<()> {
     let Some((previous, current)) = previous_revision.zip(document.current_revision_id.as_deref())
         .filter(|(previous, current)| previous != current)
@@ -200,7 +201,7 @@ pub(crate) fn reanchor_canonical_selections(
     let address = (document.id.as_str(), None, previous, current);
     if !edits.is_empty() {
         return reanchor_selections(db, address, before, &document.sentences,
-            |_, start, length| crate::ocr::map_unchanged_range_start(start, length, edits));
+            |_, start, length| crate::ocr::map_preserved_range_start(start, length, edits, moves));
     }
     let Some((old_pages, new_pages)) = old_pages.zip(document.pdf_page_starts.as_deref())
         .filter(|(old, new)| old.len() == new.len())

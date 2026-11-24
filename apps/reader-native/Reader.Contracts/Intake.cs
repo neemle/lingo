@@ -64,7 +64,10 @@ public sealed record DetachedPdfPassageRow(int Position, int SentenceCount, stri
 public sealed record PdfPageTranslationRow(int StartUtf16, int EndUtf16, string? Text,
     string? SourceText = null, string? PivotLanguage = null, string? SourceSentenceId = null, int? SourceBlockIndex = null,
     bool LegacyGroup = false, string? Failure = null, string? DirectModelRevision = null, bool Reviewed = false);
-public sealed record PdfTextOrderEdit(int StartUtf16, int EndUtf16, string Replacement);
+// Offsets are relative to the replaced source range and to the replacement string.
+public sealed record PdfTextOrderSlice(int StartUtf16, int EndUtf16, int ReplacementStartUtf16);
+public sealed record PdfTextOrderEdit(int StartUtf16, int EndUtf16, string Replacement,
+    PdfTextOrderSlice[]? PreservedSlices = null);
 public readonly record struct PdfLayoutWord(int Start, int End, double Left, double Right, double CenterY, double Height,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Rotation = null);
 public sealed record PdfLayoutSlice(int Start, int End, string Separator);

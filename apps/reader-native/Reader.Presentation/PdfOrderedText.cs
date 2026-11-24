@@ -139,13 +139,15 @@ public sealed class PdfOrderedText
         {
             AppendSource(output, sources, cursor, edit.Start);
             var start = output.Length;
+            var preserved = new List<PdfTextOrderSlice>(edit.Slices.Length);
             if (edit.Slices.Length == 0) output.Append("\n\n");
             foreach (var slice in edit.Slices)
             {
                 output.Append(slice.Separator);
+                preserved.Add(new(slice.Start - edit.Start, slice.End - edit.Start, output.Length - start));
                 AppendSource(output, sources, slice.Start, slice.End);
             }
-            changes.Add(new(edit.Start, edit.End, output.ToString(start, output.Length - start)));
+            changes.Add(new(edit.Start, edit.End, output.ToString(start, output.Length - start), preserved.ToArray()));
             cursor = edit.End;
         }
         AppendSource(output, sources, cursor, Text.Length);
@@ -239,7 +241,10 @@ public sealed class PdfOrderedText
             lastEdit = letter.Index + letter.Length;
             var previousEnd = previous.Index + previous.Length;
             edits.Add(new(previousEnd, lastEdit, null));
-            corrections.Add(new(leftEnd, lastEdit, " à " + text[words[insertion].Index..previousEnd]));
+            var movedStart = words[insertion].Index;
+            corrections.Add(new(leftEnd, lastEdit, " à " + text[movedStart..previousEnd],
+                [new(movedStart - leftEnd, previousEnd - leftEnd, 3),
+                 new(letter.Index - leftEnd, lastEdit - leftEnd, 1)]));
         }
 
         if (edits.Count == 0) return new(text);

@@ -348,6 +348,7 @@ pub(crate) fn write_text_layer(db: &Connection, id: &str, page: u16, text: &str)
 
 pub(crate) fn repair_cached_text_order(
     db: &Connection, id: &str, page: u16, reference: &str, corrected: &str, edits: &[ocr::TranscriptEdit],
+    moves: &[ocr::TranscriptMove],
 ) -> Result<bool> {
     let current: Option<(Option<i64>, u8)> = db.query_row(
         "SELECT saved.sentence, p.soft_lines FROM pdf_detached_pages p
@@ -379,7 +380,7 @@ pub(crate) fn repair_cached_text_order(
     }
     crate::dictionary_transfer::reanchor_selections(
         db, (id, Some(page), &old_revision, &new_revision), &before, &after,
-        |_, start, length| ocr::map_unchanged_range_start(start, length, edits),
+        |_, start, length| ocr::map_preserved_range_start(start, length, edits, moves),
     )?;
     write_text_layer(db, id, page, corrected)?;
     if !anchors.is_empty() { annotations::replace_page(db, id, page, &anchors)?; }
