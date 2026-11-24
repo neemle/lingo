@@ -61,6 +61,7 @@ public partial class ReadingPage
     private (PdfAutoTranslation Request, int Attempts)? pdfAutoAttempts;
     private (VerticalStackLayout Panel, PdfPageTranslationRow[] Rows, Label[] Labels, Sentence? Active,
         string? Query, string? Gloss, int GlossResults)? overflowContent;
+    private (ScrollView Viewport, string Document, int Page)? lastDrawnPdfTranslationPage;
     private (PdfLayoutAddress Address, string SentenceId, RectF Bounds, double ViewportHeight)? lastPdfTranslationFollow;
     private const string UntranslatedPdfFragment = "Фрагмент ще не перекладено";
     private static string PdfFragmentState(PdfPageTranslationRow row) =>
@@ -294,6 +295,7 @@ public partial class ReadingPage
                 RememberPdfPageTranslations(previous, pdfLayoutRows);
             pdfLayoutRequest = address;
             pdfTranslationSelectionRequest++;
+            pdfTranslationViewportRequest++;
             pdfFragmentFocus = null;
             pendingPdfCacheRefresh = null;
             pdfLayoutRequestId++;
@@ -1083,7 +1085,7 @@ public partial class ReadingPage
     private void DrawPdfTranslationLayout()
     {
         var (viewport, surface) = ActivePdfTranslationLayout();
-        if (!viewport.IsVisible) return;
+        if (!viewport.IsVisible || pdfLayoutRequest is not { } address) return;
         var detached = DetachedPdfReader.IsVisible;
         var background = detached ? DetachedPdfTranslationBackground : PdfTranslationBackground;
         var source = pdfSourceLayout is { } layout && layout.Matches(pdfLayoutRequest) ? layout : null;
@@ -1115,22 +1117,37 @@ public partial class ReadingPage
             activeSentence, text => GlossRanges(text, gloss), background.IsVisible, query,
             PdfReadingHorizontalBounds(), cached.Plan, surface);
         var overflow = detached ? DetachedPdfTranslationOverflow : PdfTranslationOverflow;
-        drawing.OverflowChanged = rows => Dispatcher.Dispatch(() =>
+        drawing.OverflowChanged = rows => Dispatcher.Dispatch(async () =>
         {
-            if (viewport.IsVisible && ReferenceEquals(surface.Drawable, drawing))
+            bool CurrentDrawing() => readingPageActive && viewport.IsVisible &&
+                ReferenceEquals(surface.Drawable, drawing) && CurrentPdfLayoutAddress() == address;
+
+            if (!CurrentDrawing()) return;
+            var page = (viewport, address.Document, address.Page);
+            if (lastDrawnPdfTranslationPage != page)
             {
-                var description = string.Join(" ", pdfLayoutRows.Except(rows)
-                    .Select(row => HasPdfTranslation(row) ? row.Text : row.Failure ?? UntranslatedPdfFragment));
-                if (SemanticProperties.GetDescription(surface) != description)
-                    SemanticProperties.SetDescription(surface, description);
-                var bounds = drawing.MatchBounds ?? drawing.ActiveBounds;
-                ShowPdfTranslationOverflow(overflow, rows, bounds is not null, query, gloss, glossResults);
-                if (bounds is { } activeBounds && pdfLayoutSentence is { } active &&
-                    !rows.Any(row => row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16))
-                    _ = FollowRenderedPdfSentenceAsync(viewport, surface, drawing, active, activeBounds);
-                else
-                    lastPdfTranslationFollow = null;
+                await WaitForPdfTranslationScrollAsync();
+                if (!CurrentDrawing()) return;
+                if (lastDrawnPdfTranslationPage != page)
+                {
+                    lastDrawnPdfTranslationPage = page;
+                    // The old page may have scrolled past the paper into overflow.
+                    await ScrollPdfTranslationAsync(() => viewport.ScrollToAsync(0, 0, animated: false));
+                    if (!CurrentDrawing()) return;
+                }
             }
+
+            var description = string.Join(" ", pdfLayoutRows.Except(rows)
+                .Select(row => HasPdfTranslation(row) ? row.Text : row.Failure ?? UntranslatedPdfFragment));
+            if (SemanticProperties.GetDescription(surface) != description)
+                SemanticProperties.SetDescription(surface, description);
+            var bounds = drawing.MatchBounds ?? drawing.ActiveBounds;
+            ShowPdfTranslationOverflow(overflow, rows, bounds is not null, query, gloss, glossResults);
+            if (bounds is { } activeBounds && pdfLayoutSentence is { } active &&
+                !rows.Any(row => row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16))
+                _ = FollowRenderedPdfSentenceAsync(viewport, surface, drawing, active, activeBounds);
+            else
+                lastPdfTranslationFollow = null;
         });
         surface.Drawable = drawing;
         surface.Invalidate();
