@@ -37,7 +37,11 @@
     <Button x:Name="ExportDictionaryCsv" Text="Зберегти CSV" Style="{StaticResource OutlineButton}"
      IsEnabled="False" Clicked="ExportClicked" CommandParameter="csv" SemanticProperties.Description="Зберегти слова й переклади у CSV" />
    </FlexLayout>
-   <Label x:Name="ArchiveStatus" TextColor="{StaticResource Sage}" IsVisible="False" />
+   <Grid x:Name="ArchiveResult" ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="False">
+    <Label x:Name="ArchiveStatus" TextColor="{StaticResource Sage}" LineBreakMode="WordWrap" VerticalOptions="Center" />
+    <Button Grid.Column="1" x:Name="ContinueImportedPractice" Text="Продовжити практику"
+     Style="{StaticResource OutlineButton}" IsVisible="False" Clicked="ContinueImportedPracticeClicked" />
+   </Grid>
    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
     <Border Stroke="{StaticResource BorderTone}" StrokeShape="RoundRectangle 8" BackgroundColor="{StaticResource Panel}">
      <SearchBar x:Name="VocabularyQuery" Placeholder="Знайти слово, переклад або контекст" MaxLength="240"

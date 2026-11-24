@@ -430,7 +430,7 @@ public partial class VocabularyPage : ContentPage
         var csv = sender is Button { CommandParameter: "csv" };
         transferring = true;
         UpdateControls();
-        ArchiveStatus.IsVisible = false;
+        ArchiveResult.IsVisible = false;
         try
         {
             var archive = await AppState.Session.ExportDictionaryAsync(documentId);
@@ -459,7 +459,7 @@ public partial class VocabularyPage : ContentPage
         if (transferring) return;
         transferring = true;
         queryRevision++;
-        ArchiveStatus.IsVisible = false;
+        ArchiveResult.IsVisible = false;
         ShowTextMatches();
         try
         {
@@ -488,9 +488,9 @@ public partial class VocabularyPage : ContentPage
             if (imported is null || !string.IsNullOrEmpty(session.Error))
                 throw new InvalidOperationException(session.Error);
             await RefreshCollectionsAsync(appearance);
-            ShowArchiveStatus(imported.RestoredPractice
-                ? "Словник імпортовано. Незавершене запитання доступне в розділі «Практика»."
-                : "Словник імпортовано.");
+            var result = $"Додано карток: {imported.AddedCards}. Уже в словнику: {imported.ExistingCards}.";
+            if (!csv) result += $" Додано записів повторення: {imported.AddedReviews}.";
+            ShowArchiveStatus(result, imported.RestoredPractice);
         }
         catch (Exception error) { ShowArchiveStatus(error.Message); }
         finally
@@ -500,9 +500,16 @@ public partial class VocabularyPage : ContentPage
         }
     }
 
-    private void ShowArchiveStatus(string text)
+    private async void ContinueImportedPracticeClicked(object? sender, EventArgs args)
+    {
+        try { await Shell.Current.GoToAsync(AppShell.PracticeRoute); }
+        catch (Exception error) { ShowArchiveStatus(error.Message, resumePractice: true); }
+    }
+
+    private void ShowArchiveStatus(string text, bool resumePractice = false)
     {
         ArchiveStatus.Text = text;
-        ArchiveStatus.IsVisible = true;
+        ContinueImportedPractice.IsVisible = resumePractice;
+        ArchiveResult.IsVisible = true;
     }
 }
