@@ -80,6 +80,7 @@ public partial class ReadingPage : ContentPage
             ReleasePdfLayoutTranslation()?.Cancel();
             pdfLayoutRows = [];
             recentPdfTranslations.Clear();
+            translationCacheVersion++;
             lastCacheRestore = null;
             detachedMachineTranslation = null;
             InvalidateModelPassageCache();

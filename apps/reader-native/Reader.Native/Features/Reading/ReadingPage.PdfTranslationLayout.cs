@@ -711,9 +711,7 @@ public partial class ReadingPage
         }
         var activePage = CurrentNativePdfWindow(document.Id)?.Center ?? session.OriginalPageIndex();
         if (translated.Page != activePage) return;
-        translationCacheVersion++;
-        lastCacheRestore = null;
-        _ = RestoreCachedTranslationAsync();
+        RefreshCanonicalTranslationCache();
     }
 
     private async void RefreshCachedPdfPageLayout()

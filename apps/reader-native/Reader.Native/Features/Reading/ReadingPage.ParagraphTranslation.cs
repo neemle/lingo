@@ -238,7 +238,12 @@ public partial class ReadingPage
             window?.Units.Any(unit => unit.Sources.Any(source => translated.SentenceIds.Contains(source.Id))) != true)
             return;
 
-        lastCacheRestore = null;
+        RefreshCanonicalTranslationCache();
+    }
+
+    private void RefreshCanonicalTranslationCache()
+    {
+        translationCacheVersion++;
         _ = RestoreCachedTranslationAsync();
     }
 
@@ -252,12 +257,6 @@ public partial class ReadingPage
 
         var request = new CachedWindowRequest(key, document.CurrentRevisionId, readinessRequest, translationCacheVersion);
         if (lastCacheRestore == request) return;
-        if (FindTranslationWindow(document, key.Target) is { IsParagraph: true } existing && IsPreferredRoute(existing) &&
-            !HasUntranslatedUnits(document, existing) &&
-            (ActiveMachineAlignment(document, key.Target, preferredOnly: true) is not null ||
-                ReviewedFor(document, key.Target, key.Sentence) is not null))
-            return;
-
         lastCacheRestore = request;
         restoringTranslationCache = true;
         try
@@ -274,11 +273,14 @@ public partial class ReadingPage
             var matching = MatchingTranslationWindows(current, key.Target).ToArray();
             var previous = matching.FirstOrDefault(candidate => candidate.IsParagraph && candidate.Anchor == window.Anchor
                 && candidate.Pivot == window.Pivot);
-            if (window.Units.Any(unit => MachineFor(current, window, unit) is not null &&
+            var shown = ActiveMachineAlignment(current, key.Target);
+            var active = window.UnitFor(current.Position);
+            // Even if this anchor is unchanged, a different overlapping window can be showing older text.
+            var activeChanged = active is not null && MachineFor(current, window, active) is not null &&
+                (shown is null || !SameCachedTranslation(window, active, shown.Value.Window, shown.Value.Unit));
+            if (activeChanged || window.Units.Any(unit => MachineFor(current, window, unit) is not null &&
                 (previous?.UnitFor(unit.First) is not { } old || MachineFor(current, previous, old) is null ||
-                    previous.LegacyGroup != window.LegacyGroup || old.MachineText != unit.MachineText ||
-                    old.Pivot != unit.Pivot || old.DirectModelRevision != unit.DirectModelRevision ||
-                    !old.Sources.SequenceEqual(unit.Sources))))
+                    !SameCachedTranslation(window, unit, previous, old))))
             {
                 if (previous is not null && previous.LegacyGroup == window.LegacyGroup)
                     window = window with { Units = window.Units.Select(unit =>
@@ -289,11 +291,9 @@ public partial class ReadingPage
             }
 
             if (cached.Sentence is { } sentence && ReviewedFor(current, key.Target, key.Sentence) is null &&
-                !matching.Any(previous => previous.Pivot == sentence.PivotLanguage
-                    && previous.UnitFor(current.Position) is { } unit && MachineFor(current, previous, unit) is not null
-                    && unit.MachineText == sentence.Text && unit.DirectModelRevision == sentence.DirectModelRevision) &&
-                BuildSentenceWindow(current, scope, sentence) is { } standalone)
-                RememberWindow(standalone, background: true);
+                BuildSentenceWindow(current, scope, sentence) is { } standalone &&
+                (shown is null || !SameCachedTranslation(standalone, standalone.Units[0], shown.Value.Window, shown.Value.Unit)))
+                RememberWindow(standalone);
         }
         catch (CoreException) { } // Cache lookup can race a library change. Manual translation stays available.
         finally
@@ -302,6 +302,12 @@ public partial class ReadingPage
             if (readingPageActive) UpdateTranslation();
         }
     }
+
+    private static bool SameCachedTranslation(TranslationWindow window, AlignedUnit unit,
+        TranslationWindow otherWindow, AlignedUnit otherUnit) =>
+        window.LegacyGroup == otherWindow.LegacyGroup && unit.MachineText == otherUnit.MachineText &&
+        unit.Pivot == otherUnit.Pivot && unit.DirectModelRevision == otherUnit.DirectModelRevision &&
+        unit.Sources.SequenceEqual(otherUnit.Sources);
 
     private void InvalidateSentenceTranslation(TranslationScope scope, string sentenceId)
     {
