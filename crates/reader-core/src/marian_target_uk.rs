@@ -3,29 +3,15 @@ use unicode_segmentation::UnicodeSegmentation;
 use whatlang::{Detector, Lang};
 
 const FRENCH_MANNER_OF_WALKING: &str = " de son pas souple et fort";
-pub(crate) const INSTRUCTION_REVISION: &str = "fr-uk-instructions-v4";
+pub(crate) const INSTRUCTION_REVISION: &str = "fr-uk-instructions-v5";
 
 /// Established Ukrainian forms for complete publication labels and names.
 pub(crate) fn publication_term(source: &str) -> Option<String> {
-    if let Some((label, name)) = source.split_once(':') {
-        let credit = match label.trim().to_lowercase().as_str() {
-            "adaptation" => Some("Адаптація"),
-            "illustrations" => Some("Ілюстрації"),
-            "traduction" => Some("Переклад"),
-            _ => None,
-        };
-        if let Some(credit) = credit {
-            let parts: Vec<_> = name.split_whitespace().collect();
-            if (2..=6).contains(&parts.len()) && parts.first()?.starts_with(char::is_uppercase)
-                && parts.last()?.starts_with(char::is_uppercase) && parts.iter().all(|part|
-                    part.chars().all(|ch| ch.is_alphabetic() || matches!(ch, '-' | '\'' | '’' | '.')))
-            {
-                return Some(format!("{credit}: {}", parts.join(" ")));
-            }
-        }
+    let source = source.split_whitespace().collect::<Vec<_>>().join(" ");
+    if let Some(credit) = publication_credit(&source) {
+        return Some(credit);
     }
-    let normalized = source.split_whitespace().collect::<Vec<_>>().join(" ")
-        .to_lowercase().replace('’', "'");
+    let normalized = source.to_lowercase().replace('’', "'");
     let (volume, title) = normalized.split_once(':').map_or((None, normalized.as_str()), |(prefix, title)| {
         let volume = prefix.trim().strip_prefix("tome ").filter(|number| {
             !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
@@ -45,6 +31,39 @@ pub(crate) fn publication_term(source: &str) -> Option<String> {
         Some(number) => format!("Том {number}. {translated}"),
         None => translated.to_owned(),
     })
+}
+
+fn publication_credit(source: &str) -> Option<String> {
+    let (label, name) = if let Some((label, name)) = source.split_once(':') {
+        (label.trim_end(), name.trim_start())
+    } else {
+        let (_, rest) = source.split_once(' ')?;
+        let (_, name) = rest.split_once(' ')?;
+        (&source[..source.len() - name.len() - 1], name)
+    };
+    let credit = match label.to_lowercase().as_str() {
+        "adaptation" | "adaptation de" | "adapté par" | "adaptée par" => "Адаптація",
+        "illustrations" | "illustrations de" | "illustré par" | "illustrée par" => "Ілюстрації",
+        "traduction" | "traduction de" | "traduit par" | "traduite par" => "Переклад",
+        "texte" | "texte de" | "écrit par" | "écrite par" => "Текст",
+        _ => return None,
+    };
+    let name_words: Vec<_> = name.trim_end_matches('.').split_whitespace().collect();
+    let name_part = |part: &str| {
+        let stem = part.strip_prefix("d’").or_else(|| part.strip_prefix("d'")).unwrap_or(part);
+        stem.starts_with(char::is_uppercase)
+            && (stem.chars().all(|ch| ch.is_alphabetic() || matches!(ch, '-' | '\'' | '’'))
+                || stem.strip_suffix('.').is_some_and(|initial| initial.chars().count() == 1))
+    };
+    if !(2..=8).contains(&name_words.len()) || !name_part(name_words[0])
+        || !name_part(name_words[name_words.len() - 1])
+        || !name_words.iter().all(|part| {
+            name_part(part) || matches!(*part, "de" | "des" | "du" | "la" | "le" | "van" | "von")
+        })
+    {
+        return None;
+    }
+    Some(format!("{credit}: {name}"))
 }
 
 /// Make the action and its object explicit before passing short exercise commands to Marian.
@@ -338,6 +357,20 @@ fn quote_closer(open: char) -> Option<char> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn publication_credits_translate_the_role_and_preserve_the_name() {
+        for (source, expected) in [
+            ("  Illustré par\nAnne de La Roche  ", "Ілюстрації: Anne de La Roche"),
+            ("Traduction\u{a0}: M. d’Aubigny.", "Переклад: M. d’Aubigny."),
+            ("Texte de Julie Bernard", "Текст: Julie Bernard"),
+            ("Adaptation : Vincent Leroger", "Адаптація: Vincent Leroger"),
+        ] {
+            assert_eq!(publication_term(source).as_deref(), Some(expected));
+        }
+        assert!(publication_term("Adapté par plusieurs personnes.").is_none());
+        assert!(publication_term("Traduction : un travail difficile.").is_none());
+    }
 
     #[test]
     fn makes_imperative_objects_explicit_in_french_exercises() {

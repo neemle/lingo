@@ -1617,6 +1617,17 @@ mod tests {
     }
 
     #[test]
+    fn publication_credit_uses_the_direct_reader_route_without_model_inference() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        french_uk_route_with_invalid_assets(&store);
+        let document = store.import("Credits.txt", "Illustré par Anne de La Roche".as_bytes(), "fr").unwrap();
+        let translated = store.translate_installed_sentence(&document.id, &document.sentences[0].id, "uk")
+            .unwrap().unwrap();
+        assert_eq!(translated.segments, ["Ілюстрації: Anne de La Roche"]);
+    }
+
+    #[test]
     fn pdf_page_batches_missing_units_and_regenerates_only_the_requested_sentence() {
         #[derive(Default)]
         struct Provider { batches: Vec<Vec<String>>, fail: bool }
@@ -3062,12 +3073,12 @@ fn cache_key(
             .unwrap_or(4)
     };
     let version = match route {
+        Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" && segments.iter().any(|text|
+            crate::marian_target_uk::publication_term(text.as_ref()).is_some()) => 15,
         _ if segments.iter().any(|text| crate::protected_translation::web_address_spans(text.as_ref()).next().is_some())
             || context.is_some_and(|text| crate::protected_translation::web_address_spans(text).next().is_some()) => 14,
         _ if segments.iter().any(|text| crate::protected_translation::contains_protected(text.as_ref()))
             || context.is_some_and(crate::protected_translation::contains_protected) => 13,
-        Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" && segments.iter().any(|text|
-            crate::marian_target_uk::publication_term(text.as_ref()).is_some()) => 12,
         Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" && segments.iter().any(|text|
             crate::marian_target_uk::french_dialogue_formula(text.as_ref()).is_some()) => 11,
         _ if settings.beam_size > 1 && segments.iter().any(|text|

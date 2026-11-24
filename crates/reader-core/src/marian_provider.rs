@@ -1328,6 +1328,53 @@ impl TranslationProvider for MarianProvider<'_> {
         if !(1..=8).contains(&settings.beam_size) {
             return Err(TranslationBatchError::Failed("Некоректні параметри декодування перекладу".into()));
         }
+        if (self.canceled)() {
+            return Err(TranslationBatchError::deferred("Переклад скасовано.".into()));
+        }
+        if edge.source == "fr" && edge.target == "uk" {
+            return translate_publication_rows(segments, |remaining| {
+                self.translate_model_rows(edge, remaining, settings)
+            });
+        }
+        self.translate_model_rows(edge, segments, settings)
+    }
+}
+
+fn translate_publication_rows(
+    segments: &[String],
+    translate: impl FnOnce(&[String]) -> std::result::Result<Vec<Result<String>>, TranslationBatchError>,
+) -> std::result::Result<Vec<Result<String>>, TranslationBatchError> {
+    let fixed: Vec<_> = segments.iter()
+        .map(|segment| crate::marian_target_uk::publication_term(segment)).collect();
+    if fixed.iter().all(Option::is_none) {
+        return translate(segments);
+    }
+    let remaining: Vec<_> = segments.iter().zip(&fixed).filter_map(|(segment, fixed)| {
+        fixed.is_none().then(|| segment.clone())
+    }).collect();
+    if remaining.is_empty() {
+        return Ok(fixed.into_iter().flatten().map(Ok).collect());
+    }
+    let (rows, deferred) = match translate(&remaining) {
+        Ok(rows) => (rows, None),
+        Err(TranslationBatchError::Deferred { message, completed }) => (completed, Some(message)),
+        Err(TranslationBatchError::Failed(message)) => (vec![Err(message); remaining.len()], None),
+    };
+    if rows.len() > remaining.len() || deferred.is_none() && rows.len() != remaining.len() {
+        return Err(TranslationBatchError::Failed("Мовний пакет повернув некоректне вирівнювання перекладу".into()));
+    }
+    let mut rows = rows.into_iter();
+    let completed = fixed.into_iter().map_while(|value| value.map(Ok).or_else(|| rows.next())).collect();
+    match deferred {
+        Some(message) => Err(TranslationBatchError::Deferred { message, completed }),
+        None => Ok(completed),
+    }
+}
+
+impl MarianProvider<'_> {
+    fn translate_model_rows(
+        &self, edge: &ModelEdge, segments: &[String], settings: TranslationSettings,
+    ) -> std::result::Result<Vec<Result<String>>, TranslationBatchError> {
         if let Some(model) = self.automatic.as_ref().filter(|model| model.edge().revision == edge.revision) {
             return model.translate(segments, settings.beam_size == 6, self.background, self.canceled);
         }
@@ -1363,9 +1410,7 @@ impl TranslationProvider for MarianProvider<'_> {
             Err(message) => Err(TranslationBatchError::Failed(message)),
         }
     }
-}
 
-impl MarianProvider<'_> {
     fn translate_package(
         directory: &Path,
         package: &Package,
@@ -1450,9 +1495,7 @@ impl MarianProvider<'_> {
         'segments: for segment in segments {
             checkpoint()?;
             if package.source == "fr" && package.target == "uk" {
-                if let Some(text) = crate::marian_target_uk::publication_term(segment)
-                    .or_else(|| crate::marian_target_uk::french_dialogue_formula(segment))
-                {
+                if let Some(text) = crate::marian_target_uk::french_dialogue_formula(segment) {
                     results.push(Ok(text));
                     continue;
                 }
@@ -1890,5 +1933,30 @@ mod tests {
         assert_eq!(fs::read(other.join("config.json")).unwrap(), b"partial");
         assert!(!store.remove_translation_package("uk", "fr").unwrap());
         assert!(store.remove_translation_package("../fr", "en").is_err());
+    }
+
+    #[test]
+    fn publication_rows_keep_their_positions_when_model_work_is_deferred() {
+        let title = "Texte de Julie Bernard".to_owned();
+        let prose = "Le navire approche.".to_owned();
+        let credit = "Illustré par Anne de La Roche".to_owned();
+        let input = [title.clone(), prose.clone(), credit, "Le marin attend.".to_owned()];
+        let result = super::translate_publication_rows(&input, |remaining| {
+            assert_eq!(remaining, [prose, "Le marin attend.".to_owned()]);
+            Err(super::TranslationBatchError::Deferred {
+                message: "occupé".into(),
+                completed: vec![Ok("Корабель наближається.".into())],
+            })
+        });
+        let Err(super::TranslationBatchError::Deferred { completed, .. }) = result else {
+            panic!("model deferred the second prose fragment");
+        };
+        assert_eq!(completed, [
+            Ok("Текст: Julie Bernard".into()),
+            Ok("Корабель наближається.".into()),
+            Ok("Ілюстрації: Anne de La Roche".into()),
+        ]);
+        let fixed = super::translate_publication_rows(&[title], |_| panic!("all fragments are resolved")).unwrap();
+        assert_eq!(fixed, [Ok("Текст: Julie Bernard".into())]);
     }
 }
