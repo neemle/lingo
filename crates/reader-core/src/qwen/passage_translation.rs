@@ -358,8 +358,8 @@ fn recover_chunk(
 fn split_for_retry(input: &str, context_overflow: bool) -> Option<(&str, &str)> {
     let input = input.trim();
     let middle = input.len() / 2;
-    let addresses: Vec<_> = protected_translation::web_address_spans(input).collect();
-    let can_split = |offset: &usize| !addresses.iter().any(|span| span.start < *offset && *offset < span.end);
+    let tokens = protected_translation::passage_token_spans(input);
+    let can_split = |offset: &usize| !tokens.iter().any(|span| span.start < *offset && *offset < span.end);
     let nearest = |position: &usize| position.abs_diff(middle);
     let offset = Layout::ClosingQuotes.segment(input, "").iter().skip(1)
         .map(|sentence| sentence.start_utf8)
@@ -381,6 +381,7 @@ fn split_for_retry(input: &str, context_overflow: bool) -> Option<(&str, &str)> 
                 .filter_map(|(offset, ch)| {
                     ch.is_whitespace().then_some(offset)
                 })
+                .filter(can_split)
                 .min_by_key(nearest)
         })?;
     Some((input[..offset].trim_end(), input[offset..].trim_start()))
@@ -599,6 +600,16 @@ mod tests {
         }).unwrap();
         assert_eq!(requests, [(source.to_owned(), false), (source.to_owned(), true)]);
         assert_eq!(translated.text, "Молодий моряк повертається додому після подорожі.");
+    }
+
+    #[test]
+    fn passage_retry_never_splits_at_decimal_or_grouping_separators() {
+        let price = "1 250,00 euros";
+        let source = format!("Nous avons convenu avant le départ de payer {price} pour le cours du soir après notre retour");
+        assert!(split_for_retry(&source, false).is_none());
+        let (left, right) = split_for_retry(&source, true).unwrap();
+        assert!(left.contains(price) || right.contains(price));
+        assert_eq!(format!("{left} {right}"), source);
     }
 
     #[test]

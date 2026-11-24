@@ -137,6 +137,18 @@ mod tests {
         assert_eq!(join_translated_chunks(pieces.iter().map(|piece| piece.text),
             pieces.iter().map(|piece| piece.separator)), sentence);
     }
+
+    #[test]
+    fn passage_chunk_limits_keep_grouped_prices_and_dotted_identifiers_whole() {
+        for token in ["1 250,00 euros", "A320.200"] {
+            let sentence = format!("{}{token} puis revenez ici.", "Texte ".repeat(42));
+            let pieces = passage_chunks(&sentence).unwrap();
+            assert!(pieces.len() > 1);
+            assert!(pieces.iter().any(|chunk| chunk.text.contains(token)), "{token}");
+            assert_eq!(join_translated_chunks(pieces.iter().map(|piece| piece.text),
+                pieces.iter().map(|piece| piece.separator)), sentence);
+        }
+    }
 }
 
 fn normalize_passage(document: &Document, range: Range<usize>) -> String {
@@ -201,8 +213,8 @@ fn chunks(text: &str) -> Result<Vec<&str>> {
         let cut = if end == rest.len() {
             end
         } else {
-            let addresses: Vec<_> = crate::protected_translation::web_address_spans(rest).collect();
-            let spanning = addresses.iter().find(|span| span.start < end && end < span.end);
+            let tokens = crate::protected_translation::passage_token_spans(rest);
+            let spanning = tokens.iter().find(|span| span.start < end && end < span.end);
             let limit = spanning.map_or(end, |span| if span.start == 0 { span.end } else { span.start });
             let prefix = &rest[..limit];
             let minimum = prefix
@@ -213,8 +225,11 @@ fn chunks(text: &str) -> Result<Vec<&str>> {
                 .rmatch_indices(['.', '!', '?', '…'])
                 .map(|(offset, ch)| offset + ch.len())
                 .filter(|&offset| offset >= minimum)
-                .find(|offset| !addresses.iter().any(|span| span.start < *offset && *offset <= span.end))
-                .or_else(|| prefix.rfind(char::is_whitespace))
+                .find(|offset| !tokens.iter().any(|span| span.start < *offset && *offset <= span.end))
+                .or_else(|| prefix.char_indices().rev().find_map(|(offset, ch)| {
+                    (ch.is_whitespace() && !tokens.iter().any(|span| span.start < offset && offset < span.end))
+                        .then_some(offset)
+                }))
                 .filter(|&offset| offset > 0)
                 .unwrap_or(limit)
         };

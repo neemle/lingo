@@ -228,6 +228,21 @@ pub(crate) fn contains_protected(source: &str) -> bool {
     protected_spans(source).next().is_some()
 }
 
+pub(crate) fn passage_token_spans(source: &str) -> Vec<Range<usize>> {
+    let mut spans: Vec<_> = protected_spans(source).map(|(span, _)| span)
+        .chain(euro_amounts(source).map(|(span, _)| span)).collect();
+    spans.sort_unstable_by_key(|span| span.start);
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(spans.len());
+    for span in spans {
+        if let Some(previous) = merged.last_mut().filter(|previous| previous.end > span.start) {
+            previous.end = previous.end.max(span.end);
+        } else {
+            merged.push(span);
+        }
+    }
+    merged
+}
+
 pub(crate) fn contains_dotted_acronym(source: &str) -> bool {
     token_spans(source, |word| is_dotted_acronym(word).then_some(None))
         .any(|(range, _)| is_dotted_acronym(&source[range]))
