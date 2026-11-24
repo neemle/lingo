@@ -47,7 +47,8 @@ public partial class ReadingPage
     private PdfLayoutAddress? pendingPdfCacheRefresh;
     private PdfAutoTranslation? pendingPdfAutoTranslation;
     private (PdfAutoTranslation Request, int Attempts)? pdfAutoAttempts;
-    private (VerticalStackLayout Panel, PdfPageTranslationRow[] Rows, Label[] Labels, Sentence? Active, string? Query)? overflowContent;
+    private (VerticalStackLayout Panel, PdfPageTranslationRow[] Rows, Label[] Labels, Sentence? Active,
+        string? Query, string? Gloss, int GlossResults)? overflowContent;
     private (PdfLayoutAddress Address, string SentenceId, RectF Bounds, double ViewportHeight)? lastPdfTranslationFollow;
     private const string UntranslatedPdfFragment = "Фрагмент ще не перекладено";
     private static string PdfFragmentState(PdfPageTranslationRow row) =>
@@ -521,23 +522,41 @@ public partial class ReadingPage
     {
         if (row.Text is not { } text || !HasPdfTranslation(row))
             return new Label { Text = row.Failure ?? UntranslatedPdfFragment, Style = (Style)Resources["ReaderMeta"] };
-        var label = new Label { FontFamily = "Georgia", FontSize = size, LineHeight = 1.3 };
-        if (pdfLayoutSentence is { } active && row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16 &&
-            query is not null && DocumentFind.SourceMatch(text, query) is { } match)
+        var label = new Label { Text = text, FontFamily = "Georgia", FontSize = size, LineHeight = 1.3 };
+        if (IsActivePdfRow(row, pdfLayoutSentence)) SetPdfTranslationTextHighlights(label, text, query, null);
+        return label;
+    }
+
+    private static bool IsActivePdfRow(PdfPageTranslationRow row, Sentence? active) =>
+        active is not null && row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16;
+
+    private void SetPdfTranslationTextHighlights(Label label, string text, string? query, string? gloss)
+    {
+        var matches = GlossRanges(text, gloss)
+            .Select(range => (range.Start, range.End, Color: TranslationGlossHighlight)).ToList();
+        if (query is not null && DocumentFind.SourceMatch(text, query) is { } match)
         {
             var end = match.StartUtf16 + match.LengthUtf16;
-            label.FormattedText = new FormattedString
-            {
-                Spans =
-                {
-                    new Span { Text = text[..match.StartUtf16] },
-                    new Span { Text = match.Text, BackgroundColor = PdfSearchMatchColor },
-                    new Span { Text = text[end..] },
-                },
-            };
+            matches.RemoveAll(range => range.Start < end && range.End > match.StartUtf16);
+            matches.Add((match.StartUtf16, end, PdfSearchMatchColor));
         }
-        else label.Text = text;
-        return label;
+        var offset = 0;
+        var formatted = new FormattedString();
+        foreach (var (start, end, color) in matches.OrderBy(range => range.Start))
+        {
+            if (start < offset || end <= start || end > text.Length) continue;
+            if (start > offset) formatted.Spans.Add(new Span { Text = text[offset..start] });
+            formatted.Spans.Add(new Span { Text = text[start..end], BackgroundColor = color });
+            offset = end;
+        }
+        if (offset == 0)
+        {
+            if (label.FormattedText is not null) label.FormattedText = null;
+            if (label.Text != text) label.Text = text;
+            return;
+        }
+        if (offset < text.Length) formatted.Spans.Add(new Span { Text = text[offset..] });
+        label.FormattedText = formatted;
     }
 
     private async Task LoadPdfPageLayoutAsync(PdfLayoutAddress address, bool cachedOnly, PdfSentenceRefresh? refresh = null)
@@ -910,7 +929,9 @@ public partial class ReadingPage
         background.IsVisible = background.Source is not null && source is { Lines.Length: > 0 } &&
             pdfLayoutRows.Length > 0;
         var gloss = (detached ? DetachedWordCard : WordCard).IsVisible ? PopupGloss(detached) : null;
-        QueueGlossAlignment(gloss, pdfLayoutRows.Select(row => row.Text));
+        var activeSentence = pdfLayoutSentence;
+        QueueGlossAlignment(gloss, pdfLayoutRows.Where(row => IsActivePdfRow(row, activeSentence)).Select(row => row.Text));
+        var glossResults = gloss is null ? 0 : glossAlignment?.Resolved.Count ?? 0;
         var query = PdfTranslationFindQuery();
         if (pdfDrawingPlan is not { } cached || cached.Rows != pdfLayoutRows || !SamePdfGeometry(cached.Source, source) ||
             cached.PreserveArtwork != background.IsVisible)
@@ -920,7 +941,7 @@ public partial class ReadingPage
             pdfDrawingPlan = cached;
         }
         var drawing = new TranslatedPdfDrawing(pdfLayoutRows,
-            pdfLayoutSentence, text => GlossRanges(text, gloss), background.IsVisible, query,
+            activeSentence, text => GlossRanges(text, gloss), background.IsVisible, query,
             PdfReadingHorizontalBounds(), cached.Plan, surface);
         var overflow = detached ? DetachedPdfTranslationOverflow : PdfTranslationOverflow;
         drawing.OverflowChanged = rows => Dispatcher.Dispatch(() =>
@@ -932,7 +953,7 @@ public partial class ReadingPage
                 if (SemanticProperties.GetDescription(surface) != description)
                     SemanticProperties.SetDescription(surface, description);
                 var bounds = drawing.MatchBounds ?? drawing.ActiveBounds;
-                ShowPdfTranslationOverflow(overflow, rows, bounds is not null, query);
+                ShowPdfTranslationOverflow(overflow, rows, bounds is not null, query, gloss, glossResults);
                 if (bounds is { } activeBounds && pdfLayoutSentence is { } active &&
                     !rows.Any(row => row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16))
                     _ = FollowRenderedPdfSentenceAsync(viewport, surface, drawing, active, activeBounds);
@@ -964,15 +985,15 @@ public partial class ReadingPage
     }
 
     private void ShowPdfTranslationOverflow(VerticalStackLayout panel, PdfPageTranslationRow[] rows, bool hasRenderedActive,
-        string? query)
+        string? query, string? gloss, int glossResults)
     {
         var active = pdfLayoutSentence;
         var previous = overflowContent;
         Label[] labels;
-        if (previous is { } current && current.Panel == panel && current.Query == query &&
-            (query is null || current.Active == active) && current.Rows.SequenceEqual(rows))
+        if (previous is { } current && current.Panel == panel && current.Rows.SequenceEqual(rows))
         {
-            if (current.Active == active) return;
+            if (current.Active == active && current.Query == query && current.Gloss == gloss &&
+                current.GlossResults == glossResults) return;
             labels = current.Labels;
         }
         else
@@ -988,7 +1009,7 @@ public partial class ReadingPage
                 for (var index = 0; index < rows.Length; index++)
                 {
                     var row = rows[index];
-                    var label = PdfTranslationTextLabel(row, 19, query);
+                    var label = PdfTranslationTextLabel(row, 19);
                     var tap = new TapGestureRecognizer();
                     tap.Tapped += async (_, _) => await SelectTranslatedPdfRowAsync(row);
                     label.GestureRecognizers.Add(tap);
@@ -997,17 +1018,19 @@ public partial class ReadingPage
                 }
             }
         }
-        overflowContent = (panel, rows, labels, active, query);
+        overflowContent = (panel, rows, labels, active, query, gloss, glossResults);
 
         Label? activeLabel = null;
         for (var index = 0; index < labels.Length; index++)
         {
-            var selected = active is not null && rows[index].StartUtf16 < active.EndUtf16 && rows[index].EndUtf16 > active.StartUtf16;
+            var row = rows[index];
+            var selected = IsActivePdfRow(row, active);
+            if (row.Text is { } text && HasPdfTranslation(row) && (selected || labels[index].FormattedText is not null))
+                SetPdfTranslationTextHighlights(labels[index], text, selected ? query : null, selected ? gloss : null);
             labels[index].BackgroundColor = selected ? Color.FromArgb("#FFF1CF") : Colors.Transparent;
             if (selected) activeLabel ??= labels[index];
         }
-        var previouslyInOverflow = active is not null && previous?.Rows.Any(row =>
-            row.StartUtf16 < active.EndUtf16 && row.EndUtf16 > active.StartUtf16) == true;
+        var previouslyInOverflow = previous?.Rows.Any(row => IsActivePdfRow(row, active)) == true;
         if ((activeLabel is not null || !hasRenderedActive) &&
             (previous?.Active != active || previous?.Panel != panel || previous?.Query != query ||
                 (activeLabel is not null && previous?.Labels != labels) ||
@@ -1353,7 +1376,7 @@ public partial class ReadingPage
                         var right = Math.Min(fragment.Start + glossEnd - range.Start, end);
                         if (left < right)
                         {
-                            canvas.FillColor = Color.FromArgb(lightInk ? "#604321" : "#FFE48B");
+                            canvas.FillColor = lightInk ? Color.FromArgb("#604321") : TranslationGlossHighlight;
                             canvas.FillRectangle(BoundsFor(left, right));
                         }
                     }

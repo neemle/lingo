@@ -6,6 +6,7 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage
 {
+    private static readonly Color TranslationGlossHighlight = Color.FromArgb("#FFE48B");
     private int popupTranslationRequest;
     private sealed record PopupTranslation(string Document, int? Page, string Revision, TextSelection Selection,
         string Target, string Text, string Source, bool Saved);
@@ -199,7 +200,7 @@ public partial class ReadingPage
         {
             if (match < start || end <= match || end > text.Length) continue;
             if (match > start) AddSpan(text[start..match]);
-            AddSpan(text[match..end], Color.FromArgb("#FFE48B"));
+            AddSpan(text[match..end], TranslationGlossHighlight);
             start = end;
         }
         if (start > 0 && start < text.Length) AddSpan(text[start..]);
