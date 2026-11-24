@@ -113,6 +113,11 @@ impl Store {
 
 impl ModelTransfer {
     pub fn run(self, action: TransferAction) -> Result<TransferPlan> {
+        if let (TransferAction::Resume | TransferAction::Activate, Installer::Optional(job)) =
+            (&action, &self.installer)
+        {
+            job.check_memory_capacity()?;
+        }
         if matches!(&action, TransferAction::Status) && !self.root.exists() {
             return Ok(self.inactive(TransferStatus::Idle));
         }

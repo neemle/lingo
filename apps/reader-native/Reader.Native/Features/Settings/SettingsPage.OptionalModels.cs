@@ -90,13 +90,15 @@ public partial class SettingsPage
             _ => "Доступну пам’ять визначити не вдалося.",
         };
         OptionalModelChoice.IsEnabled = !optionalModelBusy;
-        var canInstall = selected is not null && !retired;
+        var canManage = selected is not null && !retired;
+        var canInstall = canManage && !(memory is { TotalMib: long capacity, MinimumTotalMib: var requiredTotal }
+            && capacity < requiredTotal);
         RemoveOptionalModel.IsEnabled = !optionalModelBusy && selected is not null;
         DownloadOptionalModel.IsEnabled = !optionalModelBusy && canInstall;
         OpenOptionalModel.IsEnabled = !optionalModelBusy && optionalInventoryRead && canInstall;
-        ExportOptionalModel.IsEnabled = !optionalModelBusy && canInstall && selected is { FilesPresent: true };
-        VerifyOptionalModel.IsEnabled = !optionalModelBusy && canInstall && selected is { HasLocalFiles: true };
-        RollbackOptionalModel.IsEnabled = !optionalModelBusy && canInstall && selected is { HasRecoveryCopy: true };
+        ExportOptionalModel.IsEnabled = !optionalModelBusy && canManage && selected is { FilesPresent: true };
+        VerifyOptionalModel.IsEnabled = !optionalModelBusy && canManage && selected is { HasLocalFiles: true };
+        RollbackOptionalModel.IsEnabled = !optionalModelBusy && canManage && selected is { HasRecoveryCopy: true };
         var localTransfer = selected is not null && optionalTransfer?.Revision == selected.Revision
             ? optionalTransfer : null;
         RepairOptionalModel.IsEnabled = !optionalModelBusy && canInstall && selected is not null
@@ -186,6 +188,7 @@ public partial class SettingsPage
                 if (ReferenceEquals(optionalDownload, cancellation))
                     OptionalProgress.Progress = Math.Min(1, (double)bytes / total);
             });
+            await session.CheckOptionalModelSpaceAsync(model.Id, staging);
             if (files.Length == 1 && Path.GetExtension(files[0].FileName).Equals(".zip", StringComparison.OrdinalIgnoreCase))
             {
                 var archive = Path.Combine(staging, "model.zip");
@@ -193,7 +196,7 @@ public partial class SettingsPage
                 OptionalModelStatus.Text = $"Копіюємо архів {model.Name}…";
                 await using (var input = await files[0].OpenReadAsync())
                 await using (var output = File.Create(archive))
-                    await NativeFiles.CopyBoundedAsync(input, output, checked((int)(total + 1024 * 1024)),
+                    await NativeFiles.CopyBoundedAsync(input, output, checked(total + 1024 * 1024),
                         cancellation.Token, progress);
 
                 BeginActivation();
@@ -201,7 +204,6 @@ public partial class SettingsPage
             }
             else
             {
-                await session.CheckOptionalModelSpaceAsync(model.Id, staging);
                 var sources = files.Select(file => (file.FileName, (Func<Task<Stream>>)file.OpenReadAsync)).ToArray();
                 OptionalModelStatus.Text = $"Копіюємо локальні файли {model.Name}…";
                 await ModelDownload.StageOptionalModelFilesAsync(model, staging, sources, progress, cancellation.Token);

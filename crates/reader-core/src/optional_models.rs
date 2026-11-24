@@ -441,15 +441,7 @@ fn check_memory(model: &Model) -> Result<()> {
     let Some(available) = memory.available_mib else {
         return Err("Не вдалося визначити доступну пам’ять. Модель пропущено.".into());
     };
-    if memory
-        .total_mib
-        .is_some_and(|total| total < memory.minimum_total_mib)
-    {
-        return Err(format!(
-            "Для {} потрібно щонайменше {} МіБ RAM.",
-            model.name, memory.minimum_total_mib
-        ));
-    }
+    check_total_memory(model, memory.total_mib)?;
     if !memory.ready {
         return Err(format!(
             "Для {} потрібно {} МіБ доступної пам’яті. Зараз доступно {available} МіБ.",
@@ -457,6 +449,21 @@ fn check_memory(model: &Model) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn check_total_memory(model: &Model, total_mib: Option<u64>) -> Result<()> {
+    let minimum = model.budget.minimum_total_mib;
+    if total_mib.is_some_and(|total| total < minimum) {
+        return Err(format!("Для {} потрібно щонайменше {minimum} МіБ RAM.", model.name));
+    }
+    Ok(())
+}
+
+fn check_memory_capacity(model: &Model) -> Result<()> {
+    if model.budget.minimum_total_mib == 0 {
+        return Ok(());
+    }
+    check_total_memory(model, model.budget.readiness().total_mib)
 }
 
 /// A verified local candidate installation independent of the SQLite connection.
@@ -480,6 +487,10 @@ pub(crate) fn download_manifest(id: &str) -> Result<crate::model_transfer::Downl
 }
 
 impl OptionalModelInstallJob {
+    pub(crate) fn check_memory_capacity(&self) -> Result<()> {
+        check_memory_capacity(self.model)
+    }
+
     pub fn run(self) -> Result<()> {
         install_optional_model_files(&self.root, self.model, &self.staging_root, |directory| {
             probe_optional_model(self.model, directory)
@@ -580,6 +591,7 @@ impl Store {
 
     pub fn check_optional_model_space(&self, id: &str, staging_root: &Path) -> Result<()> {
         let model = model(id)?;
+        check_memory_capacity(model)?;
         let staged = staging_root.join(model.revision);
         fs::create_dir_all(&staged).map_err(model_error)?;
         fs::create_dir_all(&self.optional_model_directory).map_err(model_error)?;
@@ -705,6 +717,7 @@ fn install_optional_model_candidate(
     stage: impl FnOnce(&Path) -> Result<()>,
     probe: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<()> {
+    check_memory_capacity(model)?;
     fs::create_dir_all(root).map_err(model_error)?;
     let paths = ModelPaths::new(root, model.id);
     let _gate = lock_package(&paths.lock, true)?;
