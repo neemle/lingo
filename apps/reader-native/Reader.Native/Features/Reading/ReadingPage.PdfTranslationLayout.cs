@@ -813,6 +813,12 @@ public partial class ReadingPage
             CurrentPdfLayoutAddress() is not { } address || address != pdfLayoutRequest) return;
 
         var request = ++pdfTranslationViewportRequest;
+        if (readingLayout == ReaderLayout.Translation)
+        {
+            await SyncPdfTranslationPositionAsync(request, address, viewport, surface);
+            return;
+        }
+
         var source = CurrentSourceViewport();
         var overflow = OverflowRowAtScrollPosition(viewport);
         if (overflow is not null) sourceViewportMovement = null;
@@ -831,6 +837,23 @@ public partial class ReadingPage
             OverflowRowAtScrollPosition(viewport) is not { } row ||
             surface.Drawable is not TranslatedPdfDrawing drawing || drawing.SourceBounds(row) is null) return;
         if (pdfLayoutSentence is not { } active || active.StartUtf16 != row.StartUtf16 || active.EndUtf16 != row.EndUtf16)
+            await SelectTranslatedPdfRowAsync(row);
+    }
+
+    private async Task SyncPdfTranslationPositionAsync(int request, PdfLayoutAddress address,
+        ScrollView viewport, GraphicsView surface)
+    {
+        if (CurrentSourceViewport(requireVisible: false) is not { } scope) return;
+        await Task.Delay(220);
+        if (request != pdfTranslationViewportRequest || readingLayout != ReaderLayout.Translation ||
+            pdfTranslationScroll is not null || !viewport.IsVisible || CurrentPdfLayoutAddress() != address ||
+            scope != CurrentSourceViewport(requireVisible: false) ||
+            surface.Drawable is not TranslatedPdfDrawing drawing) return;
+
+        var active = pdfLayoutSentence;
+        var row = OverflowRowAtScrollPosition(viewport) ??
+            drawing.FirstVisibleRow(viewport.ScrollY, viewport.ScrollY + viewport.Height);
+        if (row is not null && !IsActivePdfRow(row, active))
             await SelectTranslatedPdfRowAsync(row);
     }
 
@@ -940,7 +963,8 @@ public partial class ReadingPage
     {
         var (original, originalSurface) = ActiveInlinePdf();
         var (translated, translatedSurface) = ActivePdfTranslationLayout();
-        if (!PdfFollowsScroll || pdfTranslationScroll is not null || !original.IsVisible || !translated.IsVisible ||
+        if (readingLayout == ReaderLayout.Translation || !PdfFollowsScroll ||
+            pdfTranslationScroll is not null || !original.IsVisible || !translated.IsVisible ||
             originalSurface.Height <= 0 || translatedSurface.Height <= 0) return;
 
         var drawing = translatedSurface.Drawable as TranslatedPdfDrawing;
@@ -1247,6 +1271,21 @@ public partial class ReadingPage
                     point.Y >= bounds.Top && point.Y <= bounds.Bottom)
                     return source;
             return null;
+        }
+
+        internal PdfPageTranslationRow? FirstVisibleRow(double top, double bottom)
+        {
+            PdfPageTranslationRow? first = null;
+            var firstTop = float.PositiveInfinity;
+            foreach (var (bounds, row) in hitTargets)
+            {
+                if (bounds.Top >= bottom || bounds.Bottom <= top) continue;
+                if (IsActivePdfRow(row, active)) return row;
+                if (bounds.Top >= firstTop) continue;
+                first = row;
+                firstTop = bounds.Top;
+            }
+            return first;
         }
 
         public void Draw(ICanvas canvas, RectF dirtyRect)

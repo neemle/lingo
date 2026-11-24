@@ -88,7 +88,7 @@ public partial class ReadingPage
         finally { sourceViewportSyncQueued = false; }
     }
 
-    private SourceViewportScope? CurrentSourceViewport()
+    private SourceViewportScope? CurrentSourceViewport(bool requireVisible = true)
     {
         var session = AppState.Session;
         if (!readingPageActive || !TranslationVisible || WordOverlay.IsVisible || utteranceActive ||
@@ -97,8 +97,8 @@ public partial class ReadingPage
         if (movingPdfPage || pdfWindowLoading) return null;
 #endif
         var detached = DetachedPdfReader.IsVisible;
-        if (detached ? !DetachedSourcePane.IsVisible || loadingDetachedSentence || speakingDetachedSentence
-            : !SourcePane.IsVisible || PdfPageNotice.IsVisible) return null;
+        if (detached ? loadingDetachedSentence || speakingDetachedSentence : PdfPageNotice.IsVisible) return null;
+        if (requireVisible && !(detached ? DetachedSourcePane : SourcePane).IsVisible) return null;
 
         var page = detached ? detachedAddress?.Page : CurrentNativePdfWindow(document.Id)?.Center;
         VisualElement view = detached ? DetachedPdfText : SourceText;
@@ -125,8 +125,8 @@ public partial class ReadingPage
     {
         var detached = ReferenceEquals(sender, DetachedTranslationViewport);
         var viewport = detached ? DetachedTranslationViewport : TranslationViewport;
-        if (CurrentSourceViewport() is not { } source) return;
-        bool Current() => source == CurrentSourceViewport() && !selectingPreviewRow && !translating &&
+        if (CurrentSourceViewport(requireVisible: false) is not { } source) return;
+        bool Current() => source == CurrentSourceViewport(requireVisible: false) && !selectingPreviewRow && !translating &&
             !translatingDetachedSentence && detached == DetachedPdfReader.IsVisible &&
             Environment.TickCount64 >= translationScrollSuppressedUntil && viewport.IsVisible;
         if (!Current()) return;
