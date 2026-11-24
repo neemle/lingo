@@ -135,6 +135,7 @@ public partial class ReadingPage : ContentPage
         readerOcrReview.CancelInference();
         CancelModelPassage();
         CancelWordExplanation();
+        CancelSyntaxExplanation();
         RestoreCachedModelTranslation(null);
         dictionaryFocus = null;
         documentFindFocus = null;
@@ -168,6 +169,7 @@ public partial class ReadingPage : ContentPage
         readerOcrReview.CancelInference();
         CancelModelPassage();
         CancelWordExplanation();
+        CancelSyntaxExplanation();
         CancelScheduledTranslation();
         StopAnalysisPrefetch();
 #if MACCATALYST

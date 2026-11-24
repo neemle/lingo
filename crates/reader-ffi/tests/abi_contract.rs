@@ -115,6 +115,37 @@ fn canceled_word_explanation_leaves_new_queries_available() {
 }
 
 #[test]
+fn canceling_sentence_review_leaves_word_explanations_and_later_reviews_available() {
+    let store = StoreFixture::new();
+    let imported = call(store.handle, json!({
+        "version": 1, "operation": "import", "name": "phrase.txt", "language": "fr",
+        "bytes": b"Le bateau arrive.",
+    }));
+    assert_eq!(imported["ok"], true, "{imported}");
+    let id = &imported["data"]["id"];
+    let sentence = &imported["data"]["sentences"][0]["id"];
+    let canceled = call(store.handle, json!({
+        "version": 1, "operation": "cancel_sentence_review", "requestId": 5,
+    }));
+    assert_eq!(canceled["ok"], true, "{canceled}");
+    let review = |request_id| call(store.handle, json!({
+        "version": 1, "operation": "review_sentence", "model": "qwen-2b",
+        "document": id, "sentence": sentence, "cachedOnly": true, "requestId": request_id,
+    }));
+    assert_error(&review(Some(0)), "invalid_argument");
+    assert_error(&review(Some(5)), "canceled");
+    for request_id in [Some(6), None] {
+        let fresh = review(request_id);
+        assert_eq!(fresh["ok"], true, "{fresh}");
+    }
+    let word = call(store.handle, json!({
+        "version": 1, "operation": "explain_word", "model": "qwen-2b",
+        "document": id, "sentence": sentence, "word": "bateau", "cachedOnly": true, "requestId": 5,
+    }));
+    assert_eq!(word["ok"], true, "{word}");
+}
+
+#[test]
 fn recovered_pdf_checkpoint_preserves_saved_pages_without_resolving_the_unread_tail() {
     let mut store = StoreFixture::new();
     let original = store.dir.join("checkpoint.pdf");

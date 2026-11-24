@@ -17,6 +17,7 @@ public sealed class CoreClient : IDisposable
     private long nextBackgroundTranslationRequest;
     private long nextOcrPageReviewRequest;
     private long nextWordExplanationRequest;
+    private long nextSentenceReviewRequest;
     private long nextSpeechRequest;
     private long nextSpeechPrefetchRequest;
     public const int MaxImportBytes = 20 * 1024 * 1024;
@@ -489,11 +490,12 @@ public sealed class CoreClient : IDisposable
     public void SetReviewedTranslation(string id, string sentenceId, string target, string text) =>
         Call<JsonElement>(new { version = 1, operation = "set_reviewed_translation", id, sentenceId, target, text });
     public SentenceReview? ReviewSentence(string model, string document, int? page, string? sentence,
-        object? focus = null, string? revisionId = null, bool cachedOnly = false, bool explainSyntax = false) =>
-        CallIndependent<SentenceReview?>(new
-        {
-            version = 1, operation = "review_sentence", model, document, page, sentence, focus, revisionId, cachedOnly, explainSyntax,
-        });
+        object? focus = null, string? revisionId = null, bool cachedOnly = false, bool explainSyntax = false,
+        CancellationToken cancellationToken = default) =>
+        CallCancelable<SentenceReview?>(ref nextSentenceReviewRequest, cancellationToken,
+            requestId => new { version = 1, operation = "review_sentence", model, document, page, sentence,
+                focus, revisionId, cachedOnly, explainSyntax, requestId },
+            requestId => new { version = 1, operation = "cancel_sentence_review", requestId });
 
     public WordExplanation? ExplainWord(string model, string document, string sentence, string word,
         bool cachedOnly = false, int? startUtf16 = null, string? revisionId = null, CancellationToken cancellationToken = default) =>

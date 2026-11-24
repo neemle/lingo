@@ -8,10 +8,14 @@ public partial class ReadingPage
 {
     private WordLookup? syntaxLookup;
     private int wordSyntaxRequest;
+    private CancellationTokenSource? syntaxExplanation;
+
+    private void CancelSyntaxExplanation() => syntaxExplanation?.Cancel();
     private (DetachedAddress Address, string? Revision, TextSelection Selection, Task<WordLookup?> Pending)? detachedLookup;
 
     private void ShowLocalSyntax(WordLookup? lookup, bool loading = false)
     {
+        CancelSyntaxExplanation();
         wordSyntaxRequest++;
         syntaxLookup = lookup;
         WordSyntaxHint.Text = lookup?.SyntaxHint;
@@ -25,6 +29,7 @@ public partial class ReadingPage
 
     private void ResetDetachedSyntax()
     {
+        CancelSyntaxExplanation();
         wordSyntaxRequest++;
         detachedLookup = null;
         SetDetachedSyntaxHint(null);
@@ -80,6 +85,7 @@ public partial class ReadingPage
         var anchor = CurrentAnalysisAnchor(session);
         if (selected is null || anchor is null || detached != anchor.Page.HasValue) return;
 
+        CancelSyntaxExplanation();
         var request = ++wordSyntaxRequest;
         details.IsVisible = !details.IsVisible;
         modelPanel.IsVisible = details.IsVisible;
@@ -176,7 +182,10 @@ public partial class ReadingPage
         if (anchor is null || selected is null || detached != anchor.Page.HasValue) return;
 
         var request = wordSyntaxRequest;
-        bool Current() => request == wordSyntaxRequest && readingPageActive && card.IsVisible && details.IsVisible &&
+        using var inference = new CancellationTokenSource();
+        syntaxExplanation = inference;
+        bool Current() => !inference.IsCancellationRequested && request == wordSyntaxRequest && readingPageActive &&
+            card.IsVisible && details.IsVisible &&
             CurrentAnalysisAnchor(session) == anchor && (detached ? detachedSelection : selection) == selected;
         button.IsEnabled = false;
         result.Text = "Шукаємо пояснення…";
@@ -192,7 +201,7 @@ public partial class ReadingPage
             if (model.FilesPresent) result.Text = "Готуємо пояснення синтаксису…";
             var explanation = await session.ReviewSentenceAsync(model.Id, anchor.DocumentId, anchor.Page,
                 anchor.SentenceId, new { kind = "selection", startUtf16 = selected.StartUtf16, text = selected.Text },
-                anchor.Revision, cachedOnly: !model.FilesPresent, explainSyntax: true);
+                anchor.Revision, cachedOnly: !model.FilesPresent, explainSyntax: true, cancellationToken: inference.Token);
             if (!Current()) return;
             result.Text = explanation switch
             {
@@ -203,7 +212,11 @@ public partial class ReadingPage
             };
         }
         catch (Exception error) { if (Current()) result.Text = error.Message; }
-        finally { button.IsEnabled = true; }
+        finally
+        {
+            if (ReferenceEquals(syntaxExplanation, inference)) syntaxExplanation = null;
+            button.IsEnabled = true;
+        }
     }
 
     private static string DescribeDependency(LinguisticSyntaxLink link)

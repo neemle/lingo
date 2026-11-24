@@ -1048,6 +1048,11 @@ fn extract_focused_review<'a>(
 
 impl ReviewSentenceJob {
     pub fn run(self) -> Result<Option<SentenceReviewResult>> {
+        self.run_until_canceled(&|| false)
+    }
+
+    pub fn run_until_canceled(self, canceled: &dyn Fn() -> bool) -> Result<Option<SentenceReviewResult>> {
+        if canceled() { return Err("Перевірку тексту скасовано.".into()); }
         let Self { windows, explain_syntax, local_syntax } = self;
         if let Some(syntax) = local_syntax {
             return Ok(Some(SentenceReviewResult {
@@ -1072,7 +1077,7 @@ impl ReviewSentenceJob {
             return Ok(read_cache()?.map(|reviews| Self::merge(reviews, true)));
         };
         model.run_requested_with_cache(
-            None,
+            Some(canceled),
             || Ok(read_cache()?.map(|reviews| Some(Self::merge(reviews, true)))),
             |directory, should_yield| {
                 let opening_deadline = Instant::now() + Duration::from_secs(20);
@@ -1083,6 +1088,7 @@ impl ReviewSentenceJob {
                         let mut reviews = Vec::with_capacity(windows.len());
                         let mut cached = true;
                         for window in &windows {
+                            if should_yield() { return Err("Локальний аналіз перервано.".into()); }
                             let review = match window {
                                 HintWork::Cached(Some(review)) => review.clone(),
                                 HintWork::Cached(None) => return Ok(None),
@@ -1556,6 +1562,7 @@ mod tests {
         drop(store);
 
         let store = Store::open(&path).unwrap();
+        assert!(prepare(&store, false, true).run_until_canceled(&|| true).is_err());
         let cached = prepare(&store, false, true).run().unwrap().unwrap();
         assert!(cached.cached);
         assert_eq!(cached.review.syntax.as_deref(), Some(explanation));

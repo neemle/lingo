@@ -105,7 +105,7 @@ public partial class ReadingPage
             || session.Sentence is not { } sentence) return;
         await ShowAnalysisPageAsync("Перевірка речення", sentence.Text,
             start => session.AnalyzeSentenceAsync(document.Id, sentence.Id, revision, start),
-            (model, cachedOnly) => session.ReviewSentenceAsync(model, document.Id, null, sentence.Id, revisionId: revision, cachedOnly: cachedOnly));
+            (model, cachedOnly, cancellationToken) => session.ReviewSentenceAsync(model, document.Id, null, sentence.Id, revisionId: revision, cachedOnly: cachedOnly, cancellationToken: cancellationToken));
     }
 
     private async void OpenExpressionAnalysisClicked(object? sender, EventArgs args)
@@ -141,8 +141,8 @@ public partial class ReadingPage
             }
             await ShowAnalysisPageAsync("Перевірка виразу", choice.Text,
                 _ => session.AnalyzeExpressionAsync(document.Id, sentence.Id, revision, choice.Members),
-                (model, cachedOnly) => session.ReviewSentenceAsync(model, document.Id, null, sentence.Id,
-                    new { kind = "expression", memberStartsUtf16 = choice.Members }, revision, cachedOnly));
+                (model, cachedOnly, cancellationToken) => session.ReviewSentenceAsync(model, document.Id, null, sentence.Id,
+                    new { kind = "expression", memberStartsUtf16 = choice.Members }, revision, cachedOnly, cancellationToken: cancellationToken));
         }
         catch (Exception error)
         {
@@ -157,7 +157,7 @@ public partial class ReadingPage
         AppState.Session.Sentence?.Id == sentence.Id;
 
     private async Task ShowAnalysisPageAsync(string title, string text, Func<int, Task<LinguisticAnalysis>> load,
-        Func<string, bool, Task<SentenceReview?>>? review = null)
+        Func<string, bool, CancellationToken, Task<SentenceReview?>>? review = null)
     {
         if (!readingPageActive) return;
         StopAnalysisPrefetch();
@@ -169,7 +169,7 @@ public partial class ReadingPage
     {
         private readonly Func<int, Task<LinguisticAnalysis>> load;
         private readonly Label status = new();
-        private readonly Func<string, bool, Task<SentenceReview?>>? review;
+        private readonly Func<string, bool, CancellationToken, Task<SentenceReview?>>? review;
         private readonly Button check = new() { Text = "Перевірити з Qwen", HorizontalOptions = LayoutOptions.Start };
         private readonly Label hints = new() { IsVisible = false };
         private readonly ActivityIndicator reviewBusy = new() { IsVisible = false, WidthRequest = 20, HeightRequest = 20,
@@ -180,11 +180,12 @@ public partial class ReadingPage
         private readonly HashSet<(int Start, int End, string Replacement)> displayedSpacing = [];
         private readonly HashSet<string> displayedHints = [];
         private int? nextStart = 0;
+        private CancellationTokenSource? sentenceReview;
         private bool started;
         private bool loading;
 
         internal AnalysisPage(string title, string text, Func<int, Task<LinguisticAnalysis>> load,
-            Func<string, bool, Task<SentenceReview?>>? review)
+            Func<string, bool, CancellationToken, Task<SentenceReview?>>? review)
         {
             Title = title;
             this.load = load;
@@ -219,6 +220,9 @@ public partial class ReadingPage
         private async Task ReviewLocallyAsync(bool cachedOnly)
         {
             if (!check.IsEnabled || review is null) return;
+            using var request = new CancellationTokenSource();
+            sentenceReview = request;
+            var cancellation = request.Token;
             check.IsEnabled = false;
             if (!cachedOnly)
             {
@@ -229,11 +233,14 @@ public partial class ReadingPage
             {
                 var available = (await AppState.Session.OptionalModelsAsync())
                     .FirstOrDefault(model => model.CanGenerateLanguageHints);
-                if (available is not null && await review(available.Id, true) is { } cached)
+                cancellation.ThrowIfCancellationRequested();
+                if (available is not null && await review(available.Id, true, cancellation) is { } cached)
                 {
+                    cancellation.ThrowIfCancellationRequested();
                     ShowReview(available.Name, cached);
                     return;
                 }
+                cancellation.ThrowIfCancellationRequested();
                 if (cachedOnly) return;
 
                 if (available is not { FilesPresent: true })
@@ -243,14 +250,17 @@ public partial class ReadingPage
                 }
                 reviewBusy.IsVisible = reviewBusy.IsRunning = true;
                 hints.Text = $"{available.Name} перевіряє текст…";
-                if (await review(available.Id, false) is { } result) ShowReview(available.Name, result);
+                if (await review(available.Id, false, cancellation) is { } result && !cancellation.IsCancellationRequested)
+                    ShowReview(available.Name, result);
             }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
             catch (Exception error)
             {
-                if (!cachedOnly) hints.Text = error.Message;
+                if (!cachedOnly && !cancellation.IsCancellationRequested) hints.Text = error.Message;
             }
             finally
             {
+                sentenceReview = null;
                 reviewBusy.IsRunning = reviewBusy.IsVisible = false;
                 check.IsEnabled = true;
             }
@@ -264,6 +274,12 @@ public partial class ReadingPage
             if (notes.Count == 1) notes.Add("Модель не запропонувала виправлень.");
             hints.Text = string.Join(Environment.NewLine, notes);
             hints.IsVisible = true;
+        }
+
+        protected override void OnDisappearing()
+        {
+            sentenceReview?.Cancel();
+            base.OnDisappearing();
         }
 
         protected override async void OnAppearing()

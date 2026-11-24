@@ -187,8 +187,8 @@ public partial class ReadingPage
         var session = AppState.Session;
         await ShowAnalysisPageAsync("Перевірка речення", current.Sentence.Text,
             start => session.AnalyzeDetachedPdfSentenceAsync(address.Document, address.Page, current.Sentence.Id, start),
-            (model, cachedOnly) => session.ReviewSentenceAsync(model, address.Document, address.Page, current.Sentence.Id,
-                revisionId: current.RevisionId, cachedOnly: cachedOnly));
+            (model, cachedOnly, cancellationToken) => session.ReviewSentenceAsync(model, address.Document, address.Page, current.Sentence.Id,
+                revisionId: current.RevisionId, cachedOnly: cachedOnly, cancellationToken: cancellationToken));
     }
 
     private async void DetachedAnalyzeSelectionClicked(object? sender, EventArgs args)
@@ -198,9 +198,9 @@ public partial class ReadingPage
         var session = AppState.Session;
         await ShowAnalysisPageAsync("Перевірка виділення", selected.Text,
             _ => session.AnalyzeDetachedPdfSelectionAsync(address.Document, address.Page, selected),
-            (model, cachedOnly) => session.ReviewSentenceAsync(model, address.Document, address.Page, null,
+            (model, cachedOnly, cancellationToken) => session.ReviewSentenceAsync(model, address.Document, address.Page, null,
                 new { kind = "selection", startUtf16 = selected.StartUtf16, text = selected.Text },
-                revisionId: current.RevisionId, cachedOnly: cachedOnly));
+                revisionId: current.RevisionId, cachedOnly: cachedOnly, cancellationToken: cancellationToken));
     }
 
     private async void DetachedSaveWordClicked(object? sender, EventArgs args)

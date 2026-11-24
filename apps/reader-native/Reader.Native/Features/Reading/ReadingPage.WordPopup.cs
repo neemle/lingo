@@ -17,6 +17,7 @@ public partial class ReadingPage
     {
         StopWordDetail();
         CancelWordExplanation();
+        CancelSyntaxExplanation();
         WordDetails.IsVisible = DetachedWordDetails.IsVisible = false;
         WordDetailsToggle.Text = DetachedWordDetailsToggle.Text = "Більше";
         wordPopup = (pdfAnchor?.View ?? view, selected, card, pdfAnchor);
@@ -42,6 +43,7 @@ public partial class ReadingPage
         {
             StopWordDetail();
             CancelWordExplanation();
+            CancelSyntaxExplanation();
         }
         UpdatePopupTranslationHighlights();
         UpdateInlinePdfHighlight();

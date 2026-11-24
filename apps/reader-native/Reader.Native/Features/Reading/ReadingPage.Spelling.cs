@@ -15,8 +15,8 @@ public partial class ReadingPage
             if (members is not [var start] || !AnalysisScopeIsCurrent(document, sentence, selected)) return;
             await ShowAnalysisPageAsync("Перевірка слова", selected.Text,
                 _ => session.AnalyzeWordAsync(document.Id, sentence.Id, revision, start),
-                (model, cachedOnly) => session.ReviewSentenceAsync(model, document.Id, null, sentence.Id,
-                    new { kind = "selection", startUtf16 = selected.StartUtf16, text = selected.Text }, revision, cachedOnly));
+                (model, cachedOnly, cancellationToken) => session.ReviewSentenceAsync(model, document.Id, null, sentence.Id,
+                    new { kind = "selection", startUtf16 = selected.StartUtf16, text = selected.Text }, revision, cachedOnly, cancellationToken: cancellationToken));
         }
         catch (Exception error)
         {

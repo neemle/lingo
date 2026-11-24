@@ -559,6 +559,12 @@ pub enum Command {
         cached_only: bool,
         #[serde(default, rename = "explainSyntax")]
         explain_syntax: bool,
+        #[serde(rename = "requestId")]
+        request_id: Option<u64>,
+    },
+    CancelSentenceReview {
+        #[serde(rename = "requestId")]
+        request_id: u64,
     },
     ReviewOcrWord {
         id: String,

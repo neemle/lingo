@@ -297,6 +297,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         | Command::ExplainDetachedWord { .. }
         | Command::CancelWordExplanation { .. }
         | Command::ReviewSentence { .. }
+        | Command::CancelSentenceReview { .. }
         | Command::ReviewOcrWord { .. }
         | Command::ReviewOcrLine { .. }
         | Command::ReviewOcrPage { .. }

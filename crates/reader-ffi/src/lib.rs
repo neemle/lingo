@@ -95,6 +95,7 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
     let cancellation = match &command {
         Command::CancelModelTranslation { request_id } => Some((ModelRequestKind::Passage, *request_id)),
         Command::CancelOcrPageReview { request_id } => Some((ModelRequestKind::OcrPageReview, *request_id)),
+        Command::CancelSentenceReview { request_id } => Some((ModelRequestKind::SentenceReview, *request_id)),
         Command::CancelWordExplanation { request_id } => Some((ModelRequestKind::WordExplanation, *request_id)),
         Command::CancelPdfPageTranslation { request_id } => Some((ModelRequestKind::PdfPageTranslation, *request_id)),
         Command::CancelBackgroundTranslation { request_id } => Some((ModelRequestKind::BackgroundTranslation, *request_id)),
@@ -394,13 +395,17 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
             let result = if request_id.is_some() { job.run_until_canceled(canceled) } else { job.run() };
             return if canceled() { Err(canceled_error()) } else { encode_job(result) };
         }
-        Command::ReviewSentence { model, document, page, sentence, focus, revision_id, cached_only, explain_syntax } => {
+        Command::ReviewSentence { model, document, page, sentence, focus, revision_id, cached_only, explain_syntax, request_id } => {
+            let canceled = request_cancellation(handle, *request_id, ModelRequestKind::SentenceReview)?;
+            let canceled_error = || Error::new("canceled", "Перевірку тексту скасовано.");
+            if canceled() { return Err(canceled_error()); }
             let job = registry::lock()?
                 .store(handle)?
                 .prepare_sentence_review(model, document, *page, sentence.as_deref(), focus.as_ref(), revision_id.as_deref(),
                     *cached_only, *explain_syntax)
                 .map_err(gateway::domain)?;
-            return encode_job(job.run());
+            let result = job.run_until_canceled(&canceled);
+            return if canceled() { Err(canceled_error()) } else { encode_job(result) };
         }
         Command::ReviewOcrWord { id, page, revision_id, start_utf16, word, cached_only } => {
             let job = registry::lock()?.store(handle)?
