@@ -273,7 +273,7 @@ public partial class ReadingPage
         foreach (var (meaning, label, detail, _) in rows.Where(row => row.Meaning.GlossLanguage != target))
             ShowGloss(meaning, label, detail);
 
-        var missing = new HashSet<TranslationPair>();
+        var missing = new HashSet<Reader.Contracts.TranslationPair>();
         foreach (var language in ordered.Where(meaning => meaning.GlossLanguage != target &&
                      string.IsNullOrWhiteSpace(Localized(meaning.Gloss, meaning.GlossLanguage)))
                  .Select(meaning => meaning.GlossLanguage).Distinct())
