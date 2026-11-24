@@ -32,7 +32,7 @@ internal static class PhotoOcr
         using var uiImage = UIImage.FromImage(image);
         using var data = uiImage.AsPNG() ?? throw new InvalidDataException("Не вдалося підготувати перегляд фото.");
         var appearance = new Dictionary<int, PdfBoxAppearance>();
-        if (lines.Length > 0) new PdfScan.PreviewColors(image).AddColors(lines, appearance);
+        PdfScan.AddPreviewColors(image, lines, appearance);
         return (new PhotoPreview(data.ToArray(), (int)image.Width, (int)image.Height), appearance);
     });
 

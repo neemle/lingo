@@ -10,10 +10,34 @@ namespace Reader.Native.Services;
 
 internal static partial class PdfScan
 {
-    private static PdfBoxAppearance ReadAppearance(NSAttributedString? text, int position, double pageHeight,
+    private static bool IsPreviewAppearanceError(Exception error) =>
+        error is ObjCException or ArgumentException or InvalidOperationException or Reader.CoreClient.CoreException;
+
+    private static NSAttributedString? ReadOptionalAttributes(PdfKit.PdfPage page)
+    {
+        try { return page.AttributedString; }
+        catch (Exception error) when (IsPreviewAppearanceError(error))
+        {
+            System.Diagnostics.Debug.WriteLine(error.Message);
+            return null;
+        }
+    }
+
+    private static PdfBoxAppearance? ReadAppearance(NSAttributedString text, int position, double pageHeight,
         CGColorSpace? inkSpace)
     {
-        using var attributes = text?.GetAttributes(position, out _);
+        try { return ReadNativeAppearance(text, position, pageHeight, inkSpace); }
+        catch (Exception error) when (IsPreviewAppearanceError(error))
+        {
+            System.Diagnostics.Debug.WriteLine(error.Message);
+            return null;
+        }
+    }
+
+    private static PdfBoxAppearance ReadNativeAppearance(NSAttributedString text, int position, double pageHeight,
+        CGColorSpace? inkSpace)
+    {
+        using var attributes = text.GetAttributes(position, out _);
         var font = attributes?[UIStringAttributeKey.Font] as UIFont;
         var traits = font?.FontDescriptor.SymbolicTraits ?? 0;
         Color? ink = null;
@@ -40,7 +64,42 @@ internal static partial class PdfScan
     private static extern IntPtr CGColorCreateCopyByMatchingToColorSpace(IntPtr space,
         CGColorRenderingIntent intent, IntPtr color, IntPtr options);
 
-    internal sealed class PreviewColors
+    internal static void AddPreviewColors(CGImage? image, IEnumerable<OcrLine> lines, Dictionary<int, PdfBoxAppearance> appearance)
+    {
+        var boxes = new Dictionary<int, PdfSampleBox>();
+        foreach (var line in lines)
+        {
+            Add(line.SourceSpan, line.X, line.Y, line.Width, line.Height);
+            foreach (var word in line.Words ?? [])
+                Add(word.SourceSpan, word.X, word.Y, word.Width, word.Height);
+        }
+        if (boxes.Count == 0) return;
+        try
+        {
+            if (image is not null && boxes.Count <= 32_768)
+            {
+                new PreviewColors(image).AddColors(boxes, appearance);
+                return;
+            }
+        }
+        catch (Exception error) when (IsPreviewAppearanceError(error))
+        {
+            System.Diagnostics.Debug.WriteLine(error.Message);
+        }
+
+        foreach (var key in boxes.Keys)
+            appearance[key] = appearance.TryGetValue(key, out var style)
+                ? style with { MaskSafe = false }
+                : new(null, 0, 400, false, null, Colors.White, MaskSafe: false);
+
+        void Add(OcrSpan? span, double x, double y, double width, double height)
+        {
+            if (span is { } range)
+                boxes[range.StartUtf16] = new(x, y, width, height);
+        }
+    }
+
+    private sealed class PreviewColors
     {
         private readonly byte[] pixels;
         private readonly int width;
@@ -63,16 +122,8 @@ internal static partial class PdfScan
             Marshal.Copy(context.Data, pixels, 0, pixels.Length);
         }
 
-        internal void AddColors(IEnumerable<OcrLine> lines, Dictionary<int, PdfBoxAppearance> appearance)
+        internal void AddColors(Dictionary<int, PdfSampleBox> boxes, Dictionary<int, PdfBoxAppearance> appearance)
         {
-            var boxes = new Dictionary<int, PdfSampleBox>();
-            foreach (var line in lines)
-            {
-                Add(line.SourceSpan, line.X, line.Y, line.Width, line.Height);
-                foreach (var word in line.Words ?? [])
-                    Add(word.SourceSpan, word.X, word.Y, word.Width, word.Height);
-            }
-            if (boxes.Count == 0 || boxes.Count > 32_768) return;
             var sources = boxes.ToArray();
             var colors = Client.SamplePdfColors(width, height, pixels, sources.Select(source => source.Value).ToArray());
             for (var index = 0; index < sources.Length; index++)
@@ -84,12 +135,6 @@ internal static partial class PdfScan
                 appearance[key] = appearance.TryGetValue(key, out var style)
                     ? style with { Background = background, Ink = style.Ink ?? ink, MaskSafe = sampled.MaskSafe }
                     : new(null, 0, 400, false, ink, background, sampled.MaskSafe);
-            }
-
-            void Add(OcrSpan? span, double x, double y, double w, double h)
-            {
-                if (span is { } range)
-                    boxes[range.StartUtf16] = new(x, y, w, h);
             }
 
             static Color Rgb(uint value) =>

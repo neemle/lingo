@@ -235,11 +235,10 @@ internal static partial class PdfScan
         using var thumbnail = Thumbnail(page, 1800);
         cancellation.ThrowIfCancellationRequested();
         var image = EncodePreview(thumbnail);
-        var bitmap = thumbnail.CGImage is { } pixels ? new PreviewColors(pixels) : null;
         var appearance = new Dictionary<int, PdfBoxAppearance>();
         if (recognized.Length > 0)
         {
-            bitmap?.AddColors(recognized, appearance);
+            AddPreviewColors(thumbnail.CGImage, recognized, appearance);
             return (image, "", [], appearance);
         }
         var layer = TextLayer(page, out var offset, expectedText, cancellation);
@@ -247,7 +246,7 @@ internal static partial class PdfScan
         var crop = page.GetBoundsForBox(PdfDisplayBox.Crop);
         if (text.Length == 0 || crop.Width <= 0 || crop.Height <= 0) return (image, text, [], appearance);
         var boxes = new List<OcrLine>();
-        using var attributed = page.AttributedString;
+        using var attributed = ReadOptionalAttributes(page);
         var raw = page.Text ?? "";
         var attributes = string.Equals(attributed?.Value, raw, StringComparison.Ordinal) ? attributed : null;
         var rotation = DisplayRotation(page);
@@ -277,10 +276,16 @@ internal static partial class PdfScan
             var direction = TextDirection(page, offset + original.Start, original.Length, raw, box, rotation);
             boxes.Add(new(word.Value, x, y, width, height, null, index,
                 SourceSpan: new(0, 0, word.Index, word.Index + word.Length), Rotation: direction));
-            appearance[word.Index] = ReadAppearance(attributes, offset + original.Start, pageHeight, inkSpace);
+            if (attributes is not null)
+            {
+                if (ReadAppearance(attributes, offset + original.Start, pageHeight, inkSpace) is { } style)
+                    appearance[word.Index] = style;
+                else
+                    attributes = null;
+            }
         }
         cancellation.ThrowIfCancellationRequested();
-        bitmap?.AddColors(boxes, appearance);
+        AddPreviewColors(thumbnail.CGImage, boxes, appearance);
         return (image, text, boxes.ToArray(), appearance);
     }, cancellation);
 
