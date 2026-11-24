@@ -219,7 +219,7 @@ fn project_row(
         .iter()
         .filter(|line| intersects(&span, line.source_span))
     {
-        let rotation = line_rotation(line);
+        let rotation = crate::ocr::line_rotation(line);
         if let Some(rotation) = rotation {
             mixed |= direction.is_some_and(|previous| previous != rotation);
             direction = Some(rotation);
@@ -265,24 +265,6 @@ fn project_row(
 
     fn intersects(span: &Range<usize>, bounds: Option<OcrSpan>) -> bool {
         bounds.is_some_and(|bounds| bounds.start_utf16 < span.end && bounds.end_utf16 > span.start)
-    }
-}
-
-fn line_rotation(line: &OcrLine) -> Option<u16> {
-    if let Some(rotation @ (0 | 90 | 180 | 270)) = line.rotation {
-        return Some(rotation);
-    }
-    let mut words = line.words.iter().filter(|word| word.text.chars().any(char::is_alphabetic));
-    let first = words.next()?;
-    let last = words.next_back()?;
-    let dx = last.x + last.width * 0.5 - first.x - first.width * 0.5;
-    let dy = last.y + last.height * 0.5 - first.y - first.height * 0.5;
-    if dy.abs() > 2.0 * dx.abs() {
-        Some(if dy > 0.0 { 90 } else { 270 })
-    } else if dx.abs() > 2.0 * dy.abs() {
-        Some(if dx > 0.0 { 0 } else { 180 })
-    } else {
-        None
     }
 }
 

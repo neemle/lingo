@@ -606,16 +606,23 @@ fn split_ocr_sentences(
 }
 
 fn same_ocr_flow(left: &ocr::OcrLine, right: &ocr::OcrLine) -> bool {
-    if left.height > 2.0 * left.width || right.height > 2.0 * right.width {
+    let rotation = ocr::line_rotation(left).unwrap_or_default();
+    if rotation != ocr::line_rotation(right).unwrap_or_default() {
         return false;
     }
-    let overlap = (left.x + left.width).min(right.x + right.width) - left.x.max(right.x);
-    let line_height = left.height.min(right.height);
-    let line_gap = right.y - left.y - left.height;
-    let wrapped = overlap >= 0.28 * left.width.min(right.width)
-        && right.y > left.y && line_gap <= line_height;
-    let inline = (right.y - left.y).abs() <= 0.45 * line_height && right.x >= left.x
-        && right.x - left.x - left.width <= 0.9 * line_height;
+    let (left_x, left_y, left_width, left_height) =
+        ocr::reading_box((left.x, left.y, left.width, left.height), rotation);
+    let (right_x, right_y, right_width, right_height) =
+        ocr::reading_box((right.x, right.y, right.width, right.height), rotation);
+    if left_height > 2.0 * left_width || right_height > 2.0 * right_width {
+        return false;
+    }
+    let overlap = (left_x + left_width).min(right_x + right_width) - left_x.max(right_x);
+    let line_height = left_height.min(right_height);
+    let line_gap = right_y - left_y - left_height;
+    let wrapped = overlap >= 0.28 * left_width.min(right_width) && right_y > left_y && line_gap <= line_height;
+    let inline = (right_y - left_y).abs() <= 0.45 * line_height && right_x >= left_x
+        && right_x - left_x - left_width <= 0.9 * line_height;
     wrapped || inline
 }
 
@@ -740,6 +747,40 @@ mod tests {
     use crate::translation::sentence_source;
     use super::*;
     use crate::{file_originals, pdf_detached_pages};
+
+    #[test]
+    fn pdf_translation_segments_wrapped_ocr_in_reading_coordinates() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let text = "Le bateau revient au port.";
+        let mut document = store.import("reader.txt", text.as_bytes(), "fr").unwrap();
+        let line = |start, end, bounds, rotation| {
+            let (x, y, width, height) = ocr::reading_box(bounds, (360 - rotation) % 360);
+            ocr::OcrLine {
+                page: 0, text: text[start..end].into(), x, y, width, height,
+                confidence: None, correction: None, words: Vec::new(), rotation: Some(rotation),
+                block_start: false, source_span: Some(ocr::OcrSpan {
+                    start_utf8: start, end_utf8: end, start_utf16: start, end_utf16: end,
+                }),
+            }
+        };
+        let wrap = (0.1, 0.14, 0.32, 0.03);
+        let next_column = (0.6, 0.14, 0.3, 0.03);
+        for angle in [0, 90, 180, 270] {
+            let first = line(0, 9, (0.1, 0.10, 0.4, 0.03), angle);
+            let second = line(10, text.len(), wrap, angle);
+            document.ocr_lines = Some(vec![first.clone(), second]);
+            assert!(super::split_ocr_sentences(&document, 0..1, Some(0), "uk").is_none(), "{angle}");
+
+            document.ocr_lines = Some(vec![first.clone(), line(10, text.len(), next_column, angle)]);
+            assert!(super::split_ocr_sentences(&document, 0..1, Some(0), "uk").is_some(), "{angle}");
+
+            document.ocr_lines = Some(vec![first, line(10, text.len(), wrap, (angle + 180) % 360)]);
+            let split = super::split_ocr_sentences(&document, 0..1, Some(0), "uk").unwrap();
+            assert_eq!(split.iter().map(|part| part.text.as_str()).collect::<Vec<_>>(), ["Le bateau", "revient au port."]);
+        }
+        assert_eq!(document.sentences[0].text, text);
+    }
 
     #[test]
     fn pdf_refresh_keeps_every_fragment_of_the_selected_sentence_on_the_current_page() {

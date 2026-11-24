@@ -13,6 +13,24 @@ pub(crate) fn reading_box((x, y, width, height): (f64, f64, f64, f64), angle: u1
     }
 }
 
+pub(crate) fn line_rotation(line: &OcrLine) -> Option<u16> {
+    if let Some(rotation @ (0 | 90 | 180 | 270)) = line.rotation {
+        return Some(rotation);
+    }
+    let mut words = line.words.iter().filter(|word| word.text.chars().any(char::is_alphabetic));
+    let first = words.next()?;
+    let last = words.next_back()?;
+    let dx = last.x + last.width * 0.5 - first.x - first.width * 0.5;
+    let dy = last.y + last.height * 0.5 - first.y - first.height * 0.5;
+    if dy.abs() > 2.0 * dx.abs() {
+        Some(if dy > 0.0 { 90 } else { 270 })
+    } else if dx.abs() > 2.0 * dy.abs() {
+        Some(if dx > 0.0 { 0 } else { 180 })
+    } else {
+        None
+    }
+}
+
 /// Fold trustworthy sideways or inverted lines into the portable result.
 /// Both recognizers report coordinates in the original preview.
 pub fn merge_rotated_lines(
