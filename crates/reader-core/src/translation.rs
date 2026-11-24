@@ -2397,6 +2397,12 @@ mod tests {
         assert_eq!(found[0]["sentenceId"], detached.id);
         assert_eq!(found[0]["pivotLanguage"], "en");
 
+        let first = store.detached_pdf_sentence(&detached_document.id, 0, Some(0)).unwrap().unwrap().sentence;
+        let passage = store.detached_pdf_passage(&detached_document.id, 0, &first.id, "uk", false, false).unwrap();
+        let passage = serde_json::to_value(passage).unwrap();
+        assert_eq!(passage["active"]["text"], "Корабель прибуває.");
+        assert!(passage["rows"].as_array().unwrap().iter().any(|row| row["text"] == "Моряк вирушає."));
+
         store.save_cached_segments([(key(&direct, 1), &["Моряк відпливає.".into()][..])]).unwrap();
         let upgraded = serde_json::to_value(store.pdf_page_translation(&document.id, 0, "uk", true).unwrap()).unwrap();
         assert_eq!(upgraded[1]["text"], "Моряк відпливає.");

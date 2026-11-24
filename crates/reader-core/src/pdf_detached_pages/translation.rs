@@ -374,11 +374,24 @@ impl Store {
         let (projection, selected) = self.detached_page_projection(id, page, sentence_id, target, cached_only)?;
         let document = &projection.document;
         let position = projection.physical.start + selected;
-        let routes = self.translation_cache_routes_for_display(&document.language, target, cached_only && !background)?;
+        let routes = self.translation_cache_routes_for_display(&document.language, target, !background)?;
         let paragraph = if cached_only {
             routes.cached_window(self, document, position, target, PageBoundaries::Projected)?.paragraph
         } else {
-            self.translate_document_paragraph(document, position, target, background, PageBoundaries::Projected)?
+            let mut generated = self.translate_document_paragraph(document, position, target, background, PageBoundaries::Projected)?;
+            if !background && generated.units.iter().any(|unit| unit.translation.is_none()) {
+                // A partial direct result should not clear saved neighboring translations.
+                // Only fill rows with exactly the same source sentences.
+                let mut saved = routes.cached_window(self, document, position, target, PageBoundaries::Projected)?.paragraph.units;
+                for unit in generated.units.iter_mut().filter(|unit| unit.translation.is_none()) {
+                    if let Some(index) = saved.iter().position(|candidate| {
+                        candidate.translation.is_some() && candidate.sentence_ids == unit.sentence_ids
+                    }) {
+                        *unit = saved.swap_remove(index);
+                    }
+                }
+            }
+            generated
         };
         let mut rows = Vec::new();
         for unit in &paragraph.units {

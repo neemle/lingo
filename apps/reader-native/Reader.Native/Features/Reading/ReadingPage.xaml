@@ -350,6 +350,7 @@
          Scrolled="TranslationViewportScrolled">
          <VerticalStackLayout Padding="14,8" Spacing="8">
           <Label x:Name="DetachedReadiness" IsVisible="False" Style="{StaticResource ReaderMeta}" LineBreakMode="WordWrap" />
+          <Label x:Name="DetachedOfflineStatus" IsVisible="False" Style="{StaticResource ReaderMeta}" LineBreakMode="WordWrap" />
           <VerticalStackLayout x:Name="DetachedPassageBefore" Spacing="7" IsVisible="False" />
           <Border x:Name="DetachedTranslationPane" IsVisible="False" BackgroundColor="#F6F4EB" StrokeThickness="0"
            StrokeShape="RoundRectangle 7">

@@ -455,12 +455,13 @@ public partial class ReadingPage
         var cacheVersion = detachedTranslationCacheVersion;
         translatingDetachedSentence = true;
         UpdateDetachedControls();
-        if (CurrentDetachedTranslation() is null) ShowDetachedTranslation("Перекладаємо офлайн…");
+        ShowDetachedOfflineStatus("Перекладаємо офлайн…");
         try
         {
             var translated = await AppState.Session.DetachedPdfPassageAsync(
                 address.Document, address.Page, current.Sentence.Id, target, cachedOnly: false);
             if (run != detachedTranslationRun || cacheVersion != detachedTranslationCacheVersion) return;
+            ShowDetachedOfflineStatus(null);
             RenderDetachedPassage(address, current, translated.Rows);
             if (ReviewedDetachedTranslation() is not null)
                 ShowDetachedReviewedTranslation();
@@ -468,20 +469,18 @@ public partial class ReadingPage
             {
                 if (!automatic)
                 {
-                    ShowDetachedTranslation("Для цього речення переклад недоступний.");
+                    ShowDetachedOfflineStatus("Для цього речення переклад недоступний.");
                     RefreshReadiness((current.Language, target));
                 }
-                else if (detachedMachineTranslation is null) ShowDetachedTranslation("");
             }
             else
                 ShowDetachedMachineTranslation(active, current.Language, target);
         }
         catch (Exception error)
         {
-            if (run == detachedTranslationRun && cacheVersion == detachedTranslationCacheVersion &&
-                ReviewedDetachedTranslation() is null &&
-                (!automatic || detachedMachineTranslation is null))
-                ShowDetachedTranslation(error.Message);
+            if (run == detachedTranslationRun && cacheVersion == detachedTranslationCacheVersion)
+                ShowDetachedOfflineStatus(ReviewedDetachedTranslation() is null &&
+                    (!automatic || detachedMachineTranslation is null) ? error.Message : null);
         }
         finally
         {
@@ -490,7 +489,10 @@ public partial class ReadingPage
                 translatingDetachedSentence = false;
                 UpdateDetachedControls();
                 if (cacheVersion != detachedTranslationCacheVersion)
+                {
+                    ShowDetachedOfflineStatus(null);
                     _ = RestoreDetachedTranslationAsync(allowAutoTranslate: false);
+                }
             }
         }
     }
@@ -553,10 +555,17 @@ public partial class ReadingPage
         detachedTranslationRun++;
         translatingDetachedSentence = false;
         detachedMachineTranslation = null;
+        ShowDetachedOfflineStatus(null);
         ClearDetachedPassageRows();
         ShowDetachedReviewedTranslation();
         UpdateDetachedControls();
         _ = RestoreDetachedTranslationAsync();
+    }
+
+    private void ShowDetachedOfflineStatus(string? message)
+    {
+        DetachedOfflineStatus.Text = message;
+        DetachedOfflineStatus.IsVisible = !string.IsNullOrWhiteSpace(message);
     }
 
     private void ShowDetachedReviewedTranslation()
