@@ -77,14 +77,6 @@ pub(crate) fn has_annotations(db: &Connection, id: &str, page: u16) -> Result<bo
     ).map_err(database_error)
 }
 
-pub(crate) fn has_reviewed_target(db: &Connection, id: &str, language: &str) -> Result<bool> {
-    db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM pdf_detached_translations WHERE document_id=?1 AND target=?2)",
-        params![id, language],
-        |row| row.get(0),
-    ).map_err(database_error)
-}
-
 pub(super) fn reviewed(
     db: &Connection, id: &str, page: u16, start: usize,
 ) -> Result<BTreeMap<String, String>> {

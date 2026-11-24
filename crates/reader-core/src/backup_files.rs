@@ -568,9 +568,6 @@ pub(crate) fn prepare_layout(
         }
         for (target, segments) in &d.reviewed_translations {
             valid_language(target)?;
-            if target == &d.language {
-                return Err("Некоректна мова перекладу в архіві".into());
-            }
             for (sentence_id, text) in segments {
                 if !known.contains(sentence_id.as_str()) || text.trim().is_empty() {
                     return Err("Некоректний переклад речення в архіві".into());

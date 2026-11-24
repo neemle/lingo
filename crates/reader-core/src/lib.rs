@@ -1124,11 +1124,8 @@ impl Store {
             if document.language == language {
                 return Ok(false);
             }
-            if document.reviewed_translations.contains_key(language)
-                || pdf_detached_pages::has_reviewed_target(tx, id, language)?
-            {
-                return Err("Для нової мови джерела вже збережено переклади. Збережіть їх окремо і видаліть із документа перед зміною мови.".into());
-            }
+            // Reviewed text stays attached to its target. It can be used again
+            // when that language is distinct from the source.
             document.language = language.to_owned();
             translation_queue::restart_after_source_language_change(tx, id)?;
             pdf_page_ocr::refresh_after_language_change(tx, document)?;
@@ -1904,7 +1901,7 @@ mod tests {
     }
 
     #[test]
-    fn correcting_document_language_keeps_progress_and_checks_reviewed_targets() {
+    fn correcting_document_language_preserves_progress_and_reviewed_targets() {
         let mut db = Store::open(Path::new(":memory:")).unwrap();
         let bytes = "Перше речення. Друге речення.".as_bytes();
         let doc = db.import("hello.txt", bytes, "en").unwrap();
@@ -1914,10 +1911,14 @@ mod tests {
         db.set_reviewed_translation(&doc.id, &sentence.id, "fr", "Deuxième phrase.")
             .unwrap();
         db.set_document_language(&doc.id, "uk").unwrap();
-        assert!(db.set_document_language(&doc.id, "fr").is_err());
+        db.set_document_language(&doc.id, "fr").unwrap();
+        assert!(db.set_reviewed_translation(&doc.id, &sentence.id, "fr", "Remplacement.").is_err());
         assert!(db.set_document_language(&doc.id, "zz").is_err());
+        let backup = db.export().unwrap();
+        let mut db = Store::open(Path::new(":memory:")).unwrap();
+        db.restore(backup).unwrap();
         let saved = &db.snapshot().unwrap().documents[0];
-        assert_eq!(saved.language, "uk");
+        assert_eq!(saved.language, "fr");
         assert_eq!(saved.position, 1);
         assert_eq!(saved.sentences[1].id, sentence.id);
         assert_eq!(

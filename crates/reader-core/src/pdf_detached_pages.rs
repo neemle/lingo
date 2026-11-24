@@ -14,7 +14,6 @@ pub(crate) use translation::canonical_ocr_search_projection;
 pub use ocr_edit::DetachedPdfOcrPage;
 pub use find::{DetachedPdfFindCursor, DetachedPdfFindPage};
 pub use annotations::{DetachedPdfAnnotationChange, DetachedPdfAnnotationItem};
-pub(crate) use annotations::has_reviewed_target;
 
 pub(crate) fn initialize(db: &mut Connection) -> Result<()> {
     db.execute_batch(
@@ -511,7 +510,7 @@ impl ArchivedPage {
                 for (target, text) in &item.translations {
                     crate::valid_language(target)?;
                     crate::validate_translation(text)?;
-                    if target == &document.language || text.trim().is_empty() {
+                    if text.trim().is_empty() {
                         return Err("Некоректний переклад речення PDF у резервній копії.".into());
                     }
                 }
