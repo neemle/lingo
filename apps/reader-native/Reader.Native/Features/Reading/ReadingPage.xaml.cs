@@ -1145,7 +1145,8 @@ public partial class ReadingPage : ContentPage
         while (request == speechRequest && session.Document is { } doc && doc.Id == documentId &&
             session.Sentence is { } sentence)
         {
-            var speechText = EffectiveSpeechText(doc, sentence);
+            var source = SpeechSourceFor(doc, sentence);
+            var speechText = source.SpeechText;
             var speakable = HasNarrationText(speechText);
             var hasSpeechOverride = speechText != sentence.Text;
             var wordResume = SpeechProgress.ResumeOffset(sentence, resume, speechText);
@@ -1159,7 +1160,7 @@ public partial class ReadingPage : ContentPage
             SourceText.SpokenWord = null;
             speechPaused = false;
             utteranceActive = true;
-            activeSpeechSource = SpeechSourceFor(doc, sentence);
+            activeSpeechSource = source;
             ResumeSpeech.IsVisible = false;
             PauseSpeech.Text = "Пауза";
             PauseSpeech.IsEnabled = !modelVoice;
@@ -1215,18 +1216,27 @@ public partial class ReadingPage : ContentPage
             if (status != LocalSpeech.CompletedStatus || singleSentence || !ContinueSpeech.IsChecked) break;
 
             int? boundary;
-            try { boundary = await PdfNarrationBoundaryAsync(documentId, sentence, token); }
+            try
+            {
+                // An OCR refresh can replace the snapshot while the current clip is playing.
+                do
+                {
+                    await session.WaitUntilIdleAsync().WaitAsync(token);
+                    if (request != speechRequest) return;
+                    boundary = await PdfNarrationBoundaryAsync(documentId, sentence, token);
+                }
+                while (session.Busy && request == speechRequest && ContinueSpeech.IsChecked);
+            }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
             if (request != speechRequest) return;
-            if (!ContinueSpeech.IsChecked) break;
+            if (!ContinueSpeech.IsChecked || !IsSpeechSourceCurrent(session, source)) break;
             if (boundary is int page)
             {
                 pdfContinuation = (page, sentence.Id);
                 break;
             }
 
-            if (session.Busy || session.Document is not { } current || current.Id != documentId ||
-                session.Sentence?.Id != sentence.Id || current.Position + 1 >= current.Sentences.Length)
+            if (session.Document is not { } current || current.Position + 1 >= current.Sentences.Length)
                 break;
             var next = current.Position + 1;
             await session.SelectSentenceAsync(next,

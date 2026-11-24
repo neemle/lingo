@@ -439,7 +439,13 @@ public partial class ReadingPage
         var session = AppState.Session;
         if (session.Document is not { Format: "pdf", PdfPageStarts.Length: > 0 }) return null;
 
-        await pdfWindowRead.WaitAsync(token);
+        Task windowRead;
+        do
+        {
+            windowRead = pdfWindowRead;
+            await windowRead.WaitAsync(token);
+        }
+        while (!ReferenceEquals(windowRead, pdfWindowRead));
         if (!readingPageActive || session.Document is not { } document || document.Id != documentId ||
             session.Sentence?.Id != completed.Id || pdfWindow is not { } window ||
             window.Center + 1 >= window.PageCount)
