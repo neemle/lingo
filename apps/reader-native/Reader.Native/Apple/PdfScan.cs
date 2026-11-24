@@ -206,8 +206,8 @@ internal static partial class PdfScan
                                 using var encodingPool = new NSAutoreleasePool();
                                 return Task.FromResult(EncodePreview(image));
                             }, cancellation).GetAwaiter().GetResult();
-                    else if (image.CGImage is { } bitmap)
-                        text = PhotoOcr.ReadLanguageSample(bitmap, cancellation);
+                    else
+                        text = PhotoOcr.ReadLanguageSampleAsync(EncodePreview(image).Bytes, cancellation).GetAwaiter().GetResult();
                 }
             }
             catch (Exception error) when (error is InvalidDataException or InvalidOperationException)
