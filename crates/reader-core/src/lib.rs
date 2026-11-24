@@ -136,6 +136,9 @@ impl Document {
     }
 
     fn matches_speech_resume(&self, resume: &SpeechResume) -> bool {
+        if resume.model.as_ref().is_some_and(|model| model.language != self.language || resume.offset_utf16 != 0) {
+            return false;
+        }
         self.sentences
             .iter()
             .find(|sentence| resume.sentence_id == sentence.id)
@@ -1183,8 +1186,9 @@ impl Store {
 
     pub fn speech_resume(&self, id: &str) -> Result<Option<SpeechResume>> {
         let resume = Self::read_speech_resume(&self.connection, id)?;
-        if let Some(resume) = resume.as_ref().filter(|resume| resume.boundary_text.is_some()) {
-            if !self.matches_boundary_resume(&self.token_document(id)?, resume) {
+        if let Some(resume) = resume.as_ref().filter(|resume| resume.model.is_some() || resume.boundary_text.is_some()) {
+            let document = self.token_document(id)?;
+            if !document.matches_speech_resume(resume) || !self.matches_boundary_resume(&document, resume) {
                 return Ok(None);
             }
         }
@@ -1235,23 +1239,26 @@ impl Store {
         if !model.valid() {
             return Err("Некоректна позиція локального голосу".into());
         }
-        let boundary_text = self.speech_narration(id, sentence_id)?;
-        if boundary_text.as_ref().is_some_and(|actual| {
-            actual.is_empty() || text_hash != format!("{:x}", Sha256::digest(actual.as_bytes()))
-        }) {
+        let tx = self.connection.unchecked_transaction().map_err(|error| error.to_string())?;
+        let document = self.speech_document(id)?;
+        if model.language != document.language {
+            return Err("Мова для озвучення змінилася. Запустіть відтворення знову.".into());
+        }
+        let sentence = document.sentences.iter().find(|sentence| sentence.id == sentence_id)
+            .ok_or("Речення для озвучення не знайдено.")?;
+        let boundary_text = self.speech_narration_for_sentence(&document, sentence)?;
+        let resume = SpeechResume {
+            sentence_id: sentence_id.into(),
+            text_hash: text_hash.into(),
+            offset_utf16: 0,
+            model: Some(model),
+            boundary_text,
+        };
+        if resume.boundary_text.as_deref() == Some("") || !document.matches_speech_resume(&resume) {
             return Err("Текст для озвучення змінився. Запустіть відтворення знову.".into());
         }
-        Self::write_speech_resume(
-            &self.connection,
-            id,
-            &SpeechResume {
-                sentence_id: sentence_id.into(),
-                text_hash: text_hash.into(),
-                offset_utf16: 0,
-                model: Some(model),
-                boundary_text,
-            },
-        )
+        Self::write_speech_resume(&tx, id, &resume)?;
+        tx.commit().map_err(|error| error.to_string())
     }
 
     fn write_speech_resume(connection: &Connection, id: &str, resume: &SpeechResume) -> Result<()> {
@@ -2154,6 +2161,43 @@ mod tests {
         assert!(restored.snapshot().unwrap().documents[0]
             .speech_text_overrides
             .is_empty());
+    }
+
+    #[test]
+    fn pdf_model_checkpoint_rejects_a_late_write_in_the_old_source_language() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("speech.db");
+        let original = dir.path().join("story.pdf");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let mut db = Store::open(&path).unwrap();
+        let prepared = file_originals::prepare_pdf_import(
+            db.pdf_original_root(), "story.pdf", &original, "fr",
+            vec!["Le bateau est parti.".into(), "Le marin rentre.".into()], vec![],
+        ).unwrap();
+        let doc = db.import_pdf_file(prepared).unwrap();
+        db.focus_pdf_reading_page(&doc.id, None, 1).unwrap();
+        let sentence = &doc.sentences[1];
+        let hash = format!("{:x}", Sha256::digest(sentence.text.as_bytes()));
+        let model = |language: &str, position_ms| ModelSpeechResume {
+            voice_id: "test".into(), revision: "1".into(), language: language.into(),
+            rate_percent: 70, position_ms,
+        };
+        db.set_model_speech_resume(&doc.id, &sentence.id, &hash, model("fr", 250)).unwrap();
+        db.set_document_language(&doc.id, "en").unwrap();
+        assert!(db.speech_resume(&doc.id).unwrap().is_none());
+        assert!(db.snapshot().unwrap().documents[0].speech_resume.is_none());
+        db.set_model_speech_resume(&doc.id, &sentence.id, &hash, model("en", 500)).unwrap();
+        assert!(db.set_model_speech_resume(&doc.id, &sentence.id, &hash, model("fr", 750)).is_err());
+        assert!(db.set_model_speech_resume(&doc.id, &sentence.id, "old text", model("en", 750)).is_err());
+        drop(db);
+
+        let mut db = Store::open(&path).unwrap();
+        assert_eq!(db.pdf_reading_page(&doc.id).unwrap(), Some(1));
+        let saved = db.speech_resume(&doc.id).unwrap().unwrap().model.unwrap();
+        assert_eq!((saved.language.as_str(), saved.position_ms), ("en", 500));
+        db.set_speech_resume(&doc.id, &sentence.id, &hash, Some(3)).unwrap();
+        db.set_document_language(&doc.id, "fr").unwrap();
+        assert_eq!(db.speech_resume(&doc.id).unwrap().unwrap().offset_utf16, 3);
     }
 
     #[test]

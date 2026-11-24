@@ -181,7 +181,7 @@ impl Store {
         self.first_canonical_on_page(&document, page, 0)
     }
 
-    fn speech_document(&self, document_id: &str) -> Result<Document> {
+    pub(crate) fn speech_document(&self, document_id: &str) -> Result<Document> {
         let body: String = self.connection.query_row(
             "SELECT body FROM documents WHERE id=?1", [document_id], |row| row.get(0),
         ).optional().map_err(|error| error.to_string())?
@@ -195,10 +195,14 @@ impl Store {
         let Some(sentence) = document.sentences.iter().find(|sentence| sentence.id == sentence_id) else {
             return Ok(None);
         };
+        self.speech_narration_for_sentence(&document, sentence)
+    }
+
+    pub(crate) fn speech_narration_for_sentence(&self, document: &Document, sentence: &Sentence) -> Result<Option<String>> {
         if crate::document_layout::sentence_in_footnote(&document.blocks, sentence) {
             return Ok(Some(String::new()));
         }
-        word_break::canonical_narration(&self.connection, &document, sentence)
+        word_break::canonical_narration(&self.connection, document, sentence)
     }
 
     pub fn speech_pronunciation(&self, document_id: &str, sentence_id: &str) -> Result<Option<String>> {
