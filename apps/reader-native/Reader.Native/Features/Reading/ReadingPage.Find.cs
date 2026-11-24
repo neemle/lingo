@@ -10,7 +10,7 @@ public partial class ReadingPage
     private sealed record DocumentFindSelection(int Position, bool Translation,
         int? PhysicalPage = null, string? SentenceId = null, DetachedPdfTranslation? CachedMachine = null,
         string? Query = null, TranslationFindFragment? PdfFragment = null, string? SavedText = null,
-        TranslationAlignment? Alignment = null, string? PivotLanguage = null);
+        TranslationAlignment? Alignment = null, string? PivotLanguage = null, string? SourceText = null);
     private sealed record DocumentFindFocus(string Document, string? Revision, int? Page,
         string Sentence, TextSelection? Span = null, string? Target = null, string? Query = null,
         TranslationFindFragment? PdfFragment = null, TranslationPair? Translation = null);
@@ -170,6 +170,7 @@ public partial class ReadingPage
                 SavedText = hit.Text,
                 PdfFragment = hit.PdfFragment,
                 CachedMachine = CachedFindMachine(hit),
+                SourceText = hit.SourceText,
             };
         }
 
@@ -181,6 +182,7 @@ public partial class ReadingPage
         {
             SavedText = current.Text, Alignment = current.Alignment,
             PdfFragment = current.PdfFragment, PivotLanguage = current.PivotLanguage,
+            SourceText = current.SourceText,
         };
     }
 
@@ -228,7 +230,7 @@ public partial class ReadingPage
             span = SourceRanges.Selection(source, first.StartUtf16, last.EndUtf16 - first.StartUtf16);
             if (span is null) return;
         }
-        var original = span?.Text ?? match.CachedMachine?.SourceText ?? selected.Text;
+        var original = match.SourceText ?? span?.Text ?? selected.Text;
         var pivot = match.PdfFragment?.PivotLanguage ?? match.CachedMachine?.PivotLanguage ?? match.PivotLanguage;
         var pair = new TranslationPair(original, opened.Language, saved, target, pivot is null ? null : [pivot]);
         documentFindFocus = new(document, revision, page, sentence, Span: span, Target: target, Query: query,
@@ -573,7 +575,8 @@ public partial class ReadingPage
                     new DocumentFindSelection(hit.Position, Translation: language is not null,
                         PhysicalPage: hit.Page, SentenceId: hit.SentenceId,
                         CachedMachine: CachedFindMachine(hit),
-                        PdfFragment: hit.PdfFragment, SavedText: language is null ? null : hit.Text))));
+                        PdfFragment: hit.PdfFragment, SavedText: language is null ? null : hit.Text,
+                        SourceText: hit.SourceText))));
                 if (found.Next is not { } next || next == cursor) return new(matches.ToArray(), null);
                 space = DocumentFind.PageSize - matches.Count;
                 cursor = next;
@@ -599,7 +602,8 @@ public partial class ReadingPage
                         throw new InvalidOperationException("Текст документа змінився. Відкрийте пошук знову.");
                     matches.AddRange(found.Matches.Where(hit => hit.Position >= 0 && hit.Position < document.Sentences.Length)
                         .Select(hit => new DocumentFindHit(hit.Text, new DocumentFindSelection(hit.Position, Translation: true,
-                            PdfFragment: hit.PdfFragment, SavedText: hit.Text, Alignment: hit.Alignment, PivotLanguage: hit.PivotLanguage))));
+                            PdfFragment: hit.PdfFragment, SavedText: hit.Text, Alignment: hit.Alignment,
+                            PivotLanguage: hit.PivotLanguage, SourceText: hit.SourceText))));
                     if (found.NextStart is not int nextPosition ||
                         nextPosition <= position || nextPosition >= document.Sentences.Length)
                         break;

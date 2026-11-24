@@ -126,12 +126,12 @@ impl Store {
                                     pivot_language: row.pivot_language,
                                     reflow_only: false,
                                 });
-                                matched = Some(text);
+                                matched = Some((text, row.pdf_source));
                                 break;
                             }
                         }
-                        if let Some(text) = matched {
-                            (text, None, None, None)
+                        if let Some((text, source)) = matched {
+                            (text, None, None, source)
                         } else if let Some(text) = projection.reviewed(&sentence.id, target) {
                             (text.to_owned(), None, Some(true), None)
                         } else if let Some(hit) = translation::cached_page_translation(self, routes, projection, position, target)? {

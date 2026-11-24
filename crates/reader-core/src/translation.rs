@@ -1052,6 +1052,8 @@ pub struct TranslationSearchMatch {
     pub position: usize,
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub alignment: Option<TranslationAlignment>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pivot_language: Option<String>,
@@ -1125,7 +1127,8 @@ pub(crate) fn search_cached_translation(
                         if !normalize_translation_search(&text).contains(&query) { continue; }
                         let part = &projected.sentences[fragment];
                         page.matches.push(TranslationSearchMatch {
-                            position, text, alignment: None, pivot_language: row.pivot_language.clone(),
+                            position, text, source_text: row.pdf_source, alignment: None,
+                            pivot_language: row.pivot_language.clone(),
                             pdf_fragment: Some(TranslationSearchFragment {
                                 page: physical_page, start_utf16: part.start_utf16, end_utf16: part.end_utf16,
                                 pivot_language: row.pivot_language, reflow_only: false,
@@ -1153,11 +1156,13 @@ pub(crate) fn search_cached_translation(
             target,
             CacheScope::Active, PageBoundaries::Canonical,
         )?;
-        let active_unit = cached
+        let mut active_unit = cached
             .paragraph
             .units
             .into_iter()
             .find(|unit| unit.sentence_ids.contains(active_id));
+        let source_text = active_unit.as_mut().filter(|unit| unit.translation.is_some())
+            .and_then(|unit| unit.pdf_source.take());
         let contextual = active_unit.and_then(|unit|
             unit.translation.map(|text| (unit.sentence_ids, text, unit.pivot_language, unit.alignment)));
         let repeated = contextual.is_some() && contextual == previous_unit;
@@ -1174,6 +1179,7 @@ pub(crate) fn search_cached_translation(
             page.matches.push(TranslationSearchMatch {
                 position,
                 text: text.to_owned(),
+                source_text,
                 alignment: alignment.cloned(),
                 pivot_language: pivot.map(str::to_owned),
                 pdf_fragment: reflow_page.map(|page| TranslationSearchFragment {
@@ -2399,6 +2405,7 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].position, 1);
         assert_eq!(found[0].pivot_language.as_deref(), Some("en"));
+        assert_eq!(found[0].source_text.as_deref(), Some("Le marin part."));
         let found = find_detached(&store, "вирушає");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0]["sentenceId"], detached.id);
