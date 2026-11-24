@@ -204,7 +204,11 @@ fn transcript_ranges(text: &str, range: Range<usize>, pdf: bool) -> Vec<(Range<u
         let content = line.trim();
         let mut tail = content;
         let heading = standalone_heading(content);
-        let footnote = footnote_start(content) && (offset == start || ends_sentence(previous));
+        let footnote = footnote_start(content) && (offset == start || ends_sentence(previous)
+            || crate::translation::word_hyphen(previous).is_some()
+                && numbered_note_label(content).is_some_and(|label| {
+                    !pdf_note_references(&text[start..offset], &[label]).is_empty()
+                }));
         let new_prose = content.starts_with(char::is_uppercase)
             && (previous.ends_with(['»', '”'])
                 || ends_sentence(previous) && previous.chars().count() * 2 < typical_width);
@@ -702,11 +706,17 @@ fn mask_pdf_markers(document: &Document, text: &str, start: usize, mask_list_lab
     if document.format != "pdf" { return None; }
     let end = start.checked_add(text.len())?;
     let first = document.blocks.partition_point(|block| block.end_utf8 <= start);
-    let refs = document.blocks[first..].iter().take_while(|block| block.start_utf8 < end)
+    let blocks = document.blocks[first..].iter().take_while(|block| block.start_utf8 < end);
+    let refs = blocks.clone()
         .flat_map(|block| &block.footnote_references)
         .filter(|reference| reference.start_utf8 >= start && reference.end_utf8 <= end)
         .map(|reference| reference.start_utf8 - start..reference.end_utf8 - start);
-    let mut ranges: Vec<_> = refs.collect();
+    // A saved sentence can straddle a newly recovered footnote boundary.
+    // Silence the note in that sentence without changing its original offsets.
+    let notes = blocks.filter(|block| block.footnote).map(|block| {
+        block.start_utf8.max(start) - start..block.end_utf8.min(end) - start
+    });
+    let mut ranges: Vec<_> = refs.chain(notes).collect();
     if mask_list_labels {
         ranges.extend(pdf_list_label_ranges(document, text, start));
     }
@@ -1031,6 +1041,23 @@ mod tests {
         let document = detached_pdf_document(raw.clone(), "fr", Some(ordinary));
         assert!(document.blocks.iter().all(|block| !block.footnote));
         assert!(mask_pdf_non_text(&document, &raw, 0).is_none());
+    }
+
+    #[test]
+    fn referenced_notes_under_a_page_turn_are_excluded_from_reader_text() {
+        let source = "Sur le quai², on décharge des marchan-\n2 Quai : bord du port.";
+        let document = detached_pdf_document(source.into(), "fr", None);
+        assert_eq!(document.blocks.len(), 2);
+        assert!(document.blocks[1].footnote);
+        for masked in [mask_pdf_non_text(&document, source, 0), mask_pdf_translation_input(&document, source, 0)] {
+            let masked = masked.unwrap();
+            assert_eq!(masked.trim_end(), "Sur le quai , on décharge des marchan-");
+            assert_eq!(masked.encode_utf16().count(), source.encode_utf16().count());
+        }
+
+        let ordinary_list = "Classez les mots du cha-\n2 Exemple : le bateau.";
+        let document = detached_pdf_document(ordinary_list.into(), "fr", None);
+        assert!(document.blocks.iter().all(|block| !block.footnote));
     }
 
     #[test]

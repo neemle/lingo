@@ -398,13 +398,7 @@ mod tests {
 
         let outgoing = "Sur les mâts¹ il reste des marchan-";
         let heading = "Note de voyage.\n";
-        let mut document = document_layout::detached_pdf_document(format!("{heading}{outgoing}{notes}"), "fr", None);
-        let start_utf8 = heading.len() + outgoing.find('¹').unwrap();
-        let start_utf16 = document.text[..start_utf8].encode_utf16().count();
-        let block = document.blocks.iter_mut().find(|block| block.start_utf8 <= start_utf8 && start_utf8 < block.end_utf8).unwrap();
-        block.footnote_references.push(ocr::OcrSpan {
-            start_utf8, end_utf8: start_utf8 + '¹'.len_utf8(), start_utf16, end_utf16: start_utf16 + 1,
-        });
+        let document = document_layout::detached_pdf_document(format!("{heading}{outgoing}{notes}"), "fr", None);
         let speech = narration_fragments(&document, outgoing, heading.len(), None, Some(incoming)).unwrap();
         assert_eq!(speech, "Sur les mâts  il reste des marchandises");
     }
