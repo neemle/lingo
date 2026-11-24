@@ -581,6 +581,7 @@ public partial class ReadingPage
             : useContext ? "Перекладаємо абзац…" : "Перекладаємо речення…";
         UpdateTranslation();
         var scope = new TranslationScope(key.Document, key.Source, key.Target);
+        PdfLayoutAddress? refreshedPage = null;
         try
         {
             if (useContext)
@@ -612,6 +613,17 @@ public partial class ReadingPage
                 return;
             }
 
+            if (regenerate && session.Sentence is { } source &&
+                ReflowPdfRefreshTarget(document, source, key.Target) is { } pdf)
+            {
+                await session.PdfPageTranslationAsync(pdf.Address.Document, pdf.Address.Page, key.Target,
+                    cachedOnly: false, refreshAtUtf16: pdf.Offset);
+                refreshedPage = pdf.Address;
+                if (ActiveTranslationKey() == key) ClearPdfFragmentFocus();
+                machineStatus = "Речення перекладено заново.";
+                return;
+            }
+
             var sentence = await session.TranslateSentenceAsync(key.Document, key.Sentence, key.Target, regenerate);
             var standalone = sentence is null ? null : BuildSentenceWindow(document, scope, sentence);
             if (standalone is not null)
@@ -626,6 +638,11 @@ public partial class ReadingPage
         finally
         {
             translating = false;
+            if (refreshedPage is { } address)
+            {
+                NotifyPdfSentenceRefresh(address, key.Sentence);
+                if (CurrentPdfLayoutAddress() == address) RefreshCachedPdfPageLayout();
+            }
             UpdateTranslation();
         }
     }

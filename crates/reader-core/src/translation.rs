@@ -701,7 +701,8 @@ fn page_batch_len<T>(pending: &[T], size: impl Fn(&T) -> usize) -> usize {
 
 pub(crate) fn regenerate_pdf_sentences(
     store: &mut Store, provider: &mut impl TranslationProvider, document: &Document,
-    selected: Range<usize>, target: &str, boundaries: PageBoundaries, canceled: &dyn Fn() -> bool,
+    selected: Range<usize>, reflow_input: Option<String>, target: &str, boundaries: PageBoundaries,
+    canceled: &dyn Fn() -> bool,
 ) -> Result<()> {
     let checkpoint = || {
         if canceled() { Err("Повторний переклад скасовано.".to_owned()) } else { Ok(()) }
@@ -710,12 +711,11 @@ pub(crate) fn regenerate_pdf_sentences(
     let mut seen = HashSet::new();
     for position in selected {
         checkpoint()?;
-        let plan = paragraph_plan(store, document, position, target, boundaries, UnitGrouping::Sentence)?;
-        let id = &document.sentences[position].id;
-        let (_, input) = plan.pending.into_iter()
-            .find(|(index, _)| plan.result.units[*index].sentence_ids.contains(id))
-            .ok_or("Для цього фрагмента повторний переклад недоступний.")?;
+        let input = pdf_regeneration_input(store, document, position, target, boundaries)?;
         if seen.insert(input.clone()) { segments.push(input); }
+    }
+    if let Some(input) = reflow_input.filter(|input| !seen.contains(input)) {
+        segments.push(input);
     }
     if segments.is_empty() {
         return Err("Некоректний обсяг тексту для повторного перекладу.".into());
@@ -737,6 +737,16 @@ pub(crate) fn regenerate_pdf_sentences(
     checkpoint()?;
     store.save_cached_segments(keys.iter().cloned().zip(output.iter().map(std::slice::from_ref)))?;
     store.link_translation_cache_keys(&document.id, keys.iter().map(String::as_str))
+}
+
+pub(crate) fn pdf_regeneration_input(
+    store: &Store, document: &Document, position: usize, target: &str, boundaries: PageBoundaries,
+) -> Result<String> {
+    let plan = paragraph_plan(store, document, position, target, boundaries, UnitGrouping::Sentence)?;
+    let id = &document.sentences[position].id;
+    plan.pending.into_iter()
+        .find_map(|(index, input)| plan.result.units[index].sentence_ids.contains(id).then_some(input))
+        .ok_or_else(|| "Для цього фрагмента повторний переклад недоступний.".to_owned())
 }
 
 pub(crate) const PDF_LAYOUT_FRAGMENT_MARKER: &str = ":layout:";
@@ -1737,10 +1747,10 @@ mod tests {
             assert!(rows.iter().all(|row| row.translation.is_some()));
         }
         assert_eq!(provider.batches, [vec!["Le marin part.".to_owned(), "Le port est ouvert.".to_owned()]]);
-        assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, 0..1, "uk", PageBoundaries::Canonical, &|| false).is_err());
-        regenerate_pdf_sentences(&mut store, &mut provider, &document, 1..2, "uk", PageBoundaries::Canonical, &|| false).unwrap();
+        assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, 0..1, None, "uk", PageBoundaries::Canonical, &|| false).is_err());
+        regenerate_pdf_sentences(&mut store, &mut provider, &document, 1..2, None, "uk", PageBoundaries::Canonical, &|| false).unwrap();
         provider.fail = true;
-        assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, 1..2, "uk", PageBoundaries::Canonical, &|| false).is_err());
+        assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, 1..2, None, "uk", PageBoundaries::Canonical, &|| false).is_err());
         let rows = translate_pdf_page(&mut store, &mut provider, &document, 0..3,
             "uk", PageBoundaries::Canonical, &|| false).unwrap();
         assert_eq!(rows[0].translation.as_deref(), Some("Корабель прибуває."));
@@ -1765,7 +1775,7 @@ mod tests {
         assert_eq!(document.sentences.len(), 3);
         provider.fail = false;
         translate_pdf_page(&mut store, &mut provider, &document, 0..3, "uk", PageBoundaries::Canonical, &|| false).unwrap();
-        regenerate_pdf_sentences(&mut store, &mut provider, &document, 0..2, "uk", PageBoundaries::Canonical, &|| false).unwrap();
+        regenerate_pdf_sentences(&mut store, &mut provider, &document, 0..2, None, "uk", PageBoundaries::Canonical, &|| false).unwrap();
         assert_eq!(provider.batches.last().unwrap(), &["Le phare de Calvi est ouvert", "et le gardien allume la lampe."]);
         provider.fail = true;
         let rows = translate_pdf_page(&mut store, &mut provider, &document, 0..3,
@@ -1817,20 +1827,23 @@ mod tests {
                 assert_eq!(store.cached_segments(key, &[&sentence.text], "uk").unwrap().unwrap(), [expected]);
             }
         };
-        let selection = 0..document.sentences.len();
-        assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, selection.clone(),
+        let reflow_position = document.sentences.len() - 1;
+        let reflow_input = pdf_regeneration_input(&store, &document, reflow_position, "uk",
+            PageBoundaries::Canonical).unwrap();
+        let selection = 0..reflow_position;
+        assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, selection.clone(), Some(reflow_input.clone()),
             "uk", PageBoundaries::Canonical, &|| false).is_err());
         assert_cached(&store, &old[0]);
 
         calls.set(0);
         provider.fail_second = false;
-        assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, selection.clone(),
+        assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, selection.clone(), Some(reflow_input.clone()),
             "uk", PageBoundaries::Canonical, &|| calls.get() == 2).is_err());
         assert_cached(&store, &old[0]);
 
         calls.set(0);
         provider.sizes.clear();
-        regenerate_pdf_sentences(&mut store, &mut provider, &document, selection,
+        regenerate_pdf_sentences(&mut store, &mut provider, &document, selection, Some(reflow_input),
             "uk", PageBoundaries::Canonical, &|| false).unwrap();
         assert_eq!(provider.sizes, [MAX_BATCH_SEGMENTS, 3]);
         assert_cached(&store, "Новий переклад.");

@@ -1,6 +1,7 @@
 use super::{annotations, word_break, CachedSentences};
 use crate::translation::{
-    sentence_input, CacheRoutes, PageBoundaries, ParagraphTranslation, ParagraphUnit, TranslationBatchError, UnitGrouping,
+    pdf_regeneration_input, sentence_input, CacheRoutes, PageBoundaries, ParagraphTranslation,
+    ParagraphUnit, TranslationBatchError, UnitGrouping,
 };
 use crate::{document_layout, ocr, Document, Result, Sentence, Store};
 use serde::Serialize;
@@ -163,7 +164,21 @@ impl Store {
         if document.language == target { return Ok(Vec::new()); }
         let original: Vec<_> = document.sentences[physical.clone()].iter()
             .map(|sentence| (sentence.start_utf16..sentence.end_utf16, sentence.id.clone())).collect();
-        let physical = split_page_ocr_units(&mut document, physical, bounds.map(|_| page), target);
+        let missing_selection = || "Виділене речення вже відсутнє на сторінці.".to_owned();
+        let selected = refresh_at.map(|offset|
+            pdf_refresh_sentence(&original, offset, projected_offset, bounds).ok_or_else(missing_selection)
+        ).transpose()?;
+        let mut reflow_input = None;
+        let physical = if let Some(units) = split_ocr_sentences(&document, physical.clone(), bounds.map(|_| page), target) {
+            if let Some(index) = selected.filter(|&index| !units.iter().any(|unit| unit.id == original[index].1)) {
+                reflow_input = Some(pdf_regeneration_input(self, &document, physical.start + index, target, boundaries)?);
+            }
+            let resized = physical.start..physical.start + units.len();
+            document.sentences.splice(physical, units);
+            resized
+        } else {
+            physical
+        };
         let offsets: Vec<_> = document.sentences[physical.clone()].iter().map(|sentence| {
             bounds.map_or_else(|| (sentence.start_utf16 - projected_offset, sentence.end_utf16 - projected_offset),
                 |(start, end)| (sentence.start_utf16.max(start), sentence.end_utf16.min(end)))
@@ -190,11 +205,11 @@ impl Store {
         };
         let mut generation_error = None;
         let mut failures = BTreeMap::new();
-        if let Some(offset) = refresh_at {
-            let selected = pdf_refresh_range(&original, &offsets, offset, projected_offset, bounds)
-                .ok_or_else(|| "Виділене речення вже відсутнє на сторінці.".to_owned())?;
+        if let Some(index) = selected {
+            let selected = pdf_refresh_range(&original[index].0, &offsets, projected_offset)
+                .ok_or_else(missing_selection)?;
             self.regenerate_document_pdf_sentences(&document,
-                physical.start + selected.start..physical.start + selected.end, target, boundaries, canceled)?;
+                physical.start + selected.start..physical.start + selected.end, reflow_input, target, boundaries, canceled)?;
         } else if !cached_only {
             match self.translate_document_page(&document, physical.clone(), target, boundaries, background, canceled) {
                 Ok(generated) if generated.iter().any(|unit| !unit.reviewed && unit.translation.is_some())
@@ -432,28 +447,20 @@ impl Store {
     }
 }
 
-fn pdf_refresh_range(
-    original: &[(Range<usize>, String)], offsets: &[(usize, usize)], offset: usize, projection: usize,
+fn pdf_refresh_sentence(
+    original: &[(Range<usize>, String)], offset: usize, projection: usize,
     bounds: Option<(usize, usize)>,
-) -> Option<Range<usize>> {
+) -> Option<usize> {
     let projected = offset.checked_add(projection)?;
     if bounds.is_some_and(|(start, end)| !(start..end).contains(&offset)) { return None; }
     let index = original.partition_point(|(span, _)| span.end <= projected);
-    let (span, _) = original.get(index).filter(|(span, _)| span.contains(&projected))?;
+    original.get(index).filter(|(span, _)| span.contains(&projected)).map(|_| index)
+}
+
+fn pdf_refresh_range(span: &Range<usize>, offsets: &[(usize, usize)], projection: usize) -> Option<Range<usize>> {
     let start = offsets.partition_point(|&(_, end)| end <= span.start.saturating_sub(projection));
     let end = offsets.partition_point(|&(start, _)| start < span.end - projection);
     (start < end).then_some(start..end)
-}
-
-// A reading sentence can span several independent visual objects on a cover or
-// worksheet. Split only the translation projection, preserving reading and note IDs.
-fn split_page_ocr_units(
-    document: &mut Document, physical: Range<usize>, page: Option<u16>, target: &str,
-) -> Range<usize> {
-    let Some(units) = split_ocr_sentences(document, physical.clone(), page, target) else { return physical; };
-    let end = physical.start + units.len();
-    document.sentences.splice(physical.clone(), units);
-    physical.start..end
 }
 
 pub(crate) fn canonical_ocr_search_projection(document: &Document, page: u16, target: &str) -> Option<Document> {
@@ -470,6 +477,8 @@ fn ocr_search_projection(document: &Document, physical: Range<usize>, page: Opti
     Some(projection)
 }
 
+// A reading sentence can span several independent visual objects on a cover or
+// worksheet. Split only the translation projection, preserving reading and note IDs.
 fn split_ocr_sentences(
     document: &Document, physical: Range<usize>, page: Option<u16>, target: &str,
 ) -> Option<Vec<Sentence>> {
@@ -664,14 +673,17 @@ mod tests {
         let original = [(20..31, "before".to_owned()), (32..70, "selected".to_owned()),
             (71..91, "after".to_owned())];
         let offsets = [(20, 31), (32, 48), (49, 59), (60, 70), (71, 91)];
-        assert_eq!(pdf_refresh_range(&original, &offsets, 54, 0, Some((20, 91))), Some(1..4));
+        assert_eq!(pdf_refresh_sentence(&original, 54, 0, Some((20, 91))), Some(1));
+        assert_eq!(pdf_refresh_range(&original[1].0, &offsets, 0), Some(1..4));
 
         let detached = [(12, 28), (29, 39), (40, 50), (51, 71)];
-        assert_eq!(pdf_refresh_range(&original[1..], &detached, 30, 20, None), Some(0..3));
+        assert_eq!(pdf_refresh_sentence(&original[1..], 30, 20, None), Some(0));
+        assert_eq!(pdf_refresh_range(&original[1].0, &detached, 20), Some(0..3));
 
         let next_page = [(49, 59), (60, 70), (71, 91)];
-        assert_eq!(pdf_refresh_range(&original[1..], &next_page, 54, 0, Some((49, 91))), Some(0..2));
-        assert_eq!(pdf_refresh_range(&original[1..], &next_page, 32, 0, Some((49, 91))), None);
+        assert_eq!(pdf_refresh_sentence(&original[1..], 54, 0, Some((49, 91))), Some(0));
+        assert_eq!(pdf_refresh_range(&original[1].0, &next_page, 0), Some(0..2));
+        assert_eq!(pdf_refresh_sentence(&original[1..], 32, 0, Some((49, 91))), None);
     }
 
     #[test]

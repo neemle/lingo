@@ -854,13 +854,13 @@ impl Store {
     }
 
     pub(crate) fn regenerate_document_pdf_sentences(
-        &mut self, document: &crate::Document, selected: std::ops::Range<usize>, target: &str,
+        &mut self, document: &crate::Document, selected: std::ops::Range<usize>, reflow_input: Option<String>, target: &str,
         boundaries: PageBoundaries, canceled: &dyn Fn() -> bool,
     ) -> Result<()> {
         let directory = self.model_directory.clone();
         let mut provider = self.reader_translation_provider(&directory, &document.language, target, false, canceled)?;
         regenerate_pdf_sentences(self, &mut provider,
-            document, selected, target, boundaries, canceled)
+            document, selected, reflow_input, target, boundaries, canceled)
     }
 
     pub fn find_translation_page(

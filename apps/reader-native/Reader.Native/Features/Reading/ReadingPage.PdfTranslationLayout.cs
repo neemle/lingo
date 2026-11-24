@@ -215,6 +215,29 @@ public partial class ReadingPage
             ? new(page.Document, page.Page, document.CurrentRevisionId, document.Language, target, page.DetachedText)
             : null;
 
+    private (PdfLayoutAddress Address, int Offset)? ReflowPdfRefreshTarget(Document document, Sentence sentence, string target)
+    {
+        if (!SupportsOriginalTranslationLayout(document)) return null;
+        var page = 0;
+        var offset = sentence.StartUtf16;
+        if (document.Format == "pdf")
+        {
+            page = CurrentNativePdfWindow(document.Id)?.Center ?? AppState.Session.OriginalPageIndex();
+            if (document.PdfPageStarts is not { } starts || page < 0 || page >= starts.Length ||
+                starts[page] is not { } start) return null;
+            var end = document.Text.Length;
+            for (var next = page + 1; next < starts.Length; next++)
+            {
+                if (starts[next] is not { } boundary) continue;
+                end = boundary;
+                break;
+            }
+            offset = Math.Max(offset, start);
+            if (offset >= end || offset >= sentence.EndUtf16) return null;
+        }
+        return (new PdfLayoutAddress(document.Id, page, document.CurrentRevisionId, document.Language, target, null), offset);
+    }
+
     private void RefreshPdfTranslationLayout()
     {
         var address = CurrentPdfLayoutAddress();
