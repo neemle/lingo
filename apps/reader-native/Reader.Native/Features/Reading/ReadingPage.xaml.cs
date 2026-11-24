@@ -1016,7 +1016,7 @@ public partial class ReadingPage : ContentPage
             var speechText = EffectiveSpeechText(document, sentence);
             if (resume is null || !SpeechProgress.Matches(sentence, resume, speechText)) return;
             var voice = SelectedVoice();
-            var position = voice?.Engine is null
+            var position = resume.Model is null
                 ? SpeechProgress.ResumeOffset(sentence, resume, speechText)
                 : ModelResumePosition(resume, voice, document.Language, SpeechRatePercent);
             if (!position.HasValue) return;
@@ -1132,9 +1132,9 @@ public partial class ReadingPage : ContentPage
         bool singleSentence, CancellationToken token)
     {
         var voice = SelectedVoice();
-        var modelVoice = voice?.Engine is not null;
+        var prefersModel = voice?.Engine is not null;
         var ratePercent = SpeechRatePercent;
-        speech.PreferredVoice = modelVoice || voice?.Id == LocalSpeech.SystemDefaultVoice ? null : voice?.Id;
+        speech.PreferredVoice = prefersModel || voice?.Id == LocalSpeech.SystemDefaultVoice ? null : voice?.Id;
         speech.Rate = ratePercent / 100f;
         var receivedCue = false;
         var systemUsesSpeechOverride = false;
@@ -1148,7 +1148,9 @@ public partial class ReadingPage : ContentPage
             var speechText = EffectiveSpeechText(doc, sentence);
             var speakable = HasNarrationText(speechText);
             var hasSpeechOverride = speechText != sentence.Text;
-            var startAt = modelVoice ? 0 : SpeechProgress.ResumeOffset(sentence, resume, speechText) ?? 0;
+            var wordResume = SpeechProgress.ResumeOffset(sentence, resume, speechText);
+            var modelVoice = prefersModel && !wordResume.HasValue;
+            var startAt = wordResume ?? 0;
             var startAtMs = modelVoice && resume is not null && SpeechProgress.Matches(sentence, resume, speechText)
                 ? ModelResumePosition(resume, voice, doc.Language, ratePercent) ?? 0 : 0;
             resume = null;

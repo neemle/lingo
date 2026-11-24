@@ -789,9 +789,10 @@ public partial class ReadingPage
             await WaitForSpeechVoicesAsync(token);
             if (run != detachedAudioRun) return false;
             var voice = SelectedVoice();
+            var wordResume = SpeechProgress.ResumeOffset(sentence, saved, speechText);
             string? status = null;
             var modelStarted = false;
-            if (voice?.Engine is { } engine)
+            if (voice?.Engine is { } engine && !wordResume.HasValue)
             {
                 try
                 {
@@ -833,7 +834,7 @@ public partial class ReadingPage
             }
             if (run != detachedAudioRun || token.IsCancellationRequested) return false;
             var fallback = !modelStarted && voice?.Engine is not null && status is not null && status != LocalSpeech.CompletedStatus;
-            if (voice?.Engine is null || fallback)
+            if (voice?.Engine is null || wordResume.HasValue || fallback)
             {
                 var modelError = fallback ? status : null;
                 if (fallback)
@@ -842,7 +843,8 @@ public partial class ReadingPage
                     checkpointDetachedSpeech = null;
                     DetachedSentenceStatus.Text = "Локальний голос недоступний. Використовуємо системний голос.";
                 }
-                detachedSpeech.PreferredVoice = fallback || voice?.Id == LocalSpeech.SystemDefaultVoice ? null : voice?.Id;
+                detachedSpeech.PreferredVoice = voice?.Engine is not null || voice?.Id == LocalSpeech.SystemDefaultVoice
+                    ? null : voice?.Id;
                 var pronunciation = current.SpeechText ?? current.PronunciationText ?? speechText;
                 var pronounced = await LocalSpeech.PrepareSystemSpeechAsync(session, current.Language, pronunciation);
                 if (run != detachedAudioRun) return false;
@@ -931,9 +933,9 @@ public partial class ReadingPage
             !SpeechProgress.Matches(current.Sentence, resume, current.SpeechText ?? current.NarrationText)) return false;
 
         var voice = SelectedVoice();
-        return voice?.Engine is not null
-            ? ModelResumePosition(resume, voice, current.Language, SpeechRatePercent).HasValue
-            : SpeechProgress.ResumeOffset(current.Sentence, resume, current.SpeechText ?? current.NarrationText).HasValue;
+        return resume.Model is null
+            ? SpeechProgress.ResumeOffset(current.Sentence, resume, current.SpeechText ?? current.NarrationText).HasValue
+            : ModelResumePosition(resume, voice, current.Language, SpeechRatePercent).HasValue;
     }
 
     private void UpdateDetachedControls()
