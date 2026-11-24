@@ -64,6 +64,7 @@ public partial class ReadingPage
     private (ScrollView Viewport, string Document, int Page)? lastDrawnPdfTranslationPage;
     private (PdfLayoutAddress Address, string SentenceId, RectF Bounds, double ViewportHeight)? lastPdfTranslationFollow;
     private const string UntranslatedPdfFragment = "Фрагмент ще не перекладено";
+    private const string LoadingPdfTranslation = "Завантажуємо переклад…";
     private static string PdfFragmentState(PdfPageTranslationRow row) =>
         row.Failure is null ? "Не перекладено" : "Помилка перекладу";
     private static readonly Color TranslationSearchMatchColor = Color.FromArgb("#FFD27A");
@@ -583,9 +584,12 @@ public partial class ReadingPage
         }
         var request = ++pdfLayoutRequestId;
         using var cancellation = cachedOnly ? null : new CancellationTokenSource();
-        pdfLayoutStatus = cachedOnly ? "Завантажуємо переклад…" : "Перекладаємо сторінку…";
+        var showsCacheLoading = cachedOnly && pdfLayoutRows.Length == 0 &&
+            (pdfLayoutStatus is null || pdfLayoutStatus == LoadingPdfTranslation);
+        if (showsCacheLoading) pdfLayoutStatus = LoadingPdfTranslation;
         if (!cachedOnly)
         {
+            pdfLayoutStatus = null;
             translatingPdfLayout = address;
             refreshingPdfSentence = refresh is not null;
             keepPdfTranslationOnNavigation = userRequested || refreshingPdfSentence;
@@ -626,9 +630,10 @@ public partial class ReadingPage
             }
             pdfLayoutRows = rows;
             pdfLayoutRowsStale = false;
-            pdfLayoutStatus = rows.Length == 0 ? "На сторінці немає тексту для перекладу."
-                : refresh is not null ? "Речення перекладено заново."
-                : !cachedOnly && rows.All(row => row.Text is null) ? "Переклад сторінки поки недоступний." : "";
+            if (!cachedOnly || showsCacheLoading)
+                pdfLayoutStatus = rows.Length == 0 ? "На сторінці немає тексту для перекладу."
+                    : refresh is not null ? "Речення перекладено заново."
+                    : !cachedOnly && rows.All(row => row.Text is null) ? "Переклад сторінки поки недоступний." : "";
         }
         catch (OperationCanceledException) when (cancellation?.IsCancellationRequested == true)
         {
@@ -636,7 +641,8 @@ public partial class ReadingPage
         }
         catch (Exception error)
         {
-            if (request == pdfLayoutRequestId || OwnsManualTranslation() && CurrentPdfLayoutAddress() == address)
+            if ((!cachedOnly || showsCacheLoading) &&
+                (request == pdfLayoutRequestId || OwnsManualTranslation() && CurrentPdfLayoutAddress() == address))
                 pdfLayoutStatus = error.Message;
         }
         finally
