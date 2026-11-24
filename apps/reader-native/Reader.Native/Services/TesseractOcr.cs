@@ -34,10 +34,45 @@ internal static class TesseractOcr
             if (group is null) return "";
             var models = string.Join("+", group.Select(item => Languages[item.Key]));
             var image = await prepareImage().ConfigureAwait(false);
-            ReadPngSize(image.Bytes);
-            return await ExecuteAsync(group.Key,
-                ["stdin", "stdout", "-l", models, "--oem", "1", "--psm", "3"], image.Bytes,
-                64 * 1024, TimeSpan.FromSeconds(12), cancellation).ConfigureAwait(false);
+            var bestSample = "";
+            var bestLetterCount = 0;
+            using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+            budget.CancelAfter(TimeSpan.FromSeconds(12));
+            foreach (ushort angle in new ushort[] { 0, 180, 90, 270 })
+            {
+                cancellation.ThrowIfCancellationRequested();
+                if (budget.IsCancellationRequested) break;
+                try
+                {
+                    var bytes = angle == 0 ? image.Bytes : RustCoreClient.RotateOcrPng(image.Bytes, angle);
+                    var (width, height) = ReadPngSize(bytes);
+                    var output = await ExecuteAsync(group.Key,
+                        ["stdin", "stdout", "-l", models, "--oem", "1", "--psm", "3", "tsv"], bytes,
+                        512 * 1024, TimeSpan.FromSeconds(6), budget.Token).ConfigureAwait(false);
+                    var lines = RustCoreClient.ParseOcrTsv(output, width, height);
+                    // Upside-down prose sometimes produces plausible-looking words with low confidence.
+                    var sample = string.Join('\n', lines.Where(line => line.Confidence is >= 0.85).Select(line => line.Text));
+                    var letters = sample.Count(char.IsLetter);
+                    if (letters > bestLetterCount)
+                    {
+                        bestSample = sample;
+                        bestLetterCount = letters;
+                    }
+                    if (letters >= 32) break;
+                }
+                catch (OperationCanceledException) when (budget.IsCancellationRequested)
+                {
+                    cancellation.ThrowIfCancellationRequested();
+                    break;
+                }
+                catch (Exception error) when (CanFallback(error))
+                {
+                    cancellation.ThrowIfCancellationRequested();
+                    Debug.WriteLine($"Мова зображення, {angle}°: {error.Message}");
+                }
+            }
+            cancellation.ThrowIfCancellationRequested();
+            return bestSample;
         }
         catch (Exception error) when (CanFallback(error))
         {
