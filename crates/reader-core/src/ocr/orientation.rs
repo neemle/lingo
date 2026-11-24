@@ -18,16 +18,17 @@ pub(crate) fn reading_box((x, y, width, height): (f64, f64, f64, f64), angle: u1
 pub fn merge_rotated_lines(
     mut primary: Vec<OcrLine>,
     native: Vec<OcrLine>,
+    page_size: Option<[u32; 2]>,
 ) -> Result<Vec<OcrLine>> {
     if primary.len() > 8192 || native.len() > 8192 {
         return Err("Завеликий набір результатів OCR.".into());
     }
     let mut word_count: usize = primary.iter().map(|line| line.words.len()).sum();
-    for mut candidate in native.into_iter().filter(|line| {
+    for candidate in native.iter().filter(|line| {
         line.confidence.is_some_and(|score| score >= 0.85)
             && line.text.chars().filter(|letter| letter.is_alphabetic()).take(3).count() == 3
     }).take(256) {
-        let mut overlaps = primary.iter().enumerate().filter(|(_, line)| same_area(line, &candidate));
+        let mut overlaps = primary.iter().enumerate().filter(|(_, line)| same_area(line, candidate));
         let first = overlaps.next().map_or(primary.len(), |(index, _)| index);
         if primary.get(first).is_some_and(|line| line.text.trim() == candidate.text.trim())
             && overlaps.next().is_none()
@@ -38,18 +39,25 @@ pub fn merge_rotated_lines(
             }
             continue;
         }
-        let removed_words = primary.iter().filter(|line| same_area(line, &candidate))
+        let removed_words = primary.iter().filter(|line| same_area(line, candidate))
             .map(|line| line.words.len()).sum::<usize>();
         let new_count = word_count - removed_words + candidate.words.len();
         if new_count > 65_536 || (first == primary.len() && primary.len() >= 8192) {
             continue;
         }
         // Keep a rotated line separate from adjacent upright prose.
+        primary.retain(|line| !same_area(line, candidate));
+        let mut candidate = candidate.clone();
         candidate.block_start = true;
-        primary.retain(|line| !same_area(line, &candidate));
         primary.insert(first, candidate);
         word_count = new_count;
     }
+    let aspect = match page_size {
+        None => 1.0,
+        Some([width, height]) if width > 0 && height > 0 => f64::from(width) / f64::from(height),
+        Some(_) => return Err("Некоректний розмір зображення OCR.".into()),
+    };
+    crate::ocr_layout::recover_sparse_initials(&mut primary, &native, aspect);
     Ok(primary)
 }
 
@@ -90,7 +98,7 @@ mod tests {
         let mut garbled = inverted.clone();
         garbled.text = "as tneIht".into();
         let merged = merge_rotated_lines(vec![upright.clone(), garbled, sideways.clone()],
-            vec![sideways_with_rotation, inverted, reverse_sideways]).unwrap();
+            vec![sideways_with_rotation, inverted, reverse_sideways], None).unwrap();
         assert_eq!(merged.iter().map(|line| line.text.as_str()).collect::<Vec<_>>(),
             ["Le bateau", "Le théâtre", "La bibliothèque", "Notre jardin"]);
         assert_eq!((merged[1].words[0].x, merged[3].words[0].y), (0.6, 0.8));

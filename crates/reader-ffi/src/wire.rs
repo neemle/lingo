@@ -30,6 +30,8 @@ pub enum Command {
     MergeRotatedOcr {
         primary: Vec<reader_core::ocr::OcrLine>,
         native: Vec<reader_core::ocr::OcrLine>,
+        #[serde(default, rename = "pageSize")]
+        page_size: Option<[u32; 2]>,
     },
     SamplePdfBackgrounds {
         rgba: String,

@@ -60,6 +60,10 @@ pub struct OcrSpan {
 }
 
 impl OcrLine {
+    pub(crate) fn reading_bounds(&self) -> (f64, f64, f64, f64) {
+        reading_box((self.x, self.y, self.width, self.height), self.rotation.unwrap_or(0))
+    }
+
     pub(crate) fn is_rotated(&self) -> bool {
         matches!(self.rotation, Some(90 | 180 | 270))
     }

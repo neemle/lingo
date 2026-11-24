@@ -120,7 +120,7 @@ internal static class TesseractOcr
                     {
                         var crossCheck = await recoverRotatedText(lines).ConfigureAwait(false);
                         cancellation.ThrowIfCancellationRequested();
-                        return crossCheck.Length == 0 ? lines : RustCoreClient.MergeRotatedOcr(lines, crossCheck);
+                        return crossCheck.Length == 0 ? lines : RustCoreClient.MergeRotatedOcr(lines, crossCheck, width, height);
                     }
                     catch (Exception error) when (CanFallback(error))
                     {
@@ -150,6 +150,7 @@ internal static class TesseractOcr
     private static async Task<OcrLine[]> RecoverQuarterTurnsAsync(Installation executable, string language,
         byte[] input, OcrLine[] lines, CancellationToken cancellation)
     {
+        var (originalWidth, originalHeight) = ReadPngSize(input);
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         budget.CancelAfter(TimeSpan.FromSeconds(12));
         foreach (ushort angle in new ushort[] { 180, 90, 270 })
@@ -164,7 +165,8 @@ internal static class TesseractOcr
                     ["stdin", "stdout", "-l", Languages[language], "--oem", "1", "--psm", "11", "tsv"],
                     image, 16 * 1024 * 1024, TimeSpan.FromSeconds(5), budget.Token).ConfigureAwait(false);
                 var recovered = RustCoreClient.ParseOcrTsv(output, width, height, imageRotation: angle);
-                if (recovered.Length > 0) lines = RustCoreClient.MergeRotatedOcr(lines, recovered);
+                if (recovered.Length > 0)
+                    lines = RustCoreClient.MergeRotatedOcr(lines, recovered, originalWidth, originalHeight);
             }
             catch (OperationCanceledException) when (budget.IsCancellationRequested)
             {

@@ -1078,13 +1078,16 @@ fn repair_ocr_drop_caps(reference: &str, lines: &mut [ocr::OcrLine]) -> bool {
     for index in 0..lines.len().saturating_sub(1) {
         let (first, rest) = lines.split_at_mut(index + 1);
         let (initial, continuation) = (&mut first[index], &mut rest[0]);
-        if initial.page != continuation.page || initial.rotation != continuation.rotation
-            || initial.is_rotated()
-            || initial.height < continuation.height * 1.6
-            || initial.height > continuation.height * 4.0
-            || continuation.x < initial.x + continuation.height * 0.5
-            || continuation.y < initial.y + continuation.height * 0.4
-            || continuation.y > initial.y + initial.height
+        if initial.page != continuation.page || initial.rotation.unwrap_or(0) != continuation.rotation.unwrap_or(0) {
+            continue;
+        }
+        let (initial_x, initial_y, _, initial_height) = initial.reading_bounds();
+        let (next_x, next_y, _, next_height) = continuation.reading_bounds();
+        if initial_height < next_height * 1.6
+            || initial_height > next_height * 4.0
+            || next_x < initial_x + next_height * 0.5
+            || next_y < initial_y + next_height * 0.4
+            || next_y > initial_y + initial_height
         {
             continue;
         }
@@ -1739,6 +1742,17 @@ mod drop_cap_tests {
             make_line("© 15 fevrier 1815, à Marseille.", 0.117, 0.264, 0.050),
             make_line("ventre dans le port. Il revient.", 0.148, 0.303, 0.022),
         ];
+        for angle in [90, 180, 270] {
+            let mut rotated = lines.clone();
+            for line in &mut rotated {
+                (line.x, line.y, line.width, line.height) =
+                    ocr::reading_box((line.x, line.y, line.width, line.height), 360 - angle);
+                line.rotation = Some(angle);
+            }
+            assert!(reconcile_ocr_with_layer(reference, &mut rotated));
+            assert_eq!(rotated[0].reading_text(), "Le 15 février 1815, à Marseille.");
+            assert_eq!(rotated[1].reading_text(), "entre dans le port. Il revient.");
+        }
         assert!(reconcile_ocr_with_layer(reference, &mut lines));
         assert_eq!(lines[0].reading_text(), "Le 15 février 1815, à Marseille.");
         assert_eq!(lines[1].reading_text(), "entre dans le port. Il revient.");

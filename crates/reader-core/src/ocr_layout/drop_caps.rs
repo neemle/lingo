@@ -1,9 +1,10 @@
-use crate::ocr::OcrLine;
+use crate::ocr::{reading_box, OcrLine};
 
 /// Retain a sparse-only initial when its geometry matches a line in the primary OCR.
 pub(crate) fn recover_sparse_initials(primary: &mut [OcrLine], sparse: &[OcrLine], aspect: f64) {
     for cap in sparse.iter().filter(|line| {
-        is_initial(&line.text) && line.confidence.is_some_and(|score| score >= 0.90)
+        line.correction.is_none() && is_initial(&line.text)
+            && line.confidence.is_some_and(|score| score >= 0.90)
     }).take(32) {
         if let Some(target) = nearest_body(cap, primary, aspect) {
             if !primary.iter().any(|line| is_initial(&line.text) && distance(line, &primary[target], aspect).is_some()) {
@@ -26,7 +27,9 @@ fn repair_damaged_initial(primary: &mut [OcrLine], cap: &OcrLine, sparse_body: &
     let [tail, first_anchor, second_anchor, ..] = sparse_body.words.as_slice() else { return };
     let mut candidates = primary.iter_mut().filter(|line| {
         let [damaged, first, second, ..] = line.words.as_slice() else { return false };
-        line.page == cap.page && damaged.raw_start_utf16 == Some(0)
+        line.correction.is_none() && line.page == cap.page
+            && line.rotation.unwrap_or(0) == cap.rotation.unwrap_or(0)
+            && damaged.raw_start_utf16 == Some(0)
             && damaged.text.strip_prefix(&cap.text).is_some_and(|suffix| {
                 !suffix.is_empty() && !suffix.chars().any(char::is_alphanumeric)
             })
@@ -57,7 +60,7 @@ fn repair_damaged_initial(primary: &mut [OcrLine], cap: &OcrLine, sparse_body: &
     prefix(line, cap);
 }
 
-fn is_initial(text: &str) -> bool {
+pub(crate) fn is_initial(text: &str) -> bool {
     let mut letters = text.chars();
     letters.next().is_some_and(char::is_uppercase) && letters.next().is_none()
 }
@@ -100,11 +103,13 @@ pub(super) fn join(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
 
 /// Some engines report the initial and the rest of the word in the same OCR row.
 fn join_inline(line: &OcrLine) -> Option<OcrLine> {
-    if line.is_rotated() { return None; }
     let [cap, tail, ..] = line.words.as_slice() else { return None };
+    let angle = line.rotation.unwrap_or(0);
+    let (cap_x, cap_y, cap_width, cap_height) = reading_box((cap.x, cap.y, cap.width, cap.height), angle);
+    let (tail_x, tail_y, _, tail_height) = reading_box((tail.x, tail.y, tail.width, tail.height), angle);
     if cap.raw_start_utf16 != Some(0) || !is_initial(&cap.text)
         || !tail.text.chars().next().is_some_and(char::is_lowercase)
-        || !close_to_initial(cap.x + cap.width, cap.y, cap.height, tail.x, tail.y, tail.height)
+        || !close_to_initial(cap_x + cap_width, cap_y, cap_height, tail_x, tail_y, tail_height)
     {
         return None;
     }
@@ -138,16 +143,21 @@ fn join_inline(line: &OcrLine) -> Option<OcrLine> {
 
 fn distance(cap: &OcrLine, body: &OcrLine, aspect: f64) -> Option<f64> {
     let start = body.text.trim_start_matches(['’', '\'', 'ʼ']);
-    let (x, y, height) = body.words.first().filter(|word| word.raw_start_utf16 == Some(0))
-        .map_or((body.x, body.y, body.height), |word| (word.x, word.y, word.height));
-    if cap.is_rotated() || body.is_rotated()
-        || cap.page != body.page || !start.chars().next().is_some_and(char::is_lowercase)
+    let angle = body.rotation.unwrap_or(0);
+    if cap.rotation.unwrap_or(0) != angle || cap.page != body.page
+        || cap.correction.is_some() || body.correction.is_some()
+        || !start.chars().next().is_some_and(char::is_lowercase)
         || body.text.chars().take(3).count() < 3 || body.text.len() + cap.text.len() > 8192
-        || !close_to_initial((cap.x + cap.width) * aspect, cap.y, cap.height, x * aspect, y, height)
     {
         return None;
     }
-    Some((x - (cap.x + cap.width)).abs() * aspect + (y - cap.y).abs())
+    let (cap_x, cap_y, cap_width, cap_height) = cap.reading_bounds();
+    let (x, y, _, height) = body.words.first().filter(|word| word.raw_start_utf16 == Some(0))
+        .map_or_else(|| body.reading_bounds(), |word| reading_box((word.x, word.y, word.width, word.height), angle));
+    let aspect = if matches!(angle, 90 | 270) { 1.0 / aspect } else { aspect };
+    let right = (cap_x + cap_width) * aspect;
+    close_to_initial(right, cap_y, cap_height, x * aspect, y, height)
+        .then_some((x * aspect - right).abs() + (y - cap_y).abs())
 }
 
 fn close_to_initial(right: f64, top: f64, cap_height: f64, x: f64, y: f64, height: f64) -> bool {

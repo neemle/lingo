@@ -148,8 +148,8 @@ public sealed class CoreClient : IDisposable
         }
         finally { if (result.Allocation != 0) NativeMethods.reader_release(result.Allocation); }
     }
-    public static OcrLine[] MergeRotatedOcr(OcrLine[] primary, OcrLine[] native) =>
-        Invoke<OcrLine[]>(0, new { version = 1, operation = "merge_rotated_ocr", primary, native });
+    public static OcrLine[] MergeRotatedOcr(OcrLine[] primary, OcrLine[] native, int width, int height) =>
+        Invoke<OcrLine[]>(0, new { version = 1, operation = "merge_rotated_ocr", primary, native, pageSize = new[] { width, height } });
     public Backup Export() => Call<Backup>(new { version = 1, operation = "export" });
     public void ExportBackupFile(string path) =>
         Call<JsonElement>(new { version = 1, operation = "export_backup_file", path });

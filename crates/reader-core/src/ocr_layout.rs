@@ -3,7 +3,7 @@ use crate::pdf_text_blocks::{separate_blocks, PositionedWord};
 use std::ops::Range;
 
 mod drop_caps;
-pub(crate) use drop_caps::recover_sparse_initials;
+pub(crate) use drop_caps::{is_initial, recover_sparse_initials};
 
 /// Applies shared page-layout decisions before recognition results acquire canonical anchors.
 pub(crate) fn reconstruct_blocks(lines: &mut Vec<OcrLine>) {
@@ -22,9 +22,7 @@ pub(crate) fn reconstruct_blocks(lines: &mut Vec<OcrLine>) {
 }
 
 fn group_rotated_lines(page: &mut [OcrLine]) {
-    let reading_box = |line: &OcrLine| {
-        crate::ocr::reading_box((line.x, line.y, line.width, line.height), line.rotation.unwrap_or(0))
-    };
+    let reading_box = OcrLine::reading_bounds;
     for paragraph in page.chunk_by_mut(|first, second| {
         if !first.is_rotated() || first.rotation != second.rotation
             || [first, second].into_iter().any(|line| {
@@ -408,6 +406,23 @@ mod tests {
         assert!(first.x + first.width >= 0.20);
         assert_eq!(first.source_span.unwrap().end_utf16, 2);
         assert_eq!(lines[0].words[1].source_span.unwrap().start_utf16, 3);
+
+        for angle in [90, 180, 270] {
+            let mut rotated = regular[0].clone();
+            rotated.words[0].height = 0.045;
+            rotated.words[0].y = 0.295;
+            rotated.rotation = Some(angle);
+            let original = |x, y, w, h| crate::ocr::reading_box((x, y, w, h), 360 - angle);
+            (rotated.x, rotated.y, rotated.width, rotated.height) =
+                original(rotated.x, rotated.y, rotated.width, rotated.height);
+            for word in &mut rotated.words {
+                (word.x, word.y, word.width, word.height) = original(word.x, word.y, word.width, word.height);
+            }
+            let mut rows = vec![rotated];
+            reconstruct_blocks(&mut rows);
+            assert_eq!(rows[0].text, "Le bateau", "{angle}°");
+            assert_eq!(rows[0].rotation, Some(angle));
+        }
     }
 
     fn caption_line() -> OcrLine {

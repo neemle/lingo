@@ -18,10 +18,15 @@ pub fn parse_tesseract_quarter_turn(
     let lines = parse_lines(tsv, width, height, true)?;
     let to_original = |x, y, w, h| super::orientation::reading_box((x, y, w, h), angle);
     Ok(lines.into_iter().filter_map(|mut line| {
-        if line.width * f64::from(width) <= line.height * f64::from(height)
-            || line.confidence.is_none_or(|score| score < 0.85)
-            || line.words.first()?.x > line.words.last()?.x
-        {
+        let is_initial = crate::ocr_layout::is_initial(&line.text);
+        let accepted = if is_initial {
+            line.confidence.is_some_and(|score| score >= 0.90)
+        } else {
+            line.confidence.is_some_and(|score| score >= 0.85)
+                && line.width * f64::from(width) > line.height * f64::from(height)
+                && line.words.first()?.x <= line.words.last()?.x
+        };
+        if !accepted {
             return None;
         }
         (line.x, line.y, line.width, line.height) = to_original(line.x, line.y, line.width, line.height);
@@ -290,6 +295,33 @@ mod tests {
             [false, true, false, false, true]);
         let text = crate::ocr::recognized_lines(&result, 1).unwrap();
         assert_eq!(text, "Le marin arrive.\n\nIl aperçoit M.\nMorrel sur le quai.\nIl appelle le capitaine.\n\n— Bonjour !");
+    }
+
+    #[test]
+    fn quarter_turn_retains_only_geometrically_matched_drop_initials() {
+        let tsv = concat!(
+            "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n",
+            "5\t1\t1\t1\t1\t1\t80\t295\t35\t46\t96\tL\n",
+            "5\t1\t2\t1\t1\t1\t125\t300\t20\t20\t97\te\n",
+            "5\t1\t2\t1\t1\t2\t150\t300\t110\t20\t97\tbateau\n",
+            "5\t1\t3\t1\t1\t1\t600\t100\t35\t46\t96\tX\n",
+        );
+        for angle in [90, 180, 270] {
+            let size = if angle == 180 { [1000, 1500] } else { [1500, 1000] };
+            let lines = parse_tesseract_quarter_turn(tsv, 1000, 1500, angle).unwrap();
+            let merged = crate::ocr::merge_rotated_lines(Vec::new(), lines, Some(size)).unwrap();
+            assert_eq!(merged.len(), 1, "{angle}°");
+            assert_eq!(merged[0].text, "Le bateau");
+            assert_eq!(merged[0].rotation, Some(360 - angle));
+            assert_eq!(merged[0].words[0].text, "Le");
+            assert_eq!(merged[0].words[1].raw_start_utf16, Some(3));
+            let first = &merged[0].words[0];
+            let (x, y, w, h) = crate::ocr::reading_box(
+                (first.x, first.y, first.width, first.height), 360 - angle,
+            );
+            assert!((x - 0.08).abs() < 1e-9 && (y - 295.0 / 1500.0).abs() < 1e-9);
+            assert!((w - 0.065).abs() < 1e-9 && (h - 46.0 / 1500.0).abs() < 1e-9);
+        }
     }
 
     #[test]
