@@ -66,13 +66,8 @@ pub(super) fn expand(text: &str) -> Cow<'_, str> {
         if digits.len() < 2
             || digits.len() > 9
             || digits.starts_with('0')
-            || text[..start]
-                .chars()
-                .next_back()
-                .is_some_and(char::is_alphabetic)
-            || characters
-                .peek()
-                .is_some_and(|(_, next)| next.is_alphabetic())
+            || joined_number(text[..start].chars().rev(), digits.len() == 3, 1)
+            || joined_number(text[end..].chars(), true, 3)
         {
             continue;
         }
@@ -88,6 +83,19 @@ pub(super) fn expand(text: &str) -> Cow<'_, str> {
     }
     expanded.push_str(&text[copied..]);
     Cow::Owned(expanded)
+}
+
+fn joined_number(mut neighbour: impl Iterator<Item = char>, allow_grouping: bool, group_width: usize) -> bool {
+    match neighbour.next() {
+        Some(ch) if ch.is_alphabetic() || matches!(ch, '-' | '‐' | '‑' | '–') => true,
+        Some('.' | ',' | ':' | '/') => neighbour.next().is_some_and(|ch| ch.is_ascii_digit()),
+        Some(' ' | '\u{a0}' | '\u{2009}' | '\u{202f}') if allow_grouping => {
+            // A space can be a thousands separator. Check for the adjoining digit group.
+            let count = neighbour.take_while(char::is_ascii_digit).take(group_width + 1).count();
+            if group_width == 1 { count > 0 } else { count == group_width }
+        }
+        _ => false,
+    }
 }
 
 pub(crate) fn cardinal(number: usize) -> String {
@@ -129,5 +137,18 @@ fn counted(number: usize, forms: [&'static str; 3]) -> &'static str {
         (_, 1) => forms[0],
         (_, 2..=4) => forms[1],
         _ => forms[2],
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expands_standalone_cardinals_without_changing_numeric_notation() {
+        assert_eq!(expand("Є 19 вікон. На сторінці 24."), "Є дев'ятнадцять вікон. На сторінці двадцять чотири.");
+        let structured = "12:35, 12,50, 2024/11/24, 20 000, 12 450, 19-й, B12, 19A, 19–24.";
+        assert_eq!(expand(structured), structured);
     }
 }

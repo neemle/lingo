@@ -85,11 +85,10 @@ impl SpeechJob {
     }
 
     fn render(self, priority: InferencePriority, canceled: Option<&dyn Fn() -> bool>) -> Result<RenderedSpeech> {
-        let normalized = uk_numbers::expand(&self.text);
-        let spoken = ukrainian_stress(&normalized);
+        let spoken = ukrainian_narration(&self.text);
         let synthesis_rate = model_synthesis_rate(self.rate);
         let cache = cache::SpeechCacheKey::new(
-            "piper-uk-narration-v3",
+            "piper-uk-narration-v4",
             self.model.revision(),
             "uk",
             &self.speaker.to_string(),
@@ -234,6 +233,13 @@ pub(crate) fn smoke(directory: &Path, interrupted: &dyn Fn() -> bool) -> Result<
 }
 
 pub(crate) const STRESS_MARK: char = '\u{301}';
+
+pub(crate) fn ukrainian_narration(text: &str) -> std::borrow::Cow<'_, str> {
+    match uk_numbers::expand(text) {
+        std::borrow::Cow::Borrowed(text) => ukrainian_stress(text),
+        std::borrow::Cow::Owned(text) => std::borrow::Cow::Owned(ukrainian_stress(&text).into_owned()),
+    }
+}
 
 /// Adds contextual acute marks for local Ukrainian voices without changing source text.
 pub fn ukrainian_stress(text: &str) -> std::borrow::Cow<'_, str> {

@@ -5,7 +5,7 @@
 //! The independently distributed model weights are licensed under OpenRAIL.
 
 use crate::optional_models::OptionalModelJob;
-use crate::tts::{cache::SpeechCacheKey, speech_signal_bounds, to_wav, ukrainian_stress, SpeechAudio, STRESS_MARK};
+use crate::tts::{cache::SpeechCacheKey, speech_signal_bounds, to_wav, ukrainian_narration, SpeechAudio, STRESS_MARK};
 use crate::{
     onnx_runtime, resources::InferencePriority,
     speech::{RenderedSpeech, SpeechAdapter, SpeechSource},
@@ -89,14 +89,15 @@ impl MultilingualSpeechJob {
 
     fn render(self, priority: InferencePriority, canceled: Option<&dyn Fn() -> bool>) -> Result<RenderedSpeech> {
         let spoken = match self.language.as_str() {
-            "uk" => ukrainian_stress(&self.text),
+            "uk" => ukrainian_narration(&self.text),
             "fr" => crate::tts::french::expand(&self.text),
             _ => self.text.as_str().into(),
         };
         let spoken = canonical_dialogue(&spoken);
         let synthesis_rate = crate::tts::model_synthesis_rate(self.rate);
+        let profile = if self.language == "uk" { "supertonic-3-narration-v10" } else { "supertonic-3-narration-v9" };
         let cache = SpeechCacheKey::new(
-            "supertonic-3-narration-v9",
+            profile,
             self.model.revision(),
             &self.language,
             self.voice,
