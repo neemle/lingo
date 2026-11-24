@@ -484,6 +484,12 @@ public partial class ReadingPage
         }
     }
 
+    private void RecheckDetachedTranslationCache()
+    {
+        detachedTranslationCacheVersion++;
+        _ = RestoreDetachedTranslationAsync(allowAutoTranslate: false);
+    }
+
     private async Task RestoreDetachedTranslationAsync(bool allowAutoTranslate = true)
     {
         if (!readingPageActive || loadingDetachedSentence || translatingDetachedSentence ||

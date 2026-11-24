@@ -593,8 +593,7 @@ public partial class ReadingPage
         else if (readingPageActive && TargetCode == address.Target && detachedAddress ==
             new DetachedAddress(address.Document, address.Page, address.DetachedText, address.SourceLanguage))
         {
-            detachedTranslationCacheVersion++;
-            _ = RestoreDetachedTranslationAsync(allowAutoTranslate: false);
+            RecheckDetachedTranslationCache();
         }
     }
 
@@ -651,18 +650,26 @@ public partial class ReadingPage
 
     private void BackgroundPageTranslated(BackgroundTranslatedPage translated)
     {
-        if (!readingPageActive || CurrentPdfLayoutAddress() is not { } address ||
-            translated.DocumentId != address.Document || translated.RevisionId != address.Revision ||
-            translated.Source != address.SourceLanguage || translated.Target != address.Target || translated.Page != address.Page)
+        var session = AppState.Session;
+        if (!readingPageActive || session.Document is not { } document ||
+            translated.DocumentId != document.Id || translated.RevisionId != document.CurrentRevisionId ||
+            translated.Source != document.Language || translated.Target != TargetCode)
             return;
 
-        if (pdfTranslationLayout) RefreshCachedPdfPageLayout();
-        else if (DetachedPdfReader.IsVisible) _ = RestoreDetachedTranslationAsync(allowAutoTranslate: false);
-        else
+        if (pdfTranslationLayout && CurrentPdfLayoutAddress() is { } address && address.Page == translated.Page)
+            RefreshCachedPdfPageLayout();
+        if (DetachedPdfReader.IsVisible)
         {
-            lastCacheRestore = null;
-            _ = RestoreCachedTranslationAsync();
+            if (detachedAddress is { } detached && detached.Document == document.Id &&
+                detached.Page == translated.Page && detached.Language == document.Language)
+                RecheckDetachedTranslationCache();
+            return;
         }
+        var activePage = CurrentNativePdfWindow(document.Id)?.Center ?? session.OriginalPageIndex();
+        if (translated.Page != activePage) return;
+        translationCacheVersion++;
+        lastCacheRestore = null;
+        _ = RestoreCachedTranslationAsync();
     }
 
     private async void RefreshCachedPdfPageLayout()

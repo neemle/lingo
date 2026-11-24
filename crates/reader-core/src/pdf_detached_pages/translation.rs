@@ -42,7 +42,7 @@ pub(super) struct PageProjection {
 pub struct PdfPageTranslationRow {
     start_utf16: usize,
     end_utf16: usize,
-    source_sentence_id: String,
+    pub(crate) source_sentence_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     source_block_index: Option<usize>,
     pub(crate) text: Option<String>,
@@ -83,6 +83,23 @@ impl PageProjection {
 }
 
 impl Store {
+    pub(crate) fn warm_pdf_reflow_page(
+        &mut self, document: &Document, page: u16, target: &str, canceled: &dyn Fn() -> bool,
+    ) -> std::result::Result<Vec<ParagraphUnit>, TranslationBatchError> {
+        if let Some(cached) = self.detached_pdf_sentences(&document.id, page)? {
+            let projection = self.project_pdf_translation_page(
+                &document.id, page, target, cached.text, cached.sentences, cached.language)?;
+            return self.translate_document_page(
+                &projection.document, projection.physical, target, PageBoundaries::Projected, true, canceled);
+        }
+        let Some((start, end)) = crate::pdf_reading_position::page_bounds(document, page) else {
+            return Ok(Vec::new());
+        };
+        let physical = document.sentences.partition_point(|sentence| sentence.end_utf16 <= start)
+            ..document.sentences.partition_point(|sentence| sentence.start_utf16 < end);
+        self.translate_document_page(document, physical, target, PageBoundaries::Canonical, true, canceled)
+    }
+
     pub fn pdf_page_translation(
         &mut self, id: &str, page: u16, target: &str, cached_only: bool,
     ) -> Result<Vec<PdfPageTranslationRow>> {

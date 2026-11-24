@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 const RETRY_SECONDS: i64 = 15;
 const INTERACTIVE_RETRY_SECONDS: i64 = 2;
 const PDF_OCR_POLL_SECONDS: i64 = 15;
-const PAGE_TRANSLATION_REVISION: u32 = 1;
+const PAGE_TRANSLATION_REVISION: u32 = 2;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -651,14 +651,14 @@ impl Store {
             let Some(page) = canonical.into_iter().chain(detached.map(usize::from)).min() else {
                 return Ok(done);
             };
-            return self.warm_positioned_translation_page(&document.id, target, page as u16, start, page + 1, canceled);
+            return self.warm_positioned_translation_page(document, target, page as u16, start, page + 1, canceled);
         }
         if start >= document.sentences.len() {
             // OCR photos also have a text-only view. Warm its sentences before the page layout.
             if start == document.sentences.len() && document.format != "pdf" &&
                 document.ocr_lines.as_ref().is_some_and(|lines| !lines.is_empty())
             {
-                return self.warm_positioned_translation_page(&document.id, target, 0, start, start + 1, canceled);
+                return self.warm_positioned_translation_page(document, target, 0, start, start + 1, canceled);
             }
             return Ok(done);
         }
@@ -711,19 +711,33 @@ impl Store {
     }
 
     fn warm_positioned_translation_page(
-        &mut self, id: &str, target: &str, page: u16, start: usize, next: usize, canceled: &dyn Fn() -> bool,
+        &mut self, document: &Document, target: &str, page: u16, start: usize, next: usize, canceled: &dyn Fn() -> bool,
     ) -> Result<TranslationWarmStep> {
+        let id = &document.id;
         let rows = self.pdf_page_translation_result_interruptible(id, page, target, false, true, None, canceled);
         if canceled() { return Err("Фоновий переклад скасовано.".into()); }
-        let deferred = matches!(&rows, Err(TranslationBatchError::Deferred { .. }));
-        let rows = if deferred {
+        let layout_deferred = matches!(&rows, Err(TranslationBatchError::Deferred { .. }));
+        let rows = if layout_deferred {
             self.pdf_page_translation_result(id, page, target, true, true)
         } else { rows };
-        let translated_page = rows.as_ref().ok()
-            .filter(|rows| rows.iter().any(|row| row.text.is_some())).map(|_| page);
+        // Layout can split one reading sentence into independent visual blocks.
+        let split = document.format == "pdf" && rows.as_ref().is_ok_and(|rows|
+            rows.windows(2).any(|pair| pair[0].source_sentence_id == pair[1].source_sentence_id));
+        let reflow = if split && !layout_deferred {
+            self.warm_pdf_reflow_page(document, page, target, canceled)
+        } else {
+            Ok(Vec::new())
+        };
+        if canceled() { return Err("Фоновий переклад скасовано.".into()); }
+        let deferred = layout_deferred || matches!(&reflow, Err(TranslationBatchError::Deferred { .. }));
+        let translated_page = (
+            rows.as_ref().is_ok_and(|rows| rows.iter().any(|row| row.text.is_some())) ||
+            reflow.as_ref().is_ok_and(|units| units.iter().any(|unit| unit.translation.is_some()))
+        ).then_some(page);
         Ok(TranslationWarmStep {
             next: Some(if deferred { start } else { next }),
-            incomplete: rows.map_or(true, |rows| rows.iter().any(|row| row.text.is_none())),
+            incomplete: rows.map_or(true, |rows| rows.iter().any(|row| row.text.is_none())) ||
+                reflow.map_or(true, |units| units.iter().any(|unit| unit.translation.is_none())),
             deferred,
             translated_page,
             translated_sentence_ids: Vec::new(),
