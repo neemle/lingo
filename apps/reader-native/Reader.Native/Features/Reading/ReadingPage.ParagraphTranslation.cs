@@ -616,8 +616,9 @@ public partial class ReadingPage
             if (regenerate && session.Sentence is { } source &&
                 ReflowPdfRefreshTarget(document, source, key.Target) is { } pdf)
             {
+                var refresh = new PdfSentenceRefresh(pdf.Offset, new(key.Sentence, key.Source, pdf.Address.Revision));
                 await session.PdfPageTranslationAsync(pdf.Address.Document, pdf.Address.Page, key.Target,
-                    cachedOnly: false, refreshAtUtf16: pdf.Offset);
+                    cachedOnly: false, refresh: refresh);
                 refreshedPage = pdf.Address;
                 if (ActiveTranslationKey() == key) ClearPdfFragmentFocus();
                 machineStatus = "Речення перекладено заново.";

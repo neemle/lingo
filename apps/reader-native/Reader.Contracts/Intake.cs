@@ -20,6 +20,10 @@ public sealed record PdfReadPage(int Page, string State, string Text, OcrSpan? S
 
 public sealed record PdfReadWindow(int Center, int PageCount, PdfReadPage[] Pages, string Context, OcrSpan? ContextSpan);
 
+public sealed record PdfSentenceRefresh(int OffsetUtf16, PdfSentenceRefreshAnchor Anchor);
+
+public sealed record PdfSentenceRefreshAnchor(string SentenceId, string SourceLanguage, string? RevisionId);
+
 public sealed record DetachedPdfSentence(Sentence Sentence, int Position, int Total, string Language,
     bool Bookmarked = false, string? Note = null)
 {

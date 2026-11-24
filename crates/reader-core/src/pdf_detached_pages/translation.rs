@@ -4,8 +4,30 @@ use crate::translation::{
     ParagraphUnit, TranslationBatchError, UnitGrouping,
 };
 use crate::{document_layout, ocr, Document, Result, Sentence, Store};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, ops::Range};
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PdfSentenceRefresh {
+    offset_utf16: usize,
+    #[serde(default)]
+    anchor: Option<PdfSentenceRefreshAnchor>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PdfSentenceRefreshAnchor {
+    sentence_id: String,
+    source_language: String,
+    revision_id: Option<String>,
+}
+
+impl PdfSentenceRefresh {
+    pub fn at_offset(offset_utf16: usize) -> Self {
+        Self { offset_utf16, anchor: None }
+    }
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -115,10 +137,10 @@ impl Store {
 
     pub fn pdf_page_translation_until_canceled(
         &mut self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
-        refresh_at: Option<usize>,
+        refresh: Option<&PdfSentenceRefresh>,
         canceled: &dyn Fn() -> bool,
     ) -> Result<Vec<PdfPageTranslationRow>> {
-        match self.pdf_page_translation_result_interruptible(id, page, target, cached_only, background, refresh_at, canceled) {
+        match self.pdf_page_translation_result_interruptible(id, page, target, cached_only, background, refresh, canceled) {
             Err(TranslationBatchError::Deferred { .. }) if background && !cached_only && !canceled() =>
                 self.pdf_page_translation_result(id, page, target, true, background).map_err(String::from),
             result => result.map_err(String::from),
@@ -133,21 +155,22 @@ impl Store {
 
     pub(crate) fn pdf_page_translation_result_interruptible(
         &mut self, id: &str, page: u16, target: &str, cached_only: bool, background: bool,
-        refresh_at: Option<usize>,
+        refresh: Option<&PdfSentenceRefresh>,
         canceled: &dyn Fn() -> bool,
     ) -> std::result::Result<Vec<PdfPageTranslationRow>, TranslationBatchError> {
         const CANCELED: &str = "Переклад сторінки скасовано.";
         if canceled() {
             return Err(TranslationBatchError::deferred(CANCELED.into()));
         }
-        if refresh_at.is_some() && (cached_only || background) {
+        if refresh.is_some() && (cached_only || background) {
             return Err(TranslationBatchError::Failed("Повторний переклад потребує активного запиту.".into()));
         }
-        let (mut document, physical, bounds, projected_offset, boundaries) = if let Some(cached) = self.detached_pdf_sentences(id, page)? {
+        let missing_selection = || "Виділене речення змінилося. Виберіть його ще раз.".to_owned();
+        let (mut document, physical, bounds, projected_offset, boundaries, revision) = if let Some(cached) = self.detached_pdf_sentences(id, page)? {
             let local_start = cached.sentences.first().map_or(0, |sentence| sentence.start_utf16);
             let projection = self.project_pdf_translation_page(id, page, target, cached.text, cached.sentences, cached.language)?;
             let offset = projection.physical_sentences().first().map_or(0, |sentence| sentence.start_utf16 - local_start);
-            (projection.document, projection.physical, None, offset, PageBoundaries::Projected)
+            (projection.document, projection.physical, None, offset, PageBoundaries::Projected, Some(cached.revision))
         } else {
             let document = self.translation_document(id)?;
             let bounds = if document.format == "pdf" {
@@ -156,18 +179,29 @@ impl Store {
                 (page == 0 && document.ocr_lines.as_ref().is_some_and(|lines| !lines.is_empty()))
                     .then(|| (0, document.text.encode_utf16().count()))
             };
-            let Some((start, end)) = bounds else { return Ok(Vec::new()); };
+            let Some((start, end)) = bounds else {
+                return if refresh.is_some() { Err(missing_selection().into()) } else { Ok(Vec::new()) };
+            };
             let first = document.sentences.partition_point(|s| s.end_utf16 <= start);
             let last = document.sentences.partition_point(|s| s.start_utf16 < end);
-            (document, first..last, Some((start, end)), 0, PageBoundaries::Canonical)
+            let revision = document.current_revision_id.clone();
+            (document, first..last, Some((start, end)), 0, PageBoundaries::Canonical, revision)
         };
-        if document.language == target { return Ok(Vec::new()); }
+        if document.language == target {
+            return if refresh.is_some() { Err(missing_selection().into()) } else { Ok(Vec::new()) };
+        }
         let original: Vec<_> = document.sentences[physical.clone()].iter()
             .map(|sentence| (sentence.start_utf16..sentence.end_utf16, sentence.id.clone())).collect();
-        let missing_selection = || "Виділене речення вже відсутнє на сторінці.".to_owned();
-        let selected = refresh_at.map(|offset|
-            pdf_refresh_sentence(&original, offset, projected_offset, bounds).ok_or_else(missing_selection)
-        ).transpose()?;
+        let selected = refresh.map(|request| {
+            let index = pdf_refresh_sentence(&original, request.offset_utf16, projected_offset, bounds)
+                .ok_or_else(missing_selection)?;
+            if request.anchor.as_ref().is_some_and(|anchor| anchor.sentence_id != original[index].1 ||
+                anchor.source_language != document.language || anchor.revision_id != revision)
+            {
+                return Err(missing_selection());
+            }
+            Ok(index)
+        }).transpose()?;
         let mut reflow_input = None;
         let physical = if let Some(units) = split_ocr_sentences(&document, physical.clone(), bounds.map(|_| page), target) {
             if let Some(index) = selected.filter(|&index| !units.iter().any(|unit| unit.id == original[index].1)) {

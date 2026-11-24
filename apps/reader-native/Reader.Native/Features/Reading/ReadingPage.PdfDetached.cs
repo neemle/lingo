@@ -415,8 +415,10 @@ public partial class ReadingPage
         UpdateDetachedControls();
         try
         {
+            var refresh = new PdfSentenceRefresh(current.Sentence.StartUtf16,
+                new(current.Sentence.Id, current.Language, current.RevisionId));
             await AppState.Session.PdfPageTranslationAsync(address.Document, address.Page, target,
-                cachedOnly: false, refreshAtUtf16: current.Sentence.StartUtf16);
+                cachedOnly: false, refresh: refresh);
             if (run == detachedTranslationRun) ClearPdfFragmentFocus();
         }
         catch (Exception error)

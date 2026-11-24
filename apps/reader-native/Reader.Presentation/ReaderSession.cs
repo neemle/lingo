@@ -308,9 +308,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     }
 
     public Task<PdfPageTranslationRow[]> PdfPageTranslationAsync(string id, int page, string target, bool cachedOnly,
-        CancellationToken cancellationToken = default, int? refreshAtUtf16 = null) =>
+        CancellationToken cancellationToken = default, PdfSentenceRefresh? refresh = null) =>
         Task.Run(() => client.PdfPageTranslation(id, page, target, cachedOnly,
-            cancellationToken: cancellationToken, refreshAtUtf16: refreshAtUtf16),
+            cancellationToken: cancellationToken, refresh: refresh),
             cancellationToken);
 
     public async Task<bool> PrefetchVisiblePdfTranslationAsync(BackgroundTranslatedPage address, CancellationToken cancellationToken)

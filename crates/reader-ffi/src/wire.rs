@@ -804,6 +804,7 @@ pub enum Command {
         background: bool,
         #[serde(rename = "refreshAtUtf16")]
         refresh_at: Option<usize>,
+        refresh: Option<reader_core::PdfSentenceRefresh>,
         #[serde(rename = "requestId")]
         request_id: Option<u64>,
     },

@@ -9,7 +9,7 @@ mod ocr_edit;
 mod speech_resume;
 mod translation;
 pub(crate) mod word_break;
-pub use translation::{DetachedPdfPassage, DetachedPdfTranslation, PdfPageTranslationRow};
+pub use translation::{DetachedPdfPassage, DetachedPdfTranslation, PdfPageTranslationRow, PdfSentenceRefresh};
 pub(crate) use translation::canonical_ocr_search_projection;
 pub use ocr_edit::DetachedPdfOcrPage;
 pub use find::{DetachedPdfFindCursor, DetachedPdfFindPage};
