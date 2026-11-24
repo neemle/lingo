@@ -381,6 +381,51 @@ fn pdf_translation_checks_the_displayed_page_source() {
 }
 
 #[test]
+fn detached_pdf_cache_read_follows_the_requested_sentence_after_cursor_movement() {
+    let store = StoreFixture::new();
+    let path = store.dir.join("reader.pdf");
+    std::fs::write(&path, b"%PDF-1.4\n").unwrap();
+    let imported = call(store.handle, json!({
+        "version":1,"operation":"import_pdf_file","name":"reader.pdf","language":"fr",
+        "path":path,"pageTexts":["Première page.",""],"lines":[],"deferredFrom":1,
+    }));
+    assert_eq!(imported["ok"], true, "{imported}");
+    let id = &imported["data"]["id"];
+    let result = call(store.handle, json!({
+        "version":1,"operation":"update_reader_preference",
+        "change":{"field":"backgroundTranslation","value":true},
+    }));
+    assert_eq!(result["ok"], true, "{result}");
+    let result = call(store.handle, json!({
+        "version":1,"operation":"cache_background_pdf_text_layer","id":id,"page":1,
+        "revision":imported["data"]["currentRevisionId"],"text":"Le bateau arrive. La pluie tombe.",
+    }));
+    assert_eq!(result["data"], true, "{result}");
+    let select = |position| call(store.handle, json!({
+        "version":1,"operation":"detached_pdf_sentence","id":id,"page":1,"position":position,
+    }));
+    let first = select(Some(0));
+    let sentence = &first["data"]["sentence"]["id"];
+    let review = call(store.handle, json!({
+        "version":1,"operation":"update_detached_pdf_annotation","id":id,"page":1,"sentenceId":sentence,
+        "change":{"kind":"translation","target":"uk","text":"Корабель прибуває."},
+    }));
+    assert_eq!(review["ok"], true, "{review}");
+    let second = select(Some(1));
+    assert_eq!(second["data"]["position"], 1, "{second}");
+
+    let passage = |sentence: &serde_json::Value, cached_only| call(store.handle, json!({
+        "version":1,"operation":"detached_pdf_passage","id":id,"page":1,
+        "sentenceId":sentence,"target":"uk","cachedOnly":cached_only,
+    }));
+    let saved = passage(sentence, true);
+    assert_eq!(saved["data"]["rows"][0]["text"], "Корабель прибуває.", "{saved}");
+    assert_eq!(select(None)["data"]["position"], 1);
+    assert_error(&passage(sentence, false), "core_error");
+    assert_error(&passage(&imported["data"]["sentences"][0]["id"], true), "core_error");
+}
+
+#[test]
 fn manual_pdf_ocr_retry_resumes_only_the_current_window_without_waiting() {
     let store = StoreFixture::new();
     let original = store.dir.join("scan.pdf");

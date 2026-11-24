@@ -1,4 +1,4 @@
-use super::{annotations, word_break, CachedSentences};
+use super::{annotations, database_error, word_break, CachedSentences};
 use crate::translation::{
     pdf_regeneration_input, sentence_input, CacheRoutes, PageBoundaries, ParagraphTranslation,
     ParagraphUnit, TranslationBatchError, UnitGrouping,
@@ -345,7 +345,7 @@ impl Store {
         cached_only: bool,
         background: bool,
     ) -> Result<Option<DetachedPdfTranslation>> {
-        let (projection, selected) = self.detached_page_projection(id, page, sentence_id, target)?;
+        let (projection, selected) = self.detached_page_projection(id, page, sentence_id, target, cached_only)?;
         if cached_only {
             let routes = self.translation_cache_routes(&projection.document.language, target)?;
             return cached_page_translation(self, &routes, &projection, selected, target);
@@ -369,7 +369,7 @@ impl Store {
         cached_only: bool,
         background: bool,
     ) -> Result<DetachedPdfPassage> {
-        let (projection, selected) = self.detached_page_projection(id, page, sentence_id, target)?;
+        let (projection, selected) = self.detached_page_projection(id, page, sentence_id, target, cached_only)?;
         let document = &projection.document;
         let position = projection.physical.start + selected;
         let routes = self.translation_cache_routes(&document.language, target)?;
@@ -402,8 +402,9 @@ impl Store {
     }
 
     fn detached_page_projection(
-        &self, id: &str, page: u16, sentence_id: &str, target: &str,
+        &self, id: &str, page: u16, sentence_id: &str, target: &str, cached_only: bool,
     ) -> Result<(PageProjection, usize)> {
+        let snapshot = self.connection.unchecked_transaction().map_err(database_error)?;
         let CachedSentences {
             language,
             text,
@@ -413,11 +414,18 @@ impl Store {
         } = self
             .detached_pdf_sentences(id, page)?
             .ok_or("Текст сторінки PDF недоступний.")?;
-        let selected = saved.min(sentences.len() - 1);
-        if sentences[selected].id != sentence_id {
-            return Err("Позиція читання сторінки PDF змінилася.".into());
-        }
+        let selected = if cached_only {
+            sentences.iter().position(|sentence| sentence.id == sentence_id)
+                .ok_or("Речення сторінки PDF змінилося.")?
+        } else {
+            let selected = saved.min(sentences.len() - 1);
+            if sentences[selected].id != sentence_id {
+                return Err("Позиція читання сторінки PDF змінилася.".into());
+            }
+            selected
+        };
         let projection = self.project_pdf_translation_page(id, page, target, text, sentences, language)?;
+        snapshot.commit().map_err(database_error)?;
         Ok((projection, selected))
     }
 
