@@ -53,6 +53,7 @@ public partial class ReadingPage
     private string? pdfLayoutStatus;
     private int pdfLayoutRequestId;
     private int pdfTranslationViewportRequest;
+    private int pdfTranslationSelectionRequest;
     private bool refreshingPdfLayout;
     private bool openingPdfTranslationText;
     private PdfLayoutAddress? pendingPdfCacheRefresh;
@@ -292,6 +293,7 @@ public partial class ReadingPage
             if (!pdfLayoutRowsStale && pdfLayoutRequest is { } previous)
                 RememberPdfPageTranslations(previous, pdfLayoutRows);
             pdfLayoutRequest = address;
+            pdfTranslationSelectionRequest++;
             pdfFragmentFocus = null;
             pendingPdfCacheRefresh = null;
             pdfLayoutRequestId++;
@@ -863,18 +865,33 @@ public partial class ReadingPage
         if (!ReferenceEquals(sender, surface) || !viewport.IsVisible ||
             args.GetPosition(surface) is not { } point || surface.Drawable is not TranslatedPdfDrawing drawing ||
             drawing.HitTest(point) is not { } fragment) return;
-        await SelectTranslatedPdfRowAsync(fragment);
+        if (!await SelectTranslatedPdfRowAsync(fragment)) return;
         if (overflowContent is not { } overflow) return;
-        var index = Array.IndexOf(overflow.Rows, fragment);
+        var index = Array.FindIndex(overflow.Rows, row => SamePdfSourceFragment(row, fragment));
         if (index >= 0) FollowOverflowSelection(overflow.Panel, pdfLayoutSentence, overflow.Labels[index]);
     }
 
-    private async Task SelectTranslatedPdfRowAsync(PdfPageTranslationRow fragment)
+    private static bool SamePdfSourceFragment(PdfPageTranslationRow first, PdfPageTranslationRow second) =>
+        first.SourceSentenceId == second.SourceSentenceId &&
+        first.StartUtf16 == second.StartUtf16 && first.EndUtf16 == second.EndUtf16;
+
+    private async Task<bool> SelectTranslatedPdfRowAsync(PdfPageTranslationRow fragment)
     {
         var session = AppState.Session;
-        if (!readingPageActive || session.Busy || CurrentPdfLayoutAddress() is not { } address ||
-            address != pdfLayoutRequest || !pdfLayoutRows.Contains(fragment)) return;
+        if (!readingPageActive || CurrentPdfLayoutAddress() is not { } address ||
+            address != pdfLayoutRequest || !pdfLayoutRows.Any(row => SamePdfSourceFragment(row, fragment))) return false;
+
+        var request = ++pdfTranslationSelectionRequest;
+        bool Current() => readingPageActive && AppState.Session == session &&
+            request == pdfTranslationSelectionRequest && pdfLayoutRequest == address &&
+            CurrentPdfLayoutAddress() == address &&
+            pdfLayoutRows.Any(row => SamePdfSourceFragment(row, fragment));
+
+        while (session.Busy && Current()) await session.WaitUntilIdleAsync();
+        if (!Current()) return false;
         await SelectPdfSourceRangeAsync(address.Source, fragment.StartUtf16, fragment.EndUtf16, fragment.SourceSentenceId, address);
+        return Current() && pdfFragmentFocus ==
+            (address, fragment.SourceSentenceId, fragment.StartUtf16, fragment.EndUtf16);
     }
 
     private Sentence? PdfHighlightSentence(InlinePdfAddress page, Sentence? sentence)
@@ -973,7 +990,7 @@ public partial class ReadingPage
         {
             var (label, top) = overflowTarget;
             if (label.Height > 0 && !OverflowLabelVisible(translated.ScrollY, translated.Height, top, label.Height))
-                await ScrollPdfTranslationAsync(() => translated.ScrollToAsync(label, ScrollToPosition.MakeVisible, animated: false));
+                await ScrollPdfTranslationAsync(() => ScrollToOverflowLabelAsync(translated, label));
             return;
         }
 
@@ -1019,6 +1036,10 @@ public partial class ReadingPage
         var overlap = Math.Min(viewportTop + viewportHeight, labelTop + labelHeight) - Math.Max(viewportTop, labelTop);
         return overlap >= Math.Min(viewportHeight, labelHeight) - 1;
     }
+
+    private static Task ScrollToOverflowLabelAsync(ScrollView viewport, Label label) =>
+        viewport.ScrollToAsync(label,
+            label.Height > viewport.Height ? ScrollToPosition.Start : ScrollToPosition.MakeVisible, animated: false);
 
     private async Task ScrollPdfTranslationAsync(Func<Task> scroll)
     {
@@ -1222,7 +1243,7 @@ public partial class ReadingPage
             }
 
             await ScrollPdfTranslationAsync(() => label is null ? viewport.ScrollToAsync(0, 0, animated: false)
-                : viewport.ScrollToAsync(label, ScrollToPosition.MakeVisible, animated: false));
+                : ScrollToOverflowLabelAsync(viewport, label));
         });
     }
 
