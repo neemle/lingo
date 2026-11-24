@@ -208,6 +208,9 @@ pub enum Command {
     UnreadPdfTextPages {
         id: String,
     },
+    HasUnrecognizedPdfSearchPages {
+        id: String,
+    },
     DetachedPdfSentence {
         id: String,
         page: u16,

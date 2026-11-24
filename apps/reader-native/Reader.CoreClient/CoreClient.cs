@@ -255,6 +255,9 @@ public sealed class CoreClient : IDisposable
     public int[] UnreadPdfTextPages(string id) =>
         Call<int[]>(new { version = 1, operation = "unread_pdf_text_pages", id });
 
+    public bool HasUnrecognizedPdfSearchPages(string id) =>
+        Call<bool>(new { version = 1, operation = "has_unrecognized_pdf_search_pages", id });
+
     public DetachedPdfSentence? DetachedPdfSentence(string id, int page, int? position, string? sentenceId = null, int? sourceOffset = null) =>
         Call<DetachedPdfSentence?>(new { version = 1, operation = "detached_pdf_sentence", id, page, position, sentenceId, sourceOffset });
 

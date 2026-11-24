@@ -255,6 +255,9 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<int[]> UnreadPdfTextPagesAsync(string id, CancellationToken cancellation) =>
         Task.Run(() => client.UnreadPdfTextPages(id), cancellation);
 
+    public Task<bool> HasUnrecognizedPdfSearchPagesAsync(string id, CancellationToken cancellation) =>
+        Task.Run(() => client.HasUnrecognizedPdfSearchPages(id), cancellation);
+
     public Task<DetachedPdfSentence?> DetachedPdfSentenceAsync(string id, int page, int? position, string? sentenceId = null, int? sourceOffset = null) =>
         Task.Run(() => client.DetachedPdfSentence(id, page, position, sentenceId, sourceOffset));
 

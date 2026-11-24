@@ -68,19 +68,25 @@ internal static partial class PdfScan
         return (pages, pageLimit);
     }
 
-    internal static Task<(int Page, int Occurrence, string Text)[]> FindUnreadTextAsync(string path, int[] pages,
+    internal static Task<((int Page, int Occurrence, string Text)[] Matches, bool NeedsOcr)> FindUnreadTextAsync(string path, int[] pages,
         int firstOccurrence, string query, string language, int limit, CancellationToken cancellation) =>
         Task.Run(() =>
         {
             using var pool = new NSAutoreleasePool();
             using var document = Open(path);
             var matches = new List<(int Page, int Occurrence, string Text)>(limit);
+            var needsOcr = false;
             foreach (var index in pages)
             {
                 cancellation.ThrowIfCancellationRequested();
                 using var pagePool = new NSAutoreleasePool();
                 using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
                 var text = TextLayer(page, out _, cancellation: cancellation).Text;
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    needsOcr = true;
+                    continue;
+                }
                 var occurrence = 0;
                 foreach (var match in DocumentFind.PdfSourceMatches(text, query, language))
                 {
@@ -90,10 +96,10 @@ internal static partial class PdfScan
                     var excerpt = new System.Globalization.StringInfo(DocumentFind.MatchingExcerpt(text, match));
                     matches.Add((index, position, excerpt.LengthInTextElements > 240
                         ? excerpt.SubstringByTextElements(0, 240) + "…" : excerpt.String));
-                    if (matches.Count == limit) return matches.ToArray();
+                    if (matches.Count == limit) return (matches.ToArray(), needsOcr);
                 }
             }
-            return matches.ToArray();
+            return (matches.ToArray(), needsOcr);
         }, cancellation);
 
     internal static Task<string> ReadPageTextAsync(string path, int index, int expectedPages, CancellationToken cancellation) =>

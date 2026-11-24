@@ -443,6 +443,31 @@ impl Store {
         rows.collect::<rusqlite::Result<_>>().map_err(database_error)
     }
 
+    /// Report physical pages whose searchable text still depends on foreground OCR.
+    pub fn has_unrecognized_pdf_search_pages(&self, id: &str) -> Result<bool> {
+        // A null page start means neither the native layer nor canonical OCR supplied text.
+        // Deferred PDFKit probes and completed-empty pages are tracked separately.
+        self.connection.query_row(
+            "WITH document(body) AS MATERIALIZED (
+                SELECT d.body FROM documents d JOIN file_originals f ON f.document_id=d.id WHERE d.id=?1
+            )
+            SELECT EXISTS (
+                SELECT 1 FROM document CROSS JOIN json_each(body,'$.pdfPageStarts') page
+                WHERE page.type='null'
+                  AND page.key NOT IN (
+                      SELECT value FROM document CROSS JOIN json_each(body,'$.pdfPendingTextPages')
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM pdf_detached_pages p WHERE p.document_id=?1 AND p.page=page.key
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM pdf_ocr_completed_pages p WHERE p.document_id=?1 AND p.page=page.key
+                  )
+            )",
+            [id], |row| row.get(0),
+        ).map_err(database_error)
+    }
+
     /// Provide enough text for the active page and both immediate neighbors.
     pub fn pdf_read_window(&self, id: &str, center: u16) -> Result<PdfReadWindow> {
         let (body, file_backed): (String, bool) = self
@@ -1748,6 +1773,40 @@ mod drop_cap_tests {
         assert_eq!(window.pages[1].text, "Recognized text.");
         assert!(!window.pages[1].refresh_pending);
         assert_eq!(store.pdf_reading_page(&id).unwrap(), Some(1));
+    }
+
+    #[test]
+    fn search_reports_only_unresolved_ocr_pages() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("library.db")).unwrap();
+        let original = root.path().join("library.pdf");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let line = |page| ocr::OcrLine {
+            page, text: "Le texte reconnu.".into(), x: 0.1, y: 0.2, width: 0.6, height: 0.04,
+            confidence: None, rotation: None, correction: None, block_start: false,
+            words: Vec::new(), source_span: None,
+        };
+        let mut pages = vec![String::new(); 6];
+        pages[0] = "Le texte natif.".into();
+        let mut prepared = file_originals::prepare_pdf_import_with_empty_pages(
+            store.pdf_original_root(), "library.pdf", &original, "fr", pages, vec![line(3)], vec![1],
+        ).unwrap();
+        prepared.defer_text_layers_from(5).unwrap();
+        let id = store.import_pdf_file(prepared).unwrap().id;
+        pdf_detached_pages::write_text_layer(&store.connection, &id, 2, "Le texte séparé.").unwrap();
+
+        assert_eq!(store.unread_pdf_text_pages(&id).unwrap(), [5]);
+        assert!(store.has_unrecognized_pdf_search_pages(&id).unwrap());
+        store.cache_pdf_ocr_page(&id, 4, vec![]).unwrap();
+        // The only remaining empty page is waiting for a PDFKit probe.
+        assert!(!store.has_unrecognized_pdf_search_pages(&id).unwrap());
+        assert_eq!(store.unread_pdf_text_pages(&id).unwrap(), [5]);
+
+        // A legacy full-document OCR import did not persist retry or completion state per page.
+        let legacy = store.import_scanned_pdf(
+            "legacy.pdf", b"%PDF-1.4\n%% legacy", "fr", vec![line(0)], 2,
+        ).unwrap();
+        assert!(!store.has_unrecognized_pdf_search_pages(&legacy.id).unwrap());
     }
 
     #[test]

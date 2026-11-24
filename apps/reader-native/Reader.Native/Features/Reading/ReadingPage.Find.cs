@@ -22,7 +22,7 @@ public partial class ReadingPage
     private sealed record DocumentFindCursor(int Position, int? PhysicalPage = null, bool UnreadLayer = false,
         int Offset = 0);
     private sealed record DocumentFindHit(string Text, DocumentFindSelection Selection);
-    private sealed record DocumentFindPage(DocumentFindHit[] Matches, DocumentFindCursor? Next);
+    private sealed record DocumentFindPage(DocumentFindHit[] Matches, DocumentFindCursor? Next, bool NeedsOcr = false);
 
     private async void FindInDocumentClicked(object? sender, EventArgs args)
     {
@@ -507,8 +507,19 @@ public partial class ReadingPage
                     : await FindOriginalAsync(searchQuery, start, token);
                 if (!Current()) return;
                 nextStart = page.Next;
-                status.Text = page.Matches.Length > 0 ? $"Збіги · сторінка {earlierPages.Count + 1}"
-                    : searchTranslation ? "Збігів у збереженому перекладі немає." : "Збігів не знайдено.";
+                if (page.Matches.Length > 0)
+                    status.Text = $"Збіги · сторінка {earlierPages.Count + 1}";
+                else if (searchTranslation)
+                    status.Text = "Збігів у збереженому перекладі немає.";
+                else
+                {
+                    var needsOcr = document.Format == "pdf" && (page.NeedsOcr ||
+                        await session.HasUnrecognizedPdfSearchPagesAsync(document.Id, token));
+                    if (!Current()) return;
+                    status.Text = needsOcr
+                        ? "У доступному тексті збігів немає. Відкрийте нерозпізнані сторінки, щоб додати їхній текст до пошуку."
+                        : "Збігів не знайдено.";
+                }
                 foreach (var match in page.Matches)
                 {
                     var selection = match.Selection with { Query = searchQuery };
@@ -581,13 +592,13 @@ public partial class ReadingPage
                 return new(matches.ToArray(), null);
 
             var space = DocumentFind.PageSize - matches.Count;
-            var found = await PdfScan.FindUnreadTextAsync(original.Path, pending, pending[0] == start ? occurrence : 0,
+            var (found, needsOcr) = await PdfScan.FindUnreadTextAsync(original.Path, pending, pending[0] == start ? occurrence : 0,
                 query, document.Language, space + 1, token);
             matches.AddRange(found.Take(space).Select(hit => new DocumentFindHit(hit.Text,
                 new DocumentFindSelection(hit.Occurrence, Translation: false, PhysicalPage: hit.Page))));
             var next = found.Length > space
                 ? new DocumentFindCursor(found[space].Occurrence, found[space].Page, UnreadLayer: true) : null;
-            return new(matches.ToArray(), next);
+            return new(matches.ToArray(), next, needsOcr);
         }
 
         async Task<DocumentFindPage> AppendDetachedAsync(
