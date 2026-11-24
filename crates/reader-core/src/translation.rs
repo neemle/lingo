@@ -1083,7 +1083,7 @@ pub(crate) fn search_cached_translation(
     const SCAN_LIMIT: usize = 128;
     const MATCH_LIMIT: usize = 30;
 
-    let routes = CacheRoutes::resolve(installed, catalog, &document.language, target)?;
+    let routes = CacheRoutes::resolve_for_cache(installed, catalog, &document.language, target, true)?;
     let query = normalize_translation_search(query.trim());
     let mut page = TranslationSearchPage {
         matches: Vec::new(),
@@ -2380,6 +2380,22 @@ mod tests {
         let saved = detached_list(&mut store);
         assert_eq!(saved["text"], "Моряк вирушає.");
         assert_eq!(saved["pivotLanguage"], "en");
+        let find_list = |store: &Store, query: &str| {
+            store.find_translation_page(&document.id, "uk", query, 0).unwrap().matches
+        };
+        let find_detached = |store: &Store, query: &str| {
+            let cursor = crate::DetachedPdfFindCursor { page: 0, position: 0 };
+            let found = store.find_detached_pdf_text(&detached_document.id, query, cursor, 5, Some("uk")).unwrap();
+            serde_json::to_value(found).unwrap()["matches"].as_array().unwrap().clone()
+        };
+        let found = find_list(&store, "вирушає");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].position, 1);
+        assert_eq!(found[0].pivot_language.as_deref(), Some("en"));
+        let found = find_detached(&store, "вирушає");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0]["sentenceId"], detached.id);
+        assert_eq!(found[0]["pivotLanguage"], "en");
 
         store.save_cached_segments([(key(&direct, 1), &["Моряк відпливає.".into()][..])]).unwrap();
         let upgraded = serde_json::to_value(store.pdf_page_translation(&document.id, 0, "uk", true).unwrap()).unwrap();
@@ -2392,6 +2408,10 @@ mod tests {
         let updated = detached_list(&mut store);
         assert_eq!(updated["text"], "Моряк відпливає.");
         assert!(updated["pivotLanguage"].is_null());
+        assert!(find_list(&store, "вирушає").is_empty());
+        assert!(find_detached(&store, "вирушає").is_empty());
+        assert_eq!(find_list(&store, "відпливає")[0].position, 1);
+        assert_eq!(find_detached(&store, "відпливає")[0]["sentenceId"], detached.id);
     }
 
     #[test]
