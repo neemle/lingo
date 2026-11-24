@@ -393,9 +393,9 @@ public partial class ReadingPage : ContentPage
     private void ChangeReadingSize(int change)
     {
         var size = Math.Clamp(SourceText.ReadingFontSize + change, 18, 30);
-        SourceText.ReadingFontSize = DetachedPdfText.ReadingFontSize = size;
-        SegmentTranslation.FontSize = size - 2;
-        UpdateTranslation();
+        if (size == SourceText.ReadingFontSize) return;
+        ApplyReadingSize(size);
+        SaveReaderPreference(ReaderPreferenceChange.ReadingFontSize(size));
     }
 
     private void UpdateTranslationLanguages(Document? document)

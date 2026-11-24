@@ -5,6 +5,7 @@ namespace Reader.Contracts;
 public sealed record ReaderPreferences
 {
     public string? Layout { get; init; }
+    public int? ReadingFontSize { get; init; }
     public bool? PdfShowOriginal { get; init; }
     public bool? PdfFitWidth { get; init; }
     public string? PdfFit { get; init; }
@@ -32,6 +33,7 @@ public sealed record ReaderPreferenceChange(string Field)
     public string? VoiceId { get; private init; }
 
     public static ReaderPreferenceChange Layout(string value) => new("layout") { Value = value };
+    public static ReaderPreferenceChange ReadingFontSize(int value) => new("readingFontSize") { Value = value };
     public static ReaderPreferenceChange PdfShowOriginal(bool value) => new("pdfShowOriginal") { Value = value };
     public static ReaderPreferenceChange PdfFit(string value) => new("pdfFit") { Value = value };
     public static ReaderPreferenceChange PdfTranslationLayout(bool value) => new("pdfTranslationLayout") { Value = value };

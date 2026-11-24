@@ -27,6 +27,8 @@ pub struct ReaderPreferences {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layout: Option<ReaderLayout>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub reading_font_size: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pdf_translation_layout: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pdf_fit_width: Option<bool>,
@@ -54,6 +56,7 @@ pub struct ReaderPreferences {
 #[serde(tag = "field", rename_all = "camelCase", deny_unknown_fields)]
 pub enum ReaderPreferenceChange {
     Layout { value: ReaderLayout },
+    ReadingFontSize { value: u8 },
     PdfTranslationLayout { value: bool },
     PdfFitWidth { value: bool },
     PdfFit { value: PdfFit },
@@ -79,6 +82,7 @@ pub enum ReaderPreferenceChange {
 impl ReaderPreferences {
     pub(crate) fn is_empty(&self) -> bool {
         self.layout.is_none()
+            && self.reading_font_size.is_none()
             && self.pdf_translation_layout.is_none()
             && self.pdf_fit_width.is_none()
             && self.pdf_fit.is_none()
@@ -93,6 +97,9 @@ impl ReaderPreferences {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
+        if self.reading_font_size.is_some_and(|size| !(18..=30).contains(&size)) {
+            return Err("Розмір тексту читача має бути від 18 до 30 пунктів.".into());
+        }
         if self.speech_rate_percent.is_some_and(|rate| !(40..=200).contains(&rate)) {
             return Err("Швидкість озвучення має бути від 40 до 200 відсотків.".into());
         }
@@ -119,6 +126,7 @@ impl ReaderPreferences {
     fn apply(&mut self, change: ReaderPreferenceChange) {
         match change {
             ReaderPreferenceChange::Layout { value } => self.layout = Some(value),
+            ReaderPreferenceChange::ReadingFontSize { value } => self.reading_font_size = Some(value),
             ReaderPreferenceChange::PdfTranslationLayout { value } => self.pdf_translation_layout = Some(value),
             ReaderPreferenceChange::PdfFitWidth { value } => {
                 self.pdf_fit_width = Some(value);
@@ -201,6 +209,7 @@ pub(crate) fn restore(db: &Connection, incoming: ReaderPreferences) -> Result<()
     incoming.validate()?;
     let mut local = read(db)?;
     local.layout = local.layout.or(incoming.layout);
+    local.reading_font_size = local.reading_font_size.or(incoming.reading_font_size);
     local.pdf_translation_layout = local.pdf_translation_layout.or(incoming.pdf_translation_layout);
     if local.pdf_fit.is_none() && local.pdf_fit_width.is_none() {
         local.pdf_fit = incoming.pdf_fit;

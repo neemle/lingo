@@ -452,7 +452,7 @@ public partial class ReadingPage
         var query = PdfTranslationFindQuery();
         foreach (var row in rows)
         {
-            var label = PdfTranslationTextLabel(row, 20, query);
+            var label = PdfTranslationTextLabel(row, SourceText.ReadingFontSize - 2, query);
             var action = new Button
             {
                 Text = "До оригіналу",
@@ -464,7 +464,7 @@ public partial class ReadingPage
             var item = new Grid { ColumnDefinitions = { new(GridLength.Star), new(GridLength.Auto) }, ColumnSpacing = 12 };
             if (!HasPdfTranslation(row) && !string.IsNullOrWhiteSpace(row.SourceText))
             {
-                var original = new Label { Text = row.SourceText, FontFamily = "Georgia", FontSize = 18 };
+                var original = new Label { Text = row.SourceText, FontFamily = "Georgia", FontSize = SourceText.ReadingFontSize - 4 };
                 item.Add(new VerticalStackLayout { Spacing = 4, Children = { original, label } });
             }
             else item.Add(label);
@@ -1114,7 +1114,7 @@ public partial class ReadingPage
                 for (var index = 0; index < rows.Length; index++)
                 {
                     var row = rows[index];
-                    var label = PdfTranslationTextLabel(row, 19);
+                    var label = PdfTranslationTextLabel(row, SourceText.ReadingFontSize - 3);
                     var tap = new TapGestureRecognizer();
                     tap.Tapped += async (_, _) => await SelectTranslatedPdfRowAsync(row);
                     label.GestureRecognizers.Add(tap);

@@ -16,6 +16,7 @@ public partial class ReadingPage
     private const string TargetPreferencePrefix = "reader.translation.target.";
     private const string VoicePreferencePrefix = "reader.speech.voice.";
     private const int DefaultSpeechRate = LocalSpeech.DefaultRatePercent;
+    private const int DefaultReadingFontSize = 22;
     private static readonly int[] LegacySpeechRates = [75, 100, 125];
     private static readonly int[] DefaultSpeechRates = [DefaultSpeechRate, 45, 50, 55, 60, 65, 75, 85, 100, 115, 125];
 
@@ -71,6 +72,33 @@ public partial class ReadingPage
                 translationSource = null;
         }
         catch (Exception error) { ReportPreferenceError(error); }
+        ApplyReadingSize(readerPreferences.ReadingFontSize ?? DefaultReadingFontSize);
+    }
+
+    private void ApplyReadingSize(int size)
+    {
+        SourceText.ReadingFontSize = DetachedPdfText.ReadingFontSize = size;
+        SetTranslationTextSize(SegmentTranslation, size - 2);
+        SetTranslationTextSize(SegmentTranslationHighlighted, size - 2);
+        SetTranslationTextSize(DetachedTranslation, size - 3);
+        SetTranslationTextSize(DetachedTranslationHighlighted, size - 3);
+        SetTranslationTextSize(ModelTranslationText, size - 3);
+        SetTranslationTextSize(ModelTranslationTextHighlighted, size - 3);
+        SetTranslationTextSize(DetachedModelTranslationText, size - 4);
+        SetTranslationTextSize(DetachedModelTranslationTextHighlighted, size - 4);
+        foreach (var row in paragraphPreviewRows.Concat(detachedPreviewRows))
+            if (row.View is Label label) label.FontSize = Math.Max(16, size - 4);
+        if (overflowContent is { } overflow)
+            for (var index = 0; index < overflow.Labels.Length; index++)
+                if (HasPdfTranslation(overflow.Rows[index]))
+                    SetTranslationTextSize(overflow.Labels[index], size - 3);
+    }
+
+    private static void SetTranslationTextSize(Label label, int size)
+    {
+        label.FontSize = size;
+        if (label.FormattedText is { } text)
+            foreach (var span in text.Spans) span.FontSize = size;
     }
 
     private static string LayoutName(ReaderLayout layout) => layout.ToString().ToLowerInvariant();
