@@ -39,6 +39,17 @@ public partial class ReadingPage
 #endif
     }
 
+    private int? ActivePdfPageForSentence(string document, Sentence? sentence)
+    {
+#if MACCATALYST
+        if (CurrentNativePdfWindow(document) is { } window &&
+            Array.Find(window.Pages, page => page.Page == window.Center)?.Span is { } span &&
+            OverlapsPdfPage(sentence, span))
+            return window.Center;
+#endif
+        return null;
+    }
+
     private bool AtPdfSentenceBoundary(int direction)
     {
 #if MACCATALYST
@@ -62,23 +73,17 @@ public partial class ReadingPage
         var session = AppState.Session;
         if (movingPdfPage || pdfWindowLoading || session.Busy || repairingPdfText is not null ||
             !HasAdjacentPdfPage(direction) ||
-            pdfWindow is not { } window || session.Document is not { } source || pdfSnapshot?.Id != source.Id)
+            session.Document is not { } source || pdfSnapshot?.Id != source.Id)
             return;
 
         var sourceSentenceId = detachedAddress is null ? session.Sentence?.Id : null;
-        var destination = window.Center + direction;
         using var travel = new CancellationTokenSource();
         CancelDetachedSpeechTravel();
         detachedSpeechTravel = travel;
         try
         {
-            await OpenPdfPageAsync(destination, travel);
-            var page = await WaitForNarrationPageAsync(source.Id, destination, travel.Token);
-            travel.Token.ThrowIfCancellationRequested();
-            if (!readingPageActive || session.Document is not { } active || active.Id != source.Id ||
-                active.Language != source.Language || pdfWindow?.Center != destination)
-                return;
-
+            if (await FindPdfSentencePageAsync(source, direction, travel) is not { } page) return;
+            var destination = page.Page;
             if (page is { State: "detached" } && detachedAddress is { } address &&
                 address.Document == source.Id && address.Page == destination)
             {
@@ -188,7 +193,7 @@ public partial class ReadingPage
     private (string Id, int Page, string Language)? pdfOcrFocus;
     private CancellationTokenSource? readerPdfOcr;
     private Task readerPdfOcrTask = Task.CompletedTask;
-    private TaskCompletionSource? narrationPageUpdated;
+    private TaskCompletionSource? sentencePageUpdated;
     private Task detachedInitialSentence = Task.CompletedTask;
     private string? pdfOcrError;
     private DateTimeOffset pdfOcrRetryAt;
@@ -266,7 +271,7 @@ public partial class ReadingPage
             }
             var revealingText = PdfPageNotice.IsVisible;
             UpdatePdfPageDisplay();
-            narrationPageUpdated?.TrySetResult();
+            sentencePageUpdated?.TrySetResult();
             if (!PdfPageNotice.IsVisible && (pageChanged || revealingText))
             {
                 var span = window.Pages.FirstOrDefault(item => item.Page == window.Center)?.Span;
@@ -415,31 +420,17 @@ public partial class ReadingPage
 
     private async Task ContinuePdfNarrationAsync(string documentId, int completedPage, string? completedSentenceId = null)
     {
-        if (pdfWindow?.Center != completedPage) return;
+        var session = AppState.Session;
+        if (pdfWindow?.Center != completedPage || session.Document is not { } source || source.Id != documentId) return;
         using var narration = new CancellationTokenSource();
         CancelDetachedSpeechTravel();
         detachedSpeechTravel = narration;
         var token = narration.Token;
-        var session = AppState.Session;
         try
         {
-            while (readingPageActive && ContinueSpeech.IsChecked &&
-                session.Document?.Id == documentId &&
-                pdfWindow is { } window && window.Center + 1 < window.PageCount)
+            while (await FindPdfSentencePageAsync(source, 1, narration, narrating: true) is { } page)
             {
-                var nextPage = window.Center + 1;
-                await session.WaitUntilIdleAsync().WaitAsync(token);
-                await pdfWindowRead.WaitAsync(token);
-                token.ThrowIfCancellationRequested();
-                if (pdfWindow?.Center != window.Center || session.Document?.Id != documentId ||
-                    !readingPageActive || !ContinueSpeech.IsChecked) return;
-                await OpenPdfPageAsync(nextPage, narration);
-                token.ThrowIfCancellationRequested();
-                var page = await WaitForNarrationPageAsync(documentId, nextPage, token);
-                if (!readingPageActive || session.Document?.Id != documentId || !ContinueSpeech.IsChecked)
-                    return;
-                if (page is { State: "empty", RefreshPending: false }) continue;
-
+                var nextPage = page.Page;
                 if (page is { State: "detached" } &&
                     detachedAddress is { } target && target.Document == documentId && target.Page == nextPage)
                 {
@@ -472,7 +463,7 @@ public partial class ReadingPage
                         var nextPosition = document.Position + 1;
                         var next = document.Sentences.ElementAtOrDefault(nextPosition);
                         if (!OverlapsPdfPage(next, span)) continue;
-                        await session.SelectSentenceAsync(nextPosition);
+                        await session.SelectSentenceAsync(nextPosition, pdfPage: nextPage);
                         token.ThrowIfCancellationRequested();
                         if (session.Error.Length > 0) throw new InvalidOperationException(session.Error);
                         if (session.Document?.Id != documentId || session.Sentence?.Id != next?.Id) return;
@@ -495,7 +486,38 @@ public partial class ReadingPage
         }
     }
 
-    private async Task<PdfReadPage?> WaitForNarrationPageAsync(string documentId, int page, CancellationToken token)
+    private async Task<PdfReadPage?> FindPdfSentencePageAsync(Document source, int direction,
+        CancellationTokenSource travel, bool narrating = false)
+    {
+        var session = AppState.Session;
+        var token = travel.Token;
+        bool Current(int page) => readingPageActive && ReferenceEquals(detachedSpeechTravel, travel) &&
+            (!narrating || ContinueSpeech.IsChecked) && pdfWindow?.Center == page &&
+            session.Document is { } active && active.Id == source.Id && active.Language == source.Language;
+
+        while (pdfWindow is { } window && Current(window.Center) && HasAdjacentPdfPage(direction))
+        {
+            var next = window.Center + direction;
+            await session.WaitUntilIdleAsync().WaitAsync(token);
+            await pdfWindowRead.WaitAsync(token);
+            token.ThrowIfCancellationRequested();
+            if (!Current(window.Center)) return null;
+
+            await OpenPdfPageAsync(next, travel);
+            token.ThrowIfCancellationRequested();
+            if (!Current(next)) return null;
+
+            var page = await WaitForPdfSentencePageAsync(source.Id, next, token);
+            token.ThrowIfCancellationRequested();
+            if (!Current(next)) return null;
+
+            if (page is { State: "empty", RefreshPending: false }) continue;
+            return page;
+        }
+        return null;
+    }
+
+    private async Task<PdfReadPage?> WaitForPdfSentencePageAsync(string documentId, int page, CancellationToken token)
     {
         while (pdfSnapshot?.Id == documentId && pdfWindow is { } window && window.Center == page)
         {
@@ -506,7 +528,7 @@ public partial class ReadingPage
 
             // A window can keep processing neighbouring pages after this page is ready.
             var updated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            narrationPageUpdated = updated;
+            sentencePageUpdated = updated;
             try
             {
                 await Task.WhenAny(updated.Task, readerPdfOcrTask).WaitAsync(token);
@@ -514,7 +536,7 @@ public partial class ReadingPage
             }
             finally
             {
-                if (ReferenceEquals(narrationPageUpdated, updated)) narrationPageUpdated = null;
+                if (ReferenceEquals(sentencePageUpdated, updated)) sentencePageUpdated = null;
             }
         }
         return null;

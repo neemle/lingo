@@ -891,7 +891,11 @@ public partial class ReadingPage : ContentPage
         }
         CancelDetachedSpeechTravel();
         StopSpeech();
-        await AppState.Session.MoveAsync(direction);
+        var session = AppState.Session;
+        if (session.Document is not { } document) return;
+        var position = document.Position + direction;
+        var next = document.Sentences.ElementAtOrDefault(position);
+        await session.SelectSentenceAsync(position, pdfPage: ActivePdfPageForSentence(document.Id, next));
     }
 
     private void UpdateSentenceMenu()
@@ -1183,7 +1187,8 @@ public partial class ReadingPage : ContentPage
                 session.Sentence?.Id != sentence.Id || current.Position + 1 >= current.Sentences.Length)
                 break;
             var next = current.Position + 1;
-            await session.SelectSentenceAsync(next);
+            await session.SelectSentenceAsync(next,
+                pdfPage: ActivePdfPageForSentence(current.Id, current.Sentences[next]));
             if (request != speechRequest) return;
             if (session.Error.Length > 0 || session.Document?.Position != next)
             {
