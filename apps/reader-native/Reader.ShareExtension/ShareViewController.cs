@@ -88,7 +88,14 @@ public sealed class ShareViewController(ObjCRuntime.NativeHandle handle) : UIVie
                 if (error is not null || url?.Path is not { } path)
                     throw new IOException(error?.LocalizedDescription ?? "Не вдалося відкрити файл.");
                 var extension = Path.GetExtension(path).ToLowerInvariant();
-                var title = Path.GetFileNameWithoutExtension(provider.SuggestedName);
+                var title = Path.GetFileName(provider.SuggestedName)?.Trim();
+                if (string.IsNullOrWhiteSpace(title))
+                {
+                    title = Path.GetFileNameWithoutExtension(path);
+                    if (Guid.TryParse(title, out _)) title = null;
+                }
+                else if (title.EndsWith(extension, StringComparison.OrdinalIgnoreCase) && extension.Length > 0)
+                    title = title[..^extension.Length];
                 var name = (string.IsNullOrWhiteSpace(title) ? "Документ" : title) + extension;
                 if (SharedImportFolder.Capacity(name) == 0)
                     throw new InvalidDataException("Цей формат файлу не підтримується.");
