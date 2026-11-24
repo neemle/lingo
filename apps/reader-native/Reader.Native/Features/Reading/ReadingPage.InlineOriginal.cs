@@ -176,7 +176,7 @@ public partial class ReadingPage
                 appearance = cached.Appearance;
             }
             else
-#if MACCATALYST
+#if MACCATALYST || IOS
             if (isPdf && await session.OriginalFileAsync(document.Id).WaitAsync(cancellation) is { } file)
             {
                 if (detachedText is not null)
@@ -194,7 +194,7 @@ public partial class ReadingPage
 #endif
             {
                 var fileBytes = (await session.OriginalAsync(document.Id).WaitAsync(cancellation)).Bytes.Select(value => checked((byte)value)).ToArray();
-#if MACCATALYST
+#if MACCATALYST || IOS
                 if (!isPdf)
                     (preview, appearance) = await PhotoOcr.ReadingPreviewAsync(fileBytes, document.OcrLines ?? []);
                 else

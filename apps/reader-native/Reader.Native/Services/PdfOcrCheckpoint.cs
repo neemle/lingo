@@ -33,7 +33,7 @@ internal sealed record PdfOcrCheckpoint(string Id, string Hash, string Name, str
         }
     }
 
-#if MACCATALYST
+#if MACCATALYST || IOS
     internal string ReadOriginalPath()
     {
         var original = Path.Combine(Folder, "original.pdf");

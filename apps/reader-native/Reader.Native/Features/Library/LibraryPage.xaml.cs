@@ -301,7 +301,7 @@ public partial class LibraryPage : ContentPage
 
     private void StopImportStepClicked(object? sender, EventArgs args)
     {
-#if MACCATALYST
+#if MACCATALYST || IOS
         if (pdfPreparation is { } preparation)
         {
             pauseExternalBatch = true;
@@ -317,7 +317,7 @@ public partial class LibraryPage : ContentPage
         copying.Cancel();
     }
 
-#if !MACCATALYST
+#if !MACCATALYST && !IOS
     private async Task<string?> ImportLegacyPdfAsync(ShareInboxItem item, byte[] bytes, bool chooseLanguage)
     {
         var session = AppState.Session;

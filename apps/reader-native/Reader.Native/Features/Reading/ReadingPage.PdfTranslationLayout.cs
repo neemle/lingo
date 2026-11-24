@@ -184,7 +184,7 @@ public partial class ReadingPage
         if (ToolTipProperties.GetText(button) as string != label)
         {
             ToolTipProperties.SetText(button, label);
-#if MACCATALYST
+#if MACCATALYST || IOS
             if (button.Handler?.PlatformView is UIKit.UIButton platformButton)
             {
                 // Use the control's native tooltip setter so Catalyst refreshes
@@ -505,7 +505,7 @@ public partial class ReadingPage
     {
         var session = AppState.Session;
         await session.WaitUntilIdleAsync();
-#if MACCATALYST
+#if MACCATALYST || IOS
         while (readingPageActive)
         {
             var window = pdfWindowRead;

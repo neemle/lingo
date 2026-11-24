@@ -517,7 +517,7 @@ internal sealed class OriginalPage : ContentPage
 
     private bool HasPhysicalPageAddress(Document document)
     {
-#if MACCATALYST
+#if MACCATALYST || IOS
         return document.Format == "pdf" && document.PdfPageStarts is { } starts && pageIndex < starts.Length;
 #else
         return false;

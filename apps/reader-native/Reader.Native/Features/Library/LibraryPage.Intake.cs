@@ -5,7 +5,7 @@ namespace Reader.Native.Features.Library;
 
 public partial class LibraryPage
 {
-#if MACCATALYST
+#if MACCATALYST || IOS
     private CancellationTokenSource? pdfPreparation;
 #endif
 
@@ -61,7 +61,7 @@ public partial class LibraryPage
                     var sample = await TesseractOcr.ReadLanguageSampleAsync(() => PhotoOcr.PreviewAsync(bytes));
                     if (sample.Length > 0 && await ImportLanguageDetection.DetectAsync(session, sample) is { } detected)
                         return detected;
-#if MACCATALYST
+#if MACCATALYST || IOS
                     return await ImportLanguageDetection.DetectAsync(session, await PhotoOcr.ReadLanguageSampleAsync(bytes));
 #else
                     return null;
@@ -99,7 +99,7 @@ public partial class LibraryPage
                 await session.CompleteStagedArticleIntakeAsync(item.Id, language);
                 break;
             }
-#if MACCATALYST
+#if MACCATALYST || IOS
             case "readPdfPages":
                 if (!await PrepareStagedPdfAsync(item, ChooseAsync)) return null;
                 break;
@@ -111,7 +111,7 @@ public partial class LibraryPage
         return session.Document?.Id;
     }
 
-#if MACCATALYST
+#if MACCATALYST || IOS
     private async Task<bool> PrepareStagedPdfAsync(IntakeItem item, Func<Func<Task<string?>>, Task<string?>> choose)
     {
         using var preparation = new CancellationTokenSource();

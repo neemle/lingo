@@ -70,7 +70,7 @@ public static class NativeFiles
     internal static Task PreviewBytesAsync(Page owner, string name, byte[] bytes)
     {
         Task Write(string path) => File.WriteAllBytesAsync(path, bytes);
-#if MACCATALYST
+#if MACCATALYST || IOS
         return WithStagedFileAsync(name, Write, retain: false, async path =>
         {
             var window = owner.Window ?? throw new InvalidOperationException("Вікно застосунку закрито.");

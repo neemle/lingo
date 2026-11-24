@@ -16,7 +16,7 @@ public partial class ReadingPage
         string Sentence, TextSelection? Span = null, string? Target = null, string? Query = null,
         TranslationFindFragment? PdfFragment = null, TranslationPair? Translation = null);
     private DocumentFindFocus? documentFindFocus;
-#if MACCATALYST
+#if MACCATALYST || IOS
     private sealed record UnreadPdfFind(string Document, int Page, string Query, int Occurrence);
     private UnreadPdfFind? pendingUnreadPdfFind;
 #endif
@@ -75,7 +75,7 @@ public partial class ReadingPage
                 return;
             }
 
-#if MACCATALYST
+#if MACCATALYST || IOS
             if (match.SourceMatch is { } detachedMatch && match.SourcePageRevision is { } pageRevision &&
                 match.PhysicalPage is int sourcePage)
             {
@@ -158,7 +158,7 @@ public partial class ReadingPage
                 await AnchorCanonicalFindSpanAsync(session, current.Id, revision, sourceMatch);
                 return;
             }
-#if MACCATALYST
+#if MACCATALYST || IOS
             if (current.Format == "pdf" && position == current.Position)
             {
                 await pdfWindowRead;
@@ -357,7 +357,7 @@ public partial class ReadingPage
             : focus.Page == address.Page && focus.Revision == detachedSentence?.RevisionId)
             ? focus.Query : null;
 
-#if MACCATALYST
+#if MACCATALYST || IOS
     private void ScheduleUnreadPdfFind()
     {
         if (pendingUnreadPdfFind is not { } find || pdfWindow?.Center != find.Page ||
@@ -473,7 +473,7 @@ public partial class ReadingPage
         var inTranslation = false;
         var currentStart = new DocumentFindCursor(0);
         DocumentFindCursor? nextStart = null;
-#if MACCATALYST
+#if MACCATALYST || IOS
         int[]? unreadPages = null;
 #endif
         page.Disappearing += (_, _) => closed.TrySetResult(null);
@@ -523,7 +523,7 @@ public partial class ReadingPage
             nextStart = null;
             earlierPages.Clear();
             previous.IsVisible = previous.IsEnabled = next.IsVisible = next.IsEnabled = false;
-#if MACCATALYST
+#if MACCATALYST || IOS
             unreadPages = null;
 #endif
         }
@@ -607,7 +607,7 @@ public partial class ReadingPage
         async Task<DocumentFindPage> FindOriginalAsync(string query, DocumentFindCursor start, CancellationToken token)
         {
             var matches = new List<DocumentFindHit>(DocumentFind.PageSize);
-#if MACCATALYST
+#if MACCATALYST || IOS
             if (start.UnreadLayer) return await AppendUnreadAsync(matches, query, start.PhysicalPage ?? 0, start.Position, token);
 #endif
             if (start.PhysicalPage is null)
@@ -631,7 +631,7 @@ public partial class ReadingPage
                         return new(matches.ToArray(), new DocumentFindCursor(nextPosition));
                 }
             }
-#if MACCATALYST
+#if MACCATALYST || IOS
             if (document.Format == "pdf")
             {
                 var cached = await AppendDetachedOriginalAsync(matches, query, start, token);
@@ -641,7 +641,7 @@ public partial class ReadingPage
             return new(matches.ToArray(), null);
         }
 
-#if MACCATALYST
+#if MACCATALYST || IOS
         async Task<DocumentFindPage> AppendUnreadAsync(List<DocumentFindHit> matches, string query, int start, int occurrence,
             CancellationToken token)
         {

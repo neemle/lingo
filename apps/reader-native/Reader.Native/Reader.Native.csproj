@@ -2,6 +2,7 @@
   <PropertyGroup>
     <TargetFrameworks>net10.0-maccatalyst</TargetFrameworks>
     <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('windows'))">net10.0-windows10.0.19041.0</TargetFrameworks>
+    <TargetFrameworks Condition="'$(LingoIos)' == 'true'">$(TargetFrameworks);net10.0-ios</TargetFrameworks>
     <OutputType>Exe</OutputType>
     <RootNamespace>Reader.Native</RootNamespace>
     <UseMaui>true</UseMaui>
@@ -14,8 +15,9 @@
     <ApplicationDisplayVersion>0.1</ApplicationDisplayVersion>
     <ApplicationVersion>1</ApplicationVersion>
     <WindowsPackageType>None</WindowsPackageType>
-    <SupportedOSPlatformVersion Condition="$(TargetFramework.Contains('maccatalyst'))">26.0</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion Condition="$(TargetFramework.Contains('maccatalyst')) Or $(TargetFramework.Contains('-ios'))">26.0</SupportedOSPlatformVersion>
     <RuntimeIdentifier Condition="$(TargetFramework.Contains('maccatalyst'))">maccatalyst-arm64</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="$(TargetFramework.Contains('-ios')) And '$(RuntimeIdentifier)' == ''">ios-arm64</RuntimeIdentifier>
     <SupportedOSPlatformVersion
       Condition="$(TargetFramework.Contains('windows'))">10.0.17763.0</SupportedOSPlatformVersion>
     <TargetPlatformMinVersion Condition="$(TargetFramework.Contains('windows'))">10.0.17763.0</TargetPlatformMinVersion>
@@ -53,6 +55,23 @@
       <Frameworks>Accelerate Foundation Metal</Frameworks>
       <LinkerFlags>-lc++ -u _reader_abi_version -u _reader_call -u _reader_close -u _reader_release -u _reader_fit_pdf_text</LinkerFlags>
     </NativeReference>
+  </ItemGroup>
+  <PropertyGroup Condition="$(TargetFramework.Contains('-ios'))">
+    <AppleRustTarget Condition="'$(RuntimeIdentifier)' == 'ios-arm64'">aarch64-apple-ios</AppleRustTarget>
+    <AppleRustTarget Condition="'$(RuntimeIdentifier)' == 'iossimulator-arm64'">aarch64-apple-ios-sim</AppleRustTarget>
+    <AppleRustTarget Condition="'$(RuntimeIdentifier)' == 'iossimulator-x64'">x86_64-apple-ios</AppleRustTarget>
+  </PropertyGroup>
+  <ItemGroup Condition="$(TargetFramework.Contains('-ios'))">
+    <NativeReference Include="../../../target/$(AppleRustTarget)/release/libreader_ffi.a">
+      <Kind>Static</Kind><SmartLink>false</SmartLink>
+      <Frameworks>Accelerate Foundation Metal</Frameworks>
+      <LinkerFlags>-lc++ -u _reader_abi_version -u _reader_call -u _reader_close -u _reader_release -u _reader_fit_pdf_text -u _reader_rotate_ocr_png</LinkerFlags>
+    </NativeReference>
+  </ItemGroup>
+  <ItemGroup Condition="!$(TargetFramework.Contains('maccatalyst')) And !$(TargetFramework.Contains('-ios'))">
+    <Compile Remove="Apple/**/*.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="$(TargetFramework.Contains('maccatalyst')) Or $(TargetFramework.Contains('-ios'))">
     <NativeReference Include="$(OnnxRuntimePath)/runtimes/ios/native/onnxruntime.xcframework.zip">
       <Kind>Static</Kind><SmartLink>false</SmartLink>
       <WeakFrameworks>CoreML</WeakFrameworks>

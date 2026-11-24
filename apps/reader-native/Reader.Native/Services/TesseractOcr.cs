@@ -250,6 +250,11 @@ internal static class TesseractOcr
         }
     }
 
+#if IOS
+    private static Task<string> ExecuteAsync(Installation installation, string[] arguments, byte[]? image,
+        int outputLimit, TimeSpan timeout, CancellationToken cancellation) =>
+        throw new PlatformNotSupportedException("Локальний процес Tesseract доступний лише на комп’ютері.");
+#else
     private static async Task<string> ExecuteAsync(Installation installation, string[] arguments, byte[]? image,
         int outputLimit, TimeSpan timeout, CancellationToken cancellation)
     {
@@ -305,4 +310,5 @@ internal static class TesseractOcr
                 await input.WriteAsync(bytes, cancellation).ConfigureAwait(false);
         }
     }
+#endif
 }

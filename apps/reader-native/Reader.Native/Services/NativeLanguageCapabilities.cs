@@ -30,7 +30,7 @@ internal sealed record NativeLanguageCapabilities(
         return new(CapabilityLevel.Installed, tags, "Windows не повідомила про встановлений OCR цієї мови.",
             "Windows.Media.Ocr");
     }
-#elif MACCATALYST
+#elif MACCATALYST || IOS
     private static NativeRecognitionInventory ReadRecognition() => new(CapabilityLevel.Available,
         PhotoOcr.RecognitionLanguageTags(), "Apple Vision не перелічує цю мову для поточного режиму OCR.", "Apple Vision");
 #endif

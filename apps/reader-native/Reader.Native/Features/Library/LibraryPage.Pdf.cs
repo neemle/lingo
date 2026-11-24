@@ -5,13 +5,13 @@ namespace Reader.Native.Features.Library;
 
 public partial class LibraryPage
 {
-#if !MACCATALYST
+#if !MACCATALYST && !IOS
     private CancellationTokenSource? pdfCancellation;
 #endif
 
     private async Task RefreshPendingPdfAsync()
     {
-#if MACCATALYST
+#if MACCATALYST || IOS
         ResumePdf.IsVisible = (await Task.Run(PdfOcrCheckpoint.List)).Length > 0;
 #else
         var snapshot = AppState.Session.Snapshot;
@@ -51,7 +51,7 @@ public partial class LibraryPage
                 if (index < 0) return;
                 job = jobs[index];
             }
-#if MACCATALYST
+#if MACCATALYST || IOS
             const string resume = "Відкрити в читачі";
 #else
             const string resume = "Продовжити";
@@ -67,7 +67,7 @@ public partial class LibraryPage
                 return;
             }
             if (action != resume) return;
-#if MACCATALYST
+#if MACCATALYST || IOS
             await AppState.OpenAsync(await RecoverPdfCheckpointAsync(job));
 #else
             if (await RunPdfOcrAsync(job) is { } id) await AppState.OpenAsync(id);
@@ -83,7 +83,7 @@ public partial class LibraryPage
 
     private void PausePdfClicked(object? sender, EventArgs args)
     {
-#if !MACCATALYST
+#if !MACCATALYST && !IOS
         if (pdfCancellation is not { } active) return;
         PausePdf.IsEnabled = false;
         SetPdfStatus("Призупиняємо розпізнавання…");
@@ -91,7 +91,7 @@ public partial class LibraryPage
 #endif
     }
 
-#if MACCATALYST
+#if MACCATALYST || IOS
     private async Task<string> RecoverPdfCheckpointAsync(PdfOcrCheckpoint job)
     {
         SetPdfStatus($"{job.Name} · переносимо збережені сторінки…");

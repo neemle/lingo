@@ -10,7 +10,7 @@ public static class MauiProgram
         .ConfigureMauiHandlers(handlers =>
         {
             handlers.AddHandler<NativeReaderView, NativeReaderHandler>();
-#if MACCATALYST
+#if MACCATALYST || IOS
             handlers.AddHandler<Border, FiniteBorderHandler>();
 #endif
         })

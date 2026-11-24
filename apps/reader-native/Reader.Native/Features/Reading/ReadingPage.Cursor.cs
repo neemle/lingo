@@ -13,7 +13,7 @@ public partial class ReadingPage
 
     internal async Task RevealDictionarySourceAsync(DictionarySourceLocation source)
     {
-#if MACCATALYST
+#if MACCATALYST || IOS
         await pdfWindowRead;
         if (source.Page is int page)
         {

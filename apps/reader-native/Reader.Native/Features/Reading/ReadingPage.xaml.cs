@@ -94,7 +94,7 @@ public partial class ReadingPage : ContentPage
         AppState.Session.PropertyChanged += SessionChanged;
         AppState.Session.BackgroundPageTranslated += BackgroundPageTranslated;
         AppState.Session.BackgroundTextTranslated += BackgroundTextTranslated;
-#if MACCATALYST
+#if MACCATALYST || IOS
         AppState.Session.BackgroundPdfTextCached += BackgroundPdfTextCached;
 #endif
         SyncReaderPdf();
@@ -147,7 +147,7 @@ public partial class ReadingPage : ContentPage
         Translation.Text = "";
         AppState.Session.BackgroundPageTranslated -= BackgroundPageTranslated;
         AppState.Session.BackgroundTextTranslated -= BackgroundTextTranslated;
-#if MACCATALYST
+#if MACCATALYST || IOS
         AppState.Session.BackgroundPdfTextCached -= BackgroundPdfTextCached;
 #endif
         AppState.Session.PropertyChanged -= SessionChanged;
@@ -203,7 +203,7 @@ public partial class ReadingPage : ContentPage
         CancelSyntaxExplanation();
         CancelScheduledTranslation();
         StopAnalysisPrefetch();
-#if MACCATALYST
+#if MACCATALYST || IOS
         CancelReaderPdfOcr();
 #endif
         if (speakingDetachedSentence) ClearDetachedSpeech();
@@ -866,7 +866,7 @@ public partial class ReadingPage : ContentPage
             Func<int, CancellationToken, Func<Task>, Task>? recognizeWindow = null;
             Func<int, TextSelection, Task>? showDetachedWord = null;
             int? savedPage = null;
-#if MACCATALYST
+#if MACCATALYST || IOS
             var originalFile = isPdf ? await session.OriginalFileAsync(document.Id) : null;
             if (originalFile is not null)
             {
@@ -891,7 +891,7 @@ public partial class ReadingPage : ContentPage
                 total = isPdf ? await PdfScan.PageCountAsync(bytes) : 1;
                 preview = page => isPdf ? PdfScan.PreviewAsync(bytes, page) : PhotoOcr.PreviewAsync(bytes);
             }
-#if MACCATALYST
+#if MACCATALYST || IOS
             if (isPdf && selection is null && document.PdfPageStarts is not null)
                 savedPage = await session.PdfReadingPageAsync(document.Id);
 #endif

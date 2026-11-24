@@ -93,7 +93,7 @@ public partial class ReadingPage
         var session = AppState.Session;
         if (!readingPageActive || !TranslationVisible || WordOverlay.IsVisible || utteranceActive ||
             session.Busy || session.Document is not { } document) return null;
-#if MACCATALYST
+#if MACCATALYST || IOS
         if (movingPdfPage || pdfWindowLoading) return null;
 #endif
         var detached = DetachedPdfReader.IsVisible;

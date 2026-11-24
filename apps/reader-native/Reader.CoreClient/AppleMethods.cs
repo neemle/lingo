@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace Reader.CoreClient;
 
-internal static class CatalystMethods
+internal static class AppleMethods
 {
     [DllImport("__Internal", CallingConvention = CallingConvention.Cdecl)]
     internal static extern uint reader_abi_version();

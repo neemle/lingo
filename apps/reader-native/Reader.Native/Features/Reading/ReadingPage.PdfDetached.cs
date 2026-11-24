@@ -35,7 +35,7 @@ public partial class ReadingPage
     private int detachedTranslationRun;
     private bool detachedTranslationScrollPending;
 
-#if MACCATALYST
+#if MACCATALYST || IOS
     private void ShowDetachedPdfPage(Document document, PdfReadPage page)
     {
         DetachedPdfText.Blocks = page.Blocks ?? [];

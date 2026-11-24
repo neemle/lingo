@@ -6,10 +6,11 @@ namespace Reader.CoreClient;
 internal static class NativeMethods
 {
     private const string Library = "reader_ffi";
+    private static bool UsesStaticBridge => OperatingSystem.IsMacCatalyst() || OperatingSystem.IsIOS();
 
     static NativeMethods()
     {
-        if (!OperatingSystem.IsMacCatalyst())
+        if (!UsesStaticBridge)
             NativeLibrary.SetDllImportResolver(typeof(NativeMethods).Assembly, Resolve);
     }
 
@@ -23,26 +24,26 @@ internal static class NativeMethods
         return NativeLibrary.Load(path);
     }
 
-    internal static uint reader_abi_version() => OperatingSystem.IsMacCatalyst()
-        ? CatalystMethods.reader_abi_version() : DesktopVersion();
+    internal static uint reader_abi_version() => UsesStaticBridge
+        ? AppleMethods.reader_abi_version() : DesktopVersion();
 
     internal static NativeBuffer reader_call(ulong handle, byte[] input, ulong length) =>
-        OperatingSystem.IsMacCatalyst() ? CatalystMethods.reader_call(handle, input, length)
+        UsesStaticBridge ? AppleMethods.reader_call(handle, input, length)
             : DesktopCall(handle, input, length);
 
-    internal static uint reader_close(ulong handle) => OperatingSystem.IsMacCatalyst()
-        ? CatalystMethods.reader_close(handle) : DesktopClose(handle);
+    internal static uint reader_close(ulong handle) => UsesStaticBridge
+        ? AppleMethods.reader_close(handle) : DesktopClose(handle);
 
     internal static NativeBuffer FitPdfText(byte[] text, ulong length, float width, float height,
-        float preferred, float minimum, nint context, nint measure) => OperatingSystem.IsMacCatalyst()
-        ? CatalystMethods.reader_fit_pdf_text(text, length, width, height, preferred, minimum, context, measure)
+        float preferred, float minimum, nint context, nint measure) => UsesStaticBridge
+        ? AppleMethods.reader_fit_pdf_text(text, length, width, height, preferred, minimum, context, measure)
         : DesktopFitPdfText(text, length, width, height, preferred, minimum, context, measure);
 
-    internal static uint reader_release(ulong allocation) => OperatingSystem.IsMacCatalyst()
-        ? CatalystMethods.reader_release(allocation) : DesktopRelease(allocation);
+    internal static uint reader_release(ulong allocation) => UsesStaticBridge
+        ? AppleMethods.reader_release(allocation) : DesktopRelease(allocation);
 
     internal static NativeBuffer RotateOcrPng(byte[] input, ulong length, ushort angle) =>
-        OperatingSystem.IsMacCatalyst() ? CatalystMethods.reader_rotate_ocr_png(input, length, angle)
+        UsesStaticBridge ? AppleMethods.reader_rotate_ocr_png(input, length, angle)
             : DesktopRotateOcrPng(input, length, angle);
 
     [DllImport(Library, EntryPoint = "reader_abi_version", CallingConvention = CallingConvention.Cdecl)]

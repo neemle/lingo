@@ -138,7 +138,7 @@ public partial class LibraryPage
         string? id;
         if (await session.FindIntakeAsync(item.Id) is { } staged)
             id = await CompleteStagedIntakeAsync(staged, item, chooseLanguage);
-#if MACCATALYST
+#if MACCATALYST || IOS
         else if (isPdf)
         {
             ImportStatus.Text = "Зберігаємо оригінал PDF…";

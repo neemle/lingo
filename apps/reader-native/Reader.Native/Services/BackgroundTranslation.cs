@@ -401,7 +401,7 @@ internal sealed class BackgroundTranslation
             if (!enabled || paused || libraryStepInvalidated || !session.Snapshot.Documents.Any(work.Key.Matches)) return;
             jobs[work.Key] = progress;
             UpdateRequiredPackages();
-#if MACCATALYST
+#if MACCATALYST || IOS
             if (progress.PendingPdfTextPage is int pendingPage)
             {
                 var pageCount = work.Document.PdfPageStarts?.Length ?? work.Document.OcrPdfPages

@@ -1,5 +1,5 @@
 using Reader.Contracts;
-#if MACCATALYST
+#if MACCATALYST || IOS
 using Reader.Native.Services;
 using Reader.Presentation;
 #endif
@@ -10,7 +10,7 @@ public partial class ReadingPage
 {
     private PdfReadWindow? CurrentNativePdfWindow(string documentId)
     {
-#if MACCATALYST
+#if MACCATALYST || IOS
         return pdfSnapshot?.Id == documentId ? pdfWindow : null;
 #else
         return null;
@@ -22,7 +22,7 @@ public partial class ReadingPage
 
     private Task MovePdfPageAsync(int direction)
     {
-#if MACCATALYST
+#if MACCATALYST || IOS
         return pdfWindow is { } window ? OpenPdfPageAsync(window.Center + direction) : Task.CompletedTask;
 #else
         return Task.CompletedTask;
@@ -31,7 +31,7 @@ public partial class ReadingPage
 
     private bool HasAdjacentPdfPage(int direction)
     {
-#if MACCATALYST
+#if MACCATALYST || IOS
         return pdfWindow is { } window && window.Center + direction >= 0 &&
             window.Center + direction < window.PageCount;
 #else
@@ -41,7 +41,7 @@ public partial class ReadingPage
 
     private int? ActivePdfPageForSentence(string document, Sentence? sentence)
     {
-#if MACCATALYST
+#if MACCATALYST || IOS
         if (CurrentNativePdfWindow(document) is { } window &&
             Array.Find(window.Pages, page => page.Page == window.Center)?.Span is { } span &&
             OverlapsPdfPage(sentence, span))
@@ -52,7 +52,7 @@ public partial class ReadingPage
 
     private bool AtPdfSentenceBoundary(int direction)
     {
-#if MACCATALYST
+#if MACCATALYST || IOS
         var session = AppState.Session;
         if (session.Document is not { Format: "pdf" } document || pdfSnapshot?.Id != document.Id ||
             pdfWindow is not { } window || !HasAdjacentPdfPage(direction))
@@ -69,7 +69,7 @@ public partial class ReadingPage
 
     private async Task MoveToAdjacentPdfSentenceAsync(int direction)
     {
-#if MACCATALYST
+#if MACCATALYST || IOS
         var session = AppState.Session;
         if (movingPdfPage || pdfWindowLoading || session.Busy || repairingPdfText is not null ||
             !HasAdjacentPdfPage(direction) ||
@@ -116,7 +116,7 @@ public partial class ReadingPage
 
     private async void JumpPdfPageClicked(object? sender, EventArgs args)
     {
-#if MACCATALYST
+#if MACCATALYST || IOS
         if (pdfPagePromptOpen || !JumpPdfPage.IsEnabled || pdfWindow is not { } window
             || pdfSnapshot is not { } document) return;
 
@@ -140,7 +140,7 @@ public partial class ReadingPage
 
     private void SyncReaderPdf()
     {
-#if MACCATALYST
+#if MACCATALYST || IOS
         var session = AppState.Session;
         UpdatePdfPageButtons();
         if (!readingPageActive || session.Busy || ReferenceEquals(pdfSnapshot, session.Document)) return;
@@ -170,7 +170,7 @@ public partial class ReadingPage
     private void StopReaderPdf()
     {
         CancelDetachedSpeechTravel();
-#if MACCATALYST
+#if MACCATALYST || IOS
         pdfSnapshot = null;
         pendingUnreadPdfFind = null;
         attemptedPdfTextOrderRepair = null;
@@ -186,7 +186,7 @@ public partial class ReadingPage
 #endif
     }
 
-#if MACCATALYST
+#if MACCATALYST || IOS
     private Document? pdfSnapshot;
     private PdfReadWindow? pdfWindow;
     private Task pdfWindowRead = Task.CompletedTask;
@@ -747,7 +747,7 @@ public partial class ReadingPage
 
     private async void RepairPdfTextClicked(object? sender, EventArgs args)
     {
-#if MACCATALYST
+#if MACCATALYST || IOS
         var session = AppState.Session;
         if (!RepairPdfText.IsEnabled || pdfWindow is not { } window ||
             session.Document is not { CurrentRevisionId: { } revision } document ||
@@ -825,7 +825,7 @@ public partial class ReadingPage
 
     private void RetryPdfOcrClicked(object? sender, EventArgs args)
     {
-#if MACCATALYST
+#if MACCATALYST || IOS
         var session = AppState.Session;
         if (session.Document is not { } document || document.Id != pdfSnapshot?.Id) return;
         pdfOcrError = null;

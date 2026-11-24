@@ -1,6 +1,6 @@
 using Reader.Contracts;
 using Reader.Presentation;
-#if MACCATALYST
+#if MACCATALYST || IOS
 using Foundation;
 using NaturalLanguage;
 #endif
@@ -18,7 +18,7 @@ internal static class ImportLanguageDetection
     private static string? Apply(ImportLanguageSample result)
     {
         if (result.Language is { } language) return language;
-#if MACCATALYST
+#if MACCATALYST || IOS
         var sample = result.Sample;
         if (sample.Where(char.IsLetter).Take(14).Count() < 14 ||
             sample.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)

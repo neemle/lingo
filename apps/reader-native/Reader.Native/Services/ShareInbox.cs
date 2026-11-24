@@ -167,7 +167,7 @@ internal static class ShareInbox
 
     private static long Limit(string kind, string name) => kind switch
     {
-#if MACCATALYST
+#if MACCATALYST || IOS
         "file" when Path.GetExtension(name).Equals(".pdf", StringComparison.OrdinalIgnoreCase) => Client.MaxPdfBytes,
 #endif
         "file" or "text" => Client.MaxImportBytes,
