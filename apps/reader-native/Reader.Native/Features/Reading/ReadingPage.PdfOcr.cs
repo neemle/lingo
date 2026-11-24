@@ -607,8 +607,8 @@ public partial class ReadingPage
         var enabled = !movingPdfPage && !pdfWindowLoading && !pdfPagePromptOpen &&
             repairingPdfText is null && !AppState.Session.Busy;
         JumpPdfPageMenu.IsEnabled = JumpPdfPage.IsEnabled = enabled && pdfWindow is { PageCount: > 1 };
-        PreviousPdfPage.IsEnabled = enabled && pdfWindow is { Center: > 0 };
-        NextPdfPage.IsEnabled = enabled && pdfWindow is { } window && window.Center + 1 < window.PageCount;
+        PreviousPdfPageMenu.IsEnabled = PreviousPdfPage.IsEnabled = enabled && HasAdjacentPdfPage(-1);
+        NextPdfPageMenu.IsEnabled = NextPdfPage.IsEnabled = enabled && HasAdjacentPdfPage(1);
         RetryPdfOcr.IsVisible = enabled && readerPdfOcr is null
             && pdfWindow?.Pages.Any(RequiresPdfOcr) == true;
         var pageState = pdfWindow is { } current

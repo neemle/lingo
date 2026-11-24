@@ -53,6 +53,16 @@
      <KeyboardAccelerator Modifiers="{OnPlatform MacCatalyst=Cmd, WinUI=Ctrl}" Key="L" />
     </MenuFlyoutItem.KeyboardAccelerators>
    </MenuFlyoutItem>
+   <MenuFlyoutItem x:Name="PreviousPdfPageMenu" Text="Попередня сторінка PDF" Clicked="PreviousPdfPageClicked" IsEnabled="False">
+    <MenuFlyoutItem.KeyboardAccelerators>
+     <KeyboardAccelerator Modifiers="{OnPlatform MacCatalyst=Cmd, WinUI=Ctrl}" Key="U" />
+    </MenuFlyoutItem.KeyboardAccelerators>
+   </MenuFlyoutItem>
+   <MenuFlyoutItem x:Name="NextPdfPageMenu" Text="Наступна сторінка PDF" Clicked="NextPdfPageClicked" IsEnabled="False">
+    <MenuFlyoutItem.KeyboardAccelerators>
+     <KeyboardAccelerator Modifiers="{OnPlatform MacCatalyst=Cmd, WinUI=Ctrl}" Key="I" />
+    </MenuFlyoutItem.KeyboardAccelerators>
+   </MenuFlyoutItem>
    <MenuFlyoutItem Text="Відтворити / пауза" Clicked="ToggleSpeechClicked" IsEnabled="{Binding CanInteract}">
     <MenuFlyoutItem.KeyboardAccelerators>
      <KeyboardAccelerator Modifiers="{OnPlatform MacCatalyst=Cmd, WinUI=Ctrl}" Key="J" />
