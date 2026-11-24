@@ -44,6 +44,7 @@ mod ocr_layout;
 mod pdf_page_ocr;
 mod pdf_detached_pages;
 pub use pdf_detached_pages::{DetachedPdfAnnotationChange, DetachedPdfAnnotationItem, DetachedPdfFindCursor, DetachedPdfFindPage, DetachedPdfOcrPage, DetachedPdfPassage, DetachedPdfSentence, DetachedPdfTranslation, PdfSentenceRefresh, PdfTranslationSource};
+pub use pdf_detached_pages::{DetachedPdfSearchPage, DetachedPdfSearchPages};
 mod pdf_reading_position;
 mod pdf_sentences;
 mod protected_translation;

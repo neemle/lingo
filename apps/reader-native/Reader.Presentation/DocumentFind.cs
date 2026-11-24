@@ -56,22 +56,31 @@ public static class DocumentFind
 
             var source = document.Text[pageStart..end];
             var minimum = page == startPage ? startUtf16 : pageStart;
-            var lastStart = -1;
-            int[]? excerptStarts = null;
-            foreach (var selection in PdfSourceMatches(source, query, document.Language, pageStart))
+            foreach (var hit in PdfPageHits(page, source, query, document.Language, pageStart, minimum, cancellationToken))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                // Raw text and a rejoined word may identify the same physical occurrence.
-                if (selection.StartUtf16 < minimum || selection.StartUtf16 == lastStart) continue;
                 if (hits.Count == PageSize)
-                    return (hits.ToArray(), new PdfFindCursor(page, selection.StartUtf16));
-
-                lastStart = selection.StartUtf16;
-                excerptStarts ??= System.Globalization.StringInfo.ParseCombiningCharacters(source);
-                hits.Add(new(page, selection, PdfExcerpt(source, excerptStarts, selection.StartUtf16 - pageStart)));
+                    return (hits.ToArray(), new PdfFindCursor(page, hit.Selection.StartUtf16));
+                hits.Add(hit);
             }
         }
         return (hits.ToArray(), null);
+    }
+
+    public static IEnumerable<PdfFindHit> PdfPageHits(int page, string source, string query, string language,
+        int pageStart, int minimum, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var lastStart = -1;
+        int[]? excerptStarts = null;
+        foreach (var selection in PdfSourceMatches(source, query, language, pageStart))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            // Raw text and a rejoined word may identify the same physical occurrence.
+            if (selection.StartUtf16 < minimum || selection.StartUtf16 == lastStart) continue;
+            lastStart = selection.StartUtf16;
+            excerptStarts ??= System.Globalization.StringInfo.ParseCombiningCharacters(source);
+            yield return new(page, selection, PdfExcerpt(source, excerptStarts, selection.StartUtf16 - pageStart));
+        }
     }
 
     private static string PdfExcerpt(string source, int[] starts, int offset)

@@ -264,6 +264,9 @@ public sealed class CoreClient : IDisposable
     public DetachedPdfFindPage FindDetachedPdfText(string id, string query, DetachedPdfFindCursor start, int limit, string? target = null) =>
         CallIndependent<DetachedPdfFindPage>(new { version = 1, operation = "find_detached_pdf_text", id, query, start, limit, target });
 
+    public DetachedPdfSearchBatch ReadDetachedPdfSearchPages(string id, int startPage) =>
+        CallIndependent<DetachedPdfSearchBatch>(new { version = 1, operation = "read_detached_pdf_search_pages", id, startPage });
+
     public void SetDetachedPdfSpeechResume(string id, int page, string sentenceId, SpeechResume? resume) =>
         Call<JsonElement>(new { version = 1, operation = "set_detached_pdf_speech_resume", id, page, sentenceId, resume });
 

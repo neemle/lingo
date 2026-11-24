@@ -265,6 +265,10 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         string id, string query, DetachedPdfFindCursor start, int limit, CancellationToken cancellation, string? target = null) =>
         Task.Run(() => client.FindDetachedPdfText(id, query, start, limit, target), cancellation);
 
+    public Task<DetachedPdfSearchBatch> ReadDetachedPdfSearchPagesAsync(
+        string id, int startPage, CancellationToken cancellation) =>
+        Task.Run(() => client.ReadDetachedPdfSearchPages(id, startPage), cancellation);
+
     public void SetDetachedPdfSpeechResume(string id, int page, string sentenceId, SpeechResume? resume) =>
         client.SetDetachedPdfSpeechResume(id, page, sentenceId, resume);
 

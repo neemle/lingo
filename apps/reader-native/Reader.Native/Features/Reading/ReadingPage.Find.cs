@@ -11,7 +11,7 @@ public partial class ReadingPage
         int? PhysicalPage = null, string? SentenceId = null, DetachedPdfTranslation? CachedMachine = null,
         string? Query = null, TranslationFindFragment? PdfFragment = null, string? SavedText = null,
         TranslationAlignment? Alignment = null, string? PivotLanguage = null, string? SourceText = null,
-        TextSelection? SourceMatch = null);
+        TextSelection? SourceMatch = null, string? SourcePageRevision = null);
     private sealed record DocumentFindFocus(string Document, string? Revision, int? Page,
         string Sentence, TextSelection? Span = null, string? Target = null, string? Query = null,
         TranslationFindFragment? PdfFragment = null, TranslationPair? Translation = null);
@@ -61,7 +61,7 @@ public partial class ReadingPage
                 ArrangeReadingColumns();
             }
 
-            if (match.SourceMatch is { } exact)
+            if (match.SourceMatch is { } exact && match.SourcePageRevision is null)
             {
                 if (current.CurrentRevisionId is not { } exactRevision || exactRevision != document.CurrentRevisionId ||
                     exact.StartUtf16 > current.Text.Length - exact.LengthUtf16 ||
@@ -76,6 +76,34 @@ public partial class ReadingPage
             }
 
 #if MACCATALYST
+            if (match.SourceMatch is { } detachedMatch && match.SourcePageRevision is { } pageRevision &&
+                match.PhysicalPage is int sourcePage)
+            {
+                await pdfWindowRead;
+                if (!readingPageActive || session.Document?.Id != document.Id) return;
+                await OpenPdfPageAsync(sourcePage);
+                if (!readingPageActive || session.Document?.Id != document.Id || pdfWindow?.Center != sourcePage) return;
+                if (detachedAddress is { } sourceAddress && sourceAddress.Document == document.Id &&
+                    sourceAddress.Page == sourcePage && sourceAddress.Language == document.Language)
+                {
+                    await detachedInitialSentence;
+                    if (!ReferenceEquals(detachedAddress, sourceAddress) || !readingPageActive) return;
+                    if (detachedSentence?.RevisionId == pageRevision &&
+                        detachedMatch.StartUtf16 <= sourceAddress.Text.Length - detachedMatch.LengthUtf16 &&
+                        sourceAddress.Text.AsSpan(detachedMatch.StartUtf16, detachedMatch.LengthUtf16).SequenceEqual(detachedMatch.Text))
+                    {
+                        await LoadDetachedSentenceAsync(sourceAddress, position: null, sourceOffset: detachedMatch.StartUtf16);
+                        if (ReferenceEquals(detachedAddress, sourceAddress) && readingPageActive && !loadingDetachedSentence &&
+                            detachedSentence is { } loaded && loaded.RevisionId == pageRevision &&
+                            loaded.Sentence.StartUtf16 <= detachedMatch.StartUtf16 && detachedMatch.StartUtf16 < loaded.Sentence.EndUtf16)
+                            RevealDetachedFindSpan(sourceAddress, loaded, detachedMatch);
+                        return;
+                    }
+                }
+                await DisplayAlertAsync("Пошук у документі",
+                    "Текст змінився. Повторіть пошук, щоб побачити актуальні збіги.", "Гаразд");
+                return;
+            }
             if (match.PhysicalPage is int unreadPage && match.SentenceId is null && !match.Translation)
             {
                 await pdfWindowRead;
@@ -603,12 +631,14 @@ public partial class ReadingPage
                         return new(matches.ToArray(), new DocumentFindCursor(nextPosition));
                 }
             }
-            var cached = await AppendDetachedAsync(matches, query, start, null, token);
 #if MACCATALYST
-            if (cached.Next is null && document.Format == "pdf")
-                return await AppendUnreadAsync(matches, query, 0, 0, token);
+            if (document.Format == "pdf")
+            {
+                var cached = await AppendDetachedOriginalAsync(matches, query, start, token);
+                return cached.Next is not null ? cached : await AppendUnreadAsync(matches, query, 0, 0, token);
+            }
 #endif
-            return cached;
+            return new(matches.ToArray(), null);
         }
 
 #if MACCATALYST
@@ -632,8 +662,35 @@ public partial class ReadingPage
             return new(matches.ToArray(), next, needsOcr);
         }
 
-        async Task<DocumentFindPage> AppendDetachedAsync(
-            List<DocumentFindHit> matches, string query, DocumentFindCursor start, string? language, CancellationToken token)
+        async Task<DocumentFindPage> AppendDetachedOriginalAsync(
+            List<DocumentFindHit> matches, string query, DocumentFindCursor start, CancellationToken token)
+        {
+            var startPage = start.PhysicalPage ?? 0;
+            var minimum = start.PhysicalPage is null ? 0 : start.Offset;
+            while (true)
+            {
+                var batch = await session.ReadDetachedPdfSearchPagesAsync(document.Id, startPage, token);
+                var space = DocumentFind.PageSize - matches.Count;
+                var found = await Task.Run(() => batch.Pages.SelectMany(page =>
+                    DocumentFind.PdfPageHits(page.Page, page.Text, query, document.Language, 0,
+                        page.Page == startPage ? minimum : 0, token)
+                        .Select(hit => (Hit: hit, page.RevisionId))).Take(space + 1).ToArray(), token);
+                matches.AddRange(found.Take(space).Select(result => new DocumentFindHit(result.Hit.Text,
+                    new DocumentFindSelection(0, Translation: false, PhysicalPage: result.Hit.Page,
+                        SourceMatch: result.Hit.Selection, SourcePageRevision: result.RevisionId))));
+                if (found.Length > space)
+                {
+                    var nextHit = found[space].Hit;
+                    return new(matches.ToArray(), new DocumentFindCursor(0, nextHit.Page, Offset: nextHit.Selection.StartUtf16));
+                }
+                if (batch.NextPage is not int next || next <= startPage) return new(matches.ToArray(), null);
+                startPage = next;
+                minimum = 0;
+            }
+        }
+
+        async Task<DocumentFindPage> AppendDetachedTranslationsAsync(
+            List<DocumentFindHit> matches, string query, DocumentFindCursor start, string language, CancellationToken token)
         {
             if (document.Format != "pdf") return new(matches.ToArray(), null);
             var cursor = new DetachedPdfFindCursor(start.PhysicalPage ?? 0,
@@ -649,10 +706,10 @@ public partial class ReadingPage
                         Offset: FindFragmentOffset(first.PdfFragment)));
 
                 matches.AddRange(found.Matches.Select(hit => new DocumentFindHit(hit.Text,
-                    new DocumentFindSelection(hit.Position, Translation: language is not null,
+                    new DocumentFindSelection(hit.Position, Translation: true,
                         PhysicalPage: hit.Page, SentenceId: hit.SentenceId,
                         CachedMachine: CachedFindMachine(hit),
-                        PdfFragment: hit.PdfFragment, SavedText: language is null ? null : hit.Text,
+                        PdfFragment: hit.PdfFragment, SavedText: hit.Text,
                         SourceText: hit.SourceText))));
                 if (found.Next is not { } next || next == cursor) return new(matches.ToArray(), null);
                 space = DocumentFind.PageSize - matches.Count;
@@ -660,8 +717,8 @@ public partial class ReadingPage
             }
         }
 #else
-        static Task<DocumentFindPage> AppendDetachedAsync(
-            List<DocumentFindHit> matches, string query, DocumentFindCursor start, string? language, CancellationToken token) =>
+        static Task<DocumentFindPage> AppendDetachedTranslationsAsync(
+            List<DocumentFindHit> matches, string query, DocumentFindCursor start, string language, CancellationToken token) =>
             Task.FromResult(new DocumentFindPage(matches.ToArray(), null));
 #endif
 
@@ -692,7 +749,7 @@ public partial class ReadingPage
                     offset = nextOffset;
                 }
             }
-            return await AppendDetachedAsync(matches, query, start, language, token);
+            return await AppendDetachedTranslationsAsync(matches, query, start, language, token);
         }
     }
 }

@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 const MAX_SCAN_PAGES: usize = 16;
 const MAX_TRANSLATION_SCAN_SENTENCES: usize = 128;
 const MAX_RESULTS: usize = 30;
+const MAX_SOURCE_BATCH_PAGES: usize = 8;
+const MAX_SOURCE_BATCH_BYTES: usize = 512 * 1024;
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -41,7 +43,56 @@ pub struct DetachedPdfFindPage {
     next: Option<DetachedPdfFindCursor>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetachedPdfSearchPage {
+    page: u16,
+    text: String,
+    revision_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetachedPdfSearchPages {
+    pages: Vec<DetachedPdfSearchPage>,
+    next_page: Option<u16>,
+}
+
 impl Store {
+    /// Read cached page text without segmenting it or changing the reading position.
+    pub fn read_detached_pdf_search_pages(&self, id: &str, start_page: u16) -> Result<DetachedPdfSearchPages> {
+        let mut statement = self.connection.prepare(
+            "SELECT page,text FROM pdf_detached_pages
+             WHERE document_id=?1 AND page>=?2 AND text<>'' ORDER BY page LIMIT ?3",
+        ).map_err(database_error)?;
+        let mut rows = statement.query(params![id, start_page, MAX_SOURCE_BATCH_PAGES as u32 + 1])
+            .map_err(database_error)?;
+        let mut batch = DetachedPdfSearchPages {
+            pages: Vec::with_capacity(MAX_SOURCE_BATCH_PAGES), next_page: None,
+        };
+        let mut bytes = 0;
+        while let Some(row) = rows.next().map_err(database_error)? {
+            let page = row.get(0).map_err(database_error)?;
+            if batch.pages.len() == MAX_SOURCE_BATCH_PAGES {
+                batch.next_page = Some(page);
+                break;
+            }
+            let text = row.get_ref(1).map_err(database_error)?.as_str().map_err(database_error)?;
+            if text.len() > crate::MAX_IMPORT {
+                return Err("Збережений текст сторінки PDF завеликий.".into());
+            }
+            if bytes + text.len() > MAX_SOURCE_BATCH_BYTES && !batch.pages.is_empty() {
+                batch.next_page = Some(page);
+                break;
+            }
+            bytes += text.len();
+            batch.pages.push(DetachedPdfSearchPage {
+                page, text: text.to_owned(), revision_id: super::page_revision(text),
+            });
+        }
+        Ok(batch)
+    }
+
     pub fn find_detached_pdf_text(
         &self, id: &str, query: &str, start: DetachedPdfFindCursor, limit: usize, target: Option<&str>,
     ) -> Result<DetachedPdfFindPage> {
@@ -186,6 +237,46 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detached_search_reads_text_in_bounded_inclusive_batches() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&directory.path().join("reader.sqlite")).unwrap();
+        let path = directory.path().join("source.pdf");
+        std::fs::write(&path, b"%PDF-1.4\n").unwrap();
+        let prepared = crate::file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "source.pdf", &path, "fr", vec![String::new(); 24], vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let text = "L’équipage attend.\r\nIl voit le quai.";
+        let large = "é".repeat(MAX_SOURCE_BATCH_BYTES / 2 + 1);
+        for page in (0..=22).step_by(2) {
+            super::super::write_text_layer(&store.connection, &document.id, page,
+                if page == 2 { &large } else { text }).unwrap();
+        }
+        let changes = store.connection.total_changes();
+        let read = |start| store.read_detached_pdf_search_pages(&document.id, start).unwrap();
+        let first = read(0);
+        let wire = serde_json::to_value(first).unwrap();
+        assert_eq!(wire["pages"], serde_json::json!([{
+            "page": 0, "text": text, "revisionId": super::super::page_revision(text)
+        }]));
+        assert_eq!(wire["nextPage"], 2);
+
+        let oversized = read(2);
+        assert_eq!(oversized.pages.len(), 1);
+        assert_eq!(oversized.pages[0].text, large);
+        assert_eq!(oversized.next_page, Some(4));
+        let bounded = read(oversized.next_page.unwrap());
+        let indexes = |batch: &DetachedPdfSearchPages| batch.pages.iter().map(|entry| entry.page).collect::<Vec<_>>();
+        assert_eq!(indexes(&bounded), [4, 6, 8, 10, 12, 14, 16, 18]);
+        assert_eq!(bounded.next_page, Some(20));
+        let remaining = read(bounded.next_page.unwrap());
+        assert_eq!(indexes(&remaining), [20, 22]);
+        assert_eq!(remaining.next_page, None);
+        assert!(read(23).pages.is_empty());
+        assert_eq!(store.connection.total_changes(), changes);
+    }
 
     #[test]
     fn finds_wrapped_phrase_in_detached_page_with_original_sentence_identity() {

@@ -227,6 +227,11 @@ pub enum Command {
         start: reader_core::DetachedPdfFindCursor,
         limit: usize,
     },
+    ReadDetachedPdfSearchPages {
+        id: String,
+        #[serde(rename = "startPage")]
+        start_page: u16,
+    },
     SetDetachedPdfSpeechResume {
         id: String,
         page: u16,

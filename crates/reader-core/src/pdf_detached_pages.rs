@@ -12,7 +12,7 @@ pub(crate) mod word_break;
 pub use translation::{DetachedPdfPassage, DetachedPdfTranslation, PdfPageTranslationRow, PdfSentenceRefresh, PdfTranslationSource};
 pub(crate) use translation::canonical_ocr_search_projection;
 pub use ocr_edit::DetachedPdfOcrPage;
-pub use find::{DetachedPdfFindCursor, DetachedPdfFindPage};
+pub use find::{DetachedPdfFindCursor, DetachedPdfFindPage, DetachedPdfSearchPage, DetachedPdfSearchPages};
 pub use annotations::{DetachedPdfAnnotationChange, DetachedPdfAnnotationItem};
 
 pub(crate) fn initialize(db: &mut Connection) -> Result<()> {

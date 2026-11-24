@@ -158,6 +158,8 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::HasUnrecognizedPdfSearchPages { id } => value(store.has_unrecognized_pdf_search_pages(&id)),
         Command::FindDetachedPdfText { id, query, start, limit, target } =>
             value(store.find_detached_pdf_text(&id, &query, start, limit, target.as_deref())),
+        Command::ReadDetachedPdfSearchPages { id, start_page } =>
+            value(store.read_detached_pdf_search_pages(&id, start_page)),
         Command::SetDetachedPdfSpeechResume { id, page, sentence_id, resume } =>
             value(store.set_detached_pdf_speech_resume(&id, page, &sentence_id, resume)),
         Command::DetachedPdfOcr { id, page } => value(store.detached_pdf_ocr(&id, page)),

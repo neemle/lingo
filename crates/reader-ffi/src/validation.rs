@@ -332,6 +332,7 @@ fn validate(command: &Command) -> Result<()> {
         | Command::HasUnrecognizedPdfSearchPages { id }
         | Command::DetachedPdfSentence { id, .. }
         | Command::FindDetachedPdfText { id, .. }
+        | Command::ReadDetachedPdfSearchPages { id, .. }
         | Command::LookupDetachedPdfWord { id, .. }
         | Command::TranslateDictionaryGloss { id, .. }
         | Command::TranslateDictionaryGlosses { id, .. }
