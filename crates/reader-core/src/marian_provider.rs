@@ -1340,7 +1340,7 @@ impl TranslationProvider for MarianProvider<'_> {
     }
 }
 
-fn translate_publication_rows(
+pub(crate) fn translate_publication_rows(
     segments: &[String],
     translate: impl FnOnce(&[String]) -> std::result::Result<Vec<Result<String>>, TranslationBatchError>,
 ) -> std::result::Result<Vec<Result<String>>, TranslationBatchError> {

@@ -3,7 +3,8 @@ use unicode_segmentation::UnicodeSegmentation;
 use whatlang::{Detector, Lang};
 
 const FRENCH_MANNER_OF_WALKING: &str = " de son pas souple et fort";
-pub(crate) const INSTRUCTION_REVISION: &str = "fr-uk-instructions-v5";
+pub(crate) const INSTRUCTION_REVISION: &str = "fr-uk-instructions-v6";
+pub(crate) const PUBLICATION_RULE_REVISION: &str = "fr-uk-publication-rules-v1";
 
 /// Established Ukrainian forms for complete publication labels and names.
 pub(crate) fn publication_term(source: &str) -> Option<String> {

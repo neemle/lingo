@@ -193,6 +193,26 @@ pub enum Route {
 }
 
 impl Route {
+    fn uses_publication_pivot_rules(&self) -> bool {
+        matches!(self, Self::Pivot { first, second } if first.source == "fr" && second.target == "uk")
+    }
+
+    fn publication_only(&self, input: &[impl AsRef<str>]) -> bool {
+        self.uses_publication_pivot_rules() && !input.is_empty() && input.iter().all(|text|
+            crate::marian_target_uk::publication_term(text.as_ref()).is_some())
+    }
+
+    fn used_route(&self, input: &[impl AsRef<str>]) -> Self {
+        if self.publication_only(input) {
+            Self::Direct(ModelEdge {
+                source: "fr".into(), target: "uk".into(), quality: None,
+                revision: crate::marian_target_uk::PUBLICATION_RULE_REVISION.into(),
+            })
+        } else {
+            self.clone()
+        }
+    }
+
     fn uses_automatic_hy(&self) -> bool {
         matches!(self, Self::Direct(edge) if crate::qwen::hy_translation::AutomaticTranslation::matches(edge))
     }
@@ -206,8 +226,8 @@ impl Route {
 
     pub fn direct_model_revision(&self) -> Option<&str> {
         match self {
-            Self::Direct(edge) => Some(&edge.revision),
-            Self::Pivot { .. } => None,
+            Self::Direct(edge) if edge.revision != crate::marian_target_uk::PUBLICATION_RULE_REVISION => Some(&edge.revision),
+            _ => None,
         }
     }
 
@@ -836,7 +856,7 @@ impl CacheRoutes {
         for route in self.candidates.iter().take(if prefer_hy { 1 } else { self.candidates.len() }) {
             let key = cache_key(route, input, context, settings)?;
             if let Some(segments) = store.cached_segments(&key, input, target)? {
-                return Ok(Some((AlignedTranslation::from_route(route.clone(), segments), key)));
+                return Ok(Some((AlignedTranslation::from_route(route.used_route(input), segments), key)));
             }
         }
         Ok(None)
@@ -914,8 +934,10 @@ fn read_cached_plan(
             if let Some(translation) = cached_unit(route, text)? {
                 let unit = &mut paragraph.units[*index];
                 unit.set_translation(translation);
-                unit.pivot_language = route.pivot_language().map(str::to_owned);
+                let used = route.used_route(std::slice::from_ref(text));
+                unit.pivot_language = used.pivot_language().map(str::to_owned);
                 unit.direct_model_revision = route.direct_model_revision().map(str::to_owned);
+                paragraph.pivot_language = unit.pivot_language.clone();
                 anchored_route = Some(route);
                 break;
             }
@@ -923,20 +945,18 @@ fn read_cached_plan(
         if let Some((text, sentence_ids)) = standalone {
             if let Some(translation) = cached_unit(route, text)? {
                 let mut aligned = AlignedTranslation {
-                    route: route.clone(),
+                    route: route.used_route(std::slice::from_ref(text)),
                     segments: vec![translation],
                     joined_lines: false,
                     alignment: None,
                 };
                 aligned.attach_source_sentences(sentence_ids.clone());
+                paragraph.pivot_language = aligned.route.pivot_language().map(str::to_owned);
                 sentence = Some(aligned);
                 anchored_route = Some(route);
                 break;
             }
         }
-    }
-    if let Some(route) = anchored_route {
-        paragraph.pivot_language = route.pivot_language().map(str::to_owned);
     }
     if matches!(scope, CacheScope::Window) {
         // Prefer the active sentence's route when it has neighboring translations.
@@ -952,7 +972,8 @@ fn read_cached_plan(
                 }
                 if let Some(translation) = cached_unit(route, text)? {
                     unit.set_translation(translation);
-                    unit.pivot_language = route.pivot_language().map(str::to_owned);
+                    let used = route.used_route(std::slice::from_ref(text));
+                    unit.pivot_language = used.pivot_language().map(str::to_owned);
                     unit.direct_model_revision = route.direct_model_revision().map(str::to_owned);
                 }
             }
@@ -1625,6 +1646,56 @@ mod tests {
         let translated = store.translate_installed_sentence(&document.id, &document.sentences[0].id, "uk")
             .unwrap().unwrap();
         assert_eq!(translated.segments, ["Ілюстрації: Anne de La Roche"]);
+    }
+
+    #[test]
+    fn publication_credits_stay_out_of_both_pivot_hops_and_keep_their_provenance() {
+        #[derive(Default)]
+        struct Provider(Vec<(String, Vec<String>)>);
+        impl TranslationProvider for Provider {
+            fn installed_models(&self) -> Result<Vec<ModelEdge>> {
+                Ok([("fr", "en"), ("en", "uk")].map(|(source, target)| ModelEdge {
+                    source: source.into(), target: target.into(), revision: "test".into(), quality: None,
+                }).into())
+            }
+
+            fn translate(&mut self, edge: &ModelEdge, segments: &[String], _: Option<&str>,
+                _: TranslationSettings) -> Result<Vec<String>> {
+                self.0.push((edge.target.clone(), segments.to_vec()));
+                Ok(vec![if edge.target == "en" { "The ship approaches." } else { "Корабель наближається." }.into()])
+            }
+        }
+
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let document = store.import("Credits.txt", b"Un bateau.", "fr").unwrap();
+        let input = ["Illustré par Anne de La Roche", "Le navire approche."].map(str::to_owned);
+        let mut provider = Provider::default();
+        for _ in 0..2 {
+            let result = store.translate_units(&mut provider, &document.id, "fr", "uk", &input).unwrap();
+            let first = result.segments[0].as_ref().unwrap();
+            let second = result.segments[1].as_ref().unwrap();
+            assert_eq!(first.text, "Ілюстрації: Anne de La Roche");
+            assert_eq!(first.pivot_language, None);
+            assert_eq!(second.text, "Корабель наближається.");
+            assert_eq!(second.pivot_language.as_deref(), Some("en"));
+        }
+        assert_eq!(provider.0, [
+            ("en".into(), vec![input[1].clone()]),
+            ("uk".into(), vec!["The ship approaches.".into()]),
+        ]);
+        let models = provider.installed_models().unwrap();
+        let routes = CacheRoutes::resolve(&models, &models, "fr", "uk").unwrap();
+        let cached = routes.cached_sentence(&store, &input[0], "uk").unwrap().unwrap();
+        assert_eq!(cached.route.pivot_language(), None);
+        assert_eq!(cached.route.direct_model_revision(), None);
+        provider.0.clear();
+        let refreshed = store.translate_aligned_with_cache_policy(&mut provider, TranslationRequest {
+            source: "fr", target: "uk", segments: &input[..1], context: Some(&input[1]),
+            settings: TranslationSettings::default(),
+        }, &models, Some(&document.id), true).unwrap().unwrap();
+        assert_eq!(refreshed.segments, ["Ілюстрації: Anne de La Roche"]);
+        assert_eq!(refreshed.route.pivot_language(), None);
+        assert!(provider.0.is_empty());
     }
 
     #[test]
@@ -2717,10 +2788,10 @@ pub(crate) struct UnitTranslation {
 }
 
 impl UnitTranslation {
-    fn from_route(text: String, route: &Route) -> Self {
+    fn from_route(text: String, route: &Route, input: &str) -> Self {
         Self {
             text,
-            pivot_language: route.pivot_language().map(str::to_owned),
+            pivot_language: route.pivot_language().filter(|_| !route.publication_only(&[input])).map(str::to_owned),
             direct_model_revision: route.direct_model_revision().map(str::to_owned),
         }
     }
@@ -2730,6 +2801,13 @@ impl Store {
     pub(crate) fn record_translation_cache_use(
         &self, document: &str, route: &Route, input: &[String],
     ) -> Result<()> {
+        if matches!(route, Route::Direct(edge) if edge.revision == crate::marian_target_uk::PUBLICATION_RULE_REVISION) {
+            let routes = self.translation_cache_routes("fr", "uk")?;
+            let keys = routes.candidates.iter().filter(|route| route.uses_publication_pivot_rules())
+                .flat_map(|route| input.iter().map(move |text| unit_cache_key(route, text)))
+                .collect::<Result<Vec<_>>>()?;
+            return self.link_translation_cache_keys(document, keys.iter().map(String::as_str));
+        }
         let keys = input.iter().map(|text| unit_cache_key(route, text)).collect::<Result<Vec<_>>>()?;
         self.link_translation_cache_keys(document, keys.iter().map(String::as_str))
     }
@@ -2810,7 +2888,7 @@ impl Store {
                     if let Some(document) = document {
                         self.link_translation_cache_keys(document, std::iter::once(key.as_str()))?;
                     }
-                    return Ok(Some(AlignedTranslation::from_route(route, output)));
+                    return Ok(Some(AlignedTranslation::from_route(route.used_route(segments), output)));
                 }
                 Err(error) => { first_failure.get_or_insert(error); }
             }
@@ -2860,7 +2938,7 @@ impl Store {
                 match outcome {
                     Ok(text) => {
                         rows.push((unit_cache_key(route, &input[index])?, index));
-                        segments[index] = Some(UnitTranslation::from_route(text, route));
+                        segments[index] = Some(UnitTranslation::from_route(text, route, &input[index]));
                         failures[index] = None;
                     }
                     Err(error) => {
@@ -2896,7 +2974,7 @@ impl Store {
         for (text, output) in input.iter().zip(segments).filter(|(_, output)| output.is_none()) {
             let key = unit_cache_key(route, text)?;
             if let Some(mut value) = self.cached_segments(&key, std::slice::from_ref(text), target)? {
-                *output = value.pop().map(|text| UnitTranslation::from_route(text, route));
+                *output = value.pop().map(|value| UnitTranslation::from_route(value, route, text));
                 used.push(key);
             }
         }
@@ -2973,6 +3051,23 @@ fn infer_route(
     context: Option<&str>,
     settings: TranslationSettings,
 ) -> Result<Vec<String>> {
+    if route.uses_publication_pivot_rules() {
+        return crate::marian_provider::translate_publication_rows(segments, |remaining| {
+            infer_model_route(provider, route, remaining, context, settings)
+                .map(|rows| rows.into_iter().map(Ok).collect())
+                .map_err(TranslationBatchError::Failed)
+        })?.into_iter().collect();
+    }
+    infer_model_route(provider, route, segments, context, settings)
+}
+
+fn infer_model_route(
+    provider: &mut impl TranslationProvider,
+    route: &Route,
+    segments: &[String],
+    context: Option<&str>,
+    settings: TranslationSettings,
+) -> Result<Vec<String>> {
     let mut infer = |edge: &ModelEdge, input: &[String], context: Option<&str>| {
         checked_inference(provider, edge, input, context, settings)
     };
@@ -2993,6 +3088,19 @@ fn infer_route(
 }
 
 fn infer_independent_units(
+    provider: &mut impl TranslationProvider,
+    route: &Route,
+    input: &[String],
+) -> std::result::Result<Vec<Result<String>>, TranslationBatchError> {
+    if route.uses_publication_pivot_rules() {
+        return crate::marian_provider::translate_publication_rows(input, |remaining| {
+            infer_independent_model_units(provider, route, remaining)
+        });
+    }
+    infer_independent_model_units(provider, route, input)
+}
+
+fn infer_independent_model_units(
     provider: &mut impl TranslationProvider,
     route: &Route,
     input: &[String],
@@ -3073,6 +3181,8 @@ fn cache_key(
             .unwrap_or(4)
     };
     let version = match route {
+        _ if route.uses_publication_pivot_rules() && segments.iter().any(|text|
+            crate::marian_target_uk::publication_term(text.as_ref()).is_some()) => 16,
         Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" && segments.iter().any(|text|
             crate::marian_target_uk::publication_term(text.as_ref()).is_some()) => 15,
         _ if segments.iter().any(|text| crate::protected_translation::web_address_spans(text.as_ref()).next().is_some())
