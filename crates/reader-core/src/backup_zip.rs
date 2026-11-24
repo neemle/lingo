@@ -747,6 +747,36 @@ mod tests {
     use crate::inspect_backup_file;
 
     #[test]
+    fn portable_archive_fills_missing_translation_settings_and_preserves_local_choices() {
+        use crate::reader_preferences::ReaderPreferenceChange;
+
+        let root = tempfile::tempdir().unwrap();
+        let mut source = Store::open(&root.path().join("source.db")).unwrap();
+        source.update_reader_preference(ReaderPreferenceChange::HyAutoTranslation { value: true }).unwrap();
+        source.update_reader_preference(ReaderPreferenceChange::TranslationTarget {
+            source: "fr".into(), target: Some("uk".into()),
+        }).unwrap();
+        let archive = root.path().join("library.zip");
+        source.export_backup_file(&archive).unwrap();
+
+        let mut fresh = Store::open(&root.path().join("fresh.db")).unwrap();
+        fresh.restore_backup_file(&archive).unwrap();
+        let preferences = fresh.reader_preferences().unwrap();
+        assert_eq!(preferences.hy_auto_translation, Some(true));
+        assert_eq!(preferences.translation_targets["fr"].as_deref(), Some("uk"));
+
+        let mut local = Store::open(&root.path().join("local.db")).unwrap();
+        local.update_reader_preference(ReaderPreferenceChange::HyAutoTranslation { value: false }).unwrap();
+        local.update_reader_preference(ReaderPreferenceChange::TranslationTarget {
+            source: "fr".into(), target: Some("de".into()),
+        }).unwrap();
+        local.restore_backup_file(&archive).unwrap();
+        let preferences = local.reader_preferences().unwrap();
+        assert_eq!(preferences.hy_auto_translation, Some(false));
+        assert_eq!(preferences.translation_targets["fr"].as_deref(), Some("de"));
+    }
+
+    #[test]
     fn pending_pdf_keeps_its_source_language_on_reopen_and_archive_restore() {
         use crate::intake::{IntakeImport, IntakeInput, PdfTextDraft};
 

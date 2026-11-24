@@ -24,6 +24,7 @@ public partial class ReadingPage
 
     private void LoadReaderPreferences()
     {
+        var previousTargets = readerPreferences.TranslationTargets;
         try
         {
             var session = AppState.Session;
@@ -64,6 +65,10 @@ public partial class ReadingPage
                 });
                 legacy.Set(LegacyMigrated, true);
             }
+            if (translationSource is { Language: var sourceLanguage } &&
+                previousTargets.GetValueOrDefault(sourceLanguage) !=
+                readerPreferences.TranslationTargets.GetValueOrDefault(sourceLanguage))
+                translationSource = null;
         }
         catch (Exception error) { ReportPreferenceError(error); }
     }

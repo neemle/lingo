@@ -209,6 +209,7 @@ pub(crate) fn restore(db: &Connection, incoming: ReaderPreferences) -> Result<()
     local.pdf_show_original = local.pdf_show_original.or(incoming.pdf_show_original);
     local.auto_translate = local.auto_translate.or(incoming.auto_translate);
     local.background_translation = local.background_translation.or(incoming.background_translation);
+    local.hy_auto_translation = local.hy_auto_translation.or(incoming.hy_auto_translation);
     local.continuous_speech = local.continuous_speech.or(incoming.continuous_speech);
     local.speech_rate_percent = local.speech_rate_percent.or(incoming.speech_rate_percent);
     for (source, target) in incoming.translation_targets {
