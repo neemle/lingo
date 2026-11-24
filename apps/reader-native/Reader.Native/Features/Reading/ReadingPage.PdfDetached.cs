@@ -738,6 +738,7 @@ public partial class ReadingPage
         var sentence = current.Sentence;
         var speechText = current.SpeechText ?? current.NarrationText ?? sentence.Text;
         var hash = SpeechProgress.TextHash(sentence, speechText);
+        var receivedCue = false;
         SpeechResume? pending = null;
         IDispatcherTimer? timer = null;
         var lastSavedAt = Environment.TickCount64 - 2000;
@@ -835,7 +836,8 @@ public partial class ReadingPage
             {
                 RecordReadingActivity(address.Document);
                 checkpointDetachedSpeech = null;
-                Save(null);
+                if (Save(null))
+                    DetachedSentenceStatus.Text = receivedCue ? status : $"{status} Підсвічення за реченням.";
                 return true;
             }
             if (status is not null) DetachedSentenceStatus.Text = status;
@@ -867,12 +869,16 @@ public partial class ReadingPage
             var input = SourceRanges.ProjectPronunciation(sentence.Text, pronounced, startAt, (start, length) =>
                 MainThread.BeginInvokeOnMainThread(() =>
                 {
-                    if (run != detachedAudioRun || detachedPaused || start < 0 || length <= 0 ||
-                        start > sentence.Text.Length - length) return;
-                    DetachedPdfText.SpokenWord = new TextSelection(
-                        sentence.StartUtf16 + start, length, sentence.Text.Substring(start, length));
+                    if (run != detachedAudioRun || token.IsCancellationRequested || detachedPaused ||
+                        detachedAddress != address || detachedSentence is not { } frame ||
+                        frame.RevisionId != current.RevisionId || frame.Sentence.Id != sentence.Id ||
+                        frame.Sentence.Text != sentence.Text ||
+                        SourceRanges.SpeechSelection(DetachedPdfText.Text, sentence, start, length) is not { } spoken)
+                        return;
+                    DetachedPdfText.SpokenWord = spoken;
+                    receivedCue = true;
                     if (!canSaveWordPosition) return;
-                    pending = new SpeechResume(sentence.Id, hash, start);
+                    pending = new SpeechResume(sentence.Id, hash, spoken.StartUtf16 - sentence.StartUtf16);
                     if (Environment.TickCount64 - lastSavedAt >= 2000) checkpointDetachedSpeech?.Invoke();
                 }));
             return detachedSpeech.SpeakAsync(input.Text, current.Language, input.Boundary);

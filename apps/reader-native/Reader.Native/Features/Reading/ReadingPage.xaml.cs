@@ -1264,27 +1264,18 @@ public partial class ReadingPage : ContentPage
                 if (request == speechRequest && utteranceActive && !speechPaused &&
                     session.Document?.Id == document.Id && session.Sentence?.Id == sentence.Id &&
                     session.Sentence?.Text == sentence.Text &&
-                    HighlightSpokenWord(sentence, start, length) is int spokenOffset)
+                    SourceRanges.SpeechSelection(SourceText.Text, sentence, start, length) is { } spoken)
                 {
+                    SourceText.SpokenWord = spoken;
                     receivedCue();
                     if (resumeHash is null) return;
-                    pendingSpeechResume = (document.Id, new(sentence.Id, resumeHash, spokenOffset));
+                    pendingSpeechResume = (document.Id, new(sentence.Id, resumeHash,
+                        spoken.StartUtf16 - sentence.StartUtf16));
                     if (lastSpeechSave == 0 || Stopwatch.GetElapsedTime(lastSpeechSave) >= TimeSpan.FromSeconds(2))
                         SaveSpeechResume();
                 }
             }));
         return speech.SpeakAsync(input.Text, document.Language, input.Boundary);
-    }
-
-    private int? HighlightSpokenWord(Sentence sentence, int start, int length)
-    {
-        var span = SourceRanges.Selection(sentence.Text, start, length);
-        if (span is null) return null;
-        var absolute = sentence.StartUtf16 + span.StartUtf16;
-        if (absolute < 0 || absolute > SourceText.Text.Length - span.LengthUtf16 ||
-            !SourceText.Text.AsSpan(absolute, span.LengthUtf16).SequenceEqual(span.Text)) return null;
-        SourceText.SpokenWord = span with { StartUtf16 = absolute };
-        return span.StartUtf16;
     }
 
     private void PauseClicked(object? sender, EventArgs args) => ToggleSpeechPause();

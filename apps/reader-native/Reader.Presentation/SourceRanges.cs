@@ -168,6 +168,17 @@ public sealed class SourceRanges(string text)
     public static TextSelection? Selection(string source, int start, int length) =>
         new SourceRanges(source).Selection(start, length);
 
+    public static TextSelection? SpeechSelection(string visibleText, Sentence sentence, int start, int length)
+    {
+        if (sentence.StartUtf16 < 0 || Selection(sentence.Text, start, length) is not { } selection)
+            return null;
+        var absolute = (long)sentence.StartUtf16 + selection.StartUtf16;
+        if (absolute > visibleText.Length - selection.LengthUtf16 ||
+            !visibleText.AsSpan((int)absolute, selection.LengthUtf16).SequenceEqual(selection.Text))
+            return null;
+        return selection with { StartUtf16 = (int)absolute };
+    }
+
     public TextSelection? Selection(int start, int length)
     {
         if (start < 0 || length <= 0 || start > Text.Length - length) return null;
