@@ -558,14 +558,14 @@ public partial class ReadingPage
 
     private async void TranslateOfflineClicked(object? sender, EventArgs args)
     {
-        ClearPdfFragmentFocus();
+        ClearTranslationFocus();
         lastAutoTranslation = ActiveTranslationKey();
         await TranslateOfflineAsync(true);
     }
 
     private async void TranslateSentenceClicked(object? sender, EventArgs args)
     {
-        ClearPdfFragmentFocus();
+        ClearTranslationFocus();
         await TranslateOfflineAsync(false);
     }
 
@@ -620,7 +620,7 @@ public partial class ReadingPage
                 await session.PdfPageTranslationAsync(pdf.Address.Document, pdf.Address.Page, key.Target,
                     cachedOnly: false, refresh: refresh);
                 refreshedPage = pdf.Address;
-                if (ActiveTranslationKey() == key) ClearPdfFragmentFocus();
+                if (ActiveTranslationKey() == key) ClearTranslationFocus();
                 machineStatus = "Речення перекладено заново.";
                 return;
             }
@@ -630,7 +630,7 @@ public partial class ReadingPage
             if (standalone is not null)
             {
                 RememberWindow(standalone);
-                if (regenerate && ActiveTranslationKey() == key) ClearPdfFragmentFocus();
+                if (regenerate && ActiveTranslationKey() == key) ClearTranslationFocus();
             }
             else readinessPair = null;
             machineStatus = regenerate ? standalone is null ? "Повторний переклад недоступний." : "Речення перекладено заново." : null;

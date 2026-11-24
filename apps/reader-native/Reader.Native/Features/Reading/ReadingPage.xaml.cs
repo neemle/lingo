@@ -406,7 +406,7 @@ public partial class ReadingPage : ContentPage
         var alignment = active && document is not null && TargetCode is { } machineTarget
             ? ActiveMachineAlignment(document, machineTarget) : null;
         var machine = alignment?.Translation;
-        var searchHit = FoundPdfTranslation(detached: false);
+        var searchHit = FoundTranslation(detached: false);
         var machineLabel = alignment?.Unit.Sources.Length > 1 ? "Машинний переклад групи речень"
             : machine?.JoinedLines == true ? "Машинний переклад об’єднаних рядків" : "Машинний переклад";
         if (alignment is { Window.Scope: var scope, Translation.PivotLanguage: var pivot })
@@ -419,15 +419,17 @@ public partial class ReadingPage : ContentPage
 
         TranslationNotice.Text = footnote ? "Виноски залишаються в оригіналі."
             : !active ? "Відкрийте документ для читання."
-            : searchHit is not null ? DocumentLanguages.WithPivotRoute("Збіг у збереженому перекладі PDF",
+            : searchHit is not null ? DocumentLanguages.WithPivotRoute("Збіг у збереженому перекладі",
                 searchHit.SourceLanguage, searchHit.PivotLanguage, searchHit.TargetLanguage)
             : translating && currentStatus is not null && machine is null ? currentStatus
             : text is not null ? "Ваш переклад активного речення"
             : machine is not null ? (currentStatus is null ? machineLabel : $"{currentStatus} {machineLabel}")
             : currentStatus ?? ReadinessMessage();
         var newTranslation = footnote ? "" : searchHit?.Target ?? text ?? machine?.Text ?? "";
-        var hasNewActiveTranslation = newTranslation.Length > 0 && SegmentTranslation.Text != newTranslation;
+        var translationChanged = SegmentTranslation.Text != newTranslation;
         SegmentTranslation.Text = newTranslation;
+        if (!translationChanged && documentFindFocus?.Translation is not null)
+            HighlightActiveTranslation(detached: false, WordCard.IsVisible ? PopupGloss(detached: false) : null);
         ActiveTranslationCard.IsVisible = SegmentTranslation.Text.Length > 0;
         ShareTranslationPair.IsVisible = DisplayedTranslationPair() is not null;
         EditTranslation.Text = text is null ? "Додати свій переклад" : "Змінити переклад";
@@ -446,7 +448,7 @@ public partial class ReadingPage : ContentPage
         UpdateModelTranslation();
         UpdateSourceLocation(document, session.Sentence);
         UpdateParagraphPreview(document, window, unit);
-        if (hasNewActiveTranslation)
+        if (translationChanged && newTranslation.Length > 0)
         {
             RequestTranslationScroll();
             RefreshCachedPdfPageLayout();
@@ -596,7 +598,7 @@ public partial class ReadingPage : ContentPage
         if (text is not null && session.Document?.Id == document.Id && session.Sentence?.Id == sentence.Id
             && TargetCode == target && !session.Busy)
         {
-            ClearPdfFragmentFocus();
+            ClearTranslationFocus();
             await session.SetReviewedTranslationAsync(document.Id, sentence.Id, target, text);
             if (session.Error.Length != 0) return;
             if (existing is not null && string.IsNullOrWhiteSpace(text))
@@ -1053,7 +1055,7 @@ public partial class ReadingPage : ContentPage
         CancelDetachedSpeechTravel();
         var session = AppState.Session;
         if (PdfPageNotice.IsVisible || session.Busy || session.Document is not { } initial || session.Sentence is not { } sentence) return;
-        ClearPdfFragmentFocus();
+        ClearTranslationFocus();
         StopWordDetail();
         var source = SpeechSourceFor(initial, sentence);
         if ((singleSentence || !ContinueSpeech.IsChecked) && !HasNarrationText(source.SpeechText))

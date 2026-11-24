@@ -9,10 +9,11 @@ public partial class ReadingPage
     private bool findingInDocument;
     private sealed record DocumentFindSelection(int Position, bool Translation,
         int? PhysicalPage = null, string? SentenceId = null, DetachedPdfTranslation? CachedMachine = null,
-        string? Query = null, TranslationFindFragment? PdfFragment = null, string? FragmentTranslation = null);
+        string? Query = null, TranslationFindFragment? PdfFragment = null, string? SavedText = null,
+        TranslationAlignment? Alignment = null, string? PivotLanguage = null);
     private sealed record DocumentFindFocus(string Document, string? Revision, int? Page,
         string Sentence, TextSelection? Span = null, string? Target = null, string? Query = null,
-        TranslationFindFragment? PdfFragment = null, string? FragmentTranslation = null);
+        TranslationFindFragment? PdfFragment = null, TranslationPair? Translation = null);
     private DocumentFindFocus? documentFindFocus;
 #if MACCATALYST
     private sealed record UnreadPdfFind(string Document, int Page, string Query, int Occurrence);
@@ -35,7 +36,7 @@ public partial class ReadingPage
             if (!readingPageActive || session.Document is not { } current || current.Id != document.Id ||
                 current.Language != document.Language || (match.Translation && TargetCode != target))
                 return;
-            ClearPdfFragmentFocus();
+            ClearTranslationFocus();
             documentFindFocus = null;
             if ((match.Translation && readingLayout == ReaderLayout.Source) ||
                 (!match.Translation && readingLayout == ReaderLayout.Translation))
@@ -118,7 +119,7 @@ public partial class ReadingPage
                 opened.Id == document.Id && opened.CurrentRevisionId == current.CurrentRevisionId &&
                 session.Sentence is { } sentence && sentence.Id == current.Sentences[position].Id)
             {
-                if (match.Translation && opened.Format == "pdf")
+                if (match.Translation)
                     RevealTranslationFindMatch(match, opened.Id, opened.CurrentRevisionId, null, sentence.Id, target);
                 else if (!match.Translation &&
                     SetDocumentFindFocus(opened.Id, opened.CurrentRevisionId, null, sentence, match.Query) is { } foundSpan)
@@ -154,13 +155,32 @@ public partial class ReadingPage
     private void RevealTranslationFindMatch(DocumentFindSelection match, string document, string? revision,
         int? page, string sentence, string? target)
     {
-        if (!match.Translation || match.Query is not { } query || target is null || TargetCode != target) return;
-        var source = page is null ? AppState.Session.Document?.Text : detachedAddress?.Text;
-        var span = match.PdfFragment is { } fragment && source is not null
-            ? SourceRanges.Selection(source, fragment.StartUtf16, fragment.EndUtf16 - fragment.StartUtf16) : null;
+        var session = AppState.Session;
+        if (!match.Translation || match.Query is not { } query || match.SavedText is not { } saved ||
+            target is null || TargetCode != target || session.Document is not { } opened || opened.Id != document)
+            return;
+        var selected = page is null ? session.Sentence : detachedSentence?.Sentence;
+        var source = page is null ? opened.Text : detachedAddress?.Text;
+        if (selected is null || source is null) return;
+        var span = match.PdfFragment is { } fragment
+            ? SourceRanges.Selection(source, fragment.StartUtf16, fragment.EndUtf16 - fragment.StartUtf16)
+            : null;
+        if (match.PdfFragment is not null && span is null) return;
+        if (match.Alignment is not null)
+        {
+            if (SourceRanges.ResolveTranslationSource(opened, match.Alignment) is not { } range) return;
+            var first = opened.Sentences[range.First];
+            var last = opened.Sentences[range.First + range.Count - 1];
+            span = SourceRanges.Selection(source, first.StartUtf16, last.EndUtf16 - first.StartUtf16);
+            if (span is null) return;
+        }
+        var original = span?.Text ?? match.CachedMachine?.SourceText ?? selected.Text;
+        var pivot = match.PdfFragment?.PivotLanguage ?? match.CachedMachine?.PivotLanguage ?? match.PivotLanguage;
+        var pair = new TranslationPair(original, opened.Language, saved, target, pivot);
         documentFindFocus = new(document, revision, page, sentence, Span: span, Target: target, Query: query,
-            PdfFragment: match.PdfFragment, FragmentTranslation: span is null ? null : match.FragmentTranslation);
-        if (span is not null && match.PdfFragment is { ReflowOnly: true })
+            PdfFragment: match.PdfFragment, Translation: pair);
+        if (PdfUsesPageTranslation && (match.PdfFragment is { ReflowOnly: true } ||
+            match.PdfFragment is null && !PageShowsSavedTranslation(selected, saved)))
         {
             pdfTranslationLayout = false;
             RefreshPdfTranslationLayout();
@@ -180,21 +200,29 @@ public partial class ReadingPage
             }
             UpdateInlinePdfHighlight();
         }
-        if (span is not null) RefreshFindTranslationDisplay();
+        RefreshFindTranslationDisplay();
+        if (page is null) RequestTranslationScroll();
     }
 
-    private TranslationPair? FoundPdfTranslation(bool detached)
+    private bool PageShowsSavedTranslation(Sentence selected, string saved) =>
+        pdfLayoutRequest is not null && pdfLayoutRequest == CurrentPdfLayoutAddress() &&
+        pdfLayoutRows.Any(row => IsActivePdfRow(row, selected) && row.Text == saved);
+
+    private TranslationPair? FoundTranslation(bool detached)
     {
-        if (documentFindFocus is not { Span: { } source, FragmentTranslation: { } translation, Target: { } target } focus ||
-            TargetCode != target || AppState.Session.Document is not { } document || focus.Document != document.Id)
+        if (documentFindFocus is not { Translation: { } pair } focus || TargetCode != pair.TargetLanguage ||
+            AppState.Session.Document is not { } document || focus.Document != document.Id ||
+            pair.SourceLanguage != document.Language)
             return null;
         var current = detached
             ? !loadingDetachedSentence && detachedAddress?.Page == focus.Page && detachedSentence is { } page &&
                 page.RevisionId == focus.Revision && page.Sentence.Id == focus.Sentence
             : focus.Page is null && document.CurrentRevisionId == focus.Revision && AppState.Session.Sentence?.Id == focus.Sentence;
-        return current ? new TranslationPair(source.Text, document.Language, translation, target,
-            focus.PdfFragment?.PivotLanguage) : null;
+        return current ? pair : null;
     }
+
+    private string? FoundTranslationQuery(bool detached) =>
+        FoundTranslation(detached) is not null ? documentFindFocus?.Query : null;
 
     private void RefreshFindTranslationDisplay()
     {
@@ -204,6 +232,7 @@ public partial class ReadingPage
             UpdateDetachedControls();
         }
         else UpdateTranslation();
+        UpdatePopupTranslationHighlights();
     }
 
     private string? PdfTranslationFindQuery() =>
@@ -490,7 +519,7 @@ public partial class ReadingPage
                     new DocumentFindSelection(hit.Position, Translation: language is not null,
                         PhysicalPage: hit.Page, SentenceId: hit.SentenceId,
                         CachedMachine: hit.Reviewed == false ? new DetachedPdfTranslation(hit.Text, hit.PivotLanguage, hit.SourceText, hit.Position) : null,
-                        PdfFragment: hit.PdfFragment, FragmentTranslation: hit.PdfFragment is null ? null : hit.Text))));
+                        PdfFragment: hit.PdfFragment, SavedText: language is null ? null : hit.Text))));
                 if (found.Next is not { } next || next == cursor) return new(matches.ToArray(), null);
                 space = DocumentFind.PageSize - matches.Count;
                 cursor = next;
@@ -514,7 +543,7 @@ public partial class ReadingPage
                     var found = await session.FindTranslationPageAsync(document.Id, language, query, position, token);
                     matches.AddRange(found.Matches.Where(hit => hit.Position >= 0 && hit.Position < document.Sentences.Length)
                         .Select(hit => new DocumentFindHit(hit.Text, new DocumentFindSelection(hit.Position, Translation: true,
-                            PdfFragment: hit.PdfFragment, FragmentTranslation: hit.PdfFragment is null ? null : hit.Text))));
+                            PdfFragment: hit.PdfFragment, SavedText: hit.Text, Alignment: hit.Alignment, PivotLanguage: hit.PivotLanguage))));
                     if (found.NextStart is not int nextPosition ||
                         nextPosition <= position || nextPosition >= document.Sentences.Length)
                         break;

@@ -53,7 +53,7 @@ public partial class ReadingPage
     private const string UntranslatedPdfFragment = "Фрагмент ще не перекладено";
     private static string PdfFragmentState(PdfPageTranslationRow row) =>
         row.Failure is null ? "Не перекладено" : "Помилка перекладу";
-    private static readonly Color PdfSearchMatchColor = Color.FromArgb("#FFD27A");
+    private static readonly Color TranslationSearchMatchColor = Color.FromArgb("#FFD27A");
 
     private static bool HasPdfTranslation(PdfPageTranslationRow row) => !string.IsNullOrWhiteSpace(row.Text);
     private static bool NeedsPdfTranslation(PdfPageTranslationRow row) => row.LegacyGroup || !HasPdfTranslation(row);
@@ -538,7 +538,7 @@ public partial class ReadingPage
         {
             var end = match.StartUtf16 + match.LengthUtf16;
             matches.RemoveAll(range => range.Start < end && range.End > match.StartUtf16);
-            matches.Add((match.StartUtf16, end, PdfSearchMatchColor));
+            matches.Add((match.StartUtf16, end, TranslationSearchMatchColor));
         }
         var offset = 0;
         var formatted = new FormattedString();
@@ -792,12 +792,12 @@ public partial class ReadingPage
         return sentence;
     }
 
-    private void ClearPdfFragmentFocus()
+    private void ClearTranslationFocus()
     {
-        var foundFragment = documentFindFocus?.PdfFragment is not null;
-        if (pdfFragmentFocus is null && !foundFragment) return;
+        var foundTranslation = documentFindFocus?.Translation is not null;
+        if (pdfFragmentFocus is null && !foundTranslation) return;
         pdfFragmentFocus = null;
-        if (!foundFragment)
+        if (!foundTranslation)
         {
             UpdateInlinePdfHighlight();
             return;
@@ -1365,7 +1365,7 @@ public partial class ReadingPage
                             var matchBounds = BoundsFor(matchStart, matchEnd);
                             var sourceMatch = RotateBounds(matchBounds, centerX, centerY, rotation);
                             MatchBounds = MatchBounds is { } previousMatch ? Union(previousMatch, sourceMatch) : sourceMatch;
-                            canvas.FillColor = lightInk ? Color.FromArgb("#604321") : PdfSearchMatchColor;
+                            canvas.FillColor = lightInk ? Color.FromArgb("#604321") : TranslationSearchMatchColor;
                             canvas.FillRectangle(matchBounds);
                         }
                     }

@@ -14,7 +14,7 @@ public partial class ReadingPage
     private TranslationPair? DisplayedTranslationPair()
     {
         if (PdfUsesPageTranslation) return DisplayedPdfTranslationPair();
-        if (FoundPdfTranslation(detached: false) is { } hit) return hit;
+        if (FoundTranslation(detached: false) is { } hit) return hit;
         var session = AppState.Session;
         var shown = SegmentTranslation.Text;
         if (session.Document is not { } document || session.Sentence is not { } sentence
@@ -57,7 +57,7 @@ public partial class ReadingPage
     private TranslationPair? DisplayedDetachedTranslationPair()
     {
         if (PdfUsesPageTranslation) return DisplayedPdfTranslationPair();
-        if (FoundPdfTranslation(detached: true) is { } hit) return hit;
+        if (FoundTranslation(detached: true) is { } hit) return hit;
         if (detachedSentence is not { } current || TargetCode is not { } target ||
             CurrentDetachedTranslation() is not { } translated) return null;
         var source = ReviewedDetachedTranslation() is null ? detachedMachineTranslation?.SourceText : null;

@@ -1008,6 +1008,10 @@ pub struct TranslationSearchMatch {
     pub position: usize,
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<TranslationAlignment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pivot_language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pdf_fragment: Option<TranslationSearchFragment>,
 }
 
@@ -1075,7 +1079,8 @@ pub(crate) fn search_cached_translation(
                         if !normalize_translation_search(&text).contains(&query) { continue; }
                         let part = &projected.sentences[fragment];
                         page.matches.push(TranslationSearchMatch {
-                            position, text, pdf_fragment: Some(TranslationSearchFragment {
+                            position, text, alignment: None, pivot_language: row.pivot_language.clone(),
+                            pdf_fragment: Some(TranslationSearchFragment {
                                 page: physical_page, start_utf16: part.start_utf16, end_utf16: part.end_utf16,
                                 pivot_language: row.pivot_language, reflow_only: false,
                             }),
@@ -1108,21 +1113,23 @@ pub(crate) fn search_cached_translation(
             .into_iter()
             .find(|unit| unit.sentence_ids.contains(active_id));
         let contextual = active_unit.and_then(|unit|
-            unit.translation.map(|text| (unit.sentence_ids, text, unit.pivot_language)));
+            unit.translation.map(|text| (unit.sentence_ids, text, unit.pivot_language, unit.alignment)));
         let repeated = contextual.is_some() && contextual == previous_unit;
         let active = contextual
             .as_ref()
-            .map(|(_, text, pivot)| (text.as_str(), pivot.as_deref()))
+            .map(|(_, text, pivot, alignment)| (text.as_str(), pivot.as_deref(), alignment.as_ref()))
             .or_else(|| {
                 let sentence = cached.sentence.as_ref()?;
-                Some((sentence.segments.first()?.as_str(), sentence.route.pivot_language()))
+                Some((sentence.segments.first()?.as_str(), sentence.route.pivot_language(), sentence.alignment.as_ref()))
             });
-        if let Some((text, pivot)) = active.filter(|(text, _)| {
+        if let Some((text, pivot, alignment)) = active.filter(|(text, _, _)| {
             position >= start && !repeated && normalize_translation_search(text).contains(&query)
         }) {
             page.matches.push(TranslationSearchMatch {
                 position,
                 text: text.to_owned(),
+                alignment: alignment.cloned(),
+                pivot_language: pivot.map(str::to_owned),
                 pdf_fragment: reflow_page.map(|page| TranslationSearchFragment {
                     page, start_utf16: sentence.start_utf16, end_utf16: sentence.end_utf16,
                     pivot_language: pivot.map(str::to_owned), reflow_only: true,
@@ -1139,13 +1146,14 @@ pub(crate) fn search_cached_translation(
     Ok(page)
 }
 
-fn normalize_translation_search(text: &str) -> String {
-    text.nfc()
+pub(crate) fn normalize_translation_search(text: &str) -> String {
+    let folded: String = text.nfc()
         .flat_map(|character| match character {
             '’' | 'ʼ' => '\''.to_lowercase(),
             character => character.to_lowercase(),
         })
-        .collect()
+        .collect();
+    folded.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn catalog_routes<'a>(
@@ -2699,7 +2707,7 @@ mod tests {
             .save_cached_segments([
                 (
                     unit_cache_key(&route, group).unwrap(),
-                    &["L’e\u{301}te\u{301} arrive.".into()][..],
+                    &["L’e\u{301}te\u{301}   arrive.".into()][..],
                 ),
                 (
                     unit_cache_key(&route, standalone).unwrap(),
@@ -2709,7 +2717,7 @@ mod tests {
             .unwrap();
         let restored = cached_translation(&store, &[], std::slice::from_ref(&edge), &document, 0, "fr").unwrap();
         assert_eq!(restored.paragraph.units[0].sentence_ids.len(), 3);
-        assert_eq!(restored.paragraph.units[0].translation.as_deref(), Some("L’e\u{301}te\u{301} arrive."));
+        assert_eq!(restored.paragraph.units[0].translation.as_deref(), Some("L’e\u{301}te\u{301}   arrive."));
         let installed = cached_translation(&store, std::slice::from_ref(&edge), &[], &document, 0, "fr").unwrap();
         assert_eq!(installed.paragraph.units[0].sentence_ids.len(), 1);
         assert!(installed.paragraph.units[0].translation.is_none());
@@ -2732,6 +2740,15 @@ mod tests {
         };
         assert_eq!(search(&document, "fr", "L'ÉTÉ", 0), [0, 3]);
         assert_eq!(search(&document, "fr", "L'ÉTÉ", 1), [3]);
+        let direct = std::slice::from_ref(&edge);
+        let phrase = search_cached_translation(&store, direct, &[], &document, "fr", "l'été arrive", 0).unwrap();
+        let hit = &phrase.matches[0];
+        assert_eq!(hit.text, "L’e\u{301}te\u{301}   arrive.");
+        assert_eq!(
+            hit.alignment.as_ref().unwrap().source_sentence_ids,
+            document.sentences[..3].iter().map(|sentence| sentence.id.clone()).collect::<Vec<_>>(),
+        );
+        assert_eq!(hit.pivot_language, None);
         assert!(search(&document, "uk", "L'ÉTÉ", 0).is_empty());
 
         document

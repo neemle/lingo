@@ -126,11 +126,18 @@ public partial class ReadingPage
             QueueGlossAlignment(detachedGloss, [DetachedTranslation.Text, DetachedModelTranslationText.Text]);
         else
             QueueGlossAlignment(canonicalGloss, [SegmentTranslation.Text, ModelTranslationText.Text]);
-        HighlightTranslation(SegmentTranslation, SegmentTranslationHighlighted, canonicalGloss);
+        HighlightActiveTranslation(detached: false, canonicalGloss);
         HighlightTranslation(ModelTranslationText, ModelTranslationTextHighlighted, canonicalGloss);
-        HighlightTranslation(DetachedTranslation, DetachedTranslationHighlighted, detachedGloss);
+        HighlightActiveTranslation(detached: true, detachedGloss);
         HighlightTranslation(DetachedModelTranslationText, DetachedModelTranslationTextHighlighted, detachedGloss);
         DrawPdfTranslationLayout();
+    }
+
+    private void HighlightActiveTranslation(bool detached, string? gloss)
+    {
+        var (original, highlighted) = detached
+            ? (DetachedTranslation, DetachedTranslationHighlighted) : (SegmentTranslation, SegmentTranslationHighlighted);
+        HighlightTranslation(original, highlighted, gloss, FoundTranslationQuery(detached));
     }
 
     private void QueueGlossAlignment(string? gloss, IEnumerable<string?> texts)
@@ -184,7 +191,7 @@ public partial class ReadingPage
         }
     }
 
-    private void HighlightTranslation(Label original, Label highlighted, string? gloss)
+    private void HighlightTranslation(Label original, Label highlighted, string? gloss, string? query = null)
     {
         var text = original.Text ?? "";
         var formatted = new FormattedString();
@@ -195,15 +202,27 @@ public partial class ReadingPage
             if (background is not null) span.BackgroundColor = background;
             formatted.Spans.Add(span);
         }
+        var ranges = GlossRanges(text, gloss)
+            .Select(range => (range.Start, range.End, Color: TranslationGlossHighlight)).ToList();
+        if (query is not null)
+        {
+            foreach (var match in DocumentFind.SourceMatches(text, query))
+            {
+                var end = match.StartUtf16 + match.LengthUtf16;
+                ranges.RemoveAll(range => range.Start < end && range.End > match.StartUtf16);
+                ranges.Add((match.StartUtf16, end, TranslationSearchMatchColor));
+            }
+        }
         var start = 0;
-        foreach (var (match, end) in GlossRanges(text, gloss))
+        foreach (var (match, end, color) in ranges.OrderBy(range => range.Start))
         {
             if (match < start || end <= match || end > text.Length) continue;
             if (match > start) AddSpan(text[start..match]);
-            AddSpan(text[match..end], TranslationGlossHighlight);
+            AddSpan(text[match..end], color);
             start = end;
         }
         if (start > 0 && start < text.Length) AddSpan(text[start..]);
+        highlighted.FontSize = original.FontSize;
         highlighted.FormattedText = start > 0 ? formatted : null;
         original.IsVisible = start == 0;
         highlighted.IsVisible = start > 0;

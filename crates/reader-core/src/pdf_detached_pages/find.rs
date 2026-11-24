@@ -1,9 +1,8 @@
 use super::{database_error, translation};
-use crate::translation::{PageBoundaries, TranslationSearchFragment, UnitGrouping};
+use crate::translation::{normalize_translation_search as search_text, PageBoundaries, TranslationSearchFragment, UnitGrouping};
 use crate::{Result, Store};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use unicode_normalization::UnicodeNormalization;
 
 const MAX_SCAN_PAGES: usize = 16;
 const MAX_TRANSLATION_SCAN_SENTENCES: usize = 128;
@@ -175,14 +174,6 @@ impl Store {
         }
         Ok(result)
     }
-}
-
-fn search_text(value: &str) -> String {
-    let normalized: String = value.nfc().map(|ch| match ch {
-        '’' | 'ʼ' => '\'',
-        ch => ch,
-    }).flat_map(char::to_lowercase).collect();
-    normalized.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]

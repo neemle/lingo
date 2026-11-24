@@ -374,7 +374,7 @@ public partial class ReadingPage
                 maxLength: 4000);
             if (text is null || !ReferenceEquals(detachedAddress, address) ||
                 detachedSentence?.Sentence.Id != current.Sentence.Id || TargetCode != target) return;
-            ClearPdfFragmentFocus();
+            ClearTranslationFocus();
             var updated = await AppState.Session.UpdateDetachedPdfAnnotationAsync(
                 address.Document, address.Page, current.Sentence.Id, new { kind = "translation", target, text });
             if (own is not null && string.IsNullOrWhiteSpace(text))
@@ -404,7 +404,7 @@ public partial class ReadingPage
 
     private async void DetachedTranslateClicked(object? sender, EventArgs args)
     {
-        ClearPdfFragmentFocus();
+        ClearTranslationFocus();
         await TranslateDetachedAsync(automatic: false);
     }
 
@@ -423,7 +423,7 @@ public partial class ReadingPage
                 new(current.Sentence.Id, current.Language, current.RevisionId));
             await AppState.Session.PdfPageTranslationAsync(address.Document, address.Page, target,
                 cachedOnly: false, refresh: refresh);
-            if (run == detachedTranslationRun) ClearPdfFragmentFocus();
+            if (run == detachedTranslationRun) ClearTranslationFocus();
         }
         catch (Exception error)
         {
@@ -576,12 +576,14 @@ public partial class ReadingPage
 
     private void RenderDetachedTranslation()
     {
-        var hit = FoundPdfTranslation(detached: true);
+        var hit = FoundTranslation(detached: true);
         var value = hit is null ? detachedTranslationLabel
-            : DocumentLanguages.WithPivotRoute("Збіг у збереженому перекладі PDF",
+            : DocumentLanguages.WithPivotRoute("Збіг у збереженому перекладі",
                 hit.SourceLanguage, hit.PivotLanguage, hit.TargetLanguage) + Environment.NewLine + hit.Target;
         var changed = DetachedTranslation.Text != value;
         DetachedTranslation.Text = value;
+        if (!changed && documentFindFocus?.Translation is not null)
+            HighlightActiveTranslation(detached: true, DetachedWordCard.IsVisible ? PopupGloss(detached: true) : null);
         DetachedTranslationPane.IsVisible = value.Length != 0;
         if (DetachedTranslationPane.IsVisible) FollowDetachedTranslation();
         if (changed && CurrentDetachedTranslation() is not null) RefreshCachedPdfPageLayout();
@@ -652,7 +654,7 @@ public partial class ReadingPage
     {
         CancelDetachedSpeechTravel();
         if (loadingDetachedSentence || detachedAddress is not { } address || detachedSentence is null) return;
-        ClearPdfFragmentFocus();
+        ClearTranslationFocus();
         StopWordDetail();
         if (speakingDetachedSentence)
         {
