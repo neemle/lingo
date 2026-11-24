@@ -139,7 +139,7 @@ internal static partial class PdfScan
             var offset = raw.Length - raw.TrimStart().Length;
             if (text.Length <= 160 && storedText.Length <= 320 &&
                 text.Where(ch => !char.IsWhiteSpace(ch)).SequenceEqual(storedText.Where(ch => !char.IsWhiteSpace(ch))) &&
-                IsObliqueScanOverlay(page, text, offset, CancellationToken.None))
+                FindObliqueScanOverlay(page, text, offset, CancellationToken.None) is not null)
                 return new([], IsScanOverlay: true);
 
             PdfOrderedText.WordBounds? Bounds(int start, int length) => TextBounds(page, offset + start, length);
@@ -350,7 +350,7 @@ internal static partial class PdfScan
         var text = raw.Trim();
         var nativeOffset = raw.Length - raw.TrimStart().Length;
         offset = nativeOffset;
-        if (expected.IsEmpty && IsObliqueScanOverlay(page, text, nativeOffset, cancellation))
+        if (expected.IsEmpty && FindObliqueScanOverlay(page, text, nativeOffset, cancellation) is not null)
             return new("");
         // Existing libraries may already be anchored to PDFKit's original order.
         if (expected.Span.StartsWith(text.AsSpan(), StringComparison.Ordinal))
@@ -455,11 +455,16 @@ internal static partial class PdfScan
     {
         cancellation.ThrowIfCancellationRequested();
         using var pool = new NSAutoreleasePool();
-        var rendered = Render(document, page, 2600);
+        using var source = document.GetPage(page) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
+        var raw = source.Text ?? "";
+        var overlay = FindObliqueScanOverlay(source, raw.Trim(), raw.Length - raw.TrimStart().Length, cancellation);
+        using var image = Thumbnail(source, 2600);
+        var rendered = EncodePreview(image);
         cancellation.ThrowIfCancellationRequested();
         var recognized = PhotoOcr.RecognizePdfPage(rendered, language, cancellation);
         cancellation.ThrowIfCancellationRequested();
-        return recognized.Select(line => line with { Page = page }).ToArray();
+        return recognized.Where(line => overlay is null || !overlay.Matches(line))
+            .Select(line => line with { Page = page }).ToArray();
     }
 
     private static void CheckRecognitionPageCount(PdfDocument document, int expectedPages)
