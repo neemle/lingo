@@ -9,7 +9,7 @@ namespace Reader.Native.Features.Reading;
 public partial class ReadingPage : ContentPage
 {
     private (string Code, string Name)[] availableTargets = [];
-    private string? lastSourceLanguage;
+    private (string Document, string Language)? translationSource;
     private bool choosingLanguage;
     private bool jumpingSentence;
     private bool openingOriginal;
@@ -71,6 +71,8 @@ public partial class ReadingPage : ContentPage
         if (storageRevision != AppState.StorageRevision)
         {
             storageRevision = AppState.StorageRevision;
+            translationSource = null;
+            TargetCode = null;
             translationWindows.Clear();
             prefetchAttempts.Clear();
             pdfLayoutRequestId++;
@@ -114,7 +116,6 @@ public partial class ReadingPage : ContentPage
         UpdateHighlight();
         _ = RestoreReadingWordAsync();
         readinessPair = null;
-        lastSourceLanguage = null;
         UpdateTranslation();
         loadingSpeechPreferences = true;
         try
@@ -367,16 +368,17 @@ public partial class ReadingPage : ContentPage
     private void UpdateTranslation()
     {
         var session = AppState.Session;
-        var source = session.Document?.Language;
-        if (source != lastSourceLanguage)
+        var document = session.Document;
+        var source = document?.Language;
+        (string Document, string Language)? address = document is null ? null : (document.Id, document.Language);
+        if (address != translationSource)
         {
-            var previous = TargetCode;
-            lastSourceLanguage = source;
+            var keepTarget = address is { } opened && translationSource is { } previous &&
+                opened.Document == previous.Document;
+            translationSource = address;
             availableTargets = DocumentLanguages.All.Where(language => language.Code != source).ToArray();
-            var preferred = source is not null && readerPreferences.TranslationTargets.TryGetValue(source, out var stored)
-                ? stored : previous;
-            TargetCode = availableTargets.FirstOrDefault(language => language.Code == preferred).Code
-                ?? (source is null ? null : source == "uk" ? "fr" : "uk");
+            var saved = source is null ? null : readerPreferences.TranslationTargets.GetValueOrDefault(source);
+            TargetCode = DocumentLanguages.TranslationTarget(source, saved, TargetCode, keepTarget);
         }
 
         var targetLabel = TargetCode is { } chosenTarget ? DocumentLanguages.Name(chosenTarget) : "Мова перекладу";
@@ -396,7 +398,6 @@ public partial class ReadingPage : ContentPage
         var key = ActiveTranslationKey();
         if (source is not null && TargetCode is { } routeTarget && readinessPair != (source, routeTarget))
             RefreshReadiness((source, routeTarget));
-        var document = session.Document;
         var window = active && document is not null && TargetCode is { } targetCode
             ? FindTranslationWindow(document, targetCode) : null;
         var unit = document is not null && window is not null ? window.UnitFor(document.Position) : null;

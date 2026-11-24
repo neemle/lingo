@@ -16,4 +16,13 @@ public static class DocumentLanguages
         pivot is null ? label : $"{label} · {PivotRoute(source, pivot, target)}";
 
     public static string Name(string code) => All.FirstOrDefault(language => language.Code == code).Name ?? code;
+
+    public static string? TranslationTarget(string? source, string? saved, string? active, bool keepActive)
+    {
+        if (source is null) return null;
+        bool Available(string? code) => code != source && All.Any(language => language.Code == code);
+        if (keepActive && Available(active)) return active;
+        var preferred = saved ?? active;
+        return Available(preferred) ? preferred : source == "uk" ? "fr" : "uk";
+    }
 }
