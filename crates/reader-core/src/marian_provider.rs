@@ -889,9 +889,15 @@ impl Store {
     pub(crate) fn translation_cache_routes(
         &self, source: &str, target: &str,
     ) -> Result<crate::translation::CacheRoutes> {
+        self.translation_cache_routes_for_display(source, target, false)
+    }
+
+    pub(crate) fn translation_cache_routes_for_display(
+        &self, source: &str, target: &str, show_saved_pivot: bool,
+    ) -> Result<crate::translation::CacheRoutes> {
         let installed = self.installed_reader_routes(source, target)?;
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
-        crate::translation::CacheRoutes::resolve(&installed, &catalog, source, target)
+        crate::translation::CacheRoutes::resolve_for_cache(&installed, &catalog, source, target, show_saved_pivot)
     }
 
     fn reader_translation_provider<'a>(

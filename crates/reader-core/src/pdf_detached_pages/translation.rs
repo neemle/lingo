@@ -298,7 +298,9 @@ impl Store {
                 Err(error) => generation_error = Some(error),
             }
         }
-        let routes = self.translation_cache_routes(&document.language, target)?;
+        // Saved pivot rows are readable while the direct model works, but they
+        // do not count as completed rows for the background worker.
+        let routes = self.translation_cache_routes_for_display(&document.language, target, !background)?;
         let mut covered = vec![false; offsets.len()];
         let mut rows = BTreeMap::<usize, PdfPageTranslationRow>::new();
         // Older cached groups can fill gaps after all individually aligned rows are reserved.

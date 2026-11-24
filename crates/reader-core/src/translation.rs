@@ -801,6 +801,16 @@ impl CacheRoutes {
         source: &str,
         target: &str,
     ) -> Result<Self> {
+        Self::resolve_for_cache(installed, catalog, source, target, false)
+    }
+
+    pub(crate) fn resolve_for_cache(
+        installed: &[ModelEdge],
+        catalog: &[ModelEdge],
+        source: &str,
+        target: &str,
+        show_saved_pivot: bool,
+    ) -> Result<Self> {
         let mut candidates = ranked_routes(installed, source, target)?;
         let installed_count = candidates.len();
         let preferred = candidates.first().cloned();
@@ -808,7 +818,8 @@ impl CacheRoutes {
         candidates.extend(
             catalog_routes(catalog, source, target).filter(|route| {
                 !installed_identities.contains(route) &&
-                    (!direct_french_ukrainian(source, target, preferred.as_ref()) || matches!(route, Route::Direct(_)))
+                    (show_saved_pivot || !direct_french_ukrainian(source, target, preferred.as_ref())
+                        || matches!(route, Route::Direct(_)))
             }),
         );
         Ok(Self {
@@ -2301,7 +2312,7 @@ mod tests {
     }
 
     #[test]
-    fn pdf_page_translation_refreshes_pivot_rows_when_direct_french_package_is_present() {
+    fn pdf_page_displays_saved_pivot_until_the_direct_translation_is_ready() {
         let root = tempfile::tempdir().unwrap();
         let mut store = Store::open(&root.path().join("library.sqlite")).unwrap();
         let document = store.import_scanned_pdf(
@@ -2336,9 +2347,18 @@ mod tests {
         assert_eq!(rows[0]["text"], "Корабель прибуває.");
         assert_eq!(rows[0]["sourceSentenceId"], document.sentences[0].id);
         assert!(rows[0].get("pivotLanguage").is_none());
-        assert!(rows[1]["text"].is_null());
+        assert_eq!(rows[1]["text"], "Моряк вирушає.");
         assert_eq!(rows[1]["sourceSentenceId"], document.sentences[1].id);
-        assert!(rows[1].get("pivotLanguage").is_none());
+        assert_eq!(rows[1]["pivotLanguage"], "en");
+        assert!(rows[1].get("directModelRevision").is_none());
+        let progress = store.pdf_page_translation_result(&document.id, 0, "uk", true, true).unwrap();
+        assert!(progress[1].text.is_none());
+
+        store.save_cached_segments([(key(&direct, 1), &["Моряк відпливає.".into()][..])]).unwrap();
+        let upgraded = serde_json::to_value(store.pdf_page_translation(&document.id, 0, "uk", true).unwrap()).unwrap();
+        assert_eq!(upgraded[1]["text"], "Моряк відпливає.");
+        assert!(upgraded[1].get("pivotLanguage").is_none());
+        assert!(upgraded[1]["directModelRevision"].is_string());
     }
 
     #[test]

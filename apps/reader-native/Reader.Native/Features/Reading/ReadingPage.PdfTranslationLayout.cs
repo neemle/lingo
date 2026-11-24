@@ -258,7 +258,7 @@ public partial class ReadingPage
     {
         var address = CurrentPdfLayoutAddress();
         var alreadyCached = address == pdfLayoutRequest && pdfLayoutRows.Length > 0 &&
-            !pdfLayoutRows.Any(NeedsPdfTranslation);
+            !pdfLayoutRows.Any(NeedsPreferredPdfTranslation);
         AppState.TranslationWorker?.SetVisiblePdf(readingPageActive && TranslationVisible &&
             !alreadyCached && !(autoTranslate && PdfUsesPageTranslation) &&
             address is { Revision: { } revision }
