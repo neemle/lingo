@@ -2042,11 +2042,13 @@ mod tests {
         let mut provider = Provider(vec![echo.into()]);
         assert!(checked_inference(&mut provider, &edge, &[source.into()], None, TranslationSettings::default()).is_err());
         provider.0.push(translated.into());
-        let results = infer_independent_units(&mut provider, &route, &[source.into(), source.into()]).unwrap();
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let document = store.import("page.txt", source.as_bytes(), "fr").unwrap();
+        let results = infer_independent_units(&mut store, &mut provider, &document.id, &route,
+            &[source.into(), source.into()]).unwrap();
         assert!(results[0].is_err());
         assert_eq!(results[1].as_deref(), Ok(translated));
 
-        let mut store = Store::open(Path::new(":memory:")).unwrap();
         let key = unit_cache_key(&route, source).unwrap();
         store.save_cached_segments([(key.clone(), &[echo.into()][..])]).unwrap();
         assert!(store.cached_segments(&key, &[source], "uk").unwrap().is_none());
@@ -2151,6 +2153,8 @@ mod tests {
         struct Provider {
             models: Vec<ModelEdge>,
             suspend: bool,
+            suspend_first: bool,
+            pivot_calls: Vec<Vec<String>>,
             target_calls: Vec<Vec<String>>,
         }
         impl TranslationProvider for Provider {
@@ -2162,6 +2166,11 @@ mod tests {
             fn translate_independent(&mut self, edge: &ModelEdge, input: &[String],
                 _: TranslationSettings) -> std::result::Result<Vec<Result<String>>, TranslationBatchError> {
                 if edge.target == "en" {
+                    self.pivot_calls.push(input.to_vec());
+                    if std::mem::take(&mut self.suspend_first) {
+                        let completed = input.iter().take(2).cloned().map(Ok).collect();
+                        return Err(TranslationBatchError::Deferred { message: "foreground".into(), completed });
+                    }
                     return Ok(input.iter().map(|segment|
                         if segment == "B" && self.suspend { Err("missing pivot".into()) }
                         else { Ok(segment.clone()) }).collect());
@@ -2177,20 +2186,32 @@ mod tests {
             }
         }
 
-        for pivot in [false, true] {
+        for (pivot, suspend_first) in [(false, false), (true, false), (true, true)] {
             let edge = |source: &str, target: &str| ModelEdge {
                 source: source.into(), target: target.into(), revision: "test".into(), quality: None,
             };
             let models = if pivot { vec![edge("fr", "en"), edge("en", "uk")] }
                 else { vec![edge("fr", "uk")] };
-            let mut provider = Provider { models, suspend: true, target_calls: Vec::new() };
-            let mut store = Store::open(Path::new(":memory:")).unwrap();
+            let mut provider = Provider {
+                models, suspend: !suspend_first, suspend_first, pivot_calls: Vec::new(), target_calls: Vec::new(),
+            };
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("reader.db");
+            let mut store = Store::open(&path).unwrap();
             let document = store.import("page.txt", b"Bonjour le monde.", "fr").unwrap();
             let input = ["A", "B", "C", "D"].map(str::to_owned);
             assert!(matches!(store.translate_units(&mut provider, &document.id, "fr", "uk", &input),
                 Err(TranslationBatchError::Deferred { .. })));
+            drop(store);
+            let mut store = Store::open(&path).unwrap();
             let resumed = store.translate_units(&mut provider, &document.id, "fr", "uk", &input).unwrap();
-            assert_eq!(provider.target_calls[1], if pivot { ["B", "D"] } else { ["C", "D"] }.map(str::to_owned));
+            let expected: &[&str] = if suspend_first { &["A", "B", "C", "D"] }
+                else if pivot { &["B", "D"] } else { &["C", "D"] };
+            assert_eq!(provider.target_calls.last().unwrap(), expected);
+            if pivot {
+                let first_hop: &[&str] = if suspend_first { &["C", "D"] } else { &["B"] };
+                assert_eq!(provider.pivot_calls.last().unwrap(), first_hop);
+            }
             for (segment, translated) in input.iter().zip(resumed.segments) {
                 assert_eq!(translated.unwrap().text, format!("Переклад {segment}"));
             }
@@ -3192,7 +3213,7 @@ impl Store {
                 break;
             }
             let batch: Vec<_> = pending.iter().map(|&index| input[index].clone()).collect();
-            let (outcomes, deferred) = match infer_independent_units(provider, route, &batch) {
+            let (outcomes, deferred) = match infer_independent_units(self, provider, document, route, &batch) {
                 Ok(outcomes) => (outcomes, None),
                 Err(TranslationBatchError::Deferred { message, completed }) => (completed, Some(message)),
                 Err(TranslationBatchError::Failed(error)) => {
@@ -3373,20 +3394,24 @@ fn infer_model_route(
 }
 
 fn infer_independent_units(
+    store: &mut Store,
     provider: &mut impl TranslationProvider,
+    document: &str,
     route: &Route,
     input: &[String],
 ) -> std::result::Result<Vec<Result<String>>, TranslationBatchError> {
     if route.uses_publication_pivot_rules() {
         return crate::marian_provider::translate_publication_rows(input, |remaining| {
-            infer_independent_model_units(provider, route, remaining)
+            infer_independent_model_units(store, provider, document, route, remaining)
         });
     }
-    infer_independent_model_units(provider, route, input)
+    infer_independent_model_units(store, provider, document, route, input)
 }
 
 fn infer_independent_model_units(
+    store: &mut Store,
     provider: &mut impl TranslationProvider,
+    document: &str,
     route: &Route,
     input: &[String],
 ) -> std::result::Result<Vec<Result<String>>, TranslationBatchError> {
@@ -3418,11 +3443,34 @@ fn infer_independent_model_units(
     match route {
         Route::Direct(edge) => infer(edge, input),
         Route::Pivot { first, second } => {
-            let mut outcomes = match infer(first, input) {
-                // These are intermediate-language results, so they cannot be stored under the full route.
-                Err(TranslationBatchError::Deferred { message, .. }) => return Err(TranslationBatchError::deferred(message)),
-                result => result?,
+            // A pivot checkpoint cannot be exposed as a direct translation.
+            let first_route = Route::Direct(first.clone());
+            let keys = input.iter().map(|text| {
+                let key = unit_cache_key(&first_route, text)?;
+                Ok(format!("{:x}", Sha256::digest(format!("pivot-hop-v1:{key}"))))
+            }).collect::<Result<Vec<_>>>()?;
+            let cached = keys.iter().zip(input).map(|(key, source)| {
+                Ok(store.cached_segments(key, std::slice::from_ref(source), &first.target)?
+                    .and_then(|mut row| row.pop()))
+            }).collect::<Result<Vec<_>>>()?;
+            let pending = input.iter().zip(&cached).filter_map(|(source, output)| {
+                output.is_none().then(|| source.clone())
+            }).collect::<Vec<_>>();
+            let (fresh, first_deferred) = if pending.is_empty() {
+                (Vec::new(), None)
+            } else {
+                match infer(first, &pending) {
+                    Ok(rows) => (rows, None),
+                    Err(TranslationBatchError::Deferred { message, completed }) => (completed, Some(message)),
+                    Err(error) => return Err(error),
+                }
             };
+            let mut fresh = fresh.into_iter();
+            let mut outcomes = cached.into_iter().map_while(|text| text.map(Ok).or_else(|| fresh.next())).collect::<Vec<_>>();
+            if let Some(message) = first_deferred {
+                checkpoint_pivot_hop(store, document, &keys, &outcomes)?;
+                return Err(TranslationBatchError::deferred(message));
+            }
             let pivot_input: Vec<_> = outcomes.iter().filter_map(|outcome| outcome.as_ref().ok()).cloned().collect();
             if !pivot_input.is_empty() {
                 let (translated, deferred) = match infer(second, &pivot_input) {
@@ -3430,6 +3478,9 @@ fn infer_independent_model_units(
                     Err(TranslationBatchError::Deferred { message, completed }) => (completed, Some(message)),
                     Err(error) => return Err(error),
                 };
+                if deferred.is_some() {
+                    checkpoint_pivot_hop(store, document, &keys, &outcomes)?;
+                }
                 let mut translated = translated.into_iter();
                 let done = outcomes.iter_mut().map_while(|outcome| {
                     if outcome.is_ok() { *outcome = translated.next()?; }
@@ -3443,6 +3494,12 @@ fn infer_independent_model_units(
             Ok(outcomes)
         }
     }
+}
+
+fn checkpoint_pivot_hop(store: &mut Store, document: &str, keys: &[String], rows: &[Result<String>]) -> Result<()> {
+    store.commit_cached_segments(Some(document), keys.iter().zip(rows).filter_map(|(key, row)| {
+        row.as_ref().ok().map(|text| (key.clone(), std::slice::from_ref(text)))
+    }))
 }
 
 fn unit_cache_key(route: &Route, text: &str) -> Result<String> {
