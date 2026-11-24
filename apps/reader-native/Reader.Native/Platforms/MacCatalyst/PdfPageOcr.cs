@@ -23,9 +23,8 @@ internal static class PdfPageOcr
         await Worker.WaitAsync(cancellation);
         try
         {
-            OcrLine[] lines = [];
-            await PdfScan.RecognizeAsync(path, document.Language, pageCount, [page],
-                (_, recognized) => lines = recognized, cancellation);
+            var (lines, _) = await PdfScan.ReadPageForOcrAsync(path, page, document.Language,
+                pageCount, readTextLayer: false, cancellation);
             cancellation.ThrowIfCancellationRequested();
             return lines;
         }
@@ -49,15 +48,8 @@ internal static class PdfPageOcr
                 if (await session.ClaimPdfOcrPageAsync(document.Id, page, retryNow && attempt == 0) is not { } claim) break;
                 try
                 {
-                    var textLayer = claim.ReadTextLayer
-                        ? await PdfScan.ReadPageTextAsync(path, claim.Page, count, cancellation) : null;
-                    OcrLine[] lines = [];
-                    if (string.IsNullOrWhiteSpace(textLayer))
-                    {
-                        textLayer = null;
-                        await PdfScan.RecognizeAsync(path, claim.Language ?? document.Language, count, [claim.Page],
-                            (_, recognized) => lines = recognized, cancellation);
-                    }
+                    var (lines, textLayer) = await PdfScan.ReadPageForOcrAsync(path, claim.Page,
+                        claim.Language ?? document.Language, count, claim.ReadTextLayer, cancellation);
                     cancellation.ThrowIfCancellationRequested();
                     await session.CachePdfOcrPageAsync(document.Id, claim, lines, textLayer);
                 }

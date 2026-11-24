@@ -52,7 +52,7 @@ internal static partial class PdfScan
             cancellation.ThrowIfCancellationRequested();
             using var pagePool = new NSAutoreleasePool();
             using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
-            var text = TextLayer(page, out _).Text;
+            var text = TextLayer(page, out _, cancellation: cancellation).Text;
             if (text.Length > 0) totalBytes += Encoding.UTF8.GetByteCount(text) + 2L;
             if (totalBytes > Client.MaxImportBytes)
             {
@@ -80,7 +80,7 @@ internal static partial class PdfScan
                 cancellation.ThrowIfCancellationRequested();
                 using var pagePool = new NSAutoreleasePool();
                 using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
-                var text = TextLayer(page, out _).Text;
+                var text = TextLayer(page, out _, cancellation: cancellation).Text;
                 var occurrence = 0;
                 foreach (var match in DocumentFind.PdfSourceMatches(text, query, language))
                 {
@@ -102,10 +102,28 @@ internal static partial class PdfScan
             cancellation.ThrowIfCancellationRequested();
             using var pool = new NSAutoreleasePool();
             using var document = Open(path);
-            if (document.PageCount != expectedPages)
-                throw new InvalidDataException("Кількість сторінок PDF змінилася.");
+            CheckRecognitionPageCount(document, expectedPages);
             using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
-            return TextLayer(page, out _).Text;
+            var text = TextLayer(page, out _, cancellation: cancellation).Text;
+            cancellation.ThrowIfCancellationRequested();
+            return text;
+        }, cancellation);
+
+    internal static Task<(OcrLine[] Lines, string? TextLayer)> ReadPageForOcrAsync(string path, int index,
+        string language, int expectedPages, bool readTextLayer, CancellationToken cancellation) =>
+        Task.Run<(OcrLine[], string?)>(() =>
+        {
+            using var pool = new NSAutoreleasePool();
+            using var document = Open(path);
+            CheckRecognitionPageCount(document, expectedPages);
+            if (readTextLayer)
+            {
+                using var page = document.GetPage(index) ?? throw new InvalidDataException("Сторінку PDF не знайдено.");
+                var text = TextLayer(page, out _, cancellation: cancellation).Text;
+                cancellation.ThrowIfCancellationRequested();
+                if (!string.IsNullOrWhiteSpace(text)) return ([], text);
+            }
+            return (RecognizePage(document, index, language, cancellation), null);
         }, cancellation);
 
     internal static Task<PdfTextOrderEdit[]> ReadStoredTextOrderFixesAsync(string path, int index, string storedText) =>
@@ -173,7 +191,7 @@ internal static partial class PdfScan
                                 return Task.FromResult(EncodePreview(image));
                             }, cancellation).GetAwaiter().GetResult();
                     else if (image.CGImage is { } bitmap)
-                        text = PhotoOcr.ReadLanguageSample(bitmap);
+                        text = PhotoOcr.ReadLanguageSample(bitmap, cancellation);
                 }
             }
             catch (Exception error) when (error is InvalidDataException or InvalidOperationException)
@@ -295,8 +313,10 @@ internal static partial class PdfScan
         return true;
     }
 
-    private static PdfOrderedText TextLayer(PdfPage page, out int offset, ReadOnlyMemory<char> expected = default)
+    private static PdfOrderedText TextLayer(PdfPage page, out int offset, ReadOnlyMemory<char> expected = default,
+        CancellationToken cancellation = default)
     {
+        cancellation.ThrowIfCancellationRequested();
         var raw = page.Text ?? "";
         var text = raw.Trim();
         var nativeOffset = raw.Length - raw.TrimStart().Length;
@@ -304,16 +324,24 @@ internal static partial class PdfScan
         // Existing libraries may already be anchored to PDFKit's original order.
         if (expected.Span.StartsWith(text.AsSpan(), StringComparison.Ordinal))
             return new(text);
-        PdfOrderedText.WordBounds? Bounds(int start, int length) => TextBounds(page, nativeOffset + start, length);
+        PdfOrderedText.WordBounds? Bounds(int start, int length)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            return TextBounds(page, nativeOffset + start, length);
+        }
         var accents = PdfOrderedText.Repair(text, Bounds);
         if (expected.Span.StartsWith(accents.Text.AsSpan(), StringComparison.Ordinal)) return accents;
         var joined = accents.JoinLigatures(Bounds);
         if (expected.Span.StartsWith(joined.Text.AsSpan(), StringComparison.Ordinal)) return joined;
         var width = page.GetBoundsForBox(PdfDisplayBox.Crop).Width;
-        PdfOrderedText.WordBounds? LayoutBounds(int start, int length) => TextBounds(page, nativeOffset + start, length, raw);
+        PdfOrderedText.WordBounds? LayoutBounds(int start, int length)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            return TextBounds(page, nativeOffset + start, length, raw);
+        }
         var layout = joined.SeparateBlocks(LayoutBounds, width);
         if (expected.Span.StartsWith(layout.Text.AsSpan(), StringComparison.Ordinal)) return layout;
-        var marked = MarkNativeNoteReferences(page, raw, nativeOffset, layout);
+        var marked = MarkNativeNoteReferences(page, raw, nativeOffset, layout, cancellation);
         if (expected.IsEmpty || accents.Text == joined.Text ||
             expected.Span.StartsWith(marked.Text.AsSpan(), StringComparison.Ordinal))
             return marked;
@@ -323,7 +351,8 @@ internal static partial class PdfScan
         return expected.Span.StartsWith(upgraded.Text.AsSpan(), StringComparison.Ordinal) ? upgraded : marked;
     }
 
-    private static PdfOrderedText MarkNativeNoteReferences(PdfPage page, string raw, int offset, PdfOrderedText layout)
+    private static PdfOrderedText MarkNativeNoteReferences(PdfPage page, string raw, int offset, PdfOrderedText layout,
+        CancellationToken cancellation = default)
     {
         NSAttributedString? attributes = null;
         var loaded = false;
@@ -331,6 +360,7 @@ internal static partial class PdfScan
         {
             return layout.MarkRaisedNoteReferences((start, length) =>
             {
+                cancellation.ThrowIfCancellationRequested();
                 if (!loaded)
                 {
                     loaded = true;
@@ -382,30 +412,30 @@ internal static partial class PdfScan
             Recognize(document, language, expectedPages, pendingPages, pageCompleted, cancellation);
         }, cancellation);
 
-    internal static Task RecognizeAsync(string path, string language, int expectedPages, int[] pendingPages,
-        Action<int, OcrLine[]> pageCompleted, CancellationToken cancellation) =>
-        Task.Run(() =>
-        {
-            using var pool = new NSAutoreleasePool();
-            using var document = Open(path);
-            Recognize(document, language, expectedPages, pendingPages, pageCompleted, cancellation);
-        }, cancellation);
-
     private static void Recognize(PdfDocument document, string language, int expectedPages, int[] pendingPages,
         Action<int, OcrLine[]> pageCompleted, CancellationToken cancellation)
+    {
+        CheckRecognitionPageCount(document, expectedPages);
+        foreach (var page in pendingPages)
+            pageCompleted(page, RecognizePage(document, page, language, cancellation));
+    }
+
+    private static OcrLine[] RecognizePage(PdfDocument document, int page, string language, CancellationToken cancellation)
+    {
+        cancellation.ThrowIfCancellationRequested();
+        using var pool = new NSAutoreleasePool();
+        var rendered = Render(document, page, 2600);
+        cancellation.ThrowIfCancellationRequested();
+        var recognized = PhotoOcr.RecognizePdfPage(rendered, language, cancellation);
+        cancellation.ThrowIfCancellationRequested();
+        return recognized.Select(line => line with { Page = page }).ToArray();
+    }
+
+    private static void CheckRecognitionPageCount(PdfDocument document, int expectedPages)
     {
         var count = checked((int)document.PageCount);
         PdfRecognition.CheckPageCount(count);
         if (count != expectedPages) throw new InvalidDataException("Кількість сторінок PDF змінилася.");
-        foreach (var page in pendingPages)
-        {
-            cancellation.ThrowIfCancellationRequested();
-            using var pagePool = new NSAutoreleasePool();
-            var rendered = Render(document, page, 2600);
-            cancellation.ThrowIfCancellationRequested();
-            var recognized = PhotoOcr.RecognizePdfPage(rendered, language, cancellation);
-            pageCompleted(page, recognized.Select(line => line with { Page = page }).ToArray());
-        }
     }
 
     private static PdfDocument Open(NSData data) => Checked(new PdfDocument(data));

@@ -17,7 +17,7 @@ internal static class PhotoOcr
             lines => Task.Run(() => RecoverRotatedText(bytes, language, lines, default)));
 
     internal static OcrLine[] RecognizePdfPage(PhotoPreview rendered, string language, CancellationToken cancellation) =>
-        TesseractOcr.RecognizeAsync(() => Task.FromResult(RecognizeNative(rendered.Bytes, language)),
+        TesseractOcr.RecognizeAsync(() => Task.FromResult(RecognizeNative(rendered.Bytes, language, cancellation)),
             () => Task.FromResult(rendered), language, cancellation,
             lines => Task.FromResult(RecoverRotatedText(rendered.Bytes, language, lines, cancellation))).GetAwaiter().GetResult();
 
@@ -46,12 +46,12 @@ internal static class PhotoOcr
         return ReadLanguageSample(image);
     }
 
-    internal static string ReadLanguageSample(CGImage image)
+    internal static string ReadLanguageSample(CGImage image, CancellationToken cancellation = default)
     {
         using var request = CreateRecognitionRequest();
         request.AutomaticallyDetectsLanguage = true;
         using var handler = new VNImageRequestHandler(image, new VNImageOptions());
-        if (!handler.Perform([request], out _)) return "";
+        if (!PerformRecognition(handler, request, cancellation, out _)) return "";
         return string.Join("\n", (request.Results ?? []).Select(observation =>
             observation.TopCandidates(1).FirstOrDefault()?.String));
     }
@@ -89,11 +89,12 @@ internal static class PhotoOcr
         return languages?.Select(tag => tag.ToString()).ToArray() ?? [];
     }
 
-    private static OcrLine[] RecognizeNative(byte[] bytes, string language)
+    private static OcrLine[] RecognizeNative(byte[] bytes, string language, CancellationToken cancellation = default)
     {
+        cancellation.ThrowIfCancellationRequested();
         using var pool = new NSAutoreleasePool();
         using var image = Decode(bytes, 4096);
-        return RecognizeNative(image, language);
+        return RecognizeNative(image, language, cancellation);
     }
 
     private static OcrLine[] RecoverRotatedText(byte[] bytes, string language, OcrLine[] portable,
@@ -101,15 +102,25 @@ internal static class PhotoOcr
     {
         using var pool = new NSAutoreleasePool();
         using var image = Decode(bytes, 4096);
-        var rotated = RecognizeNative(image, language, rotatedOnly: true);
+        var rotated = RecognizeNative(image, language, cancellation, rotatedOnly: true);
         if (!portable.Any(line => line.Confidence is < 0.60) || rotated.Any(line => line.Rotation == 180))
             return rotated;
 
         cancellation.ThrowIfCancellationRequested();
-        return [.. rotated, .. RecognizeNative(image, language, rotatedOnly: true, upsideDown: true)];
+        return [.. rotated, .. RecognizeNative(image, language, cancellation, rotatedOnly: true, upsideDown: true)];
     }
 
-    private static OcrLine[] RecognizeNative(CGImage image, string language,
+    private static bool PerformRecognition(VNImageRequestHandler handler, VNRecognizeTextRequest request,
+        CancellationToken cancellation, out NSError? error)
+    {
+        using var registration = cancellation.Register(static state => ((VNRequest)state!).Cancel(), request);
+        cancellation.ThrowIfCancellationRequested();
+        var succeeded = handler.Perform([request], out error);
+        cancellation.ThrowIfCancellationRequested();
+        return succeeded;
+    }
+
+    private static OcrLine[] RecognizeNative(CGImage image, string language, CancellationToken cancellation,
         bool rotatedOnly = false, bool upsideDown = false)
     {
         using var request = CreateRecognitionRequest();
@@ -120,13 +131,14 @@ internal static class PhotoOcr
 
         using var handler = new VNImageRequestHandler(image,
             upsideDown ? CGImagePropertyOrientation.Down : CGImagePropertyOrientation.Up, new VNImageOptions());
-        if (!handler.Perform([request], out var error))
+        if (!PerformRecognition(handler, request, cancellation, out var error))
             throw new InvalidOperationException(error?.LocalizedDescription ?? "Помилка розпізнавання зображення.");
 
         var lines = new List<OcrLine>();
         using var tokenizer = new NLTokenizer(NLTokenUnit.Word);
         foreach (var observation in request.Results ?? [])
         {
+            cancellation.ThrowIfCancellationRequested();
             var rotation = ReadRotation(observation, image);
             if (upsideDown)
             {
