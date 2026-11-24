@@ -23,6 +23,10 @@ fetch() {
 
 fetch "$downloads/libpng-1.6.54.tar.gz" ba7efce137409079989df4667706c339bebfbb10e9f413474718012a13c8cd4c \
   https://codeload.github.com/pnggroup/libpng/tar.gz/refs/tags/v1.6.54
+fetch "$downloads/tiff-4.7.2.tar.gz" 672bd7d10aee4606171afb864f3570b83340f6a33e2c186dc0512f7145ffdf6a \
+  https://download.osgeo.org/libtiff/tiff-4.7.2.tar.gz
+fetch "$downloads/libjpeg-turbo-3.2.1.tar.gz" c27ad72a68da151177929aa969ae773a2da5ac2af9ce946079314fdac8cece7f \
+  https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.2.1/libjpeg-turbo-3.2.1.tar.gz
 fetch "$downloads/leptonica-1.86.0.tar.gz" b4447faf61a8786a9b211d58d4103d85d47fd3a5dd418d5a6bc525d41db54ccc \
   https://codeload.github.com/DanBloomberg/leptonica/tar.gz/refs/tags/1.86.0
 fetch "$downloads/tesseract-5.5.2.tar.gz" 6235ea0dae45ea137f59c09320406f5888383741924d98855bd2ce0d16b54f21 \
@@ -36,7 +40,7 @@ options=(-DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_
 jobs="$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || sysctl -n hw.physicalcpu)"
 if (( jobs > 8 )); then jobs=8; fi
 
-for name in libpng-1.6.54 leptonica-1.86.0 tesseract-5.5.2; do
+for name in libpng-1.6.54 tiff-4.7.2 libjpeg-turbo-3.2.1 leptonica-1.86.0 tesseract-5.5.2; do
   tar -xzf "$downloads/$name.tar.gz" -C "$work"
 done
 # Reuse the built helper across installer runs on the same SDK.
@@ -46,11 +50,25 @@ if [[ ! -x "$helper" ]]; then
   cmake -S "$work/libpng-1.6.54" -B "$work/png-build" "${options[@]}" \
     -DPNG_SHARED=OFF -DPNG_FRAMEWORK=OFF -DPNG_TESTS=OFF -DPNG_TOOLS=OFF
   cmake --build "$work/png-build" --target install --parallel "$jobs"
+  # Leptonica decodes embedded TIFF fonts even when the OCR input is PNG.
+  cmake -S "$work/tiff-4.7.2" -B "$work/tiff-build" "${options[@]}" \
+    -Dtiff-static=ON -Dtiff-tools=OFF -Dtiff-tests=OFF -Dtiff-contrib=OFF -Dtiff-docs=OFF -Dtiff-cxx=OFF \
+    -Djpeg=OFF -Djbig=OFF -Dlerc=OFF -Dlibdeflate=OFF -Dlzma=OFF -Dwebp=OFF -Dzstd=OFF
+  cmake --build "$work/tiff-build" --target install --parallel "$jobs"
+  # Leptonica compiles its TIFF decoder only when JPEG support is also present.
+  cmake -S "$work/libjpeg-turbo-3.2.1" -B "$work/jpeg-build" "${options[@]}" \
+    -DENABLE_SHARED=OFF -DENABLE_STATIC=ON -DWITH_TURBOJPEG=OFF -DWITH_SIMD=OFF
+  cmake --build "$work/jpeg-build" --target install --parallel "$jobs"
   cmake -S "$work/leptonica-1.86.0" -B "$work/leptonica-build" "${options[@]}" \
     "-DPNG_LIBRARY=$prefix/lib/libpng16.a" "-DPNG_PNG_INCLUDE_DIR=$prefix/include" \
-    -DENABLE_GIF=OFF -DENABLE_JPEG=OFF -DENABLE_TIFF=OFF -DENABLE_WEBP=OFF -DENABLE_OPENJPEG=OFF
+    "-DJPEG_LIBRARY=$prefix/lib/libjpeg.a" "-DJPEG_INCLUDE_DIR=$prefix/include" \
+    "-DTIFF_LIBRARY=$prefix/lib/libtiff.a" "-DTIFF_INCLUDE_DIR=$prefix/include" \
+    -DENABLE_GIF=OFF -DENABLE_JPEG=ON -DENABLE_TIFF=ON -DENABLE_WEBP=OFF -DENABLE_OPENJPEG=OFF
   cmake --build "$work/leptonica-build" --target install --parallel "$jobs"
+  # Leptonica's exported static target refers to ZLIB::ZLIB when TIFF is enabled.
+  printf '%s\n' 'find_package(ZLIB REQUIRED)' > "$work/tesseract-dependencies.cmake"
   cmake -S "$work/tesseract-5.5.2" -B "$work/tesseract-build" "${options[@]}" \
+    "-DCMAKE_PROJECT_INCLUDE=$work/tesseract-dependencies.cmake" \
     -DBUILD_TRAINING_TOOLS=OFF -DGRAPHICS_DISABLED=ON \
     -DDISABLE_ARCHIVE=ON -DDISABLE_CURL=ON -DDISABLE_TIFF=ON
   cmake --build "$work/tesseract-build" --target tesseract --parallel "$jobs"
@@ -89,6 +107,9 @@ f7304988d41f833efebcc2d529df54b1903ecebbc3da1faabd19a0fddd4fe586 swe.traineddata
 d59e53e2bded32f4445f124b4b00240fcac7e8044c003ab822ccb94f0b3db59b ukr.traineddata
 MODELS
 cp "$work/libpng-1.6.54/LICENSE" "$resources/licenses/libpng.txt"
+cp "$work/tiff-4.7.2/LICENSE.md" "$resources/licenses/libtiff.txt"
+cp "$work/libjpeg-turbo-3.2.1/LICENSE.md" "$resources/licenses/libjpeg-turbo.txt"
+cp "$work/libjpeg-turbo-3.2.1/README.ijg" "$resources/licenses/libjpeg-ijg.txt"
 cp "$work/leptonica-1.86.0/leptonica-license.txt" "$resources/licenses/leptonica.txt"
 cp "$work/tesseract-5.5.2/LICENSE" "$resources/licenses/tesseract.txt"
 cp "$work/tesseract-5.5.2/tessdata/configs/tsv" "$models/configs/tsv"
