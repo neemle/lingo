@@ -9,6 +9,22 @@ public sealed class SourceRanges(string text)
     public string Text { get; } = text;
     private int[] Boundaries => boundaries ??= StringInfo.ParseCombiningCharacters(Text);
 
+    public static (int First, int Count)? ResolveTranslationSource(Document document, TranslationAlignment? alignment)
+    {
+        if ((uint)document.Position >= (uint)document.Sentences.Length) return null;
+        if (alignment is null) return (document.Position, 1);
+
+        var ids = alignment.SourceSentenceIds;
+        var active = Array.IndexOf(ids, document.Sentences[document.Position].Id);
+        if (active < 0 || active > document.Position) return null;
+        var first = document.Position - active;
+        if (ids.Length > document.Sentences.Length - first) return null;
+
+        for (var index = 0; index < ids.Length; index++)
+            if (document.Sentences[first + index].Id != ids[index]) return null;
+        return (first, ids.Length);
+    }
+
     public static (string Text, Action<int, int>? Boundary) PrepareSpeech(string source, Action<int, int>? boundary)
     {
         // AVSpeechSynthesizer can report offsets in composed text even when its input is decomposed.

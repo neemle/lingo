@@ -22,7 +22,7 @@ public sealed record CachedTranslation(ParagraphTranslation Paragraph, MachineTr
 public sealed record ParagraphTranslation(ParagraphUnit[] Units, string? PivotLanguage,
     bool MoreBefore, bool MoreAfter);
 public sealed record ParagraphUnit(string[] SentenceIds, string? Translation, bool Reviewed, string? PivotLanguage = null,
-    string? DirectModelRevision = null);
+    string? DirectModelRevision = null, TranslationAlignment? Alignment = null);
 
 public sealed record LexicalPackage(string Language, string Name, string SourceUrl, string DownloadUrl,
     string Revision, string License, string GlossLanguage, long Bytes, string Sha256, bool Installed);

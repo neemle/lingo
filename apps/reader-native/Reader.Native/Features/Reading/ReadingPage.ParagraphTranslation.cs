@@ -288,8 +288,9 @@ public partial class ReadingPage
             if (cached.Sentence is { } sentence && ReviewedFor(current, key.Target, key.Sentence) is null &&
                 !matching.Any(previous => previous.Pivot == sentence.PivotLanguage
                     && previous.UnitFor(current.Position) is { } unit && MachineFor(current, previous, unit) is not null
-                    && unit.DirectModelRevision == sentence.DirectModelRevision))
-                RememberWindow(BuildSentenceWindow(current, scope, sentence), background: true);
+                    && unit.DirectModelRevision == sentence.DirectModelRevision) &&
+                BuildSentenceWindow(current, scope, sentence) is { } standalone)
+                RememberWindow(standalone, background: true);
         }
         catch (CoreException) { } // Cache lookup can race a library change. Manual translation stays available.
         finally
@@ -522,11 +523,15 @@ public partial class ReadingPage
             paragraph.PivotLanguage, true, paragraph.MoreBefore, paragraph.MoreAfter);
     }
 
-    private static TranslationWindow BuildSentenceWindow(Document document, TranslationScope scope,
+    private static TranslationWindow? BuildSentenceWindow(Document document, TranslationScope scope,
         MachineTranslation sentence)
     {
-        var unit = new AlignedUnit(document.Position, [document.Sentences[document.Position]],
-            sentence.Text, sentence.JoinedLines, null, sentence.PivotLanguage, sentence.DirectModelRevision);
+        if (SourceRanges.ResolveTranslationSource(document, sentence.Alignment) is not { } range) return null;
+        var sources = document.Sentences.AsSpan(range.First, range.Count).ToArray();
+        var span = sources.Length > 1 ? document.Text[sources[0].StartUtf16..sources[^1].EndUtf16] : null;
+        var unit = new AlignedUnit(range.First, sources,
+            sentence.Text, sources.Length > 1 || sentence.JoinedLines, span, sentence.PivotLanguage,
+            sentence.DirectModelRevision);
         return new TranslationWindow(scope, document.Position, [unit], sentence.PivotLanguage, false, false, false);
     }
 
@@ -587,13 +592,14 @@ public partial class ReadingPage
             }
 
             var sentence = await session.TranslateSentenceAsync(key.Document, key.Sentence, key.Target, regenerate);
-            if (sentence is not null)
+            var standalone = sentence is null ? null : BuildSentenceWindow(document, scope, sentence);
+            if (standalone is not null)
             {
-                RememberWindow(BuildSentenceWindow(document, scope, sentence));
+                RememberWindow(standalone);
                 if (regenerate && ActiveTranslationKey() == key) ClearPdfFragmentFocus();
             }
             else readinessPair = null;
-            machineStatus = regenerate ? sentence is null ? "Повторний переклад недоступний." : "Речення перекладено заново." : null;
+            machineStatus = regenerate ? standalone is null ? "Повторний переклад недоступний." : "Речення перекладено заново." : null;
         }
         catch (Exception error) { machineStatus = error.Message; }
         finally
