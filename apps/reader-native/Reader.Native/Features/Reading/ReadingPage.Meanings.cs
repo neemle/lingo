@@ -272,6 +272,41 @@ public partial class ReadingPage
         if (!Current()) return;
         foreach (var (meaning, label, detail, _) in rows.Where(row => row.Meaning.GlossLanguage != target))
             ShowGloss(meaning, label, detail);
+
+        var missing = new HashSet<TranslationPair>();
+        foreach (var language in ordered.Where(meaning => meaning.GlossLanguage != target &&
+                     string.IsNullOrWhiteSpace(Localized(meaning.Gloss, meaning.GlossLanguage)))
+                 .Select(meaning => meaning.GlossLanguage).Distinct())
+        {
+            try
+            {
+                var state = await AppState.Session.TranslationReadinessAsync(language, target);
+                if (!Current()) return;
+                if (!state.Ready) missing.UnionWith(state.Missing);
+            }
+            catch (Exception error) { System.Diagnostics.Debug.WriteLine(error.Message); }
+        }
+        if (!Current() || missing.Count == 0) return;
+        var packages = missing.ToArray();
+        var packageButton = new Button
+        {
+            Text = "Мовні пакети для значень", HorizontalOptions = LayoutOptions.Start,
+            Style = (Style)Resources["PlayerButton"],
+        };
+        var routes = packages.Select(pair => $"{DocumentLanguages.Name(pair.Source)} → {DocumentLanguages.Name(pair.Target)}");
+        DescribeButton(packageButton, $"Відкрити потрібні мовні пакети · {string.Join(", ", routes)}");
+        packageButton.Clicked += async (_, _) =>
+        {
+            if (!Current()) return;
+            try
+            {
+                await Shell.Current.GoToAsync(AppShell.SettingsRoute,
+                    new ShellNavigationQueryParameters { ["translationPackages"] = packages });
+            }
+            catch (Exception error) { await DisplayAlertAsync("Мовні пакети", error.Message, "Гаразд"); }
+        };
+        host.Children.Add(packageButton);
+        PositionWordPopup();
     }
 
     private static SenseSnapshot MeaningSnapshot(string surface, WordMeaning meaning) =>
