@@ -349,7 +349,7 @@ impl Store {
     ) -> Result<Option<DetachedPdfTranslation>> {
         let (projection, selected) = self.detached_page_projection(id, page, sentence_id, target, cached_only)?;
         if cached_only {
-            let routes = self.translation_cache_routes(&projection.document.language, target)?;
+            let routes = self.translation_cache_routes_for_display(&projection.document.language, target, !background)?;
             return cached_page_translation(self, &routes, &projection, selected, target);
         }
         let position = projection.physical.start + selected;
@@ -374,7 +374,7 @@ impl Store {
         let (projection, selected) = self.detached_page_projection(id, page, sentence_id, target, cached_only)?;
         let document = &projection.document;
         let position = projection.physical.start + selected;
-        let routes = self.translation_cache_routes(&document.language, target)?;
+        let routes = self.translation_cache_routes_for_display(&document.language, target, cached_only && !background)?;
         let paragraph = if cached_only {
             routes.cached_window(self, document, position, target, PageBoundaries::Projected)?.paragraph
         } else {

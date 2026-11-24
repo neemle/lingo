@@ -783,7 +783,8 @@ pub(crate) fn cached_translation(
     selected: usize,
     target: &str,
 ) -> Result<CachedTranslation> {
-    let routes = CacheRoutes::resolve(installed, catalog, &document.language, target)?;
+    // Keep saved pivot output visible until the preferred direct route has a result.
+    let routes = CacheRoutes::resolve_for_cache(installed, catalog, &document.language, target, true)?;
     routes.cached_window(store, document, selected, target, PageBoundaries::Canonical)
 }
 
@@ -2351,14 +2352,46 @@ mod tests {
         assert_eq!(rows[1]["sourceSentenceId"], document.sentences[1].id);
         assert_eq!(rows[1]["pivotLanguage"], "en");
         assert!(rows[1].get("directModelRevision").is_none());
+        let sentence_id = &document.sentences[1].id;
+        let cached_list = |store: &Store| {
+            let cached = store.cached_installed_translation(&document.id, sentence_id, "uk").unwrap();
+            cached.paragraph.units.into_iter()
+                .find(|unit| unit.sentence_ids.contains(sentence_id)).unwrap()
+        };
+        let saved = cached_list(&store);
+        assert_eq!(saved.translation.as_deref(), Some("Моряк вирушає."));
+        assert_eq!(saved.pivot_language.as_deref(), Some("en"));
         let progress = store.pdf_page_translation_result(&document.id, 0, "uk", true, true).unwrap();
         assert!(progress[1].text.is_none());
+
+        let file = root.path().join("detached.pdf");
+        std::fs::write(&file, b"%PDF-1.4\n% detached fixture\n").unwrap();
+        let prepared = crate::file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "detached.pdf", &file, "fr", vec![String::new()], vec![],
+        ).unwrap();
+        let detached_document = store.import_pdf_file(prepared).unwrap();
+        crate::pdf_detached_pages::write_ocr(&store.connection, &detached_document.id, 0, "fr",
+            document.ocr_lines.as_deref().unwrap(), 1).unwrap();
+        let detached = store.detached_pdf_sentence(&detached_document.id, 0, Some(1)).unwrap().unwrap().sentence;
+        let detached_list = |store: &mut Store| {
+            let cached = store.detached_pdf_passage(&detached_document.id, 0, &detached.id, "uk", true, false).unwrap();
+            serde_json::to_value(cached).unwrap()["active"].clone()
+        };
+        let saved = detached_list(&mut store);
+        assert_eq!(saved["text"], "Моряк вирушає.");
+        assert_eq!(saved["pivotLanguage"], "en");
 
         store.save_cached_segments([(key(&direct, 1), &["Моряк відпливає.".into()][..])]).unwrap();
         let upgraded = serde_json::to_value(store.pdf_page_translation(&document.id, 0, "uk", true).unwrap()).unwrap();
         assert_eq!(upgraded[1]["text"], "Моряк відпливає.");
         assert!(upgraded[1].get("pivotLanguage").is_none());
         assert!(upgraded[1]["directModelRevision"].is_string());
+        let updated = cached_list(&store);
+        assert_eq!(updated.translation.as_deref(), Some("Моряк відпливає."));
+        assert!(updated.pivot_language.is_none());
+        let updated = detached_list(&mut store);
+        assert_eq!(updated["text"], "Моряк відпливає.");
+        assert!(updated["pivotLanguage"].is_null());
     }
 
     #[test]
