@@ -220,11 +220,17 @@ public partial class ReadingPage
         {
             if (Navigation.ModalStack.LastOrDefault() == page) await Navigation.PopModalAsync();
         };
-        await Navigation.PushModalAsync(page);
+        using var cancellation = new CancellationTokenSource();
+        void OnClosed(object? sender, EventArgs args) => cancellation.Cancel();
+        page.Disappearing += OnClosed;
+        var presented = false;
         try
         {
+            await Navigation.PushModalAsync(page);
+            presented = true;
             var offline = await AppState.Session.TranslateOfflinePassageAsync(
-                address.Document, address.Page, address.Sentence, address.Target);
+                address.Document, address.Page, address.Sentence, address.Target, cancellation.Token);
+            if (cancellation.IsCancellationRequested) return;
             if (offline is null)
                 offlineText.Text = "Офлайн-переклад уривка недоступний. Перевірте мовні пакети в налаштуваннях.";
             else if (!string.Equals(offline.SourceText, source, StringComparison.Ordinal))
@@ -236,7 +242,12 @@ public partial class ReadingPage
                     offlineHeading.Text += $" · {DocumentLanguages.PivotRoute(address.SourceLanguage, pivot, address.Target)}";
             }
         }
-        catch (Exception error) { offlineText.Text = error.Message; }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (Exception error) when (presented)
+        {
+            if (!cancellation.IsCancellationRequested) offlineText.Text = error.Message;
+        }
+        finally { page.Disappearing -= OnClosed; }
     }
 
     private static (Label Heading, Label Text) AddPassageComparisonSection(VerticalStackLayout content, string title, string text)

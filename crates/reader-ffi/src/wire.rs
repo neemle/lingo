@@ -542,6 +542,12 @@ pub enum Command {
         #[serde(rename = "sentenceId")]
         sentence_id: String,
         target: String,
+        #[serde(rename = "requestId")]
+        request_id: Option<u64>,
+    },
+    CancelOfflinePassage {
+        #[serde(rename = "requestId")]
+        request_id: u64,
     },
     PassageSource {
         id: String,

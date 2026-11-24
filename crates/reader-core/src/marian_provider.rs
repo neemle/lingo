@@ -500,7 +500,14 @@ impl StoreWorker {
     pub fn translate_offline_passage(
         self, id: &str, page: Option<u16>, sentence_id: &str, target: &str,
     ) -> Result<Option<OfflinePassageTranslation>> {
-        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?.translate_offline_passage(id, page, sentence_id, target)
+        self.translate_offline_passage_until_canceled(id, page, sentence_id, target, &|| false)
+    }
+
+    pub fn translate_offline_passage_until_canceled(
+        self, id: &str, page: Option<u16>, sentence_id: &str, target: &str, canceled: &dyn Fn() -> bool,
+    ) -> Result<Option<OfflinePassageTranslation>> {
+        self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?
+            .translate_offline_passage_until_canceled(id, page, sentence_id, target, canceled)
     }
 
     pub fn lookup_detached_pdf_word(
@@ -1173,6 +1180,15 @@ impl Store {
     pub fn translate_offline_passage(
         &mut self, id: &str, page: Option<u16>, sentence_id: &str, target: &str,
     ) -> Result<Option<OfflinePassageTranslation>> {
+        self.translate_offline_passage_until_canceled(id, page, sentence_id, target, &|| false)
+    }
+
+    pub fn translate_offline_passage_until_canceled(
+        &mut self, id: &str, page: Option<u16>, sentence_id: &str, target: &str, canceled: &dyn Fn() -> bool,
+    ) -> Result<Option<OfflinePassageTranslation>> {
+        if canceled() {
+            return Err("Офлайн-переклад уривка скасовано.".into());
+        }
         crate::valid_language(target)?;
         let (source, source_text) = self.passage_translation_source(id, page, sentence_id)?;
         if source == target {
@@ -1184,8 +1200,9 @@ impl Store {
             .unzip();
         let directory = self.model_directory.clone();
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
+        let mut provider = MarianProvider { canceled, ..MarianProvider::interactive(&directory) };
         let translated = self.translate_aligned_with_catalog(
-            &mut MarianProvider::interactive(&directory),
+            &mut provider,
             TranslationRequest {
                 source: &source,
                 target,
@@ -1196,6 +1213,9 @@ impl Store {
             &catalog,
             Some(id),
         )?;
+        if canceled() {
+            return Err("Офлайн-переклад уривка скасовано.".into());
+        }
         Ok(translated.map(|result| {
             let mut text = crate::translation_passage::join_translated_chunks(result.segments, separators);
             if source == "fr" && target == "uk" {

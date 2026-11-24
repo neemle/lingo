@@ -300,6 +300,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         | Command::ReviewSentence { .. }
         | Command::CancelSentenceReview { .. }
         | Command::CancelSelectionTranslation { .. }
+        | Command::CancelOfflinePassage { .. }
         | Command::ReviewOcrWord { .. }
         | Command::ReviewOcrLine { .. }
         | Command::ReviewOcrPage { .. }
@@ -409,7 +410,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
             value(store.translate_dictionary_glosses(&id, &source, &target, &glosses)),
         Command::TranslateSelection { id, target, selection, .. } =>
             selected_translation(store.translate_selected_text(&id, &target, &selection)),
-        Command::TranslateOfflinePassage { id, page, sentence_id, target } =>
+        Command::TranslateOfflinePassage { id, page, sentence_id, target, .. } =>
             value(store.translate_offline_passage(&id, page, &sentence_id, &target)),
         Command::PassageSource { id, page, sentence_id } =>
             value(store.passage_source(&id, page, &sentence_id)),

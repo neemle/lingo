@@ -19,6 +19,7 @@ public sealed class CoreClient : IDisposable
     private long nextWordExplanationRequest;
     private long nextSentenceReviewRequest;
     private long nextSelectionTranslationRequest;
+    private long nextOfflinePassageRequest;
     private long nextSpeechRequest;
     private long nextSpeechPrefetchRequest;
     public const int MaxImportBytes = 20 * 1024 * 1024;
@@ -662,8 +663,11 @@ public sealed class CoreClient : IDisposable
         CallIndependent<ModelPassageTranslation?>(new { version = 1, operation = "translate_with_model", id, page, sentenceId, target, cachedOnly = true });
     public string PassageSource(string id, int? page, string sentenceId) =>
         Call<string>(new { version = 1, operation = "passage_source", id, page, sentenceId });
-    public OfflinePassageTranslation? TranslateOfflinePassage(string id, int? page, string sentenceId, string target) =>
-        CallIndependent<OfflinePassageTranslation?>(new { version = 1, operation = "translate_offline_passage", id, page, sentenceId, target });
+    public OfflinePassageTranslation? TranslateOfflinePassage(string id, int? page, string sentenceId, string target,
+        CancellationToken cancellationToken = default) =>
+        CallCancelable<OfflinePassageTranslation?>(ref nextOfflinePassageRequest, cancellationToken,
+            requestId => new { version = 1, operation = "translate_offline_passage", id, page, sentenceId, target, requestId },
+            requestId => new { version = 1, operation = "cancel_offline_passage", requestId });
     public MachineTranslation? TranslateDictionaryGloss(string id, string source, string gloss, string target = "uk") =>
         CallIndependent<MachineTranslation?>(new { version = 1, operation = "translate_dictionary_gloss", id, source, gloss, target });
     public string?[] TranslateDictionaryGlosses(string id, string source, string target, string[] glosses) =>

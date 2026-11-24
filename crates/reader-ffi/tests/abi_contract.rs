@@ -146,6 +146,37 @@ fn canceling_sentence_review_leaves_word_explanations_and_later_reviews_availabl
 }
 
 #[test]
+fn canceling_offline_comparison_leaves_new_and_selected_translations_available() {
+    let store = StoreFixture::new();
+    let imported = call(store.handle, json!({
+        "version": 1, "operation": "import", "name": "phrase.txt", "language": "fr",
+        "bytes": b"Le bateau arrive.",
+    }));
+    assert_eq!(imported["ok"], true, "{imported}");
+    let document = &imported["data"];
+    let id = &document["id"];
+    let sentence = &document["sentences"][0]["id"];
+    let canceled = call(store.handle, json!({
+        "version": 1, "operation": "cancel_offline_passage", "requestId": 7,
+    }));
+    assert_eq!(canceled["ok"], true, "{canceled}");
+    let compare = |request_id: Option<u64>| call(store.handle, json!({
+        "version": 1, "operation": "translate_offline_passage", "id": id, "sentenceId": sentence,
+        "target": "uk", "requestId": request_id,
+    }));
+    assert_error(&compare(Some(0)), "invalid_argument");
+    assert_error(&compare(Some(7)), "canceled");
+    assert_eq!(compare(Some(8))["ok"], true);
+    assert_eq!(compare(None)["ok"], true);
+
+    let selected = call(store.handle, json!({
+        "version": 1, "operation": "translate_selection", "id": id, "target": "uk", "requestId": 7,
+        "selection": {"revisionId":document["currentRevisionId"],"startUtf16":3,"text":"bateau"},
+    }));
+    assert_eq!(selected["ok"], true, "{selected}");
+}
+
+#[test]
 fn canceled_selection_does_not_hide_a_new_translation_or_other_model_requests() {
     let store = StoreFixture::new();
     let imported = call(store.handle, json!({

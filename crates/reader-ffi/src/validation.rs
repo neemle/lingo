@@ -24,6 +24,8 @@ fn validate(command: &Command) -> Result<()> {
         | Command::ReviewOcrPage { request_id: Some(0), .. }
         | Command::CancelSelectionTranslation { request_id: 0 }
         | Command::TranslateSelection { request_id: Some(0), .. }
+        | Command::CancelOfflinePassage { request_id: 0 }
+        | Command::TranslateOfflinePassage { request_id: Some(0), .. }
         | Command::CancelSentenceReview { request_id: 0 }
         | Command::ReviewSentence { request_id: Some(0), .. }
         | Command::CancelWordExplanation { request_id: 0 }
