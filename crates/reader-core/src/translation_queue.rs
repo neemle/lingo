@@ -47,6 +47,7 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
             resume_at INTEGER,
             ocr_generation INTEGER NOT NULL DEFAULT 0,
             route_identity TEXT,
+            retry_cursor INTEGER,
             PRIMARY KEY(document_id, target)
         );",
     )
@@ -74,6 +75,14 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
         .map_err(database_error)?;
     if !has_route_identity {
         tx.execute_batch("ALTER TABLE background_translation_progress ADD COLUMN route_identity TEXT;")
+            .map_err(database_error)?;
+    }
+    let has_retry_cursor: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('background_translation_progress')
+         WHERE name='retry_cursor')", [], |row| row.get(0),
+    ).map_err(database_error)?;
+    if !has_retry_cursor {
+        tx.execute_batch("ALTER TABLE background_translation_progress ADD COLUMN retry_cursor INTEGER;")
             .map_err(database_error)?;
     }
     tx.execute_batch(
@@ -370,7 +379,7 @@ pub(crate) fn revisit_reviewed_translation(
 pub(crate) fn restart_after_source_language_change(db: &Connection, id: &str) -> Result<()> {
     db.execute(
         "UPDATE background_translation_progress
-         SET cursor=0,incomplete=0,resume_at=0,route_identity=NULL,ocr_generation=ocr_generation+1
+         SET cursor=0,incomplete=0,resume_at=0,route_identity=NULL,retry_cursor=NULL,ocr_generation=ocr_generation+1
          WHERE document_id=?1",
         [id],
     )
@@ -470,13 +479,13 @@ impl Store {
              WHERE id=?1 AND json_extract(body,'$.currentRevisionId')=?3
                AND json_extract(body,'$.language')=?5
              ON CONFLICT(document_id,target) DO UPDATE SET revision_id=excluded.revision_id,
-               cursor=0,incomplete=0,resume_at=0,route_identity=excluded.route_identity
+               cursor=0,incomplete=0,resume_at=0,route_identity=excluded.route_identity,retry_cursor=NULL
              WHERE background_translation_progress.revision_id<>excluded.revision_id
                 OR background_translation_progress.route_identity IS NOT excluded.route_identity",
             params![id, target, revision, route_identity, source],
         ).map_err(database_error)?;
         let checkpoint = self.connection.query_row(
-                "SELECT cursor,incomplete,resume_at,ocr_generation FROM background_translation_progress
+                "SELECT cursor,incomplete,resume_at,ocr_generation,retry_cursor FROM background_translation_progress
              WHERE document_id=?1 AND revision_id=?2 AND target=?3",
                 params![id, revision, target],
                 |row| {
@@ -485,12 +494,13 @@ impl Store {
                         row.get::<_, bool>(1)?,
                         row.get::<_, Option<i64>>(2)?,
                         row.get::<_, i64>(3)?,
+                        row.get::<_, Option<u32>>(4)?,
                     ))
                 },
             )
             .optional()
             .map_err(database_error)?;
-        let Some((cursor, incomplete, resume_at, generation)) = checkpoint else {
+        let Some((cursor, incomplete, resume_at, generation, retry_cursor)) = checkpoint else {
             return Ok(progress);
         };
         // A review can change without a text revision. Read the body after the
@@ -507,28 +517,35 @@ impl Store {
         if resume_at.is_some_and(|deadline| deadline > now) {
             return Ok(BackgroundTranslationProgress { resume_at, missing_packages, ..progress });
         }
-        let (cursor, incomplete, resume_at) = if missing_packages.is_some() {
-            (0, false, Some(now + 30))
+        // An older checkpoint only recorded that something failed, so it
+        // needs one full retry to locate the first incomplete position.
+        let mut retry_cursor = retry_cursor.or(incomplete.then_some(0));
+        let (cursor, resume_at) = if missing_packages.is_some() {
+            retry_cursor = None;
+            (0, Some(now + 30))
         } else {
             let step = self.warm_document_translation_step(&document, target, cursor as usize, canceled)?;
             progress.translated_page = step.translated_page;
             progress.translated_sentence_ids = step.translated_sentence_ids;
             if step.deferred {
-                (cursor as usize, incomplete, Some(crate::now() + INTERACTIVE_RETRY_SECONDS))
+                (cursor as usize, Some(crate::now() + INTERACTIVE_RETRY_SECONDS))
             } else if let Some(next) = step.next {
-                (next, incomplete || step.incomplete, Some(0))
+                if step.incomplete {
+                    retry_cursor = Some(retry_cursor.map_or(cursor, |earlier| earlier.min(cursor)));
+                }
+                (next, Some(0))
             } else {
                 if document.format == "pdf" {
                     progress.pending_pdf_text_page = self.next_background_pdf_text_page(id)?;
                 }
                 if progress.pending_pdf_text_page.is_some() {
-                    (cursor as usize, incomplete, Some(crate::now() + PDF_OCR_POLL_SECONDS))
-                } else if incomplete {
-                    (0, false, Some(crate::now() + 300))
+                    (cursor as usize, Some(crate::now() + PDF_OCR_POLL_SECONDS))
+                } else if let Some(first_incomplete) = retry_cursor.take() {
+                    (first_incomplete as usize, Some(crate::now() + 300))
                 } else {
                     progress.waiting_for_pdf_ocr = document.format == "pdf"
                         && self.pdf_has_unprocessed_pages(&document)?;
-                    (cursor as usize, false, None)
+                    (cursor as usize, None)
                 }
             }
         };
@@ -536,11 +553,12 @@ impl Store {
         // checkpoint so the next run can reuse those units and finish the rest.
         if canceled() { return Err(canceled_error()); }
         let saved = self.connection.execute(
-            "UPDATE background_translation_progress SET cursor=?4,incomplete=?5,resume_at=?6
+            "UPDATE background_translation_progress SET cursor=?4,incomplete=?5,resume_at=?6,retry_cursor=?9
              WHERE document_id=?1 AND target=?2 AND revision_id=?3 AND ocr_generation=?7
                AND EXISTS(SELECT 1 FROM documents WHERE id=?1 AND json_extract(body,'$.currentRevisionId')=?3
                           AND json_extract(body,'$.language')=?8)",
-            params![id, target, revision, i64::try_from(cursor).map_err(database_error)?, incomplete, resume_at, generation, source],
+            params![id, target, revision, i64::try_from(cursor).map_err(database_error)?,
+                retry_cursor.is_some(), resume_at, generation, source, retry_cursor],
         ).map_err(database_error)?;
         if saved == 0 {
             progress.resume_at = Some(0);

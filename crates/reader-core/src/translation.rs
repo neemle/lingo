@@ -2547,6 +2547,51 @@ mod tests {
     }
 
     #[test]
+    fn background_pdf_retries_the_first_incomplete_page_after_reopening() {
+        let root = tempfile::tempdir().unwrap();
+        let database = root.path().join("library.sqlite");
+        let mut store = Store::open(&database).unwrap();
+        let file = root.path().join("reader.pdf");
+        std::fs::write(&file, b"%PDF-1.4\n").unwrap();
+        let pages = ["Le bateau arrive.", "Le marin part.", "Le capitaine attend.", "Les voyageurs débarquent."];
+        let prepared = crate::file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "reader.pdf", &file, "fr", pages.map(str::to_owned).into(), vec![],
+        ).unwrap();
+        let document = store.import_pdf_file(prepared).unwrap();
+        let revision = document.current_revision_id.as_deref().unwrap();
+        let route = french_uk_route_with_invalid_assets(&store);
+        for (index, text) in [(0, "Корабель прибуває."), (1, "Моряк вирушає."), (3, "Пасажири висаджуються.")] {
+            store.save_cached_segments([(unit_cache_key(&route, pages[index]).unwrap(), &[text.into()][..])]).unwrap();
+        }
+        store.update_reader_preference(crate::reader_preferences::ReaderPreferenceChange::BackgroundTranslation {
+            value: true,
+        }).unwrap();
+        let advance = |store: &mut Store| {
+            serde_json::to_value(store.advance_background_translation(&document.id, revision, "uk").unwrap()).unwrap()
+        };
+        assert_eq!(advance(&mut store)["translatedPage"], 0);
+        assert_eq!(advance(&mut store)["translatedPage"], 1);
+        assert!(advance(&mut store)["translatedPage"].is_null());
+        assert_eq!(advance(&mut store)["translatedPage"], 3);
+        drop(store);
+
+        let mut store = Store::open(&database).unwrap();
+        assert!(advance(&mut store)["resumeAt"].as_i64().is_some_and(|time| time > crate::now()));
+        let retry: (u32, Option<u32>) = store.connection.query_row(
+            "SELECT cursor,retry_cursor FROM background_translation_progress WHERE document_id=?1",
+            [&document.id], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(retry, (2, None));
+        store.save_cached_segments([(unit_cache_key(&route, pages[2]).unwrap(), &["Капітан чекає.".into()][..])]).unwrap();
+        store.connection.execute(
+            "UPDATE background_translation_progress SET resume_at=0 WHERE document_id=?1", [&document.id],
+        ).unwrap();
+        assert_eq!(advance(&mut store)["translatedPage"], 2);
+        assert_eq!(advance(&mut store)["translatedPage"], 3);
+        assert!(advance(&mut store)["resumeAt"].is_null());
+    }
+
+    #[test]
     fn background_pdf_waits_for_ocr_then_translates_the_recognized_page() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("library.sqlite");
