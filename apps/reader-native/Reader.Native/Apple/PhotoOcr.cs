@@ -11,15 +11,18 @@ namespace Reader.Native.Services;
 
 internal static class PhotoOcr
 {
+    private static readonly SemaphoreSlim RotationCheck = new(1, 1);
+    private static readonly TimeSpan RotationCheckTimeout = TimeSpan.FromSeconds(8);
+
     internal static Task<OcrLine[]> RecognizeAsync(byte[] bytes, string language) =>
         TesseractOcr.RecognizeAsync(() => Task.Run(() => RecognizeNative(bytes, language)),
             () => PreviewAsync(bytes), language, default,
-            lines => Task.Run(() => RecoverRotatedText(bytes, language, lines, default)));
+            lines => RecoverRotatedTextAsync(bytes, language, lines, default));
 
     internal static OcrLine[] RecognizePdfPage(PhotoPreview rendered, string language, CancellationToken cancellation) =>
         TesseractOcr.RecognizeAsync(() => Task.FromResult(RecognizeNative(rendered.Bytes, language, cancellation)),
             () => Task.FromResult(rendered), language, cancellation,
-            lines => Task.FromResult(RecoverRotatedText(rendered.Bytes, language, lines, cancellation))).GetAwaiter().GetResult();
+            lines => RecoverRotatedTextAsync(rendered.Bytes, language, lines, cancellation)).GetAwaiter().GetResult();
 
     internal static async Task<PhotoPreview> PreviewAsync(byte[] bytes) =>
         (await ReadingPreviewAsync(bytes, []).ConfigureAwait(false)).Preview;
@@ -95,6 +98,28 @@ internal static class PhotoOcr
         using var pool = new NSAutoreleasePool();
         using var image = Decode(bytes, 4096);
         return RecognizeNative(image, language, cancellation);
+    }
+
+    private static async Task<OcrLine[]> RecoverRotatedTextAsync(byte[] bytes, string language, OcrLine[] portable,
+        CancellationToken cancellation)
+    {
+        if (!await RotationCheck.WaitAsync(0, cancellation).ConfigureAwait(false)) return [];
+
+        var check = Task.Run(() =>
+        {
+            using var deadline = new CancellationTokenSource(RotationCheckTimeout);
+            try { return RecoverRotatedText(bytes, language, portable, deadline.Token); }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested) { return []; }
+            finally { RotationCheck.Release(); }
+        });
+        _ = check.ContinueWith(task => System.Diagnostics.Debug.WriteLine(task.Exception),
+            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+
+        // Vision can remain blocked after cancellation. Keep the portable result and allow
+        // only one native cross-check to remain in flight.
+        try { return await check.WaitAsync(RotationCheckTimeout, cancellation).ConfigureAwait(false); }
+        catch (TimeoutException) { return []; }
     }
 
     private static OcrLine[] RecoverRotatedText(byte[] bytes, string language, OcrLine[] portable,
