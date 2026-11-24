@@ -10,6 +10,7 @@ public partial class ReadingPage : ContentPage
 {
     private (string Code, string Name)[] availableTargets = [];
     private (string Document, string Language)? translationSource;
+    private string? preferredTargetCode;
     private bool choosingLanguage;
     private bool jumpingSentence;
     private bool openingOriginal;
@@ -159,6 +160,7 @@ public partial class ReadingPage : ContentPage
         storageRevision = AppState.StorageRevision;
         translationSource = null;
         TargetCode = null;
+        preferredTargetCode = null;
         translationWindows.Clear();
         prefetchAttempts.Clear();
         CancelScheduledTranslation();
@@ -399,22 +401,27 @@ public partial class ReadingPage : ContentPage
         UpdateTranslation();
     }
 
+    private void UpdateTranslationLanguages(Document? document)
+    {
+        (string Document, string Language)? address = document is null ? null : (document.Id, document.Language);
+        if (address == translationSource) return;
+        var sameDocument = address is { } opened && translationSource is { } previous &&
+            opened.Document == previous.Document;
+        translationSource = address;
+        var source = document?.Language;
+        availableTargets = DocumentLanguages.All.Where(language => language.Code != source).ToArray();
+        var saved = source is null ? null : readerPreferences.TranslationTargets.GetValueOrDefault(source);
+        TargetCode = DocumentLanguages.TranslationTarget(source, saved,
+            sameDocument ? preferredTargetCode : TargetCode, sameDocument);
+        if (!sameDocument) preferredTargetCode = TargetCode;
+    }
+
     private void UpdateTranslation()
     {
         var session = AppState.Session;
         var document = session.Document;
         var source = document?.Language;
-        (string Document, string Language)? address = document is null ? null : (document.Id, document.Language);
-        if (address != translationSource)
-        {
-            var keepTarget = address is { } opened && translationSource is { } previous &&
-                opened.Document == previous.Document;
-            translationSource = address;
-            availableTargets = DocumentLanguages.All.Where(language => language.Code != source).ToArray();
-            var saved = source is null ? null : readerPreferences.TranslationTargets.GetValueOrDefault(source);
-            TargetCode = DocumentLanguages.TranslationTarget(source, saved, TargetCode, keepTarget);
-        }
-
+        UpdateTranslationLanguages(document);
         var targetLabel = TargetCode is { } chosenTarget ? DocumentLanguages.Name(chosenTarget) : "Мова перекладу";
         TargetLanguage.Text = targetLabel;
         DescribeButton(TargetLanguage, $"Вибрати мову перекладу. Зараз {targetLabel}");
@@ -476,7 +483,7 @@ public partial class ReadingPage : ContentPage
         UpdateSentenceRefreshButtons();
         if (DetachedPdfReader.IsVisible) UpdateDetachedControls();
         else UpdateSentenceMenu();
-        TargetLanguage.IsEnabled = (active || DetachedPdfReader.IsVisible) && !session.Busy;
+        TargetLanguage.IsEnabled = document is not null && availableTargets.Length > 0 && !session.Busy;
         UpdateModelTranslation();
         UpdateSourceLocation(document, session.Sentence);
         UpdateParagraphPreview(document, window, unit);
@@ -592,9 +599,12 @@ public partial class ReadingPage : ContentPage
         {
             var target = await NativeChoices.ChooseAsync(this, "Мова перекладу", null,
                 availableTargets.Select(language => (language.Code, language.Name)), TargetCode);
-            if (target is null || target == TargetCode || session.Document is not { } current ||
+            if (target is null || session.Document is not { } current ||
                 current.Id != document.Id || current.Language != document.Language) return;
 
+            preferredTargetCode = target;
+            SaveReaderPreference(ReaderPreferenceChange.TranslationTarget(document.Language, target));
+            if (target == TargetCode) return;
             TargetCode = target;
             CancelPopupTranslation();
             CancelWordExplanation();
@@ -609,7 +619,6 @@ public partial class ReadingPage : ContentPage
             Translation.Text = "";
             if (WordCard.IsVisible || DetachedWordCard.IsVisible)
                 _ = LoadPopupTranslationAsync(DetachedWordCard.IsVisible);
-            SaveReaderPreference(ReaderPreferenceChange.TranslationTarget(document.Language, target));
             UpdateTranslation();
             ResetDetachedTranslation();
         }
