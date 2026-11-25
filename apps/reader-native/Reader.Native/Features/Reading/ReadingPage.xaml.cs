@@ -1111,24 +1111,46 @@ public partial class ReadingPage : ContentPage
         if (pendingSpeechResume is not { } pending) return;
         var session = AppState.Session;
         if (session.Busy) return;
+        pendingSpeechResume = null;
         if (session.Document is not { } document || document.Id != pending.DocumentId ||
-            session.Sentence is not { } sentence ||
-            !SpeechProgress.Matches(sentence, pending.Resume, EffectiveSpeechText(document, sentence)))
-        {
-            pendingSpeechResume = null;
-            return;
-        }
+            session.Sentence is not { } sentence) return;
+        if (!TrySaveSpeechResume(session, document, sentence, pending.Resume))
+            pendingSpeechResume = pending;
+    }
+
+    private bool TrySaveSpeechResume(ReaderSession session, Document document, Sentence sentence, SpeechResume resume)
+    {
         try
         {
-            var resume = pending.Resume;
+            if (!SpeechProgress.Matches(sentence, resume, EffectiveSpeechText(document, sentence))) return true;
             if (resume.Model is { } model)
-                session.SetModelSpeechResume(pending.DocumentId, resume.SentenceId, resume.TextHash, model);
+                session.SetModelSpeechResume(document.Id, resume.SentenceId, resume.TextHash, model);
             else
-                session.SetSpeechResume(pending.DocumentId, resume.SentenceId, resume.TextHash, resume.OffsetUtf16);
-            pendingSpeechResume = null;
+                session.SetSpeechResume(document.Id, resume.SentenceId, resume.TextHash, resume.OffsetUtf16);
             lastSpeechSave = Stopwatch.GetTimestamp();
+            return true;
         }
-        catch (Exception error) { SpeechStatus.Text = $"Не вдалося зберегти позицію озвучення. {error.Message}"; }
+        catch (Exception error)
+        {
+            SpeechStatus.Text = $"Не вдалося зберегти позицію озвучення. {error.Message}";
+            return false;
+        }
+    }
+
+    private async Task SaveStoppedSpeechWhenIdleAsync(ReaderSession session, int stoppedRequest,
+        string documentId, string language, SpeechResume resume)
+    {
+        do { await session.WaitUntilIdleAsync(); }
+        while (session.Busy && speechRequest == stoppedRequest);
+        if (speechRequest != stoppedRequest) return;
+
+        var document = session.Snapshot.Documents.FirstOrDefault(item => item.Id == documentId);
+        if (document is null || document.Language != language ||
+            document.Sentences.FirstOrDefault(sentence => sentence.Id == resume.SentenceId) is not { } sentence)
+            return;
+
+        if (TrySaveSpeechResume(session, document, sentence, resume) && readingPageActive)
+            RefreshSpeechResume();
     }
 
     private async void RepeatSentenceClicked(object? sender, EventArgs args)
@@ -1391,6 +1413,8 @@ public partial class ReadingPage : ContentPage
     internal void StopSpeech()
     {
         CheckpointSpeechPosition();
+        var session = AppState.Session;
+        var source = activeSpeechSource;
         checkpointModelSpeech = null;
         speechRequest++;
         speech.Stop();
@@ -1402,6 +1426,12 @@ public partial class ReadingPage : ContentPage
         PauseSpeech.IsEnabled = false;
         PauseSpeech.Text = "Пауза";
         SpeechStatus.Text = "Озвучення зупинено.";
+        if (session.Busy && source is { } stopped && pendingSpeechResume is { } pending &&
+            pending.DocumentId == stopped.Document && pending.Resume.SentenceId == stopped.Sentence)
+        {
+            pendingSpeechResume = null;
+            _ = SaveStoppedSpeechWhenIdleAsync(session, speechRequest, pending.DocumentId, stopped.Language, pending.Resume);
+        }
         if (readingPageActive) RefreshSpeechResume();
     }
 }
