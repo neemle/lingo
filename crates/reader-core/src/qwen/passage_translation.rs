@@ -1,11 +1,12 @@
 use super::{
-    generate_in_mode, hy_translation, json_output, prompt_checkpoint, with_prompt_context, GenerationMode,
+    annotation_cache, generate_in_mode, hy_translation, json_output, prompt_checkpoint, with_prompt_context, GenerationMode,
     HintCache, HintCacheMode, HintWork, GENERATION_INPUT_TOO_LONG, GENERATION_TIMEOUT, HINT_GENERATION_MODEL,
 };
 use crate::{pdf_sentences::Layout, translation_passage::{join_translated_chunks, passage_chunks}, Result, Store};
 use crate::protected_translation::{self, ProtectedText, MARKER_ERROR};
 use llama_cpp_2::{context::LlamaContext, model::LlamaModel};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     sync::LazyLock,
@@ -40,6 +41,30 @@ struct TranslationChunk {
     text: String,
 }
 
+#[derive(Serialize, Deserialize)]
+enum PassageProvider {
+    Qwen,
+    HyMtSmall,
+    HyMtLarge,
+}
+
+impl PassageProvider {
+    fn hy_model(self) -> Option<hy_translation::Model> {
+        match self {
+            Self::Qwen => None,
+            Self::HyMtSmall => Some(hy_translation::Model::Small),
+            Self::HyMtLarge => Some(hy_translation::Model::Large),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum PassageCacheEntry<'a> {
+    Chunk(&'a TranslationChunk),
+    Provider(PassageProvider),
+}
+
 pub(super) fn complete_output(bytes: &[u8]) -> bool {
     bytes.last() == Some(&b'}') && serde_json::from_slice::<TranslationChunk>(bytes).is_ok()
 }
@@ -62,6 +87,7 @@ pub struct TranslatePassageJob {
     chunks: Vec<HintWork<TranslationChunk>>,
     separators: Vec<&'static str>,
     fallback: Option<PassageFallback>,
+    provider_cache: Option<HintCache>,
 }
 
 struct PassageFallback {
@@ -171,7 +197,33 @@ impl Store {
         };
         let complete = |work: &[HintWork<TranslationChunk>]| work.iter()
             .all(|chunk| matches!(chunk, HintWork::Cached(Some(_))));
-        let mut chunks = prepare(hy_model, mode)?;
+        let provider_key = french_to_ukrainian.then(|| {
+            let mut hash = Sha256::new();
+            hash.update(b"passage-refresh-provider-v1\0fr\0uk\0");
+            hash.update(text.as_bytes());
+            <[u8; 32]>::from(hash.finalize())
+        });
+        let is_refresh = matches!(mode, HintCacheMode::Refresh);
+        let mut preferred_cache = None;
+        let mut provider_cache = None;
+        if let Some(key) = provider_key {
+            if is_refresh {
+                provider_cache = Some(self.hint_cache(id, key)?);
+            } else if let Some(provider) = annotation_cache::read_model_hint::<PassageProvider>(&snapshot, id, &key)? {
+                let alternative = provider.hy_model();
+                if alternative.is_none_or(|model| self.prepare_optional_model(model.id()).is_ok()) {
+                    let cached = prepare(alternative, HintCacheMode::ReadOnly)?;
+                    if complete(&cached) {
+                        hy_model = alternative;
+                        preferred_cache = Some(cached);
+                    }
+                }
+            }
+        }
+        let mut chunks = match preferred_cache {
+            Some(cached) => cached,
+            None => prepare(hy_model, mode)?,
+        };
         if french_to_ukrainian && !matches!(mode, HintCacheMode::Refresh) && !complete(&chunks) {
             use hy_translation::Model::{Large, Small};
             // The recommended model may change with RAM or installed files.
@@ -190,11 +242,7 @@ impl Store {
                 }
             }
         }
-        let fallback = if hy_model.is_some() && !matches!(mode, HintCacheMode::ReadOnly) && !complete(&chunks)
-            // A failed refresh keeps its complete saved passage. Do not display an
-            // alternate that would be hidden by that previous result on reopening.
-            && (!matches!(mode, HintCacheMode::Refresh) || !complete(&prepare(hy_model, HintCacheMode::ReadOnly)?))
-        {
+        let fallback = if hy_model.is_some() && !matches!(mode, HintCacheMode::ReadOnly) && !complete(&chunks) {
             let candidates = [Some(hy_translation::Model::Small), None];
             candidates.into_iter().find(|&candidate| {
                 let id = candidate.map_or(HINT_GENERATION_MODEL, hy_translation::Model::id);
@@ -215,6 +263,7 @@ impl Store {
             chunks,
             separators,
             fallback,
+            provider_cache,
         })
     }
 }
@@ -348,7 +397,7 @@ impl TranslatePassageJob {
                         translated.push(value);
                     }
                     check()?;
-                    HintCache::save_batch(updates.into_iter().map(|(cache, index)| (cache, &translated[index])))?;
+                    self.save_refresh(updates.into_iter().map(|(cache, index)| (cache, &translated[index])))?;
                     Ok(self.combine(translated, false))
             };
             if use_hy { hy_translation::with_context(directory, opening_check, run) }
@@ -356,6 +405,22 @@ impl TranslatePassageJob {
         });
         check()?;
         result
+    }
+
+    fn save_refresh<'a>(
+        &'a self, updates: impl IntoIterator<Item = (&'a HintCache, &'a TranslationChunk)>,
+    ) -> Result<()> {
+        let provider = match self.hy_model {
+            None => PassageProvider::Qwen,
+            Some(hy_translation::Model::Small) => PassageProvider::HyMtSmall,
+            Some(hy_translation::Model::Large) => PassageProvider::HyMtLarge,
+        };
+        let provider_entry = PassageCacheEntry::Provider(provider);
+        let updates: Vec<_> = updates.into_iter()
+            .map(|(cache, chunk)| (cache, PassageCacheEntry::Chunk(chunk)))
+            .collect();
+        HintCache::save_batch(updates.iter().map(|(cache, entry)| (*cache, entry))
+            .chain(self.provider_cache.iter().map(|cache| (cache, &provider_entry))))
     }
 
     fn combine(&self, chunks: Vec<TranslationChunk>, cached: bool) -> PassageTranslation {
@@ -567,6 +632,7 @@ mod tests {
                 source: "fr".into(), source_text: "Le bateau revient.".into(), target: "uk".into(),
                 regenerate: false, hy_model: Some(hy_translation::Model::Small), chunks: vec![], separators: vec![""],
                 fallback: Some(PassageFallback { hy_model: None, chunks: vec![] }),
+                provider_cache: None,
             };
             let mut calls = 0;
             let result = job.run_with_fallback(&|| canceled, |attempt| {
@@ -934,6 +1000,57 @@ mod tests {
         assert!(refresh.hy_model.is_none());
         assert!(refresh.cached().unwrap().is_none());
         assert!(reopened.cached_passage_translation(&document.id, None, sentence, "de").unwrap().is_none());
+    }
+
+    #[test]
+    fn refreshed_alternate_stays_selected_after_reopening() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("reader.db");
+        let mut store = Store::open(&path).unwrap();
+        let source = "Le jeune marin attend ses amis sur le quai.";
+        let document = store.import("Texte.txt", source.as_bytes(), "fr").unwrap();
+        let sentence = &document.sentences[0].id;
+        let prepare = |model: hy_translation::Model| {
+            let HintWork::Generate { cache, .. } = store.prepare_hint_work::<TranslationChunk>(
+                model.id(), &document.id, "hy-mt2-passage-v2", hy_translation::PROMPT,
+                format!("FR → UK\n{source}"), HintCacheMode::Refresh,
+            ).unwrap() else { panic!("expected writable Hy-MT cache"); };
+            cache
+        };
+        let large = prepare(hy_translation::Model::Large);
+        let small = prepare(hy_translation::Model::Small);
+        let old = TranslationChunk { text: "Молодий моряк чекає на друзів на пристані.".into() };
+        let new = TranslationChunk { text: "Юний моряк чекає своїх друзів на причалі.".into() };
+        large.save(&old).unwrap();
+        let mut refresh = store.prepare_passage_translation(&document.id, None, sentence, "uk", true).unwrap();
+        refresh.hy_model = Some(hy_translation::Model::Small);
+        refresh.save_refresh([(&small, &new)]).unwrap();
+        drop(store);
+
+        let store = Store::open(&path).unwrap();
+        let cached = store.cached_passage_translation(&document.id, None, sentence, "uk").unwrap().unwrap();
+        assert_eq!(cached.model_name, hy_translation::Model::Small.name());
+        assert_eq!(cached.text, new.text);
+
+        // Reject the provider write after the new chunks have been written.
+        store.connection.execute_batch(
+            "CREATE TRIGGER reject_provider BEFORE UPDATE ON model_hints
+             WHEN NEW.annotation_blob = '\"HyMtLarge\"'
+             BEGIN SELECT RAISE(ABORT, 'test provider cache failure'); END;",
+        ).unwrap();
+        refresh.hy_model = Some(hy_translation::Model::Large);
+        assert!(refresh.save_refresh([(&large, &new)]).is_err());
+        assert_eq!(large.load::<TranslationChunk>().unwrap().unwrap().text, old.text);
+        let cached = store.prepare_passage_translation(&document.id, None, sentence, "uk", false)
+            .unwrap().run().unwrap();
+        assert_eq!(cached.model_name, hy_translation::Model::Small.name());
+        assert_eq!(cached.text, new.text);
+
+        store.connection.execute_batch("DROP TRIGGER reject_provider").unwrap();
+        refresh.save_refresh([(&large, &old)]).unwrap();
+        let cached = store.cached_passage_translation(&document.id, None, sentence, "uk").unwrap().unwrap();
+        assert_eq!(cached.model_name, hy_translation::Model::Large.name());
+        assert_eq!(cached.text, old.text);
     }
 
     #[test]

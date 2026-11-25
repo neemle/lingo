@@ -532,6 +532,14 @@ impl Store {
                 return Ok(HintWork::Cached(cached));
             }
         }
+        Ok(HintWork::Generate {
+            model: package,
+            example,
+            cache: self.hint_cache(document, key)?,
+        })
+    }
+
+    fn hint_cache(&self, document: &str, key: [u8; 32]) -> Result<HintCache> {
         let database = self
             .connection
             .path()
@@ -539,15 +547,10 @@ impl Store {
             .filter(|path| path.is_absolute())
             .map(Path::to_owned)
             .ok_or("Для збереження підказок потрібна бібліотека на диску.")?;
-        let cache = HintCache {
+        Ok(HintCache {
             database,
             document_id: document.to_owned(),
             key,
-        };
-        Ok(HintWork::Generate {
-            model: package,
-            example,
-            cache,
         })
     }
 
