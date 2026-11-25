@@ -1820,8 +1820,9 @@ impl MarianProvider<'_> {
                             let sentence = segment.trim_end();
                             if let Some(retry) = french_retry {
                                 reference(&retry.input, settings.beam_size).ok()
+                                    .filter(|text| retry.ukrainian_clause(text) && !wrong_ukrainian(text))
                                     .map(|text| retry.restore(&text))
-                                    .filter(acceptable)
+                                    .filter(|text| protected.restore(text.clone()).is_ok())
                             } else if let Some(mark @ ('.' | '!' | '?')) = sentence.chars().last() {
                                 let source = sentence[..sentence.len() - mark.len_utf8()].trim_end();
                                 reference(source, settings.beam_size).ok()

@@ -261,26 +261,68 @@ pub(super) fn french_dialogue_formula(source: &str) -> Option<String> {
 pub(super) struct FrenchDialogueRetry<'a> {
     frame: DialogueFrame<'a>,
     pub input: String,
+    address: Option<&'static str>,
 }
 
 impl FrenchDialogueRetry<'_> {
-    pub(super) fn restore(&self, target: &str) -> String {
-        self.frame.restore(target)
+    pub(super) fn ukrainian_clause(&self, target: &str) -> bool {
+        if clearly_ukrainian(target) { return true; }
+        if self.address.is_none() || clearly_russian(target) { return false; }
+        let lower = target.to_lowercase();
+        let mut cues = lower.unicode_words().filter(|word| matches!(*word, "мені" | "навіть" | "будь" | "будьмо" |
+            "дякую" | "потрібно" | "годині" | "звідки" | "сьогодні"));
+        cues.next().is_some_and(|first| cues.any(|word| word != first))
     }
+
+    pub(super) fn restore(&self, target: &str) -> String {
+        let Some(address) = self.address else { return self.frame.restore(target); };
+        let target = DialogueFrame::new(target).body;
+        let first = target.split_whitespace().next().unwrap_or_default();
+        let clause = match first {
+            "Я" | "Мені" | "Мене" | "Ми" | "Нам" | "Ви" | "Вам" | "Ти" | "Тобі" | "Це" | "Тут" =>
+                format!("{}{}", first.to_lowercase(), &target[first.len()..]),
+            _ => target.to_owned(),
+        };
+        self.frame.restore(&format!("{address}, {clause}"))
+    }
+}
+
+fn french_initial_address(body: &str) -> Option<(&'static str, &str)> {
+    let (address, clause) = body.split_once(',')?;
+    let clause = clause.trim_start();
+    if clause.is_empty() { return None; }
+    let translated = match address.trim().to_ascii_lowercase().as_str() {
+        "monsieur" => "Пане",
+        "madame" | "mademoiselle" => "Пані",
+        _ => return None,
+    };
+    Some((translated, clause))
+}
+
+pub(crate) fn has_french_initial_address(source: &str) -> bool {
+    french_initial_address(DialogueFrame::new(source).body).is_some()
 }
 
 pub(super) fn french_dialogue_retry(source: &str) -> Option<FrenchDialogueRetry<'_>> {
     let frame = DialogueFrame::new(source);
     if frame.body.is_empty() { return None; }
-    let rewritten = frame.body.replace(" vient à la rencontre de ", " s'avance vers ");
+    let leading = french_initial_address(frame.body);
+    let rewritten = leading.map_or(frame.body, |(_, clause)| clause)
+        .replace(" vient à la rencontre de ", " s'avance vers ");
     let mut words = rewritten.split_whitespace().peekable();
     let mut input = String::with_capacity(rewritten.len());
     while let Some(word) = words.next() {
         let word = if words.peek().is_some_and(|next| next.starts_with(char::is_uppercase)) {
             match word { "M." => "monsieur", "Mme" | "Mme." => "madame", "Mlle" | "Mlle." => "mademoiselle", _ => word }
         } else { word };
-        if !input.is_empty() { input.push(' '); }
-        input.push_str(word);
+        if input.is_empty() && leading.is_some() {
+            let mut chars = word.chars();
+            input.extend(chars.next()?.to_uppercase());
+            input.push_str(chars.as_str());
+        } else {
+            if !input.is_empty() { input.push(' '); }
+            input.push_str(word);
+        }
     }
     if input != frame.body && matches!(frame.suffix, "." | "!" | "?") {
         input.push_str(frame.suffix);
@@ -288,7 +330,7 @@ pub(super) fn french_dialogue_retry(source: &str) -> Option<FrenchDialogueRetry<
     if input == source || crate::pdf_sentences::Layout::ClosingQuotes.segment(&input, "").len() != 1 {
         return None;
     }
-    Some(FrenchDialogueRetry { frame, input })
+    Some(FrenchDialogueRetry { frame, input, address: leading.map(|(address, _)| address) })
 }
 
 pub(crate) struct FrenchSpeechAttribution<'a> {
@@ -577,6 +619,12 @@ mod tests {
         assert_eq!(retry.input, "Un homme s'avance vers monsieur Dupont.");
         assert_eq!(retry.restore("Чоловік наближається до пана Дюпона!"), "Чоловік наближається до пана Дюпона.");
         assert!(french_dialogue_retry("Une porte se ferme. Il part.").is_none());
+        let retry = french_dialogue_retry("— « Monsieur, je n’ai même pas 19 ans. »").unwrap();
+        assert_eq!(retry.input, "Je n’ai même pas 19 ans");
+        assert_eq!(retry.restore("Мені навіть не 19."), "— « Пане, мені навіть не 19. »");
+        assert!(retry.ukrainian_clause("Мені навіть не 19."));
+        assert!(!retry.ukrainian_clause("Мне ещё нет 19 лет."));
+        assert!(!has_french_initial_address("Monsieur Dupont travaille."));
     }
 
     #[test]
