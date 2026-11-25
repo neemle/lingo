@@ -7,6 +7,7 @@ use crate::protected_translation::{self, ProtectedText, MARKER_ERROR};
 use llama_cpp_2::{context::LlamaContext, model::LlamaModel};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -134,7 +135,9 @@ impl Store {
                     };
                     (HINT_GENERATION_MODEL, SYSTEM, example, cache_kind)
                 };
-                let cache_kind = if target == "uk" && protected_translation::contains_euro_amount(prompt_text) {
+                let cache_kind = if has_repeated_numbers(prompt_text) {
+                    "passage-repeated-numbers-v1"
+                } else if target == "uk" && protected_translation::contains_euro_amount(prompt_text) {
                     "passage-protected-euro-amounts-v1"
                 } else if protected_translation::contains_dotted_acronym(prompt_text) {
                     "passage-protected-dotted-acronyms-v1"
@@ -403,6 +406,29 @@ fn mixed_cyrillic_word(text: &str) -> bool {
     })
 }
 
+fn numbers(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|ch: char| !ch.is_ascii_digit()).filter(|number| !number.is_empty())
+}
+
+fn has_repeated_numbers(text: &str) -> bool {
+    let mut seen = HashSet::new();
+    numbers(text).any(|number| !seen.insert(number))
+}
+
+fn preserves_numbers(source: &str, target: &str) -> bool {
+    let mut expected = numbers(source).peekable();
+    if expected.peek().is_none() { return true; }
+    let mut available = HashMap::new();
+    for number in numbers(target) {
+        *available.entry(number).or_insert(0usize) += 1;
+    }
+    expected.all(|number| {
+        let Some(count) = available.get_mut(number).filter(|count| **count > 0) else { return false; };
+        *count -= 1;
+        true
+    })
+}
+
 fn parse(bytes: &[u8], target: &str, source_text: &str) -> Result<TranslationChunk> {
     let error = "Модель не повернула повного перекладу.";
     let result: TranslationChunk =
@@ -416,16 +442,8 @@ fn parse(bytes: &[u8], target: &str, source_text: &str) -> Result<TranslationChu
         .count();
     let wrong_script = target == "uk" && letters > 0 && cyrillic * 5 < letters * 3;
     let source_letters = protected_translation::without_identifiers(source_text).chars().filter(|ch| ch.is_alphabetic()).count();
-    let missing_numbers = source_text
-        .split(|ch: char| !ch.is_ascii_digit())
-        .filter(|number| !number.is_empty())
-        .any(|number| {
-            !text
-                .split(|ch: char| !ch.is_ascii_digit())
-                .any(|candidate| candidate == number)
-        });
     let source_sentences = complete_sentences(source_text);
-    if source_letters >= 60 && letters * 2 < source_letters || missing_numbers ||
+    if source_letters >= 60 && letters * 2 < source_letters || !preserves_numbers(source_text, text) ||
         (source_sentences > 1 && complete_sentences(text) < source_sentences)
     {
         return Err(error.into());
@@ -532,6 +550,35 @@ mod tests {
             ("Le marin entre dans le port.".to_owned(), true),
         ]);
         assert_eq!(recovered.text, "Нотатка датована 15 лютого 1815 року. Моряк заходить у порт.");
+    }
+
+    #[test]
+    fn translation_with_one_missing_repeated_number_is_retried() {
+        let first = "Le bateau part le 15 juin.";
+        let second = "Le train arrive le 15 juillet.";
+        let source = format!("{first} {second}");
+        let mut calls = Vec::new();
+        let result = translate_chunk(&source, "uk", false, |fragment, _| {
+            calls.push(fragment.to_owned());
+            let text = match fragment {
+                text if text == first => "Корабель відпливає 15 червня.",
+                text if text == second => "Потяг прибуває 15 липня.",
+                _ => "Корабель відпливає 15 червня. Потяг прибуває в липні.",
+            };
+            Ok(serde_json::to_vec(&TranslationChunk { text: text.into() }).unwrap())
+        }).unwrap();
+        assert_eq!(calls, [source.as_str(), first, second]);
+        assert_eq!(result.text, "Корабель відпливає 15 червня. Потяг прибуває 15 липня.");
+
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let document = store.import("Dates.txt", source.as_bytes(), "fr").unwrap();
+        let HintWork::Generate { cache, .. } = store.prepare_hint_work::<TranslationChunk>(
+            HINT_GENERATION_MODEL, &document.id, "qwen-passage-translation-v7", SYSTEM,
+            format!("Translate from French into Ukrainian.\n{source}"), HintCacheMode::Refresh,
+        ).unwrap() else { panic!("Expected old cache entry"); };
+        cache.save(&TranslationChunk { text: "Корабель відпливає 15 червня. Потяг прибуває в липні.".into() }).unwrap();
+        assert!(store.cached_passage_translation(&document.id, None, &document.sentences[0].id, "uk").unwrap().is_none());
     }
 
     #[test]
