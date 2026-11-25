@@ -166,8 +166,8 @@ public partial class ReadingPage
                     CanReuseInlinePdfFrame(previous) && inlinePdfPreview is { Bytes.Length: <= 12 * 1024 * 1024 } image
                     ? new(previous, image, inlineNativeText, inlineNativeBoxes, inlinePdfAppearance) : null;
                 ClearInlinePdfFrame();
-                RefreshPdfTranslationLayout();
             }
+            RefreshPdfTranslationLayout();
 
             InlinePdfToggle.Text = isPdf ? "Завантажуємо PDF…" : "Завантажуємо фото…";
             PhotoPreview preview;

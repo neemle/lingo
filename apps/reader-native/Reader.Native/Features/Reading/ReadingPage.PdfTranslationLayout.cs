@@ -44,6 +44,7 @@ public partial class ReadingPage
     private readonly List<(PdfLayoutAddress Address, PdfPageTranslationRow[] Rows)> recentPdfTranslations = [];
     private PdfPageTranslationRow[] pdfLayoutRows = [];
     private bool pdfLayoutRowsStale;
+    private (string Document, int Page)? pdfTranslationDestination;
     private PhotoPreview? pdfTranslationBackgroundPreview;
     private (PdfPageTranslationRow[] Rows, PdfSourceLayout? Source, bool PreserveArtwork, PdfTranslationLayout Plan)? pdfDrawingPlan;
     private PdfSourceLayout? pdfSourceLayout;
@@ -262,6 +263,8 @@ public partial class ReadingPage
         showInlineOriginal && inlinePdfAddress is { } page && TargetCode is { } target &&
         AppState.Session.Document is { } document && SupportsOriginalTranslationLayout(document) &&
         page.Document == document.Id &&
+        (pdfTranslationDestination is not { } destination || destination.Document != document.Id ||
+            destination.Page == page.Page) &&
         page.Revision == document.CurrentRevisionId &&
         DetachedPdfReader.IsVisible == (page.DetachedText is not null) &&
         (!DetachedPdfReader.IsVisible || detachedAddress?.Text == page.DetachedText) &&
@@ -306,7 +309,9 @@ public partial class ReadingPage
         var available = address is not null;
         var detached = DetachedPdfReader.IsVisible;
         var shown = available && pdfTranslationLayout;
-        var waitingForPreview = PdfUsesPageTranslation && inlinePdfAddress is null && inlinePdfLoading is not null;
+        var waitingForPreview = PdfUsesPageTranslation && address is null &&
+            (inlinePdfLoading is not null || pdfTranslationDestination is { } destination &&
+                AppState.Session.Document?.Id == destination.Document);
         if (translatingPdfLayout is { } running)
         {
             var keepRunning = readingPageActive && (keepPdfTranslationOnNavigation
@@ -342,6 +347,8 @@ public partial class ReadingPage
             pdfLayoutRowsStale = false;
             pdfDrawingPlan = null;
             PdfTranslationSurface.Drawable = DetachedPdfTranslationSurface.Drawable = null;
+            SemanticProperties.SetDescription(PdfTranslationSurface, null);
+            SemanticProperties.SetDescription(DetachedPdfTranslationSurface, null);
             ClearPdfTranslationBackground();
             PdfTranslationSurface.Invalidate();
             DetachedPdfTranslationSurface.Invalidate();
@@ -349,11 +356,13 @@ public partial class ReadingPage
             overflowContent = null;
             lastPdfTranslationFollow = null;
             PdfTranslationOverflow.IsVisible = DetachedPdfTranslationOverflow.IsVisible = false;
+            PdfTranslationOverflow.Children.Clear();
+            DetachedPdfTranslationOverflow.Children.Clear();
             if (shown && address is not null) _ = LoadPdfPageLayoutAsync(address, cachedOnly: true);
         }
         else if (shown && address is not null && pdfLayoutRows.Length == 0 && pdfLayoutStatus is null)
             _ = LoadPdfPageLayoutAsync(address, cachedOnly: true);
-        UpdatePdfTranslationStatus(shown ? address : null, detached, translatingPage);
+        UpdatePdfTranslationStatus(shown ? address : null, detached, translatingPage, waitingForPreview);
         UpdateSentenceRefreshButtons();
         AlignPdfViewports();
         UpdateTranslationPackageActions();
@@ -374,7 +383,8 @@ public partial class ReadingPage
         SchedulePdfAutoTranslation();
     }
 
-    private void UpdatePdfTranslationStatus(PdfLayoutAddress? address, bool detached, bool translatingPage)
+    private void UpdatePdfTranslationStatus(PdfLayoutAddress? address, bool detached, bool translatingPage,
+        bool waitingForPreview)
     {
         var ready = address is not null && PdfPageRouteReady(address);
         var needsPackages = address is not null && PdfPageNeedsPackages;
@@ -386,7 +396,7 @@ public partial class ReadingPage
         var pageGlyph = needsPackages ? "\uf019" : "\uf15c";
         LabelTranslationIcon(TranslatePdfPage, pageGlyph, pageLabel);
         LabelTranslationIcon(DetachedTranslatePdfPage, pageGlyph, pageLabel);
-        string? text = null;
+        string? text = waitingForPreview ? "Завантажуємо сторінку…" : null;
         if (address is not null)
         {
             var translated = pdfLayoutRows.Count(HasPdfTranslation);

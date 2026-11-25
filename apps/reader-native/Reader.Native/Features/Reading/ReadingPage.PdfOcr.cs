@@ -389,6 +389,8 @@ public partial class ReadingPage
 
         pendingUnreadPdfFind = null;
         movingPdfPage = true;
+        pdfTranslationDestination = (document.Id, page);
+        RefreshPdfTranslationLayout();
         StopDetachedPdfReader();
         StopAnalysisPrefetch();
         CancelReaderPdfOcr();
@@ -414,6 +416,7 @@ public partial class ReadingPage
         finally
         {
             movingPdfPage = false;
+            pdfTranslationDestination = null;
             if (readingPageActive && session.Document?.Id == document.Id)
             {
                 if (session.Error.Length > 0)
@@ -422,6 +425,7 @@ public partial class ReadingPage
                     UpdatePdfPageDisplay();
                 }
                 UpdatePdfPageButtons();
+                RefreshPdfTranslationLayout();
             }
         }
     }
