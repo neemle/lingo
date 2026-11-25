@@ -3878,6 +3878,9 @@ fn cache_key(
             .unwrap_or(4)
     };
     let version = match route {
+        Route::Direct(ModelEdge { target, .. }) | Route::Pivot { second: ModelEdge { target, .. }, .. }
+            if target == "uk" && (segments.iter().any(|text| crate::protected_translation::contains_page_reference(text.as_ref()))
+                || context.is_some_and(crate::protected_translation::contains_page_reference)) => 22,
         _ if segments.iter().any(|text| crate::protected_translation::contains_percentage(text.as_ref()))
             || context.is_some_and(crate::protected_translation::contains_percentage) => 21,
         Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" && segments.iter().any(|text|

@@ -170,7 +170,9 @@ impl Store {
                     };
                     (HINT_GENERATION_MODEL, SYSTEM, example, cache_kind)
                 };
-                let cache_kind = if french_to_ukrainian && protected_translation::contains_french_month_phrase(prompt_text) {
+                let cache_kind = if target == "uk" && protected_translation::contains_page_reference(prompt_text) {
+                    "passage-protected-page-references-v1"
+                } else if french_to_ukrainian && protected_translation::contains_french_month_phrase(prompt_text) {
                     "passage-fr-uk-month-phrases-v1"
                 } else if protected_translation::contains_percentage(prompt_text) {
                     "passage-protected-percentages-v1"

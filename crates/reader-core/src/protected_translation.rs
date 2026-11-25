@@ -28,6 +28,13 @@ static PERCENTAGES: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(r"{AMOUNT}{SPACE}[%‰]")).expect("percentages and per-mille figures")
 });
 
+static PAGE_REFERENCES: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"([pP]{1,2}|[сС])\.[ \t\u{a0}\u{202f}]+",
+        r"([0-9]{1,6}(?:[ \u{a0}\u{202f}]*[-–][ \u{a0}\u{202f}]*[0-9]{1,6})?)",
+    )).expect("page references")
+});
+
 static FRENCH_MONTH_PHRASES: LazyLock<Regex> = LazyLock::new(|| {
     let months = crate::translation_dates::FRENCH_MONTHS.join("|");
     Regex::new(&format!(r"(?i)en[ \u{{a0}}\u{{202f}}]+({months})")).expect("French month phrases")
@@ -60,6 +67,51 @@ fn euro_amounts(source: &str) -> impl Iterator<Item = (Range<usize>, &str)> + '_
 
 fn percentage_spans(source: &str) -> impl Iterator<Item = Range<usize>> + '_ {
     standalone_matches(&PERCENTAGES, source).filter_map(|matched| matched.get(0).map(|value| value.range()))
+}
+
+fn page_references_in(source: &str, allow_ukrainian: bool) -> impl Iterator<Item = (Range<usize>, &str)> + '_ {
+    standalone_matches(&PAGE_REFERENCES, source).filter_map(move |matched| {
+        let range = matched.get(0)?.range();
+        let rest = &source[range.end..];
+        if (!allow_ukrainian && matched.get(1)?.as_str().starts_with(['с', 'С'])) ||
+            (rest.starts_with(['.', ',']) && rest[1..].starts_with(|ch: char| ch.is_ascii_digit()))
+        {
+            return None;
+        }
+        Some((range, matched.get(2)?.as_str()))
+    })
+}
+
+fn page_references(source: &str) -> impl Iterator<Item = (Range<usize>, &str)> + '_ {
+    page_references_in(source, false)
+}
+
+pub(crate) fn restore_unmarked_page_references(source: &str, translated: &str) -> Option<String> {
+    let expected: Vec<_> = page_references(source).map(|(_, pages)| pages).collect();
+    let actual: Vec<_> = page_references_in(translated, true).collect();
+    if expected.is_empty() || expected.len() != actual.len() {
+        return None;
+    }
+    let compact = |text: &str| text.chars().filter(|ch| !ch.is_whitespace()).map(|ch| {
+        if ch == '-' { '–' } else { ch }
+    }).collect::<String>();
+    if !expected.iter().zip(&actual).all(|(source, (_, target))| compact(source) == compact(target)) {
+        return None;
+    }
+    let mut output = String::new();
+    let mut last = 0;
+    for (pages, (span, _)) in expected.into_iter().zip(actual) {
+        output.push_str(&translated[last..span.start]);
+        output.push_str("с. ");
+        output.push_str(pages);
+        last = span.end;
+    }
+    output.push_str(&translated[last..]);
+    Some(output)
+}
+
+pub(crate) fn contains_page_reference(source: &str) -> bool {
+    page_references(source).next().is_some()
 }
 
 fn french_month_phrases(source: &str) -> impl Iterator<Item = (Range<usize>, &'static str)> + '_ {
@@ -142,6 +194,7 @@ pub(crate) struct ProtectedText<'a> {
     input: Cow<'a, str>,
     markers: Vec<Marker<'a>>,
     only_protected: bool,
+    page_references_only: bool,
 }
 
 impl<'a> ProtectedText<'a> {
@@ -156,6 +209,7 @@ impl<'a> ProtectedText<'a> {
         let mut number = 1;
         let mut unprotected_letters = false;
         let mut source_upper = None;
+        let mut page_reference_count = 0;
         let mut numeric: Vec<_> = percentage_spans(source).map(|range| {
             let replacement = Cow::Borrowed(&source[range.clone()]);
             (range, replacement)
@@ -166,6 +220,11 @@ impl<'a> ProtectedText<'a> {
                 !numeric.iter().any(|(other, _)| overlaps(other, range))
             }).map(|(range, amount)| (range, Cow::Owned(format!("{amount} євро")))).collect();
             numeric.extend(amounts);
+            let references: Vec<_> = page_references(source).filter(|(range, _)| {
+                !numeric.iter().any(|(other, _)| overlaps(other, range))
+            }).map(|(range, pages)| (range, Cow::Owned(format!("с. {pages}")))).collect();
+            page_reference_count = references.len();
+            numeric.extend(references);
         }
         let identifiers = protected_spans(source).filter(|(range, _)| {
             !numeric.iter().any(|(other, _)| overlaps(other, range))
@@ -202,6 +261,7 @@ impl<'a> ProtectedText<'a> {
                 input: Cow::Borrowed(source),
                 markers,
                 only_protected: false,
+                page_references_only: false,
             };
         }
         let tail = &source[offset..];
@@ -209,6 +269,7 @@ impl<'a> ProtectedText<'a> {
         input.push_str(tail);
         Self {
             input: Cow::Owned(input),
+            page_references_only: markers.len() == page_reference_count,
             markers,
             only_protected: !unprotected_letters,
         }
@@ -224,6 +285,10 @@ impl<'a> ProtectedText<'a> {
 
     pub(crate) fn only_protected(&self) -> bool {
         self.only_protected
+    }
+
+    pub(crate) fn has_only_page_reference_markers(&self) -> bool {
+        self.page_references_only
     }
 
     pub(crate) fn detached_french_articles(&self) -> Option<String> {
@@ -285,6 +350,7 @@ pub(crate) fn passage_token_spans(source: &str) -> Vec<Range<usize>> {
     let mut spans: Vec<_> = protected_spans(source).map(|(span, _)| span)
         .chain(euro_amounts(source).map(|(span, _)| span))
         .chain(french_month_phrases(source).map(|(span, _)| span))
+        .chain(page_references(source).map(|(span, _)| span))
         .chain(percentage_spans(source)).collect();
     spans.sort_unstable_by_key(|span| span.start);
     let mut merged: Vec<Range<usize>> = Vec::with_capacity(spans.len());
@@ -437,6 +503,25 @@ fn is_identifier(word: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn protects_page_numbers_and_localizes_the_ukrainian_reference() {
+        let source = "Voir p. 189 et pp. 12–14. Répondez ensuite.";
+        let protected = ProtectedText::new(source, "uk");
+        assert_eq!(protected.input(), "Voir ZXQ001QXZ et ZXQ002QXZ. Répondez ensuite.");
+        assert_eq!(protected.restore("Див. ZXQ001QXZ і ZXQ002QXZ. Далі дайте відповідь.".into()).unwrap(),
+            "Див. с. 189 і с. 12–14. Далі дайте відповідь.");
+        assert!(protected.restore("Див. ZXQ001QXZ.".into()).is_err());
+        assert!(ProtectedText::new("p.\u{202f}26", "uk").only_protected());
+        assert_eq!(ProtectedText::new(source, "de").input(), source);
+        assert!(!contains_page_reference("http://exemple.fr/p.26, chap. 2, p. 3,14"));
+        let spans = passage_token_spans(source);
+        assert_eq!(spans.into_iter().map(|span| &source[span]).collect::<Vec<_>>(), ["p. 189", "pp. 12–14"]);
+        assert_eq!(restore_unmarked_page_references(source, "Див. p. 189 і с. 12-14.").as_deref(),
+            Some("Див. с. 189 і с. 12–14."));
+        assert!(restore_unmarked_page_references(source, "Див. p. 190 і с. 12–14.").is_none());
+        assert!(restore_unmarked_page_references(source, "Див. p. 189.").is_none());
+    }
 
     #[test]
     fn protects_french_month_phrases_in_ukrainian_prose() {

@@ -1561,6 +1561,7 @@ impl MarianProvider<'_> {
         let mut ukrainian_retry_budget = 2;
         let mut attribution_retry_budget = 2;
         let mut marker_retry_budget = 2;
+        let mut page_reference_retry_budget = 2;
         'segments: for segment in segments {
             checkpoint()?;
             if package.source == "fr" && package.target == "uk" {
@@ -1569,6 +1570,7 @@ impl MarianProvider<'_> {
                     continue;
                 }
             }
+            let unmarked_segment = segment;
             let protected = crate::protected_translation::ProtectedText::new(segment, package.target);
             if protected.only_protected() {
                 results.push(protected.restore(protected.input().to_owned()));
@@ -1805,6 +1807,20 @@ impl MarianProvider<'_> {
                         || (start == 0 && end == source_pieces.len()
                             && crate::marian_target_uk::clearly_foreign_prose(segment, text))
                 };
+                if start == 0 && end == source_pieces.len() && page_reference_retry_budget > 0
+                    && protected.has_only_page_reference_markers()
+                    && protected.restore(translated.clone()).is_err()
+                {
+                    page_reference_retry_budget -= 1;
+                    if let Some(candidate) = reference(unmarked_segment, settings.beam_size).ok()
+                        .filter(|text| !wrong_ukrainian(text))
+                        .and_then(|text| crate::protected_translation::restore_unmarked_page_references(unmarked_segment, &text))
+                    {
+                        checkpoint()?;
+                        results.push(Ok(candidate));
+                        continue 'segments;
+                    }
+                }
                 if package.target == "uk" && wrong_ukrainian(&translated) {
                     let russian = crate::marian_target_uk::clearly_russian(&translated);
                     let acceptable = |text: &String| {
