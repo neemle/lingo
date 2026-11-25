@@ -169,7 +169,11 @@ impl Store {
             // The recommended model may change with RAM or installed files.
             // Keep a complete saved passage from one model instead of re-running it.
             for alternative in [Some(Large), Some(Small), None] {
-                if alternative == hy_model { continue; }
+                if alternative == hy_model ||
+                    alternative.is_some_and(|model| self.prepare_optional_model(model.id()).is_err())
+                {
+                    continue;
+                }
                 let cached = prepare(alternative, HintCacheMode::ReadOnly)?;
                 if complete(&cached) {
                     hy_model = alternative;
@@ -804,6 +808,19 @@ mod tests {
         assert!(store.cached_passage_translation(&document.id, Some(1), &updated.sentences[1].id, "uk").unwrap().is_none());
     }
 
+    #[test]
+    fn uncached_french_passage_can_prepare_qwen_without_hy_models() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let document = store.import("Texte.txt", b"Le jeune marin attend ses amis.", "fr").unwrap();
+        let sentence = &document.sentences[0].id;
+        assert!(store.cached_passage_translation(&document.id, None, sentence, "uk").unwrap().is_none());
+        let job = store.prepare_passage_translation(&document.id, None, sentence, "uk", false).unwrap();
+        assert!(job.hy_model.is_none());
+        assert!(matches!(job.chunks.as_slice(), [HintWork::Generate { .. }]));
+    }
+
+    #[cfg(any(target_os = "macos", target_abi = "macabi"))]
     #[test]
     fn a_cached_hy_passage_survives_a_change_of_preferred_model() {
         let root = tempfile::tempdir().unwrap();
