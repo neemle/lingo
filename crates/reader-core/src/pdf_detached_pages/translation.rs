@@ -655,7 +655,14 @@ fn same_ocr_flow(left: &ocr::OcrLine, right: &ocr::OcrLine) -> bool {
     let overlap = (left_x + left_width).min(right_x + right_width) - left_x.max(right_x);
     let line_height = left_height.min(right_height);
     let line_gap = right_y - left_y - left_height;
-    let wrapped = overlap >= 0.28 * left_width.min(right_width) && right_y > left_y && line_gap <= line_height;
+    let narrower_width = left_width.min(right_width);
+    // OCR bounds follow the ink, so short glyphs can make a regular line gap look too large.
+    let wrap_gap = if !right.block_start && (right_x - left_x).abs() <= 0.1 * narrower_width {
+        left_height.max(right_height)
+    } else {
+        line_height
+    };
+    let wrapped = overlap >= 0.28 * narrower_width && right_y > left_y && line_gap <= wrap_gap;
     let inline = (right_y - left_y).abs() <= 0.45 * line_height && right_x >= left_x
         && right_x - left_x - left_width <= 0.9 * line_height;
     wrapped || inline
@@ -816,6 +823,13 @@ mod tests {
             let second = line(10, text.len(), wrap, angle);
             document.ocr_lines = Some(vec![first.clone(), second]);
             assert!(super::split_ocr_sentences(&document, 0..1, Some(0), "uk").is_none(), "{angle}");
+
+            let short_glyphs = line(0, 9, (0.1, 0.10, 0.4, 0.016), angle);
+            let taller_glyphs = line(10, text.len(), (0.1, 0.134, 0.32, 0.020), angle);
+            document.ocr_lines = Some(vec![short_glyphs.clone(), taller_glyphs.clone()]);
+            assert!(super::split_ocr_sentences(&document, 0..1, Some(0), "uk").is_none(), "{angle}");
+            document.ocr_lines = Some(vec![short_glyphs, ocr::OcrLine { block_start: true, ..taller_glyphs }]);
+            assert!(super::split_ocr_sentences(&document, 0..1, Some(0), "uk").is_some(), "{angle}");
 
             document.ocr_lines = Some(vec![first.clone(), line(10, text.len(), next_column, angle)]);
             assert!(super::split_ocr_sentences(&document, 0..1, Some(0), "uk").is_some(), "{angle}");
