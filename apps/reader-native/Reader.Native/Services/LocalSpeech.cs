@@ -92,7 +92,17 @@ public sealed class LocalSpeech : IDisposable
         var voice = PreferredVoice;
         return playback.PlayAsync(async token =>
         {
-            var input = SourceRanges.PrepareSpeech(text, boundary);
+            var (source, nativeBoundary) = (text, boundary);
+            if (language == "fr" && Encoding.UTF8.GetByteCount(text) <= 64 * 1024)
+            {
+                try
+                {
+                    var edits = CoreClient.CoreClient.PrepareFrenchSpeech(text);
+                    (source, nativeBoundary) = SourceRanges.ApplySpeechReplacements(text, edits, boundary);
+                }
+                catch (CoreException) { }
+            }
+            var input = SourceRanges.PrepareSpeech(source, nativeBoundary);
             await speech.SpeakAsync(input.Text, language, voice, rate, input.Boundary, token);
             return CompletedStatus;
         });

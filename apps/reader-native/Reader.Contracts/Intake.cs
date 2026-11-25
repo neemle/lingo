@@ -74,6 +74,7 @@ public readonly record struct PdfLayoutWord(int Start, int End, double Left, dou
 public sealed record PdfLayoutSlice(int Start, int End, string Separator);
 public sealed record PdfLayoutEdit(int Start, int End, PdfLayoutSlice[] Slices);
 public sealed record PdfLigatureJoin(int Start, int End);
+public sealed record SpeechReplacement(int StartUtf16, int EndUtf16, string Text);
 public sealed record DetachedPdfFindPage(DetachedPdfFindHit[] Matches, DetachedPdfFindCursor? Next);
 public sealed record DetachedPdfSearchSource(int Page, string Text, string RevisionId);
 public sealed record DetachedPdfSearchBatch(DetachedPdfSearchSource[] Pages, int? NextPage);

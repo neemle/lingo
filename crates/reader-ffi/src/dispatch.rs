@@ -67,7 +67,7 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::Open { .. } => Err(Error::new("invalid_handle", "Open requires handle zero")),
         Command::SamplePdfBackgrounds { .. } | Command::SeparatePdfBlocks { .. } |
         Command::FindPdfLigatureJoins { .. } | Command::ParseOcrTsv { .. } | Command::MergeRotatedOcr { .. } |
-        Command::PlanPdfTranslationLayout { .. } =>
+        Command::PlanPdfTranslationLayout { .. } | Command::PrepareFrenchSpeech { .. } =>
             unreachable!("Stateless command handled before store dispatch"),
         Command::Snapshot => {
             let snapshot = store.snapshot().map_err(gateway::domain)?;

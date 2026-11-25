@@ -14,6 +14,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 pub(crate) mod cache;
 pub(crate) mod french;
+pub use french::{french_reference_speech_edits, SpeechReplacement};
 pub(crate) mod uk_numbers;
 
 const MODEL: &str = "piper-uk";

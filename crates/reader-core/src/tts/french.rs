@@ -1,5 +1,6 @@
 use crate::french_cardinals::spoken_cardinal;
-use std::borrow::Cow;
+use serde::Serialize;
+use std::{borrow::Cow, ops::Range};
 use unicode_segmentation::UnicodeSegmentation;
 
 const INLINE_SPACES: [char; 3] = [' ', '\u{00a0}', '\u{202f}'];
@@ -10,26 +11,53 @@ pub(crate) fn expand(text: &str) -> Cow<'_, str> {
 }
 
 fn expand_page_references(text: &str) -> Option<String> {
-    let mut references = crate::protected_translation::page_references(text).peekable();
-    references.peek()?;
+    let mut edits = page_reference_edits(text).peekable();
+    edits.peek()?;
     let mut output = String::with_capacity(text.len());
     let mut copied = 0;
-    for (span, pages) in references {
+    for (span, replacement) in edits {
         output.push_str(&text[copied..span.start]);
-        let range = pages.split_once(['-', '–']);
-        let plural = range.is_some() || text[span.clone()].get(..2).is_some_and(|prefix| prefix.eq_ignore_ascii_case("pp"));
-        output.push_str(if plural { "pages " } else { "page " });
-        if let Some((first, last)) = range {
-            output.push_str(first.trim_end());
-            output.push_str(" à ");
-            output.push_str(last.trim_start());
-        } else {
-            output.push_str(pages);
-        }
+        output.push_str(replacement);
         copied = span.end;
     }
     output.push_str(&text[copied..]);
     Some(output)
+}
+
+fn page_reference_edits(text: &str) -> impl Iterator<Item = (Range<usize>, &'static str)> + '_ {
+    crate::protected_translation::page_references(text).flat_map(move |(span, pages)| {
+        let number_start = span.end - pages.len();
+        let abbreviation = text[span.start..number_start].trim_end();
+        let range = pages.split_once(['-', '–']);
+        let plural = range.is_some() || abbreviation.eq_ignore_ascii_case("pp.");
+        let label = (span.start..number_start, if plural { "pages " } else { "page " });
+        let separator = range.map(|(first, last)| {
+            let left = number_start + first.trim_end().len();
+            let right = span.end - last.trim_start().len();
+            (left..right, " à ")
+        });
+        std::iter::once(label).chain(separator)
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeechReplacement {
+    start_utf16: usize,
+    end_utf16: usize,
+    text: &'static str,
+}
+
+pub fn french_reference_speech_edits(text: &str) -> Vec<SpeechReplacement> {
+    let mut offset = 0;
+    let mut units = 0;
+    page_reference_edits(text).map(|(span, replacement)| {
+        let start_utf16 = units + text[offset..span.start].encode_utf16().count();
+        let end_utf16 = start_utf16 + text[span.clone()].encode_utf16().count();
+        offset = span.end;
+        units = end_utf16;
+        SpeechReplacement { start_utf16, end_utf16, text: replacement }
+    }).collect()
 }
 
 fn expand_words(text: &str) -> Cow<'_, str> {

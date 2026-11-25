@@ -58,6 +58,12 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
         unsafe { std::slice::from_raw_parts(input, len as usize) }
     };
     let command = validation::decode(bytes)?;
+    if let Command::PrepareFrenchSpeech { text } = command {
+        if text.len() > 64 * 1024 {
+            return Err(Error::new("invalid_argument", "Текст для озвучення завеликий."));
+        }
+        return encode_job(Ok(reader_core::tts::french_reference_speech_edits(&text)));
+    }
     if let Command::ParseOcrTsv { tsv, width, height, sparse_tsv, image_rotation } = command {
         if let Some(angle) = image_rotation {
             return encode_job(reader_core::ocr::parse_tesseract_quarter_turn(&tsv, width, height, angle));

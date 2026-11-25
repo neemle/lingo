@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using Reader.Contracts;
 
 namespace Reader.Presentation;
@@ -36,6 +37,57 @@ public sealed class SourceRanges(string text)
         if (originalStarts.Length != spokenStarts.Length) return (spoken, null);
 
         return (spoken, MapSpeechBoundary(source.Length, spoken.Length, originalStarts, spokenStarts, 0, boundary));
+    }
+
+    public static (string Text, Action<int, int>? Boundary) ApplySpeechReplacements(
+        string source, IReadOnlyList<SpeechReplacement> edits, Action<int, int>? boundary)
+    {
+        if (edits.Count == 0) return (source, boundary);
+        var spoken = new StringBuilder(source.Length);
+        var starts = boundary is null ? null : new List<int>(source.Length);
+        var ends = boundary is null ? null : new List<int>(source.Length);
+        var cursor = 0;
+        foreach (var edit in edits)
+        {
+            if (edit.StartUtf16 < cursor || edit.EndUtf16 <= edit.StartUtf16 || edit.EndUtf16 > source.Length ||
+                !IsUtf16Boundary(edit.StartUtf16) || !IsUtf16Boundary(edit.EndUtf16) || string.IsNullOrEmpty(edit.Text))
+                return (source, boundary);
+            CopySourceThrough(edit.StartUtf16);
+            spoken.Append(edit.Text);
+            if (starts is not null && ends is not null)
+            {
+                for (var index = 0; index < edit.Text.Length; index++)
+                {
+                    starts.Add(edit.StartUtf16);
+                    ends.Add(edit.EndUtf16);
+                }
+            }
+            cursor = edit.EndUtf16;
+        }
+        CopySourceThrough(source.Length);
+        return (spoken.ToString(), boundary is null ? null : MapBoundary);
+
+        bool IsUtf16Boundary(int index) => index == source.Length || !char.IsLowSurrogate(source[index]);
+
+        void CopySourceThrough(int end)
+        {
+            spoken.Append(source, cursor, end - cursor);
+            if (starts is not null && ends is not null)
+            {
+                for (var index = cursor; index < end; index++)
+                {
+                    starts.Add(index);
+                    ends.Add(index + 1);
+                }
+            }
+        }
+
+        void MapBoundary(int start, int length)
+        {
+            if (start < 0 || length <= 0 || start > starts!.Count - length) return;
+            var original = starts[start];
+            boundary!(original, ends![start + length - 1] - original);
+        }
     }
 
     public static (string Text, Action<int, int>? Boundary) ProjectPronunciation(

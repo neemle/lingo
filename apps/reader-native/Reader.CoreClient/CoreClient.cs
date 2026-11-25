@@ -101,6 +101,8 @@ public sealed class CoreClient : IDisposable
         Invoke<PdfSampleColors[]>(0, new { version = 1, operation = "sample_pdf_backgrounds", width, height, rgba, boxes, withInk = true });
     public static PdfLayoutEdit[] SeparatePdfBlocks(string text, PdfLayoutWord[] words, double pageWidth) =>
         Invoke<PdfLayoutEdit[]>(0, new { version = 1, operation = "separate_pdf_blocks", text, words, pageWidth });
+    public static SpeechReplacement[] PrepareFrenchSpeech(string text) =>
+        Invoke<SpeechReplacement[]>(0, new { version = 1, operation = "prepare_french_speech", text });
     public static PdfTranslationLayout PlanPdfTranslationLayout(PdfTranslationSourceRow[] rows, OcrLine[] geometry,
         int offset, IReadOnlyDictionary<int, PdfTranslationSourceStyle> styles, bool preserveArtwork = false) =>
         Invoke<PdfTranslationLayout>(0, new { version = 1, operation = "plan_pdf_translation_layout",
