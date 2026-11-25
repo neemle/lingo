@@ -183,10 +183,13 @@ public partial class LibraryPage : ContentPage
         catch (Exception error) { await DisplayAlertAsync("Імпорт", error.Message, "Гаразд"); }
     }
 
-    private async Task ImportAsync(bool scanPdf)
+    internal Task ImportPickedDocumentsAsync(FileResult[] files) => ImportAsync(scanPdf: false, pickedFiles: files);
+
+    private async Task ImportAsync(bool scanPdf, FileResult[]? pickedFiles = null)
     {
-        if (importing || changingLanguage) return;
-        if (AppState.Session.Busy || !DesktopImport.Gate.Wait(0))
+        if (pickedFiles is not null)
+            await DesktopImport.Gate.WaitAsync();
+        else if (importing || changingLanguage || AppState.Session.Busy || !DesktopImport.Gate.Wait(0))
         {
             ImportStatus.Text = "Зачекайте, поки завершиться поточна операція, і повторіть імпорт.";
             return;
@@ -198,10 +201,11 @@ public partial class LibraryPage : ContentPage
         using var copying = new CancellationTokenSource();
         try
         {
+            if (pickedFiles is not null) await AppState.Session.WaitUntilIdleAsync();
             var options = new PickOptions { PickerTitle = scanPdf ? "Виберіть сканований PDF" : "Додати документи або фотографії" };
-            IEnumerable<FileResult?> selected = scanPdf
+            IEnumerable<FileResult?> selected = pickedFiles ?? (scanPdf
                 ? await FilePicker.Default.PickAsync(options) is { } pdf ? [pdf] : []
-                : await FilePicker.Default.PickMultipleAsync(options);
+                : await FilePicker.Default.PickMultipleAsync(options));
             var rejected = 0;
             string? firstIssue = null;
             string? capacityIssue = null;

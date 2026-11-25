@@ -17,6 +17,7 @@ public partial class AppShell : Shell
     private string[] renderedRecent = [];
     private bool restored;
     private bool openingFiles;
+    private bool pickingDocuments;
     private bool listening;
     private bool stopped;
     internal bool IsClosing => stopped;
@@ -81,6 +82,28 @@ public partial class AppShell : Shell
         DesktopImport.Available -= ScheduleFileImports;
         if (trackedSession is not null) trackedSession.PropertyChanged -= SessionChanged;
         trackedSession = null;
+    }
+
+    internal async Task PickDocumentsAsync()
+    {
+        if (stopped || !listening || pickingDocuments) return;
+        pickingDocuments = true;
+        try
+        {
+            var selected = (await FilePicker.Default.PickMultipleAsync(new PickOptions
+            {
+                PickerTitle = "Додати документи або фотографії",
+            })).OfType<FileResult>().ToArray();
+            if (selected.Length == 0 || stopped) return;
+            if (CurrentPage is not LibraryPage) await GoToAsync(LibraryRoute);
+            if (!stopped && CurrentPage is LibraryPage library)
+                await library.ImportPickedDocumentsAsync(selected);
+        }
+        catch (Exception error)
+        {
+            if (!stopped) await DisplayAlertAsync("Імпорт", error.Message, "Гаразд");
+        }
+        finally { pickingDocuments = false; }
     }
 
     private void ScheduleFileImports() => MainThread.BeginInvokeOnMainThread(DrainFileImports);
