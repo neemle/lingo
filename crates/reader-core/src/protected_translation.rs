@@ -28,7 +28,12 @@ static PERCENTAGES: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(r"{AMOUNT}{SPACE}[%‰]")).expect("percentages and per-mille figures")
 });
 
-fn numeric_matches<'a>(pattern: &'static Regex, source: &'a str) -> impl Iterator<Item = regex::Captures<'a>> {
+static FRENCH_MONTH_PHRASES: LazyLock<Regex> = LazyLock::new(|| {
+    let months = crate::translation_dates::FRENCH_MONTHS.join("|");
+    Regex::new(&format!(r"(?i)en[ \u{{a0}}\u{{202f}}]+({months})")).expect("French month phrases")
+});
+
+fn standalone_matches<'a>(pattern: &'static Regex, source: &'a str) -> impl Iterator<Item = regex::Captures<'a>> {
     let mut addresses = web_address_spans(source).peekable();
     pattern.captures_iter(source).filter_map(move |matched| {
         let range = matched.get(0)?.range();
@@ -47,14 +52,26 @@ fn numeric_matches<'a>(pattern: &'static Regex, source: &'a str) -> impl Iterato
 }
 
 fn euro_amounts(source: &str) -> impl Iterator<Item = (Range<usize>, &str)> + '_ {
-    numeric_matches(&EURO_AMOUNTS, source).filter_map(|matched| {
+    standalone_matches(&EURO_AMOUNTS, source).filter_map(|matched| {
         let amount = matched.name("before").or_else(|| matched.name("after"))?;
         Some((matched.get(0)?.range(), amount.as_str()))
     })
 }
 
 fn percentage_spans(source: &str) -> impl Iterator<Item = Range<usize>> + '_ {
-    numeric_matches(&PERCENTAGES, source).filter_map(|matched| matched.get(0).map(|value| value.range()))
+    standalone_matches(&PERCENTAGES, source).filter_map(|matched| matched.get(0).map(|value| value.range()))
+}
+
+fn french_month_phrases(source: &str) -> impl Iterator<Item = (Range<usize>, &'static str)> + '_ {
+    standalone_matches(&FRENCH_MONTH_PHRASES, source).filter_map(|matched| {
+        let month = matched.get(1)?.as_str().to_lowercase();
+        let translation = crate::translation_dates::ukrainian_month_phrase(&month)?;
+        Some((matched.get(0)?.range(), translation))
+    })
+}
+
+pub(crate) fn contains_french_month_phrase(source: &str) -> bool {
+    french_month_phrases(source).next().is_some()
 }
 
 pub(crate) fn contains_percentage(source: &str) -> bool {
@@ -129,6 +146,10 @@ pub(crate) struct ProtectedText<'a> {
 
 impl<'a> ProtectedText<'a> {
     pub(crate) fn new(source: &'a str, target: &str) -> Self {
+        Self::with_french_months(source, target, false)
+    }
+
+    pub(crate) fn with_french_months(source: &'a str, target: &str, french_months: bool) -> Self {
         let mut markers = Vec::new();
         let mut input = String::new();
         let mut offset = 0;
@@ -154,6 +175,9 @@ impl<'a> ProtectedText<'a> {
         });
         let mut spans: Vec<_> = identifiers.collect();
         spans.extend(numeric);
+        if french_months {
+            spans.extend(french_month_phrases(source).map(|(range, translated)| (range, Cow::Borrowed(translated))));
+        }
         spans.sort_unstable_by_key(|(range, _)| range.start);
         for (range, replacement) in spans {
             let token = loop {
@@ -260,6 +284,7 @@ pub(crate) fn contains_protected(source: &str) -> bool {
 pub(crate) fn passage_token_spans(source: &str) -> Vec<Range<usize>> {
     let mut spans: Vec<_> = protected_spans(source).map(|(span, _)| span)
         .chain(euro_amounts(source).map(|(span, _)| span))
+        .chain(french_month_phrases(source).map(|(span, _)| span))
         .chain(percentage_spans(source)).collect();
     spans.sort_unstable_by_key(|span| span.start);
     let mut merged: Vec<Range<usize>> = Vec::with_capacity(spans.len());
@@ -412,6 +437,16 @@ fn is_identifier(word: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn protects_french_month_phrases_in_ukrainian_prose() {
+        let source = "La participation a augmenté de 19,50 % en octobre.";
+        let protected = ProtectedText::with_french_months(source, "uk", true);
+        assert_eq!(protected.input(), "La participation a augmenté de ZXQ001QXZ ZXQ002QXZ.");
+        assert_eq!(protected.restore("Рівень участі зріс ZXQ002QXZ на ZXQ001QXZ.".into()).unwrap(),
+            "Рівень участі зріс у жовтні на 19,50 %.");
+        assert!(!contains_french_month_phrase("en maillot ou https://example.org/en%20octobre"));
+    }
 
     #[test]
     fn percentages_preserve_the_value_unit_and_multiplicity() {

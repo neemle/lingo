@@ -8,6 +8,7 @@ use llama_cpp_2::{context::LlamaContext, model::LlamaModel};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
+    sync::LazyLock,
     time::{Duration, Instant},
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -135,7 +136,9 @@ impl Store {
                     };
                     (HINT_GENERATION_MODEL, SYSTEM, example, cache_kind)
                 };
-                let cache_kind = if protected_translation::contains_percentage(prompt_text) {
+                let cache_kind = if french_to_ukrainian && protected_translation::contains_french_month_phrase(prompt_text) {
+                    "passage-fr-uk-month-phrases-v1"
+                } else if protected_translation::contains_percentage(prompt_text) {
                     "passage-protected-percentages-v1"
                 } else if has_repeated_numbers(prompt_text) {
                     "passage-repeated-numbers-v1"
@@ -248,7 +251,8 @@ impl TranslatePassageJob {
                                         .ok_or("Модель не отримала текст уривка.")?;
                                     let chunk_deadline = Instant::now() + if use_hy { Duration::from_secs(120) } else { CHUNK_TIMEOUT };
                                     let render = |fragment: &str, regenerate| {
-                                        let protected = ProtectedText::new(fragment, &self.target);
+                                        let protect_months = self.hy_model.is_none() && self.source == "fr" && self.target == "uk";
+                                        let protected = ProtectedText::with_french_months(fragment, &self.target, protect_months);
                                         context.clear_kv_cache();
                                         if let Some(variant) = self.hy_model {
                                             let text = hy_translation::translate(variant, model, context, protected.input(), regenerate,
@@ -431,6 +435,13 @@ fn preserves_numbers(source: &str, target: &str) -> bool {
     })
 }
 
+fn has_invented_ukrainian_year(source: &str, target: &str) -> bool {
+    static YEAR: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"(?i)\b([1-9][0-9]{3})\s+ро(?:ку|ці|ків)\b").expect("Ukrainian year")
+    });
+    YEAR.captures_iter(target).any(|year| !numbers(source).any(|number| number == &year[1]))
+}
+
 fn parse(bytes: &[u8], target: &str, source_text: &str) -> Result<TranslationChunk> {
     let error = "Модель не повернула повного перекладу.";
     let result: TranslationChunk =
@@ -446,6 +457,8 @@ fn parse(bytes: &[u8], target: &str, source_text: &str) -> Result<TranslationChu
     let source_letters = protected_translation::without_identifiers(source_text).chars().filter(|ch| ch.is_alphabetic()).count();
     let source_sentences = complete_sentences(source_text);
     if source_letters >= 60 && letters * 2 < source_letters || !preserves_numbers(source_text, text) ||
+        (target == "uk" && protected_translation::contains_french_month_phrase(source_text) &&
+            has_invented_ukrainian_year(source_text, text)) ||
         (source_sentences > 1 && complete_sentences(text) < source_sentences)
     {
         return Err(error.into());
@@ -489,6 +502,15 @@ fn language_name(language: &str) -> Result<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_a_year_invented_for_a_month_only_in_the_original() {
+        let response = serde_json::to_vec(&TranslationChunk {
+            text: "У жовтні 2024 року участь зросла на 19,50 %.".into(),
+        }).unwrap();
+        assert!(parse(&response, "uk", "La participation a augmenté de 19,50 % en octobre.").is_err());
+        assert!(parse(&response, "uk", "La participation a augmenté de 19,50 % en octobre 2024.").is_ok());
+    }
 
     #[test]
     fn stops_only_after_the_passage_json_object_closes() {

@@ -1,7 +1,7 @@
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
-const FRENCH_MONTHS: [&str; 12] = [
+pub(crate) const FRENCH_MONTHS: [&str; 12] = [
     "janvier",
     "février",
     "mars",
@@ -15,6 +15,15 @@ const FRENCH_MONTHS: [&str; 12] = [
     "novembre",
     "décembre",
 ];
+const UKRAINIAN_MONTH_PHRASES: [&str; 12] = [
+    "у січні", "у лютому", "у березні", "у квітні", "у травні", "у червні",
+    "у липні", "у серпні", "у вересні", "у жовтні", "у листопаді", "у грудні",
+];
+
+pub(crate) fn ukrainian_month_phrase(french_month: &str) -> Option<&'static str> {
+    FRENCH_MONTHS.iter().position(|&month| month == french_month)
+        .map(|index| UKRAINIAN_MONTH_PHRASES[index])
+}
 const UKRAINIAN_MONTHS: [&str; 12] = [
     "січня",
     "лютого",
