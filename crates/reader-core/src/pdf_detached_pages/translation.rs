@@ -591,7 +591,12 @@ fn split_ocr_sentences(
         let [left, right] = pair else { continue; };
         if left.page != right.page || page.is_some_and(|page| left.page != page) { continue; }
         let Some((left_span, right_span)) = left.source_span.zip(right.source_span) else { continue; };
-        if left_span.end_utf8 > right_span.start_utf8 || same_ocr_flow(left, right) { continue; }
+        if left_span.end_utf8 > right_span.start_utf8 { continue; }
+        let starts_list_item = document.text.get(right_span.start_utf8..right_span.end_utf8).is_some_and(|text| {
+            document_layout::pdf_list_label_ranges(document, text, right_span.start_utf8)
+                .next().is_some_and(|range| range.start == 0)
+        });
+        if !starts_list_item && same_ocr_flow(left, right) { continue; }
         if document.text.is_char_boundary(right_span.start_utf8) {
             cuts.push(right_span.start_utf8);
         }

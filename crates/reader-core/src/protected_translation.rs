@@ -30,7 +30,7 @@ static PERCENTAGES: LazyLock<Regex> = LazyLock::new(|| {
 
 static PAGE_REFERENCES: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
-        r"([pP]{1,2}|[сС])\.[ \t\u{a0}\u{202f}]+",
+        r"([pP]{1,2}\.|(?i:с\.|стор\.|сторінці|сторінка|сторінку|сторінки|сторінок|сторінках))[ \t\u{a0}\u{202f}]+",
         r"([0-9]{1,6}(?:[ \u{a0}\u{202f}]*[-–][ \u{a0}\u{202f}]*[0-9]{1,6})?)",
     )).expect("page references")
 });
@@ -73,7 +73,7 @@ fn page_references_in(source: &str, allow_ukrainian: bool) -> impl Iterator<Item
     standalone_matches(&PAGE_REFERENCES, source).filter_map(move |matched| {
         let range = matched.get(0)?.range();
         let rest = &source[range.end..];
-        if (!allow_ukrainian && matched.get(1)?.as_str().starts_with(['с', 'С'])) ||
+        if (!allow_ukrainian && !matched.get(1)?.as_str().starts_with(['p', 'P'])) ||
             (rest.starts_with(['.', ',']) && rest[1..].starts_with(|ch: char| ch.is_ascii_digit()))
         {
             return None;
@@ -518,6 +518,8 @@ mod tests {
         let spans = passage_token_spans(source);
         assert_eq!(spans.into_iter().map(|span| &source[span]).collect::<Vec<_>>(), ["p. 189", "pp. 12–14"]);
         assert_eq!(restore_unmarked_page_references(source, "Див. p. 189 і с. 12-14.").as_deref(),
+            Some("Див. с. 189 і с. 12–14."));
+        assert_eq!(restore_unmarked_page_references(source, "Див. сторінку 189 і сторінки 12-14.").as_deref(),
             Some("Див. с. 189 і с. 12–14."));
         assert!(restore_unmarked_page_references(source, "Див. p. 190 і с. 12–14.").is_none());
         assert!(restore_unmarked_page_references(source, "Див. p. 189.").is_none());

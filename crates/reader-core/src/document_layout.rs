@@ -756,16 +756,13 @@ pub(crate) fn pdf_list_label_ranges<'a>(document: &'a Document, text: &'a str, s
         let body = line.trim_start_matches(|ch: char| ch.is_whitespace() || ch == '\u{fffc}');
         let begin = prefix + line.len() - body.len();
         let token = body.split_whitespace().next()?;
-        let marker = token.strip_suffix('.')?;
-        if crate::pdf_sentences::is_page_reference(marker, &body[token.len()..]) {
-            return None;
-        }
-        let label = marker.as_bytes();
         let absolute = start.checked_add(begin)?;
-        if !(label.is_empty() && is_ocr_list_dot(document, absolute))
-            && !(label.len() == 1 && label[0].is_ascii_lowercase())
-            && !((1..=3).contains(&label.len()) && label.iter().all(u8::is_ascii_digit))
-        {
+        let printed_label = token.strip_suffix('.').is_some_and(|marker| {
+            !crate::pdf_sentences::is_page_reference(marker, &body[token.len()..])
+                && (alphabetical_list_label(marker).is_some()
+                    || ((1..=3).contains(&marker.len()) && marker.bytes().all(|ch| ch.is_ascii_digit())))
+        });
+        if !printed_label && !is_ocr_list_marker(document, token, absolute) {
             return None;
         }
         let original = document.text.get(absolute..)?.strip_prefix(token)?;
@@ -778,10 +775,21 @@ pub(crate) fn pdf_list_label_ranges<'a>(document: &'a Document, text: &'a str, s
     })
 }
 
-fn is_ocr_list_dot(document: &Document, start: usize) -> bool {
-    document.ocr_lines.as_deref().unwrap_or_default().iter().any(|line| {
+fn alphabetical_list_label(text: &str) -> Option<u8> {
+    let [letter] = text.as_bytes() else { return None; };
+    letter.is_ascii_lowercase().then_some(*letter)
+}
+
+fn is_ocr_list_marker(document: &Document, token: &str, start: usize) -> bool {
+    let confused_letter = match token {
+        "." => None,
+        "€:" | "€." => Some(b'c'),
+        _ => return false,
+    };
+    let lines = document.ocr_lines.as_deref().unwrap_or_default();
+    lines.iter().enumerate().any(|(index, line)| {
         let [dot, next, ..] = line.words.as_slice() else { return false; };
-        if dot.text != "." || !dot.source_span.is_some_and(|span| span.start_utf8 == start)
+        if dot.text != token || !dot.source_span.is_some_and(|span| span.start_utf8 == start)
             || !next.text.starts_with(char::is_uppercase)
         {
             return false;
@@ -790,8 +798,30 @@ fn is_ocr_list_dot(document: &Document, start: usize) -> bool {
         let (x, y, width, height) = crate::ocr::reading_box((dot.x, dot.y, dot.width, dot.height), rotation);
         let (next_x, next_y, _, next_height) = crate::ocr::reading_box((next.x, next.y, next.width, next.height), rotation);
         let gap = next_x - x - width;
-        (0.0..=2.0 * next_height).contains(&gap) && height <= 0.45 * next_height
-            && (next_y + 0.45 * next_height..=next_y + 1.1 * next_height).contains(&(y + height / 2.0))
+        if !(0.0..=2.0 * next_height).contains(&gap) { return false; }
+        let Some(letter) = confused_letter else {
+            return height <= 0.45 * next_height
+                && (next_y + 0.45 * next_height..=next_y + 1.1 * next_height).contains(&(y + height / 2.0));
+        };
+        if height > 1.25 * next_height || !(next_y..=next_y + next_height).contains(&(y + height / 2.0)) {
+            return false;
+        }
+        let peer_label = |peer: &crate::ocr::OcrLine| {
+            if peer.page != line.page || crate::ocr::line_rotation(peer).unwrap_or_default() != rotation {
+                return None;
+            }
+            let [marker, body, ..] = peer.words.as_slice() else { return None; };
+            let (marker_x, _, _, _) = crate::ocr::reading_box((marker.x, marker.y, marker.width, marker.height), rotation);
+            let (body_x, _, _, _) = crate::ocr::reading_box((body.x, body.y, body.width, body.height), rotation);
+            if (marker_x - x).abs() > 0.6 * next_height || (body_x - next_x).abs() > 0.6 * next_height {
+                return None;
+            }
+            alphabetical_list_label(marker.text.strip_suffix('.')?)
+        };
+        // A damaged glyph alone is ambiguous. Require both adjacent list labels
+        // in the same column and a preceding item in the expected order.
+        lines[..index].iter().rev().find_map(peer_label) == Some(letter - 1)
+            && lines.iter().any(|peer| peer_label(peer) == Some(letter + 1))
     })
 }
 
@@ -951,6 +981,37 @@ fn parse_pdf(bytes: &[u8]) -> Result<Extracted> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reserves_a_damaged_list_label_only_in_a_corroborated_column() {
+        use crate::ocr::{OcrLine, OcrSpan, OcrWord};
+        let text = "b. Choisissez\n€: Indiquez\nd. Comparez";
+        let line = |marker: &str, next: &str, start, y| {
+            let word = |text: &str, x, width, source_span| OcrWord {
+                text: text.into(), x, y, width, height: 0.01, raw_start_utf16: None, source_span,
+            };
+            OcrLine {
+                page: 0, text: format!("{marker} {next}"), x: 0.15, y, width: 0.25, height: 0.01,
+                rotation: None, confidence: None, correction: None, block_start: true, source_span: None,
+                words: vec![word(marker, 0.15, 0.013, Some(OcrSpan {
+                    start_utf8: start, end_utf8: start + marker.len(),
+                    start_utf16: text[..start].encode_utf16().count(),
+                    end_utf16: text[..start + marker.len()].encode_utf16().count(),
+                })), word(next, 0.17, 0.22, None)],
+            }
+        };
+        let mut document = Document { format: "pdf".into(), text: text.into(), ocr_lines: Some(vec![
+            line("b.", "Choisissez", 0, 0.2),
+            line("€:", "Indiquez", text.find('€').unwrap(), 0.24),
+            line("d.", "Comparez", text.find("d. ").unwrap(), 0.29),
+        ]), ..Document::default() };
+        let labels = |doc: &Document| pdf_list_label_ranges(doc, &doc.text, 0)
+            .map(|range| text[range].to_owned()).collect::<Vec<_>>();
+        assert_eq!(labels(&document), ["b.", "€:", "d."]);
+        document.ocr_lines.as_mut().unwrap()[2].words[1].x = 0.52;
+        assert_eq!(labels(&document), ["b.", "d."]);
+        assert!(mask_pdf_translation_input(&document, text, 0).unwrap().contains("€: Indiquez"));
+    }
     use crate::ocr::{OcrLine, OcrSpan};
 
     #[test]
