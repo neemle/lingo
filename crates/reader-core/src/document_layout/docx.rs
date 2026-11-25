@@ -14,7 +14,7 @@ use std::{
 mod numbering;
 use numbering::Numbering;
 
-pub(crate) const DOCX_LAYOUT_VERSION: u8 = 5;
+pub(crate) const DOCX_LAYOUT_VERSION: u8 = 6;
 
 #[derive(Clone, Default)]
 struct ParagraphProperties {
@@ -203,19 +203,127 @@ struct Paragraph {
 
 pub(super) fn parse(bytes: &[u8]) -> Result<Extracted> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|_| "Некоректний DOCX")?;
-    let styles = xml_part(&mut archive, "word/styles.xml")
-        .ok()
-        .flatten()
+    let missing_document = "У DOCX немає текстового документа";
+    let document = match relationship_parts(&mut archive, None, ["officeDocument"])? {
+        Some([document]) => document.ok_or(missing_document)?,
+        None => "word/document.xml".to_owned(),
+    };
+    let xml = xml_part(&mut archive, &document)?.ok_or(missing_document)?;
+    let [styles, numbering] =
+        relationship_parts(&mut archive, Some(&document), ["styles", "numbering"])
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| {
+                [
+                    sibling_part(&document, "styles.xml"),
+                    sibling_part(&document, "numbering.xml"),
+                ]
+                .map(Some)
+            });
+    let styles = styles
+        .and_then(|part| xml_part(&mut archive, &part).ok().flatten())
         .and_then(|xml| parse_styles(&xml).ok())
         .unwrap_or_default();
-    let xml =
-        xml_part(&mut archive, "word/document.xml")?.ok_or("У DOCX немає текстового документа")?;
-    let numbering = xml_part(&mut archive, "word/numbering.xml")
-        .ok()
-        .flatten()
+    let numbering = numbering
+        .and_then(|part| xml_part(&mut archive, &part).ok().flatten())
         .and_then(|xml| Numbering::parse(&xml).ok())
         .unwrap_or_default();
     parse_body(&xml, &styles, numbering)
+}
+
+fn sibling_part(part: &str, sibling: &str) -> String {
+    part.rsplit_once('/')
+        .map_or_else(|| sibling.to_owned(), |(dir, _)| format!("{dir}/{sibling}"))
+}
+
+fn relationship_parts<const N: usize>(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    part: Option<&str>,
+    kinds: [&str; N],
+) -> Result<Option<[Option<String>; N]>> {
+    let path = part.map_or_else(
+        || "_rels/.rels".to_owned(),
+        |part| {
+            let name = part.rsplit('/').next().unwrap_or(part);
+            sibling_part(part, &format!("_rels/{name}.rels"))
+        },
+    );
+    let Some(xml) = xml_part(archive, &path)? else {
+        return Ok(None);
+    };
+    let mut reader = NsReader::from_str(&xml);
+    let mut targets = [const { None }; N];
+    loop {
+        let decoder = reader.decoder();
+        let (namespace, event) = reader.read_resolved_event().map_err(xml_error)?;
+        let element = match event {
+            Event::Start(element) | Event::Empty(element) => element,
+            Event::Eof => return Ok(Some(targets)),
+            _ => continue,
+        };
+        if !matches!(namespace, ResolveResult::Bound(uri)
+            if uri.as_ref() == b"http://schemas.openxmlformats.org/package/2006/relationships")
+            || element.local_name().as_ref() != b"Relationship"
+        {
+            continue;
+        }
+        let Some(kind) = attribute(&element, decoder, b"Type")? else {
+            continue;
+        };
+        let Some((prefix, kind)) = kind.rsplit_once('/') else {
+            continue;
+        };
+        if !matches!(
+            prefix,
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+                | "http://purl.oclc.org/ooxml/officeDocument/relationships"
+        ) {
+            continue;
+        }
+        let Some(index) = kinds.iter().position(|candidate| *candidate == kind) else {
+            continue;
+        };
+        if targets[index].is_some()
+            || !matches!(
+                attribute(&element, decoder, b"TargetMode")?.as_deref(),
+                None | Some("Internal")
+            )
+        {
+            continue;
+        }
+        targets[index] = attribute(&element, decoder, b"Target")?
+            .and_then(|target| internal_part_path(part, &target));
+    }
+}
+
+fn internal_part_path(source: Option<&str>, target: &str) -> Option<String> {
+    if target.is_empty() || target.contains([':', '\\', '?', '#']) {
+        return None;
+    }
+    let (mut path, target) = if let Some(absolute) = target.strip_prefix('/') {
+        (Vec::new(), absolute)
+    } else {
+        let base = source
+            .and_then(|part| part.rsplit_once('/'))
+            .map(|(dir, _)| dir);
+        (
+            base.into_iter()
+                .flat_map(|dir| dir.split('/'))
+                .collect::<Vec<_>>(),
+            target,
+        )
+    };
+    for segment in target.split('/') {
+        match segment {
+            "" => return None,
+            "." => {}
+            ".." => {
+                path.pop()?;
+            }
+            name => path.push(name),
+        }
+    }
+    (!path.is_empty()).then(|| path.join("/"))
 }
 
 fn parse_body(xml: &str, styles: &Styles, mut numbering: Numbering) -> Result<Extracted> {
@@ -447,4 +555,79 @@ fn attribute(event: &BytesStart<'_>, decoder: Decoder, name: &[u8]) -> Result<Op
 
 fn xml_error(error: impl std::fmt::Display) -> String {
     format!("Некоректний XML: {error}")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Cursor, Write};
+
+    #[test]
+    fn docx_import_uses_linked_body_styles_and_numbering() {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, xml) in [
+            (
+                "_rels/.rels",
+                r#"
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="https://example.invalid/body.xml" TargetMode="External"/>
+                  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="content/book/body.xml"/>
+                </Relationships>"#,
+            ),
+            (
+                "content/book/_rels/body.xml.rels",
+                r#"
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="../layout/styles.xml"/>
+                  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="/layout/lists.xml"/>
+                </Relationships>"#,
+            ),
+            (
+                "word/document.xml",
+                r#"
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body><w:p><w:r><w:t>Unused part.</w:t></w:r></w:p></w:body>
+                </w:document>"#,
+            ),
+            (
+                "content/book/body.xml",
+                r#"
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body>
+                    <w:p><w:pPr><w:pStyle w:val="Lesson"/></w:pPr><w:r><w:t>Un chapitre</w:t></w:r></w:p>
+                    <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="17"/></w:numPr></w:pPr><w:r><w:t>Une phrase.</w:t></w:r></w:p>
+                  </w:body>
+                </w:document>"#,
+            ),
+            (
+                "content/layout/styles.xml",
+                r#"
+                <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:style w:type="paragraph" w:styleId="Lesson"><w:pPr><w:outlineLvl w:val="1"/></w:pPr></w:style>
+                </w:styles>"#,
+            ),
+            (
+                "layout/lists.xml",
+                r#"
+                <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:abstractNum w:abstractNumId="4"><w:lvl w:ilvl="0"><w:start w:val="3"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum>
+                  <w:num w:numId="17"><w:abstractNumId w:val="4"/></w:num>
+                </w:numbering>"#,
+            ),
+        ] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(xml.as_bytes()).unwrap();
+        }
+        let bytes = zip.finish().unwrap().into_inner();
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = crate::Store::open(&directory.path().join("reader.db")).unwrap();
+        let document = store.import("lesson.docx", &bytes, "fr").unwrap();
+        assert_eq!(document.text, "Un chapitre\nUne phrase.\n");
+        assert_eq!(document.blocks[0].heading_level, Some(2));
+        let marker = document.blocks[1]
+            .list
+            .as_ref()
+            .and_then(|list| list.marker.as_deref());
+        assert_eq!(marker, Some("3."));
+    }
 }
