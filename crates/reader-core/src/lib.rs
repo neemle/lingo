@@ -123,6 +123,8 @@ pub struct Document {
     pub(crate) pdf_abbreviation_boundaries: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) pdf_quote_boundaries: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) prose_sentence_boundaries: bool,
     pub created_at: i64,
     pub source_hash: String,
     pub format: String,
@@ -877,8 +879,11 @@ impl Store {
             .and_then(|extension| extension.to_str())
             .unwrap_or("txt")
             .to_lowercase();
+        let prose_sentence_boundaries = matches!(format.as_str(), "txt" | "docx") && ocr_lines.is_none();
         let sentences = if format == "pdf" || ocr_lines.is_some() {
             pdf_sentences::Layout::ClosingQuotes.segment(&text, &id)
+        } else if prose_sentence_boundaries {
+            pdf_sentences::segment_prose(&text, &id)
         } else {
             segment(&text, &id)
         };
@@ -912,6 +917,7 @@ impl Store {
             pdf_structured_sentences: format == "pdf",
             pdf_abbreviation_boundaries: format == "pdf",
             pdf_quote_boundaries: format == "pdf",
+            prose_sentence_boundaries,
             created_at: now(),
             source_hash: hash,
             source_url: source_url.map(str::to_owned),

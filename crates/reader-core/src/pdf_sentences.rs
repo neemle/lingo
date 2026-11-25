@@ -50,9 +50,18 @@ pub(crate) fn segment_document(document: &Document, text: &str) -> Vec<Sentence>
         crate::segment_pdf_with_titles(text, &document.id)
     } else if document.format == "pdf" && document.pdf_structured_sentences {
         crate::segment_pdf_structured(text, &document.id)
+    } else if matches!(document.format.as_str(), "txt" | "docx") && document.prose_sentence_boundaries {
+        segment_prose(text, &document.id)
     } else {
         segment(text, &document.id, document.pdf_soft_lines)
     }
+}
+
+pub(crate) fn segment_prose(text: &str, id: &str) -> Vec<Sentence> {
+    let mut boundaries = text.as_bytes().to_vec();
+    mask_title_periods(&mut boundaries);
+    let boundaries = std::str::from_utf8(&boundaries).expect("Masking ASCII periods preserves UTF-8");
+    attach_closing_quotes(text, id, crate::segment_with_boundaries(text, boundaries, id))
 }
 
 pub(crate) fn position_at(sentences: &[Sentence], offset: usize) -> usize {

@@ -78,6 +78,8 @@ pub(crate) fn parser_version(document: &Document) -> &'static str {
         document.ocr_lines.is_some(),
         document.pdf_page_starts.is_some(),
     ) {
+        ("docx", _, _) if document.docx_layout_version.unwrap_or(0) >= 5 && document.prose_sentence_boundaries =>
+            "docx-reflow/5-prose/1",
         ("docx", _, _) if document.docx_layout_version.unwrap_or(0) >= 5 => "docx-reflow/5",
         ("docx", _, _) if document.docx_layout_version == Some(4) => "docx-reflow/4",
         ("docx", _, _) if document.docx_layout_version == Some(3) => "docx-reflow/3",
@@ -87,6 +89,7 @@ pub(crate) fn parser_version(document: &Document) -> &'static str {
         ("pdf", true, false) => "pdf-ocr-reflow/1",
         ("pdf", false, _) => "pdf-text-reflow/1",
         (_, true, _) => "image-ocr-reflow/2",
+        ("txt", _, _) if document.prose_sentence_boundaries => "text-reflow/2",
         _ => "text-reflow/1",
     }
 }

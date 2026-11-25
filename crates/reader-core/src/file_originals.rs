@@ -478,6 +478,7 @@ impl Store {
             pdf_structured_sentences: true,
             pdf_abbreviation_boundaries: true,
             pdf_quote_boundaries: true,
+            prose_sentence_boundaries: false,
             created_at: now(),
             source_hash: hash,
             format: "pdf".into(),
