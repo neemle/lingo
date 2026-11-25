@@ -15,4 +15,10 @@
     <Compile Include="../Reader.Native/Platforms/iOS/SharedImportFolder.cs" Link="SharedImportFolder.cs" />
     <_LinkNativeExecutableInputs Include="$(CodesignEntitlements)" Condition="$(RuntimeIdentifier.StartsWith('iossimulator-'))" />
   </ItemGroup>
+  <!-- The iOS SDK tracks partial manifests but can reuse the bundle manifest after Info.plist changes. -->
+  <Target Name="TrackShareExtensionManifest" BeforeTargets="_CompileAppManifest">
+    <ItemGroup>
+      <_CompileAppManifestInputFile Include="$(MSBuildProjectDirectory)/Info.plist" />
+    </ItemGroup>
+  </Target>
 </Project>

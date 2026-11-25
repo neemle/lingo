@@ -8,6 +8,7 @@ internal static class SharedImportFolder
     internal const int MaxItems = 16;
     internal const string Payload = "payload";
     internal const string Name = "name";
+    internal const string Kind = "kind";
     internal const string BatchPrefix = "batch-";
     internal const string WordDocumentType = "org.openxmlformats.wordprocessingml.document";
 
@@ -17,10 +18,16 @@ internal static class SharedImportFolder
         return container?.Path is { } path ? Path.Combine(path, "incoming") : null;
     }
 
-    internal static long Capacity(string name) => Path.GetExtension(name).ToLowerInvariant() switch
+    internal static long Capacity(string name, string kind = "file") => kind switch
     {
-        ".pdf" => 4L * 1024 * 1024 * 1024,
-        ".txt" or ".docx" or ".jpg" or ".jpeg" or ".png" or ".webp" or ".heic" or ".heif" => 20L * 1024 * 1024,
+        "file" => Path.GetExtension(name).ToLowerInvariant() switch
+        {
+            ".pdf" => 4L * 1024 * 1024 * 1024,
+            ".txt" or ".docx" or ".jpg" or ".jpeg" or ".png" or ".webp" or ".heic" or ".heif" => 20L * 1024 * 1024,
+            _ => 0,
+        },
+        "text" => 20L * 1024 * 1024,
+        "url" => 16 * 1024,
         _ => 0,
     };
 

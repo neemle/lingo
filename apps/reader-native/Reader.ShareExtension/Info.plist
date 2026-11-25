@@ -13,7 +13,20 @@
         <key>NSExtensionAttributes</key>
         <dict>
             <key>NSExtensionActivationRule</key>
-            <string>extensionItems.@count &gt; 0 AND SUBQUERY(extensionItems, $item, $item.attachments.@count &gt; 0 AND $item.attachments.@count &lt;= 16 AND SUBQUERY($item.attachments, $attachment, ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.adobe.pdf" OR ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.image" OR ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.plain-text" OR ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "org.openxmlformats.wordprocessingml.document").@count == $item.attachments.@count).@count == extensionItems.@count</string>
+            <dict>
+                <key>NSExtensionActivationDictionaryVersion</key>
+                <integer>2</integer>
+                <key>NSExtensionActivationSupportsAttachmentsWithMaxCount</key>
+                <integer>16</integer>
+                <key>NSExtensionActivationSupportsFileWithMaxCount</key>
+                <integer>16</integer>
+                <key>NSExtensionActivationSupportsImageWithMaxCount</key>
+                <integer>16</integer>
+                <key>NSExtensionActivationSupportsText</key>
+                <true/>
+                <key>NSExtensionActivationSupportsWebURLWithMaxCount</key>
+                <integer>16</integer>
+            </dict>
         </dict>
     </dict>
 </dict>
