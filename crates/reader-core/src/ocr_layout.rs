@@ -701,17 +701,23 @@ mod tests {
         let full_top = [("Left", 0.05), ("starts", 0.15), ("Middle", 0.46), ("starts", 0.57),
             ("Right", 0.81), ("starts", 0.91)];
         let short_top = [("Left", 0.05), ("Middle", 0.46), ("Right", 0.81)];
+        let centered_top = [("Left", 0.1), ("Middle", 0.515), ("Right", 0.86)];
         let body = [("Left", 0.05), ("ends", 0.15), ("Middle", 0.46), ("ends", 0.57), ("Right", 0.81), ("ends", 0.91)];
+        let continuation = [("Left", 0.05), ("detail", 0.15), ("Middle", 0.46), ("detail", 0.57),
+            ("Right", 0.81), ("detail", 0.91)];
         let root = tempfile::tempdir().unwrap();
-        for (index, (top, expected)) in [
-            (&full_top[..], "Left starts\nLeft ends\n\nMiddle starts\nMiddle ends\n\nRight starts\nRight ends"),
-            (&short_top[..], "Left\nLeft ends\n\nMiddle\nMiddle ends\n\nRight\nRight ends"),
+        let short_text = "Left\nLeft ends\nLeft detail\n\nMiddle\nMiddle ends\nMiddle detail\n\nRight\nRight ends\nRight detail";
+        for (index, (top, top_positions, expected)) in [
+            (&full_top[..], [0.05, 0.46, 0.81], "Left starts\nLeft ends\nLeft detail\n\nMiddle starts\nMiddle ends\nMiddle detail\n\nRight starts\nRight ends\nRight detail"),
+            (&short_top[..], [0.05, 0.46, 0.81], short_text),
+            (&centered_top[..], [0.1, 0.515, 0.86], short_text),
         ].into_iter().enumerate() {
-            let cached = [row(top, 0.3), row(&body, 0.34)];
+            let cached = [row(top, 0.3), row(&body, 0.34), row(&continuation, 0.38)];
             let old = crate::ocr::recognized_lines(&cached, 1).unwrap();
             let (rebuilt, revised, edits) = upgrade_cached_page(&cached, &old).unwrap();
             assert_eq!(revised, expected);
-            assert_eq!(rebuilt.iter().map(|line| line.block_start).collect::<Vec<_>>(), [false, false, true, false, true, false]);
+            assert_eq!(rebuilt.iter().map(|line| line.block_start).collect::<Vec<_>>(),
+                [false, false, false, true, false, false, true, false, false]);
             assert!(!edits.is_empty());
             assert!(upgrade_cached_page(&rebuilt, &revised).is_none());
 
@@ -725,7 +731,9 @@ mod tests {
                 .map(|row| row["sourceBlockIndex"].as_u64()).collect::<Vec<_>>();
             assert_eq!(columns, [Some(0), Some(1), Some(2)]);
             let geometry = document.ocr_lines.unwrap();
-            for (line, x) in geometry.iter().zip([0.05, 0.05, 0.46, 0.46, 0.81, 0.81]) {
+            let positions = top_positions.into_iter().zip([0.05, 0.46, 0.81])
+                .flat_map(|(top, body)| [top, body, body]);
+            for (line, x) in geometry.iter().zip(positions) {
                 assert_eq!(line.x, x);
                 let span = line.source_span.unwrap();
                 assert_eq!(&expected[span.start_utf8..span.end_utf8], line.reading_text());

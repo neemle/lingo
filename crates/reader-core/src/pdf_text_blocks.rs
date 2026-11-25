@@ -282,6 +282,7 @@ fn parallel_grid(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) ->
     let mut previous = first;
     let mut rows = 0;
     let mut columns: Vec<_> = (0..width).map(|_| Vec::new()).collect();
+    let mut anchors = lines[..width].iter().map(|cell| cell[0]).collect::<Vec<_>>();
     let mut has_multiword_cell = [false; 8];
     for row in lines.chunks_exact(width) {
         let Some(first_word) = row[0].first().copied() else { break; };
@@ -291,9 +292,10 @@ fn parallel_grid(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) ->
 
         let mut end = cursor;
         let mut prior_word = None;
-        let complete = row.iter().zip(&lines[..width]).all(|(cell, top)| {
+        let complete = row.iter().zip(&anchors).zip(&lines[..width]).all(|((cell, anchor), top)| {
             let (Some(left), Some(right)) = (cell.first(), cell.last()) else { return false; };
-            if !same_baseline(first_word, *left) || !aligned(top[0], *left) ||
+            let same_column = aligned(*anchor, *left) || rows == 1 && centered_heading(top, cell);
+            if !same_baseline(first_word, *left) || !same_column ||
                 left.start < end || !whitespace(&units[end..left.start]) ||
                 prior_word.is_some_and(|prior| !wide_gap(prior, *left, page_width))
             { return false; }
@@ -302,6 +304,11 @@ fn parallel_grid(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) ->
             true
         });
         if !complete { break; }
+        if rows == 1 {
+            for (anchor, cell) in anchors.iter_mut().zip(row) {
+                if !aligned(*anchor, cell[0]) { *anchor = cell[0]; }
+            }
+        }
         for ((column, has_multiword_cell), cell) in columns.iter_mut().zip(&mut has_multiword_cell).zip(row) {
             *has_multiword_cell |= cell.len() >= 2;
             let separator = if rows > 0 { "\n" } else if cell[0].start == start { "" } else { "\n\n" };
@@ -314,6 +321,13 @@ fn parallel_grid(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) ->
     // A heading may be one word. Each column still needs an aligned multiword cell before reordering.
     (rows >= 2 && has_multiword_cell[..width].iter().all(|&seen| seen))
         .then(|| (BlockEdit { start, end: cursor, slices: columns.into_iter().flatten().collect() }, rows * width))
+}
+
+fn centered_heading(heading: &[PositionedWord], body: &[PositionedWord]) -> bool {
+    let ([heading], [first, .., last]) = (heading, body) else { return false; };
+    let width = last.right - first.left;
+    let center_delta = (heading.left + heading.right - first.left - last.right).abs() / 2.0;
+    heading.left >= first.left && heading.right <= last.right && center_delta <= 0.2 * width
 }
 
 fn parallel_lines(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) -> Option<(BlockEdit, usize)> {
