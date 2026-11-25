@@ -5,6 +5,34 @@ use unicode_segmentation::UnicodeSegmentation;
 const INLINE_SPACES: [char; 3] = [' ', '\u{00a0}', '\u{202f}'];
 
 pub(crate) fn expand(text: &str) -> Cow<'_, str> {
+    let Some(references) = expand_page_references(text) else { return expand_words(text); };
+    Cow::Owned(expand_words(&references).into_owned())
+}
+
+fn expand_page_references(text: &str) -> Option<String> {
+    let mut references = crate::protected_translation::page_references(text).peekable();
+    references.peek()?;
+    let mut output = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (span, pages) in references {
+        output.push_str(&text[copied..span.start]);
+        let range = pages.split_once(['-', '–']);
+        let plural = range.is_some() || text[span.clone()].get(..2).is_some_and(|prefix| prefix.eq_ignore_ascii_case("pp"));
+        output.push_str(if plural { "pages " } else { "page " });
+        if let Some((first, last)) = range {
+            output.push_str(first.trim_end());
+            output.push_str(" à ");
+            output.push_str(last.trim_start());
+        } else {
+            output.push_str(pages);
+        }
+        copied = span.end;
+    }
+    output.push_str(&text[copied..]);
+    Some(output)
+}
+
+fn expand_words(text: &str) -> Cow<'_, str> {
     let mut output = String::new();
     let mut copied = 0;
     for (start, token) in text.split_word_bound_indices() {
@@ -118,6 +146,15 @@ fn grouped_number_edge(mut adjacent: impl Iterator<Item = char>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_french_page_references_as_pages_and_ranges() {
+        assert_eq!(expand("Consultez la fiche, p. 189. Voir aussi pp.\u{202f}12-14."),
+            "Consultez la fiche, page cent quatre-vingt neuf. Voir aussi pages douze à quatorze.");
+        assert_eq!(expand("(P. 26), puis pp. 35 – 36."),
+            "(page vingt six), puis pages trente cinq à trente six.");
+        assert_eq!(expand("Nous parlons de P. Durand."), "Nous parlons de P. Durand.");
+    }
 
     #[test]
     fn reads_french_dates_and_honorifics_inside_narration() {

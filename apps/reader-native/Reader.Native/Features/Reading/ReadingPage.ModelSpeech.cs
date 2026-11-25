@@ -139,6 +139,7 @@ public partial class ReadingPage
     {
         var profile = voice.Engine switch
         {
+            "supertonic-3" when language == "fr" => 11,
             "supertonic-3" when language == "uk" => 10,
             "supertonic-3" => 9,
             _ => 5,

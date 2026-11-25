@@ -82,7 +82,7 @@ fn page_references_in(source: &str, allow_ukrainian: bool) -> impl Iterator<Item
     })
 }
 
-fn page_references(source: &str) -> impl Iterator<Item = (Range<usize>, &str)> + '_ {
+pub(crate) fn page_references(source: &str) -> impl Iterator<Item = (Range<usize>, &str)> + '_ {
     page_references_in(source, false)
 }
 

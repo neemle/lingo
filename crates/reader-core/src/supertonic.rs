@@ -95,7 +95,11 @@ impl MultilingualSpeechJob {
         };
         let spoken = canonical_dialogue(&spoken);
         let synthesis_rate = crate::tts::model_synthesis_rate(self.rate);
-        let profile = if self.language == "uk" { "supertonic-3-narration-v10" } else { "supertonic-3-narration-v9" };
+        let profile = match self.language.as_str() {
+            "fr" => "supertonic-3-narration-v11",
+            "uk" => "supertonic-3-narration-v10",
+            _ => "supertonic-3-narration-v9",
+        };
         let cache = SpeechCacheKey::new(
             profile,
             self.model.revision(),
