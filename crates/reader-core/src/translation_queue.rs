@@ -168,7 +168,7 @@ mod tests {
         let editor = RefCell::new(Store::open(&path).unwrap());
         let invocations = Cell::new(0);
         let old_step = worker.advance_background_translation_until_canceled(
-            &document.id, revision, "uk", &|| {
+            &document.id, revision, "uk", Some("fr"), &|| {
                 let count = invocations.get() + 1;
                 invocations.set(count);
                 if count == 2 {
@@ -189,6 +189,16 @@ mod tests {
                       row.get::<_, i64>(3)?, row.get::<_, Option<String>>(4)?)),
         ).unwrap();
         assert_eq!(checkpoint, (0, false, 0, 5, None));
+        let queued_step = worker.advance_background_translation_for_source(
+            &document.id, revision, "uk", Some("fr"),
+        ).unwrap();
+        assert!(queued_step.resume_at.is_none());
+        assert!(queued_step.missing_packages.is_none());
+        let unchanged_route: Option<String> = worker.connection.query_row(
+            "SELECT route_identity FROM background_translation_progress WHERE document_id=?1 AND target='uk'",
+            [&document.id], |row| row.get(0),
+        ).unwrap();
+        assert!(unchanged_route.is_none());
         let next_step = worker.advance_background_translation(&document.id, revision, "uk").unwrap();
         assert!(next_step.resume_at.is_some_and(|due| due > 0));
         assert!(next_step.missing_packages.is_some());
@@ -424,13 +434,21 @@ impl Store {
         revision: &str,
         target: &str,
     ) -> Result<BackgroundTranslationProgress> {
-        self.advance_background_translation_until_canceled(id, revision, target, &|| false)
+        self.advance_background_translation_for_source(id, revision, target, None)
+    }
+
+    pub fn advance_background_translation_for_source(
+        &mut self, id: &str, revision: &str, target: &str, source: Option<&str>,
+    ) -> Result<BackgroundTranslationProgress> {
+        self.advance_background_translation_until_canceled(id, revision, target, source, &|| false)
     }
 
     pub(crate) fn advance_background_translation_until_canceled(
-        &mut self, id: &str, revision: &str, target: &str, canceled: &dyn Fn() -> bool,
+        &mut self, id: &str, revision: &str, target: &str, expected_source: Option<&str>,
+        canceled: &dyn Fn() -> bool,
     ) -> Result<BackgroundTranslationProgress> {
         valid_language(target)?;
+        if let Some(source) = expected_source { valid_language(source)?; }
         let mut progress = BackgroundTranslationProgress {
             resume_at: None,
             translated_page: None,
@@ -454,12 +472,14 @@ impl Store {
                 ..progress
             });
         };
+        // A queued request can survive a language change at the same text revision.
         let source: Option<(String, bool)> = self.connection.query_row(
             "SELECT json_extract(body,'$.language'),
                     json_extract(body,'$.format')='pdf' OR coalesce(json_array_length(body,'$.ocrLines'),0)>0
              FROM documents
-             WHERE id=?1 AND json_extract(body,'$.currentRevisionId')=?2",
-            params![id, revision],
+             WHERE id=?1 AND json_extract(body,'$.currentRevisionId')=?2
+               AND (?3 IS NULL OR json_extract(body,'$.language')=?3)",
+            params![id, revision, expected_source],
             |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional().map_err(database_error)?;
         let Some((source, positioned)) = source.filter(|(source, _)| source != target) else {

@@ -2787,7 +2787,7 @@ mod tests {
             let revision = document.current_revision_id.as_deref().unwrap();
             let started = std::cell::Cell::new(false);
             let result = store.advance_background_translation_until_canceled(
-                &document.id, revision, "uk", &|| started.replace(true),
+                &document.id, revision, "uk", None, &|| started.replace(true),
             );
             assert!(result.is_err());
             let interrupted: (u32, i64) = store.connection.query_row(

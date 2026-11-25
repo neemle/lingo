@@ -39,7 +39,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public async Task<BackgroundTranslationProgress> AdvanceBackgroundTranslationAsync(string id, string revision, string source, string target,
         CancellationToken cancellationToken = default)
     {
-        var progress = await Task.Run(() => client.AdvanceBackgroundTranslation(id, revision, target, cancellationToken), cancellationToken);
+        var progress = await Task.Run(() =>
+            client.AdvanceBackgroundTranslation(id, revision, target, cancellationToken, source), cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (progress.TranslatedPage is { } page)
             BackgroundPageTranslated?.Invoke(new(id, revision, page, source, target));

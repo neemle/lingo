@@ -120,13 +120,15 @@ unsafe fn invoke(handle: u64, input: *const u8, len: u64) -> Result<serde_json::
     let exclusive = matches!(&command, Command::ClearStorage { .. });
     let _write = exclusive.then(|| STORAGE_GATE.write().unwrap_or_else(|error| error.into_inner()));
     let _read = (!exclusive).then(|| STORAGE_GATE.read().unwrap_or_else(|error| error.into_inner()));
-    if let Command::AdvanceBackgroundTranslation { id, revision, target, request_id } = &command {
+    if let Command::AdvanceBackgroundTranslation { id, revision, target, source, request_id } = &command {
         let canceled = request_cancellation(handle, *request_id, ModelRequestKind::BackgroundTranslation)?;
         let canceled_error = || Error::new("canceled", "Фоновий переклад скасовано.");
         if canceled() { return Err(canceled_error()); }
         let worker = registry::lock()?.store(handle)?.prepare_translation_worker();
         if let Some(worker) = worker {
-            let result = worker.advance_background_translation_until_canceled(id, revision, target, &canceled);
+            let result = worker.advance_background_translation_for_source_until_canceled(
+                id, revision, target, source.as_deref(), &canceled,
+            );
             return if canceled() { Err(canceled_error()) } else { encode_job(result) };
         }
     }

@@ -67,6 +67,7 @@ pub enum Command {
         id: String,
         revision: String,
         target: String,
+        source: Option<String>,
         #[serde(rename = "requestId")]
         request_id: Option<u64>,
     },

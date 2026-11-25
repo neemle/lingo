@@ -554,8 +554,14 @@ impl StoreWorker {
     pub fn advance_background_translation_until_canceled(
         self, id: &str, revision: &str, target: &str, canceled: &dyn Fn() -> bool,
     ) -> Result<crate::translation_queue::BackgroundTranslationProgress> {
+        self.advance_background_translation_for_source_until_canceled(id, revision, target, None, canceled)
+    }
+
+    pub fn advance_background_translation_for_source_until_canceled(
+        self, id: &str, revision: &str, target: &str, source: Option<&str>, canceled: &dyn Fn() -> bool,
+    ) -> Result<crate::translation_queue::BackgroundTranslationProgress> {
         self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?
-            .advance_background_translation_until_canceled(id, revision, target, canceled)
+            .advance_background_translation_until_canceled(id, revision, target, source, canceled)
     }
 
     pub fn warm_translation_step(

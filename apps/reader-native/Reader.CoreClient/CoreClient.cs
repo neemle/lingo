@@ -41,9 +41,9 @@ public sealed class CoreClient : IDisposable
         CallIndependent<JsonElement>(new { version = 1, operation = "clear_storage", scope });
 
     public BackgroundTranslationProgress AdvanceBackgroundTranslation(string id, string revision, string target,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default, string? source = null) =>
         CallCancelable<BackgroundTranslationProgress>(ref nextBackgroundTranslationRequest, cancellationToken,
-            requestId => new { version = 1, operation = "advance_background_translation", id, revision, target, requestId },
+            requestId => new { version = 1, operation = "advance_background_translation", id, revision, target, source, requestId },
             CancelBackgroundTranslationRequest);
 
     private static object CancelBackgroundTranslationRequest(long requestId) =>
