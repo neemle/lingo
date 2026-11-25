@@ -1,6 +1,7 @@
 use super::{
     annotation_cache, expressions::ExpressionMatch, lexicon, ocr_suggestions::{spacing_suggestions, SpacingSuggestion, SpellingSuggestion},
-    syntax_parse, versioned_index, KnowledgePackage, Pack, WordAnalysis, WordContext, WordLookup, PACKS,
+    french_elided_base, syntax_parse, versioned_index, word_key, KnowledgePackage, Pack, WordAnalysis,
+    WordContext, WordLookup, PACKS,
 };
 use crate::{
     document_tokens::{find_sentence, revision_id, token_id, word_parts},
@@ -427,6 +428,10 @@ impl Store {
         .map_err(|error| error.to_string())?;
         if language == "fr" {
             address.extend_from_slice(b"\0french-syntax-v1");
+            let text = boundary.map_or(sentence.text.as_str(), |boundary| boundary.text.as_str());
+            if word_parts(text).any(|(_, _, word)| french_elided_base(&word_key(word)).is_some()) {
+                address.extend_from_slice(b"\0french-elision-v1");
+            }
         }
         if let Some(boundary) = boundary {
             address.extend_from_slice(&(boundary.visible_start as u64).to_le_bytes());

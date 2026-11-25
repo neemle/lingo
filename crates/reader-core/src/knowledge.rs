@@ -508,6 +508,36 @@ impl Store {
         context: Option<&WordContext>,
         index: Option<(&Pack, &Connection, u32)>,
     ) -> Result<Option<WordLookup>> {
+        let mut exact = self.lookup_exact_word(language, word, context, index)?;
+        let Some(lookup) = exact.as_mut().filter(|lookup| {
+            language == "fr" && lookup.analyses.is_empty() && lookup.meanings.is_empty()
+        }) else {
+            return Ok(exact);
+        };
+        let key = word_key(word);
+        let Some(base) = french_elided_base(&key) else {
+            return Ok(exact);
+        };
+        let Some(base_lookup) = self.lookup_exact_word(language, base, None, index)?
+            .filter(|lookup| !lookup.analyses.is_empty() || !lookup.meanings.is_empty())
+        else {
+            return Ok(exact);
+        };
+        lookup.total_observations = base_lookup.total_observations;
+        lookup.analyses = base_lookup.analyses;
+        lookup.lexical_package = base_lookup.lexical_package;
+        lookup.meanings = base_lookup.meanings;
+        lookup.spelling_suggestions.clear();
+        Ok(exact)
+    }
+
+    fn lookup_exact_word(
+        &self,
+        language: &str,
+        word: &str,
+        context: Option<&WordContext>,
+        index: Option<(&Pack, &Connection, u32)>,
+    ) -> Result<Option<WordLookup>> {
         let key = word_key(word);
         let syntax_hint = context.and_then(|context| context.local_syntax_hint(language, word));
         let Some((pack, db, index_version)) = index else {
@@ -810,6 +840,14 @@ pub(crate) fn word_key(word: &str) -> String {
         .collect()
 }
 
+fn french_elided_base(key: &str) -> Option<&str> {
+    let (prefix, base) = key.split_once('\'')?;
+    (matches!(prefix, "l" | "d" | "j" | "m" | "t" | "s" | "n" | "c" | "qu")
+        && !base.is_empty()
+        && base.chars().all(char::is_alphabetic))
+        .then_some(base)
+}
+
 fn build_pack(path: &Path, input: impl BufRead) -> Result<()> {
     let mut db = Connection::open(path).map_err(|error| error.to_string())?;
     db.execute_batch(
@@ -912,6 +950,56 @@ fn build_pack(path: &Path, input: impl BufRead) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn french_elision_uses_attested_base_and_preserves_the_selection() {
+        use crate::knowledge::scoped_analysis::AnalysisScope;
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&directory.path().join("user.sqlite")).unwrap();
+        let pack = PACKS.iter().find(|pack| pack.language == "fr").unwrap();
+        let path = pack.path(&store.knowledge_directory);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        build_pack(&path, concat!(
+            "1\thôtel\thôtel\tNOUN\t_\tGender=Masc|Number=Sing\t0\troot\t_\t_\n",
+            "2\td'accord\td'accord\tADV\t_\t_\t1\tadvmod\t_\t_\n",
+            "3\taccord\taccord\tNOUN\t_\t_\t1\tdep\t_\t_\n",
+            "4\thui\thui\tADV\t_\t_\t1\tadvmod\t_\t_\n",
+        ).as_bytes()).unwrap();
+
+        for (word, lemma, pos) in [
+            ("L’HÔTEL", "hôtel", "NOUN"),
+            ("dʼhôtel", "hôtel", "NOUN"),
+            ("d’accord", "d'accord", "ADV"),
+        ] {
+            let lookup = store.lookup_word("fr", word, None).unwrap().unwrap();
+            assert_eq!(lookup.analyses[0].lemma, lemma);
+            assert_eq!(lookup.analyses[0].part_of_speech, pos);
+        }
+        assert!(store.lookup_word("fr", "aujourd’hui", None).unwrap().unwrap().analyses.is_empty());
+
+        let text = "🏨 L’hôtel est ouvert.";
+        let document = store.import("elision.txt", text.as_bytes(), "fr").unwrap();
+        let sentence = &document.sentences[0];
+        let offset = |word| {
+            let start = sentence.text.find(word).unwrap();
+            sentence.text[..start].encode_utf16().count()
+        };
+        let start = offset("L’hôtel");
+        for scope in [
+            AnalysisScope::Word { start_utf16: start },
+            AnalysisScope::Expression { member_starts_utf16: vec![start, offset("est")] },
+            AnalysisScope::Sentence { start: 0 },
+        ] {
+            let analysis = store.cached_linguistic_analysis(&document.id, &sentence.id,
+                document.current_revision_id.as_deref().unwrap(), scope).unwrap();
+            let selected = analysis["words"].as_array().unwrap().iter()
+                .find(|word| word["text"] == "L’hôtel").unwrap();
+            assert_eq!(selected["sentenceStartUtf16"], start);
+            assert_eq!(selected["morphology"][0]["lemma"], "hôtel");
+            assert_eq!(selected["spellingStatus"], "attested");
+        }
+    }
 
     #[test]
     fn french_partitive_explains_the_selected_expression_and_its_members_without_a_pack() {
