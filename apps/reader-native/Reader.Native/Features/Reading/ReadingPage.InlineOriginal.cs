@@ -189,10 +189,7 @@ public partial class ReadingPage
                     detachedLines = (await session.DetachedPdfOcrAsync(document.Id, page).WaitAsync(cancellation))?.Lines ?? [];
                 var recognized = detachedText is not null ? detachedLines :
                     document.OcrLines?.Where(line => line.Page == page && line.SourceSpan is not null).ToArray() ?? [];
-                var textStart = document.PdfPageStarts?.ElementAtOrDefault(page)
-                    ?? document.Blocks.FirstOrDefault(block => block.Page == page)?.StartUtf16 ?? -1;
-                var expectedText = detachedText is not null ? detachedText.AsMemory()
-                    : textStart >= 0 && textStart <= document.Text.Length ? document.Text.AsMemory(textStart) : default;
+                var expectedText = InlinePdfText(document, address).Text;
                 (preview, nativeText, nativeBoxes, appearance) = await PdfScan.ReadingPreviewAsync(file.Path, page,
                     recognized, expectedText, cancellation);
             }
@@ -258,6 +255,12 @@ public partial class ReadingPage
     private bool CanReuseInlinePdfFrame(InlinePdfAddress address) => address.DetachedText is null &&
         CurrentNativePdfWindow(address.Document)?.Pages.Any(page => page.Page == address.Page &&
             page is { State: "textLayer", HasOcr: false, RefreshPending: false }) == true;
+
+    private static (ReadOnlyMemory<char> Text, int Offset) InlinePdfText(Document document, InlinePdfAddress address) =>
+        address.DetachedText is { } detached ? (detached.AsMemory(), 0) :
+        DocumentPages.TextBounds(document, address.Page) is { } bounds
+            ? (document.Text.AsMemory(bounds.Start, bounds.End - bounds.Start), bounds.Start)
+            : default;
 
     private void ShowActiveInlinePdfFrame()
     {
@@ -496,11 +499,8 @@ public partial class ReadingPage
         var offset = 0;
         if (lines.Length == 0 && inlineNativeBoxes.Length > 0)
         {
-            var source = address.DetachedText ?? document.Text;
-            var start = detached ? 0 : document.PdfPageStarts?.ElementAtOrDefault(address.Page)
-                ?? document.Blocks.FirstOrDefault(block => block.Page == address.Page)?.StartUtf16 ?? -1;
-            if (start >= 0 && start <= source.Length - inlineNativeText.Length &&
-                source.AsSpan(start, inlineNativeText.Length).SequenceEqual(inlineNativeText))
+            var (pageText, start) = InlinePdfText(document, address);
+            if (!pageText.IsEmpty && pageText.Span.StartsWith(inlineNativeText.AsSpan(), StringComparison.Ordinal))
             {
                 lines = inlineNativeBoxes;
                 offset = start;
