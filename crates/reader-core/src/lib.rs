@@ -124,6 +124,8 @@ pub struct Document {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) pdf_quote_boundaries: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) pdf_reference_boundaries: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) prose_sentence_boundaries: bool,
     pub created_at: i64,
     pub source_hash: String,
@@ -458,18 +460,22 @@ pub fn segment(text: &str, id: &str) -> Vec<Sentence> {
 }
 
 pub(crate) fn segment_pdf(text: &str, id: &str) -> Vec<Sentence> {
-    segment_pdf_lines(text, id, false, false)
+    segment_pdf_lines(text, id, false, false, false)
 }
 
 pub(crate) fn segment_pdf_structured(text: &str, id: &str) -> Vec<Sentence> {
-    segment_pdf_lines(text, id, true, false)
+    segment_pdf_lines(text, id, true, false, false)
 }
 
 pub(crate) fn segment_pdf_with_titles(text: &str, id: &str) -> Vec<Sentence> {
-    segment_pdf_lines(text, id, true, true)
+    segment_pdf_lines(text, id, true, true, false)
 }
 
-fn segment_pdf_lines(text: &str, id: &str, structured: bool, titles: bool) -> Vec<Sentence> {
+pub(crate) fn segment_pdf_with_references(text: &str, id: &str) -> Vec<Sentence> {
+    segment_pdf_lines(text, id, true, true, true)
+}
+
+fn segment_pdf_lines(text: &str, id: &str, structured: bool, titles: bool, references: bool) -> Vec<Sentence> {
     let mut softened = text.as_bytes().to_vec();
     let mut start = 0;
     let mut lines = text.split_inclusive('\n').peekable();
@@ -488,6 +494,9 @@ fn segment_pdf_lines(text: &str, id: &str, structured: bool, titles: bool) -> Ve
     }
     if titles {
         pdf_sentences::mask_title_periods(&mut softened);
+    }
+    if references {
+        pdf_sentences::mask_page_reference_periods(&mut softened);
     }
     let boundaries = String::from_utf8(softened).expect("Replacing line breaks with spaces preserves UTF-8");
     segment_with_boundaries(text, &boundaries, id)
@@ -601,7 +610,8 @@ impl Store {
         knowledge::annotation_cache::initialize(connection)?;
         pdf_sentences::upgrade_documents(connection)?;
         card_learning::upgrade_noun_keys(connection)?;
-        pdf_sentences::upgrade_prose_documents(connection)
+        pdf_sentences::upgrade_prose_documents(connection)?;
+        pdf_sentences::upgrade_pdf_references(connection)
     }
     pub fn snapshot(&self) -> Result<Snapshot> {
         fn rows<T: serde::de::DeserializeOwned>(
@@ -881,7 +891,9 @@ impl Store {
             .unwrap_or("txt")
             .to_lowercase();
         let prose_sentence_boundaries = matches!(format.as_str(), "txt" | "docx") && ocr_lines.is_none();
-        let sentences = if format == "pdf" || ocr_lines.is_some() {
+        let sentences = if format == "pdf" {
+            pdf_sentences::Layout::PageReferences.segment(&text, &id)
+        } else if ocr_lines.is_some() {
             pdf_sentences::Layout::ClosingQuotes.segment(&text, &id)
         } else if prose_sentence_boundaries {
             pdf_sentences::segment_prose(&text, &id)
@@ -918,6 +930,7 @@ impl Store {
             pdf_structured_sentences: format == "pdf",
             pdf_abbreviation_boundaries: format == "pdf",
             pdf_quote_boundaries: format == "pdf",
+            pdf_reference_boundaries: format == "pdf",
             prose_sentence_boundaries,
             created_at: now(),
             source_hash: hash,

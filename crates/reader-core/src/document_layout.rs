@@ -756,7 +756,11 @@ pub(crate) fn pdf_list_label_ranges<'a>(document: &'a Document, text: &'a str, s
         let body = line.trim_start_matches(|ch: char| ch.is_whitespace() || ch == '\u{fffc}');
         let begin = prefix + line.len() - body.len();
         let token = body.split_whitespace().next()?;
-        let label = token.strip_suffix('.')?.as_bytes();
+        let marker = token.strip_suffix('.')?;
+        if crate::pdf_sentences::is_page_reference(marker, &body[token.len()..]) {
+            return None;
+        }
+        let label = marker.as_bytes();
         if !(label.len() == 1 && label[0].is_ascii_lowercase())
             && !((1..=3).contains(&label.len()) && label.iter().all(u8::is_ascii_digit))
         {

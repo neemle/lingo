@@ -17,11 +17,13 @@ pub(crate) enum Layout {
     Structured = 2,
     Titles = 3,
     ClosingQuotes = 4,
+    PageReferences = 5,
 }
 
 impl Layout {
     pub(crate) fn from_storage(value: u8) -> Self {
         match value {
+            5 => Self::PageReferences,
             4 => Self::ClosingQuotes,
             3 => Self::Titles,
             2 => Self::Structured,
@@ -32,6 +34,7 @@ impl Layout {
 
     pub(crate) fn segment(self, text: &str, id: &str) -> Vec<Sentence> {
         match self {
+            Self::PageReferences => attach_closing_quotes(text, id, crate::segment_pdf_with_references(text, id)),
             Self::ClosingQuotes => attach_closing_quotes(text, id, crate::segment_pdf_with_titles(text, id)),
             Self::Titles => crate::segment_pdf_with_titles(text, id),
             Self::Structured => crate::segment_pdf_structured(text, id),
@@ -42,7 +45,9 @@ impl Layout {
 }
 
 pub(crate) fn segment_document(document: &Document, text: &str) -> Vec<Sentence> {
-    if (document.format == "pdf" && document.pdf_quote_boundaries) ||
+    if document.format == "pdf" && document.pdf_reference_boundaries {
+        Layout::PageReferences.segment(text, &document.id)
+    } else if (document.format == "pdf" && document.pdf_quote_boundaries) ||
         (document.format != "pdf" && document.ocr_lines.is_some())
     {
         Layout::ClosingQuotes.segment(text, &document.id)
@@ -187,7 +192,7 @@ pub(crate) fn upgrade_documents(connection: &mut Connection) -> Result<()> {
                 .map_err(storage_error)?;
             }
         }
-        crate::pdf_detached_pages::upgrade_sentence_layouts(&tx)?;
+        crate::pdf_detached_pages::upgrade_sentence_layouts(&tx, Layout::ClosingQuotes)?;
         tx.pragma_update(None, "user_version", 5)
             .map_err(storage_error)?;
     }
@@ -195,21 +200,34 @@ pub(crate) fn upgrade_documents(connection: &mut Connection) -> Result<()> {
 }
 
 pub(crate) fn upgrade_prose_documents(connection: &mut Connection) -> Result<()> {
-    const VERSION: u32 = 7;
+    upgrade_anchored_sentences(connection, 7, false)
+}
+
+pub(crate) fn upgrade_pdf_references(connection: &mut Connection) -> Result<()> {
+    upgrade_anchored_sentences(connection, 8, true)
+}
+
+fn upgrade_anchored_sentences(connection: &mut Connection, target_version: u32, pdf_references: bool) -> Result<()> {
     let version = |db: &Connection| db.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
         .map_err(storage_error);
-    if version(connection)? >= VERSION {
+    if version(connection)? >= target_version {
         return Ok(());
     }
 
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(storage_error)?;
-    if version(&tx)? < VERSION {
+    if version(&tx)? < target_version {
         let ids = {
-            let mut query = tx.prepare(
+            let selection = if pdf_references {
+                "SELECT id FROM documents WHERE json_extract(body,'$.format')='pdf'
+                 AND json_extract(body,'$.pdfQuoteBoundaries')=1
+                 AND coalesce(json_extract(body,'$.pdfReferenceBoundaries'),0)=0
+                 AND instr(lower(json_extract(body,'$.text')),'p.')>0"
+            } else {
                 "SELECT id FROM documents WHERE json_extract(body,'$.format') IN ('txt','docx')
                  AND coalesce(json_extract(body,'$.proseSentenceBoundaries'),0)=0
-                 AND coalesce(json_type(body,'$.ocrLines'),'null')='null'",
-            ).map_err(storage_error)?;
+                 AND coalesce(json_type(body,'$.ocrLines'),'null')='null'"
+            };
+            let mut query = tx.prepare(selection).map_err(storage_error)?;
             let rows = query.query_map([], |row| row.get::<_, String>(0)).map_err(storage_error)?;
             rows.collect::<rusqlite::Result<Vec<_>>>().map_err(storage_error)?
         };
@@ -219,8 +237,11 @@ pub(crate) fn upgrade_prose_documents(connection: &mut Connection) -> Result<()>
                 [&id], |row| Ok((row.get(0)?, row.get(1)?)),
             ).map_err(storage_error)?;
             let mut document: Document = serde_json::from_str(&body).map_err(storage_error)?;
-            if document.ocr_lines.is_some() { continue; }
-            let sentences = segment_prose(&document.text, &document.id);
+            let sentences = if pdf_references {
+                Layout::PageReferences.segment(&document.text, &document.id)
+            } else if document.ocr_lines.is_none() {
+                segment_prose(&document.text, &document.id)
+            } else { continue; };
             if document.sentences.len() == sentences.len() && document.sentences.iter().zip(&sentences)
                 .all(|(old, new)| (old.start_utf8, old.end_utf8) == (new.start_utf8, new.end_utf8))
             {
@@ -245,13 +266,17 @@ pub(crate) fn upgrade_prose_documents(connection: &mut Connection) -> Result<()>
                 });
             }
             document.sentences = sentences;
-            document.prose_sentence_boundaries = true;
+            if pdf_references { document.pdf_reference_boundaries = true; }
+            else { document.prose_sentence_boundaries = true; }
             document.speech_resume = inline_resume;
             crate::document_revisions::append(&mut document, &tx)?;
             let body = serde_json::to_string(&document).map_err(storage_error)?;
             tx.execute("UPDATE documents SET body=?1 WHERE id=?2", params![body, id]).map_err(storage_error)?;
         }
-        tx.pragma_update(None, "user_version", VERSION).map_err(storage_error)?;
+        if pdf_references {
+            crate::pdf_detached_pages::upgrade_sentence_layouts(&tx, Layout::PageReferences)?;
+        }
+        tx.pragma_update(None, "user_version", target_version).map_err(storage_error)?;
     }
     tx.commit().map_err(storage_error)
 }
@@ -328,6 +353,21 @@ pub(crate) fn is_abbreviated_title(word: &str) -> bool {
         "Mr" | "Mrs" | "Ms")
 }
 
+pub(crate) fn is_page_reference(abbreviation: &str, suffix: &str) -> bool {
+    if !matches!(abbreviation, "p" | "pp" | "P" | "PP" | "Pp") { return false; }
+    let number = suffix.trim_start_matches(|ch: char| ch.is_whitespace() && !matches!(ch, '\n' | '\r'));
+    number.len() < suffix.len() && number.starts_with(|ch: char| ch.is_ascii_digit())
+}
+
+pub(crate) fn mask_page_reference_periods(boundaries: &mut [u8]) {
+    let text = std::str::from_utf8(boundaries).expect("PDF sentence boundary text is UTF-8");
+    let periods: Vec<_> = text.match_indices('.').filter_map(|(dot, _)| {
+        let abbreviation = text[..dot].rsplit(|ch: char| !ch.is_alphanumeric() && ch != '_').next()?;
+        is_page_reference(abbreviation, &text[dot + 1..]).then_some(dot)
+    }).collect();
+    for period in periods { boundaries[period] = b' '; }
+}
+
 fn storage_error(error: impl std::fmt::Display) -> String {
     format!("Не вдалося оновити межі речень. {error}")
 }
@@ -347,6 +387,59 @@ mod tests {
             assert_eq!(sentence.start_utf16, text[..sentence.start_utf8].encode_utf16().count());
             assert_eq!(sentence.end_utf16, text[..sentence.end_utf8].encode_utf16().count());
         }
+    }
+
+    #[test]
+    fn page_references_stay_in_the_sentence_without_crossing_paragraphs() {
+        let text = "Consultez la fiche méthodologique 3, p. 189. En fonction du sujet, faites votre choix.\n\nVoir pp. 12–14. Puis revenez.\n\nVoir p.\n\n42. Nouvel exercice.";
+        let sentences = Layout::PageReferences.segment(text, "pdf");
+        let excerpts: Vec<_> = sentences.iter().map(|sentence| sentence.text.as_str()).collect();
+        assert_eq!(&excerpts[..4], [
+            "Consultez la fiche méthodologique 3, p. 189.", "En fonction du sujet, faites votre choix.",
+            "Voir pp. 12–14.", "Puis revenez.",
+        ]);
+        assert_eq!(excerpts[4], "Voir p.");
+        for sentence in sentences {
+            assert_eq!(&text[sentence.start_utf8..sentence.end_utf8], sentence.text);
+            assert_eq!(text[..sentence.end_utf8].encode_utf16().count(), sentence.end_utf16);
+        }
+        assert_eq!(Layout::from_storage(4).segment("Voir p. 189. Puis revenez.", "pdf").len(), 3);
+    }
+
+    #[test]
+    fn upgrades_existing_pdf_references_only_when_anchors_survive() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("reader.db");
+        let mut store = crate::Store::open(&path).unwrap();
+        let add_legacy = |store: &mut crate::Store, number: u16, protected| {
+            let text = format!("Consultez la fiche, p. {number}. Puis revenez.");
+            let line = crate::ocr::OcrLine {
+                page: 0, text: text.clone(), x: 0.1, y: 0.2, width: 0.6, height: 0.02,
+                rotation: None, correction: None, confidence: None, block_start: false,
+                words: vec![], source_span: None,
+            };
+            let bytes = format!("%PDF-1.4\n% {number}\n");
+            let mut doc = store.import_scanned_pdf("fiche.pdf", bytes.as_bytes(), "fr", vec![line], 1).unwrap();
+            doc.pdf_reference_boundaries = false;
+            doc.sentences = Layout::ClosingQuotes.segment(&doc.text, &doc.id);
+            assert_eq!(doc.sentences.len(), 3);
+            doc.position = 1;
+            if protected { doc.bookmarks.push(doc.sentences[1].id.clone()); }
+            store.connection.execute("UPDATE documents SET body=?2 WHERE id=?1",
+                params![doc.id, serde_json::to_string(&doc).unwrap()]).unwrap();
+            doc.id
+        };
+        let free = add_legacy(&mut store, 189, false);
+        let bookmarked = add_legacy(&mut store, 190, true);
+        store.connection.pragma_update(None, "user_version", 7).unwrap();
+        drop(store);
+        let docs = crate::Store::open(&path).unwrap().snapshot().unwrap().documents;
+        let free = docs.iter().find(|doc| doc.id == free).unwrap();
+        assert_eq!(free.sentences.len(), 2);
+        assert_eq!(free.position, 0);
+        let bookmarked = docs.iter().find(|doc| doc.id == bookmarked).unwrap();
+        assert_eq!(bookmarked.sentences.len(), 3);
+        assert_eq!(bookmarked.bookmarks, [bookmarked.sentences[1].id.clone()]);
     }
 
     #[test]

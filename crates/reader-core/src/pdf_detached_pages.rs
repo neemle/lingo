@@ -23,7 +23,7 @@ pub(crate) fn initialize(db: &mut Connection) -> Result<()> {
             ocr_language TEXT,
             text TEXT NOT NULL,
             lines TEXT,
-            soft_lines INTEGER NOT NULL DEFAULT 4,
+            soft_lines INTEGER NOT NULL DEFAULT 5,
             PRIMARY KEY(document_id, page)
         );
         CREATE TABLE IF NOT EXISTS pdf_detached_positions (
@@ -90,15 +90,20 @@ fn upgrade_legacy_pages(db: &mut Connection) -> Result<()> {
     tx.commit().map_err(database_error)
 }
 
-pub(crate) fn upgrade_sentence_layouts(db: &Connection) -> Result<()> {
+pub(crate) fn upgrade_sentence_layouts(db: &Connection, target: Layout) -> Result<()> {
     let pages = {
         let mut statement = db.prepare(
             "SELECT p.document_id,p.page FROM pdf_detached_pages p
-             WHERE p.soft_lines<4 AND NOT EXISTS(
+             WHERE p.soft_lines<?1 AND (?1=4 OR (p.soft_lines=4 AND instr(lower(p.text),'p.')>0))
+             AND NOT EXISTS(
                  SELECT 1 FROM pdf_detached_speech_resume s WHERE s.document_id=p.document_id AND s.page=p.page
+             ) AND (?1=4 OR NOT EXISTS(
+                 SELECT 1 FROM dictionary_context_anchors a
+                 WHERE a.document_id=p.document_id AND json_extract(a.anchor,'$.page')=p.page
+             )
              )",
         ).map_err(database_error)?;
-        let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u16>(1)?)))
+        let rows = statement.query_map([target as u8], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u16>(1)?)))
             .map_err(database_error)?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(database_error)?
     };
@@ -111,15 +116,15 @@ pub(crate) fn upgrade_sentence_layouts(db: &Connection) -> Result<()> {
         ).map_err(database_error)?;
         let prior = Layout::from_storage(layout);
         let before = prior.segment(&text, "");
-        let after = Layout::ClosingQuotes.segment(&text, "");
+        let after = target.segment(&text, "");
         if !anchors_unchanged(&annotations::list(db, &id, page)?, &before, &after) {
             continue;
         }
         if let Some(position) = saved {
             write_position(db, &id, page, remap_position(position as usize, &before, &after))?;
         }
-        db.execute("UPDATE pdf_detached_pages SET soft_lines=4 WHERE document_id=?1 AND page=?2",
-            params![id, page]).map_err(database_error)?;
+        db.execute("UPDATE pdf_detached_pages SET soft_lines=?3 WHERE document_id=?1 AND page=?2",
+            params![id, page, target as u8]).map_err(database_error)?;
     }
     Ok(())
 }
@@ -343,7 +348,7 @@ pub(crate) fn read(db: &Connection, id: &str, page: u16) -> Result<Option<(Strin
 }
 
 pub(crate) fn write_text_layer(db: &Connection, id: &str, page: u16, text: &str) -> Result<()> {
-    write(db, id, page, text, None, None, Layout::ClosingQuotes)
+    write(db, id, page, text, None, None, Layout::PageReferences)
 }
 
 pub(crate) fn replace_native_layer(
@@ -432,7 +437,7 @@ pub(crate) fn write_ocr(
             ocr_edit::reanchor_replaced_ocr(db, id, page, &previous, &text)?;
         }
     }
-    write(db, id, page, &text, Some(language), Some(&payload), Layout::ClosingQuotes)
+    write(db, id, page, &text, Some(language), Some(&payload), Layout::PageReferences)
 }
 
 fn write(
@@ -465,6 +470,8 @@ pub(crate) struct ArchivedPage {
     abbreviation_boundaries: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     quote_boundaries: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    reference_boundaries: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<annotations::ArchivedAnnotation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -473,7 +480,9 @@ pub(crate) struct ArchivedPage {
 
 impl ArchivedPage {
     fn layout(&self) -> Layout {
-        if self.quote_boundaries {
+        if self.reference_boundaries {
+            Layout::PageReferences
+        } else if self.quote_boundaries {
             Layout::ClosingQuotes
         } else if self.abbreviation_boundaries {
             Layout::Titles
@@ -486,9 +495,10 @@ impl ArchivedPage {
 
     fn set_layout(&mut self, layout: Layout) {
         self.soft_lines = layout != Layout::Literal;
-        self.structured_sentences = matches!(layout, Layout::Structured | Layout::Titles | Layout::ClosingQuotes);
-        self.abbreviation_boundaries = matches!(layout, Layout::Titles | Layout::ClosingQuotes);
-        self.quote_boundaries = layout == Layout::ClosingQuotes;
+        self.structured_sentences = (layout as u8) >= Layout::Structured as u8;
+        self.abbreviation_boundaries = (layout as u8) >= Layout::Titles as u8;
+        self.quote_boundaries = (layout as u8) >= Layout::ClosingQuotes as u8;
+        self.reference_boundaries = layout == Layout::PageReferences;
     }
 
     pub(crate) fn validate(&self, document: &crate::Document, page_count: u16) -> Result<()> {
@@ -615,9 +625,10 @@ pub(crate) fn visit_cached_pages(
             annotations,
             position: position.filter(|&position| has_sentence(&text, position, layout)),
             soft_lines: layout != Layout::Literal,
-            structured_sentences: matches!(layout, Layout::Structured | Layout::Titles | Layout::ClosingQuotes),
-            abbreviation_boundaries: matches!(layout, Layout::Titles | Layout::ClosingQuotes),
-            quote_boundaries: layout == Layout::ClosingQuotes,
+            structured_sentences: (layout as u8) >= Layout::Structured as u8,
+            abbreviation_boundaries: (layout as u8) >= Layout::Titles as u8,
+            quote_boundaries: (layout as u8) >= Layout::ClosingQuotes as u8,
+            reference_boundaries: layout == Layout::PageReferences,
             text,
             language: row.get(2).map_err(database_error)?,
             lines: encoded.as_deref().map(serde_json::from_str).transpose().map_err(database_error)?,
@@ -649,7 +660,7 @@ pub(crate) fn adopt_cached_page(db: &Connection, document: &crate::Document, mut
             page.set_layout(local_mode);
         }
     } else {
-        if page.layout() != Layout::ClosingQuotes && page.speech_resume.is_none() {
+        if (page.layout() as u8) < Layout::ClosingQuotes as u8 && page.speech_resume.is_none() {
             let previous = page.layout().segment(&page.text, "");
             let current = Layout::ClosingQuotes.segment(&page.text, "");
             if anchors_unchanged(&page.annotations, &previous, &current) {
@@ -713,6 +724,36 @@ fn database_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upgrades_and_archives_page_references_on_cached_detached_pages() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("reader.db");
+        let original = root.path().join("book.pdf");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let mut store = Store::open(&path).unwrap();
+        let prepared = crate::file_originals::prepare_pdf_import(
+            store.pdf_original_root(), "book.pdf", &original, "fr", vec![String::new()], vec![],
+        ).unwrap();
+        let doc = store.import_pdf_file(prepared).unwrap();
+        let text = "Consultez la fiche, p. 189. Puis revenez.";
+        write(&store.connection, &doc.id, 0, text, None, None, Layout::ClosingQuotes).unwrap();
+        write_position(&store.connection, &doc.id, 0, 2).unwrap();
+        store.connection.pragma_update(None, "user_version", 7).unwrap();
+        drop(store);
+
+        let store = Store::open(&path).unwrap();
+        assert!(page_layout(&store.connection, &doc.id, 0).unwrap() == Layout::PageReferences);
+        let current = store.detached_pdf_sentence(&doc.id, 0, None).unwrap().unwrap();
+        assert_eq!(current.position, 1);
+        assert_eq!(current.sentence.text, "Puis revenez.");
+        visit_cached_pages(&store.connection, &doc.id, |page| {
+            let restored: ArchivedPage = serde_json::from_str(&serde_json::to_string(&page).unwrap()).unwrap();
+            assert!(restored.layout() == Layout::PageReferences);
+            assert_eq!(restored.position, Some(1));
+            Ok(())
+        }).unwrap();
+    }
 
     #[test]
     fn backup_restores_detached_audio_after_an_earlier_sentence_boundary_changes() {
