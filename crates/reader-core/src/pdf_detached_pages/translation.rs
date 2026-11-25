@@ -81,6 +81,10 @@ pub(super) struct PageProjection {
 pub struct PdfPageTranslationRow {
     start_utf16: usize,
     end_utf16: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    layout_start_utf16: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    layout_end_utf16: Option<usize>,
     pub(crate) source_sentence_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     source_block_index: Option<usize>,
@@ -254,8 +258,17 @@ impl Store {
         let row = |first: usize, last: usize, unit: ParagraphUnit, legacy_group| {
             let source = &document.sentences[physical.start + first];
             let end = &document.sentences[physical.start + last];
+            let (start, stop) = (offsets[first].0, offsets[last].1);
+            let visual = (!unit.reviewed).then(|| translation_layout_span(&document, source, end)).flatten()
+                .map(|range| (range.start.saturating_sub(projected_offset), range.end.saturating_sub(projected_offset)))
+                .and_then(|(left, right)| {
+                    let (left, right) = (left.max(start), right.min(stop));
+                    (left < right).then_some((left, right))
+                });
             PdfPageTranslationRow {
-                start_utf16: offsets[first].0, end_utf16: offsets[last].1,
+                start_utf16: start, end_utf16: stop,
+                layout_start_utf16: visual.map(|(left, _)| left).filter(|&left| left > start),
+                layout_end_utf16: visual.map(|(_, right)| right).filter(|&right| right < stop),
                 source_sentence_id: original[original.partition_point(|(span, _)| span.end <= source.start_utf16)].1.clone(),
                 source_block_index: source_block_index(&document, &block_starts, source, end),
                 text: unit.translation, source_text: unit.pdf_source, pivot_language: unit.pivot_language,
@@ -657,6 +670,16 @@ fn pdf_layout_block_starts(document: &Document, page: &[Sentence]) -> Vec<usize>
     starts
 }
 
+fn translation_layout_span(document: &Document, first: &Sentence, last: &Sentence) -> Option<Range<usize>> {
+    let source = document.text.get(first.start_utf8..last.end_utf8)?;
+    let masked = document_layout::mask_pdf_translation_input(document, source, first.start_utf8)?;
+    let body = masked.trim();
+    if body.is_empty() { return None; }
+    let leading = &masked[..masked.len() - masked.trim_start().len()];
+    let start = first.start_utf16 + leading.encode_utf16().count();
+    Some(start..start + body.encode_utf16().count())
+}
+
 fn source_block_index(document: &Document, starts: &[usize], first: &Sentence, last: &Sentence) -> Option<usize> {
     let first_letter = first.start_utf8 + first.text.find(char::is_alphanumeric)?;
     let last_letter = last.start_utf8 + last.text.rfind(char::is_alphanumeric)?;
@@ -839,6 +862,42 @@ mod tests {
             assert!(document.sentences.iter().any(|sentence| sentence.id == row.source_sentence_id
                 && sentence.start_utf16 <= row.start_utf16 && row.end_utf16 <= sentence.end_utf16));
         }
+    }
+
+    #[test]
+    fn pdf_overlay_excludes_the_printed_number_but_keeps_the_sentence_anchor() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&root.path().join("reader.db")).unwrap();
+        let line = ocr::OcrLine {
+            rotation: None, page: 0, text: "11. préparez votre essai.".into(),
+            x: 0.1, y: 0.2, width: 0.42, height: 0.02, confidence: None,
+            correction: None, block_start: false, source_span: None,
+            words: [("11.", 0, 0.1, 0.05), ("préparez", 4, 0.19, 0.12),
+                ("votre", 13, 0.32, 0.08), ("essai.", 19, 0.42, 0.10)]
+                .into_iter().map(|(text, start, x, width)| ocr::OcrWord {
+                    text: text.into(), x, y: 0.2, width, height: 0.02,
+                    raw_start_utf16: Some(start), source_span: None,
+                }).collect(),
+        };
+        let document = store.import_scanned_pdf("exercise.pdf", b"%PDF-1.4\n", "fr", vec![line], 1).unwrap();
+        let rows = store.pdf_page_translation(&document.id, 0, "uk", true).unwrap();
+        let [row] = rows.as_slice() else { panic!("expected one numbered exercise"); };
+        assert_eq!(row.source_sentence_id, document.sentences[0].id);
+        assert_eq!(row.start_utf16, 0);
+        assert_eq!(row.layout_start_utf16, Some(4));
+        assert_eq!(row.layout_end_utf16, None);
+
+        let spans = serde_json::from_value::<Vec<crate::pdf_translation_layout::SourceRow>>(serde_json::json!([{
+            "startUtf16": row.layout_start_utf16.unwrap(), "endUtf16": row.end_utf16,
+            "blockIndex": row.source_block_index, "pending": false,
+        }])).unwrap();
+        let styles = serde_json::from_value::<Vec<crate::pdf_translation_layout::SourceStyleAnchor>>(serde_json::json!([{
+            "startUtf16": 0, "style": {"weight": 700, "italic": false, "maskSafe": false, "background": [1., 1., 1., 1.]},
+        }])).unwrap();
+        let layout = crate::pdf_translation_layout::project(&spans, &document.ocr_lines.unwrap(), 0, &styles, true).unwrap();
+        let layout = serde_json::to_value(layout).unwrap();
+        assert_eq!(layout["overflow"], serde_json::json!([]));
+        assert_eq!(layout["regions"][0]["bounds"]["x"].as_f64(), Some(0.19));
     }
 
     #[test]

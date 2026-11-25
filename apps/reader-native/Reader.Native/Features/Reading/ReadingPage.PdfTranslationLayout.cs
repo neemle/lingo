@@ -1282,7 +1282,8 @@ public partial class ReadingPage
         bool preserveArtwork)
     {
         var spans = Array.ConvertAll(rows, row => new PdfTranslationSourceRow(
-            row.StartUtf16, row.EndUtf16, row.SourceBlockIndex, preserveArtwork && !HasPdfTranslation(row)));
+            row.LayoutStartUtf16 ?? row.StartUtf16, row.LayoutEndUtf16 ?? row.EndUtf16,
+            row.SourceBlockIndex, preserveArtwork && !HasPdfTranslation(row)));
         var styles = source?.Appearance?.ToDictionary(entry => entry.Key, entry =>
         {
             var style = entry.Value;
