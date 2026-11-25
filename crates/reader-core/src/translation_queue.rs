@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 const RETRY_SECONDS: i64 = 15;
 const INTERACTIVE_RETRY_SECONDS: i64 = 2;
 const PDF_OCR_POLL_SECONDS: i64 = 15;
-const PAGE_TRANSLATION_REVISION: u32 = 6;
+const PAGE_TRANSLATION_REVISION: u32 = 7;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
