@@ -600,7 +600,8 @@ impl Store {
         translation::initialize_cache_ownership(connection)?;
         knowledge::annotation_cache::initialize(connection)?;
         pdf_sentences::upgrade_documents(connection)?;
-        card_learning::upgrade_noun_keys(connection)
+        card_learning::upgrade_noun_keys(connection)?;
+        pdf_sentences::upgrade_prose_documents(connection)
     }
     pub fn snapshot(&self) -> Result<Snapshot> {
         fn rows<T: serde::de::DeserializeOwned>(

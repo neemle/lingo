@@ -125,23 +125,20 @@ fn preserves_anchors(document: &Document, sentences: &[Sentence]) -> bool {
                 .map(|resume| &resume.sentence_id),
         );
     for id in protected {
-        let unchanged = original
-            .iter()
-            .find(|sentence| sentence.id == *id)
-            .is_some_and(|old| {
-                sentences
-                    .binary_search_by_key(&old.start_utf16, |new| new.start_utf16)
-                    .is_ok_and(|index| {
-                        sentences[index].end_utf16 == old.end_utf16
-                            && sentences[index].text == old.text
-                    })
-            });
-        if !unchanged {
+        if !unchanged_sentence(original, sentences, id) {
             return false;
         }
     }
 
     true
+}
+
+fn unchanged_sentence(before: &[Sentence], after: &[Sentence], id: &str) -> bool {
+    before.iter().find(|sentence| sentence.id == id).is_some_and(|old| {
+        after.binary_search_by_key(&old.start_utf16, |new| new.start_utf16).is_ok_and(|index| {
+            after[index].id == id && after[index].end_utf16 == old.end_utf16 && after[index].text == old.text
+        })
+    })
 }
 
 pub(crate) fn upgrade_documents(connection: &mut Connection) -> Result<()> {
@@ -197,6 +194,88 @@ pub(crate) fn upgrade_documents(connection: &mut Connection) -> Result<()> {
     tx.commit().map_err(storage_error)
 }
 
+pub(crate) fn upgrade_prose_documents(connection: &mut Connection) -> Result<()> {
+    const VERSION: u32 = 7;
+    let version = |db: &Connection| db.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
+        .map_err(storage_error);
+    if version(connection)? >= VERSION {
+        return Ok(());
+    }
+
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(storage_error)?;
+    if version(&tx)? < VERSION {
+        let ids = {
+            let mut query = tx.prepare(
+                "SELECT id FROM documents WHERE json_extract(body,'$.format') IN ('txt','docx')
+                 AND coalesce(json_extract(body,'$.proseSentenceBoundaries'),0)=0
+                 AND coalesce(json_type(body,'$.ocrLines'),'null')='null'",
+            ).map_err(storage_error)?;
+            let rows = query.query_map([], |row| row.get::<_, String>(0)).map_err(storage_error)?;
+            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(storage_error)?
+        };
+        for id in ids {
+            let (body, checkpoint): (String, Option<String>) = tx.query_row(
+                "SELECT d.body,s.body FROM documents d LEFT JOIN speech_resume s ON s.document_id=d.id WHERE d.id=?1",
+                [&id], |row| Ok((row.get(0)?, row.get(1)?)),
+            ).map_err(storage_error)?;
+            let mut document: Document = serde_json::from_str(&body).map_err(storage_error)?;
+            if document.ocr_lines.is_some() { continue; }
+            let sentences = segment_prose(&document.text, &document.id);
+            if document.sentences.len() == sentences.len() && document.sentences.iter().zip(&sentences)
+                .all(|(old, new)| (old.start_utf8, old.end_utf8) == (new.start_utf8, new.end_utf8))
+            {
+                continue;
+            }
+            let inline_resume = document.speech_resume.take();
+            let Ok(checkpoint) = checkpoint.as_deref().map(serde_json::from_str).transpose() else {
+                continue;
+            };
+            document.speech_resume = checkpoint.or_else(|| inline_resume.clone());
+            if !preserves_anchors(&document, &sentences) ||
+                !preserves_dictionary_anchors(&tx, &document, &sentences)?
+            {
+                continue;
+            }
+            if let Some(cursor) = document.sentences.get(document.position) {
+                let offset = cursor.start_utf16.saturating_add(document.reading_token_utf16.unwrap_or(0));
+                document.position = position_at(&sentences, offset);
+                document.reading_token_utf16 = sentences.get(document.position).and_then(|sentence| {
+                    (sentence.start_utf16 < offset && offset < sentence.end_utf16)
+                        .then(|| offset - sentence.start_utf16)
+                });
+            }
+            document.sentences = sentences;
+            document.prose_sentence_boundaries = true;
+            document.speech_resume = inline_resume;
+            crate::document_revisions::append(&mut document, &tx)?;
+            let body = serde_json::to_string(&document).map_err(storage_error)?;
+            tx.execute("UPDATE documents SET body=?1 WHERE id=?2", params![body, id]).map_err(storage_error)?;
+        }
+        tx.pragma_update(None, "user_version", VERSION).map_err(storage_error)?;
+    }
+    tx.commit().map_err(storage_error)
+}
+
+fn preserves_dictionary_anchors(db: &Connection, document: &Document, sentences: &[Sentence]) -> Result<bool> {
+    let mut query = db.prepare(
+        "SELECT json_extract(anchor,'$.sentenceStartUtf16'), sentence FROM dictionary_context_anchors
+         WHERE document_id=?1 OR document_id IN (SELECT document_id FROM dictionary_sources WHERE source_hash=?2)",
+    ).map_err(storage_error)?;
+    let rows = query.query_map(params![document.id, document.source_hash], |row| {
+        Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, String>(1)?))
+    }).map_err(storage_error)?;
+    for row in rows {
+        let (start, text) = row.map_err(storage_error)?;
+        if !start.and_then(|start| usize::try_from(start).ok()).is_some_and(|start| {
+            sentences.binary_search_by_key(&start, |sentence| sentence.start_utf16)
+                .is_ok_and(|index| sentences[index].text == text)
+        }) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn attach_closing_quotes(text: &str, id: &str, sentences: Vec<Sentence>) -> Vec<Sentence> {
     let mut joined: Vec<Sentence> = Vec::with_capacity(sentences.len());
     for mut next in sentences {
@@ -250,7 +329,7 @@ pub(crate) fn is_abbreviated_title(word: &str) -> bool {
 }
 
 fn storage_error(error: impl std::fmt::Display) -> String {
-    format!("Не вдалося оновити межі речень PDF. {error}")
+    format!("Не вдалося оновити межі речень. {error}")
 }
 
 #[cfg(test)]
