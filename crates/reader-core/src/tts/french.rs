@@ -2,6 +2,8 @@ use crate::french_cardinals::spoken_cardinal;
 use std::borrow::Cow;
 use unicode_segmentation::UnicodeSegmentation;
 
+const INLINE_SPACES: [char; 3] = [' ', '\u{00a0}', '\u{202f}'];
+
 pub(crate) fn expand(text: &str) -> Cow<'_, str> {
     let mut output = String::new();
     let mut copied = 0;
@@ -43,10 +45,20 @@ pub(crate) fn expand(text: &str) -> Cow<'_, str> {
             spoken_number(token)
         };
         if let Some(number) = number {
-            output.push_str(&text[copied..start]);
+            let prefix = &text[copied..start];
+            if text[..copied].ends_with(|ch: char| ch.is_ascii_digit() || matches!(ch, '%' | '‰'))
+                && prefix.trim_matches(INLINE_SPACES) == "–"
+            {
+                output.push_str(" à ");
+            } else if let Some((unsigned_prefix, sign)) = signed_prefix(prefix, &text[..start]) {
+                output.push_str(unsigned_prefix);
+                output.push_str(sign);
+            } else {
+                output.push_str(prefix);
+            }
             output.push_str(&number);
             copied = end;
-            let unit = following.trim_start_matches([' ', '\u{00a0}', '\u{202f}']);
+            let unit = following.trim_start_matches(INLINE_SPACES);
             if let Some(symbol @ ('%' | '‰')) = unit.chars().next() {
                 output.push_str(if symbol == '%' { " pour cent" } else { " pour mille" });
                 copied += following.len() - unit.len() + symbol.len_utf8();
@@ -58,6 +70,20 @@ pub(crate) fn expand(text: &str) -> Cow<'_, str> {
     }
     output.push_str(&text[copied..]);
     Cow::Owned(output)
+}
+
+fn signed_prefix<'a>(prefix: &'a str, preceding: &str) -> Option<(&'a str, &'static str)> {
+    let sign = prefix.chars().next_back()?;
+    let spoken = match sign {
+        '-' | '−' => "moins ",
+        '+' => "plus ",
+        _ => return None,
+    };
+    let unsigned_prefix = prefix.strip_suffix(sign)?;
+    let before_sign = preceding.strip_suffix(sign)?;
+    before_sign.chars().next_back()
+        .is_none_or(|ch| ch.is_whitespace() || matches!(ch, '(' | '[' | '«' | ':' | '='))
+        .then_some((unsigned_prefix, spoken))
 }
 
 fn spoken_number(token: &str) -> Option<String> {
@@ -114,6 +140,16 @@ mod tests {
         );
         assert_eq!(expand("Le lot 004, version 1.25, part à 10:30."), "Le lot 004, version 1.25, part à 10:30.");
         assert_eq!(expand("Budget 30 %."), "Budget trente pour cent.");
+    }
+
+    #[test]
+    fn distinguishes_numeric_ranges_and_signs_from_dialogue() {
+        assert_eq!(
+            expand("— La plage est de 12–15 %, puis de −2,5 à +3,0 ‰. Il fait -20 °C."),
+            "— La plage est de douze à quinze pour cent, puis de moins deux virgule cinq à plus trois virgule zéro pour mille. Il fait moins vingt °C."
+        );
+        assert_eq!(expand("Les pages 12 – 15. — 20 ans."), "Les pages douze à quinze. — vingt ans.");
+        assert_eq!(expand("Le train 12-15 arrive à 10:30."), "Le train douze-quinze arrive à 10:30.");
     }
 
     #[test]
