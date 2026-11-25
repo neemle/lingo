@@ -3878,6 +3878,8 @@ fn cache_key(
             .unwrap_or(4)
     };
     let version = match route {
+        _ if segments.iter().any(|text| crate::protected_translation::contains_defined_acronym(text.as_ref()))
+            || context.is_some_and(crate::protected_translation::contains_defined_acronym) => 23,
         Route::Direct(ModelEdge { target, .. }) | Route::Pivot { second: ModelEdge { target, .. }, .. }
             if target == "uk" && (segments.iter().any(|text| crate::protected_translation::contains_page_reference(text.as_ref()))
                 || context.is_some_and(crate::protected_translation::contains_page_reference)) => 22,

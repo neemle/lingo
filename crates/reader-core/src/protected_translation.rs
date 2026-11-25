@@ -1,6 +1,7 @@
 use crate::Result;
 use regex::Regex;
 use std::{borrow::Cow, ops::Range, sync::LazyLock};
+use unicode_normalization::UnicodeNormalization;
 
 pub(crate) const MARKER_ERROR: &str = "Перекладач змінив або пропустив захищений фрагмент.";
 
@@ -39,6 +40,9 @@ static FRENCH_MONTH_PHRASES: LazyLock<Regex> = LazyLock::new(|| {
     let months = crate::translation_dates::FRENCH_MONTHS.join("|");
     Regex::new(&format!(r"(?i)en[ \u{{a0}}\u{{202f}}]+({months})")).expect("French month phrases")
 });
+
+static ACRONYM_DEFINITIONS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\(([A-Z]{3,8})\)").expect("parenthesized acronyms"));
 
 fn standalone_matches<'a>(pattern: &'static Regex, source: &'a str) -> impl Iterator<Item = regex::Captures<'a>> {
     let mut addresses = web_address_spans(source).peekable();
@@ -369,6 +373,27 @@ pub(crate) fn contains_dotted_acronym(source: &str) -> bool {
         .any(|(range, _)| is_dotted_acronym(&source[range]))
 }
 
+fn defined_acronyms(source: &str) -> impl Iterator<Item = &str> {
+    standalone_matches(&ACRONYM_DEFINITIONS, source).filter_map(|matched| {
+        let label = matched.get(1)?.as_str();
+        let phrase = source[..matched.get(0)?.start()].rsplit(['.', '!', '?', ':', ';', '\n', '(', ')']).next()?;
+        let mut words = phrase.rsplit(|ch: char| !ch.is_alphabetic()).filter(|word| !word.is_empty());
+        for expected in label.chars().rev() {
+            loop {
+                let word = words.next()?;
+                if word.nfkd().next()?.to_ascii_uppercase() == expected { break; }
+                if !matches!(word, "l" | "d" | "de" | "des" | "du" | "et" | "la" | "le" | "les" | "à" |
+                    "au" | "aux" | "pour" | "of" | "the" | "for" | "and") { return None; }
+            }
+        }
+        Some(label)
+    })
+}
+
+pub(crate) fn contains_defined_acronym(source: &str) -> bool {
+    defined_acronyms(source).next().is_some()
+}
+
 pub(crate) fn without_identifiers(text: &str) -> Cow<'_, str> {
     let mut output = String::new();
     let mut offset = 0;
@@ -387,11 +412,13 @@ pub(crate) fn without_identifiers(text: &str) -> Cow<'_, str> {
 fn protected_spans(
     source: &str,
 ) -> impl Iterator<Item = (Range<usize>, Option<&'static str>)> + '_ {
-    token_spans(source, |word| {
+    let defined: Vec<_> = defined_acronyms(source).collect();
+    token_spans(source, move |word| {
         if let Some(translated) = ukrainian_acronym(word) {
             return Some(Some(translated));
         }
-        (is_identifier(word) || in_marker_namespace(word) || is_dotted_acronym(word)).then_some(None)
+        (is_identifier(word) || in_marker_namespace(word) || is_dotted_acronym(word) || defined.contains(&word))
+            .then_some(None)
     })
     .map(|(mut range, replacement)| {
         if is_dotted_acronym(&source[range.clone()]) {
@@ -407,10 +434,10 @@ fn protected_spans(
     })
 }
 
-fn token_spans(
-    source: &str,
-    classify: fn(&str) -> Option<Option<&'static str>>,
-) -> impl Iterator<Item = (Range<usize>, Option<&'static str>)> + '_ {
+fn token_spans<'a>(
+    source: &'a str,
+    classify: impl Fn(&str) -> Option<Option<&'static str>> + 'a,
+) -> impl Iterator<Item = (Range<usize>, Option<&'static str>)> + 'a {
     let mut addresses = web_address_spans(source).peekable();
     let mut words = ascii_tokens(source).peekable();
     std::iter::from_fn(move || loop {
@@ -629,6 +656,26 @@ mod tests {
         assert!(contains_dotted_acronym("Le C.N.R.S. publie le rapport."));
         assert!(!contains_dotted_acronym("CHAPITRE II. M. Morrel arrive."));
         assert!(!contains_dotted_acronym("Voir https://example.org/publications/A.B.C."));
+    }
+
+    #[test]
+    fn preserves_explicitly_defined_acronyms_without_protecting_the_expansion() {
+        let source = "L’École de santé publique (ESP) publie les résultats. Contactez l’ESP.";
+        let protected = ProtectedText::new(source, "uk");
+        assert_eq!(protected.input(),
+            "L’École de santé publique (ZXQ001QXZ) publie les résultats. Contactez l’ZXQ002QXZ.");
+        assert_eq!(protected.restore(
+            "Школа громадського здоров’я (ZXQ001QXZ) публікує результати. Зверніться до ZXQ002QXZ.".into(),
+        ).unwrap(), "Школа громадського здоров’я (ESP) публікує результати. Зверніться до ESP.");
+        assert!(protected.restore("Школа громадського здоров’я публікує результати.".into()).is_err());
+        assert_eq!(passage_token_spans(source).into_iter().map(|span| &source[span]).collect::<Vec<_>>(),
+            ["ESP", "ESP"]);
+        assert!(contains_defined_acronym("Centre national de la recherche scientifique (CNRS)"));
+        for plain in ["CHAPITRE (PARIS)", "Lire les résultats (NOTE)", "Fin. Reprendre le travail (ESP)"] {
+            assert!(!contains_defined_acronym(plain), "{plain}");
+            assert_eq!(ProtectedText::new(plain, "uk").input(), plain);
+        }
+        assert!(!contains_defined_acronym("Voir https://exemple.fr/ecole(ESP)"));
     }
 
     #[test]
