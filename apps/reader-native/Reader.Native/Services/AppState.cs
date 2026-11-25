@@ -7,6 +7,7 @@ namespace Reader.Native.Services;
 public static class AppState
 {
     private static ReaderSession? session;
+    private static bool translationForeground = true;
     private static string[] readingHistoryDocumentIds = [];
     internal static BackgroundTranslation? TranslationWorker { get; private set; }
     internal static int StorageRevision { get; private set; }
@@ -22,7 +23,13 @@ public static class AppState
     }
 
     internal static void StartTranslationWorker(IDispatcher dispatcher) =>
-        TranslationWorker ??= new BackgroundTranslation(Session, dispatcher);
+        TranslationWorker ??= new BackgroundTranslation(Session, dispatcher, translationForeground);
+
+    internal static void SetTranslationForeground(bool foreground)
+    {
+        translationForeground = foreground;
+        TranslationWorker?.SetForeground(foreground);
+    }
     // Bindings can still read the session while the native window is being destroyed.
     public static ReaderSession Session => session ??=
         new ReaderSession(Path.Combine(FileSystem.AppDataDirectory, "reader-native.db"));

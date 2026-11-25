@@ -30,6 +30,7 @@ internal sealed class BackgroundTranslation
     private DateTimeOffset retryAt;
     private bool enabled;
     private bool paused;
+    private bool foreground;
     private JobKey? lastLibraryJob;
     private JobKey? readerTarget;
     private bool libraryStepInvalidated;
@@ -51,10 +52,11 @@ internal sealed class BackgroundTranslation
     }
     private sealed record LibraryFailure(int Attempts, long? RetryAt);
 
-    internal BackgroundTranslation(ReaderSession session, IDispatcher dispatcher)
+    internal BackgroundTranslation(ReaderSession session, IDispatcher dispatcher, bool foreground)
     {
         this.session = session;
         this.dispatcher = dispatcher;
+        this.foreground = foreground;
         timer = dispatcher.CreateTimer();
         timer.Interval = Cadence;
         timer.Tick += Tick;
@@ -128,8 +130,20 @@ internal sealed class BackgroundTranslation
         SetQueueStatus();
     }
 
-    private void SetQueueStatus() => SetStatus(!enabled ? "" : paused ? "Фоновий переклад призупинено."
-        : powerPauseReason ?? "Перевіряємо чергу перекладу…");
+    private string? PauseReason => paused ? "Фоновий переклад призупинено."
+        : !foreground ? "Черга перекладу продовжиться після повернення до застосунку."
+        : powerPauseReason;
+
+    private bool CanRun => enabled && PauseReason is null;
+
+    private void SetQueueStatus() => SetStatus(enabled ? PauseReason ?? "Перевіряємо чергу перекладу…" : "");
+
+    internal void SetForeground(bool value)
+    {
+        if (foreground == value) return;
+        foreground = value;
+        UpdateQueueScheduling();
+    }
 
 #if MACCATALYST || IOS
     private void UpdatePowerState()
@@ -138,8 +152,14 @@ internal sealed class BackgroundTranslation
         var reason = BackgroundTranslationPowerMonitor.PauseReason;
         if (powerPauseReason == reason) return;
         powerPauseReason = reason;
+        UpdateQueueScheduling();
+    }
+#endif
+
+    private void UpdateQueueScheduling()
+    {
         if (!enabled || paused) return;
-        if (reason is not null)
+        if (!CanRun)
         {
             timer.Stop();
             stepCancellation?.Cancel();
@@ -147,7 +167,6 @@ internal sealed class BackgroundTranslation
         else Wake();
         SetQueueStatus();
     }
-#endif
 
     internal void TranslationRoutesChanged()
     {
@@ -271,7 +290,7 @@ internal sealed class BackgroundTranslation
 
     private void Schedule(TimeSpan delay)
     {
-        if (!enabled || paused || powerPauseReason is not null) return;
+        if (!CanRun) return;
         if (timer.IsRunning && timer.Interval == delay) return;
         timer.Stop();
         timer.Interval = delay;
@@ -288,7 +307,7 @@ internal sealed class BackgroundTranslation
 
     private void Tick(object? sender, EventArgs args)
     {
-        if (!enabled || paused || powerPauseReason is not null || session.Busy ||
+        if (!CanRun || session.Busy ||
             !pending.IsCompleted || retryAt > DateTimeOffset.UtcNow)
             return;
         if (session.Snapshot.Documents.Length == 0)
@@ -331,7 +350,7 @@ internal sealed class BackgroundTranslation
             var wake = wakeVersion;
             var preferences = await Task.Run(session.GetReaderPreferences);
             token.ThrowIfCancellationRequested();
-            if (!enabled || paused || session.Busy) return;
+            if (!CanRun || session.Busy) return;
             var current = session.Document?.Id;
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var live = new HashSet<JobKey>();
@@ -395,7 +414,7 @@ internal sealed class BackgroundTranslation
                     token = timeout.Token;
                     var complete = await session.PrefetchVisiblePdfTranslationAsync(address, token, visible.DetachedText);
                     token.ThrowIfCancellationRequested();
-                    if (enabled && !paused && visiblePdf == visible && visibleAttempt == attempt)
+                    if (CanRun && visiblePdf == visible && visibleAttempt == attempt)
                     {
                         visibleAttempt = (visible, complete ? long.MaxValue
                             : DateTimeOffset.UtcNow.ToUnixTimeSeconds() + VisiblePageRetrySeconds);
@@ -435,7 +454,7 @@ internal sealed class BackgroundTranslation
             var progress = await session.AdvanceBackgroundTranslationAsync(
                 work.Key.Document, work.Key.Revision, work.Key.Source, work.Key.Target, token);
             token.ThrowIfCancellationRequested();
-            if (!enabled || paused || libraryStepInvalidated || !session.Snapshot.Documents.Any(work.Key.Matches)) return;
+            if (!CanRun || libraryStepInvalidated || !session.Snapshot.Documents.Any(work.Key.Matches)) return;
             jobs[work.Key] = progress;
             UpdateRequiredPackages();
 #if MACCATALYST || IOS
@@ -445,16 +464,16 @@ internal sealed class BackgroundTranslation
                     ?? throw new InvalidDataException("Кількість сторінок PDF невідома.");
                 var original = await session.OriginalFileAsync(work.Key.Document)
                     ?? throw new InvalidDataException("Оригінал PDF недоступний.");
-                if (!enabled || paused || libraryStepInvalidated) return;
+                if (!CanRun || libraryStepInvalidated) return;
                 token.ThrowIfCancellationRequested();
                 SetStatus($"Читаємо текстовий шар сторінки {pendingPage + 1} · «{title}»…", running: true);
                 var text = await PdfScan.ReadPageTextAsync(original.Path, pendingPage, pageCount, token);
                 token.ThrowIfCancellationRequested();
-                if (!enabled || paused || libraryStepInvalidated) return;
+                if (!CanRun || libraryStepInvalidated) return;
                 await session.CacheBackgroundPdfTextLayerAsync(work.Key.Document, work.Key.Revision, pendingPage, text);
                 token.ThrowIfCancellationRequested();
                 libraryFailures.Remove(work.Key);
-                if (enabled && !paused) SetStatus("Черга перекладу продовжується.");
+                if (CanRun) SetStatus("Черга перекладу продовжується.");
                 return;
             }
 #endif
@@ -474,7 +493,7 @@ internal sealed class BackgroundTranslation
         }
         catch (Exception error)
         {
-            if (!enabled || paused || cancellation.IsCancellationRequested) return;
+            if (!CanRun || cancellation.IsCancellationRequested) return;
             if (prefetchingVisiblePage)
             {
                 if (visibleAttempt is { } attempt && attempt.Page == visiblePdf)

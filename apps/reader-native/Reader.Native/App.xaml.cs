@@ -13,6 +13,8 @@ public partial class App : Application
 #if IOS
         _ = ReceiveSharedFilesAsync();
         window.Activated += ReceiveSharedFiles;
+        window.Deactivated += (_, _) => Services.AppState.SetTranslationForeground(false);
+        window.Activated += (_, _) => Services.AppState.SetTranslationForeground(true);
 #else
         window.Width = 1160;
         window.Height = 820;
