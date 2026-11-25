@@ -507,8 +507,15 @@ impl StoreWorker {
         self, id: &str, page: Option<u16>, sentence_id: &str, target: &str,
         expected: Option<(&str, &str)>, canceled: &dyn Fn() -> bool,
     ) -> Result<Option<OfflinePassageTranslation>> {
+        self.translate_passage_until_canceled(id, page, sentence_id, target, expected, false, canceled)
+    }
+
+    pub fn translate_passage_until_canceled(
+        self, id: &str, page: Option<u16>, sentence_id: &str, target: &str,
+        expected: Option<(&str, &str)>, marian_only: bool, canceled: &dyn Fn() -> bool,
+    ) -> Result<Option<OfflinePassageTranslation>> {
         self.open(OpenFlags::SQLITE_OPEN_READ_WRITE)?
-            .translate_offline_passage_until_canceled(id, page, sentence_id, target, expected, canceled)
+            .translate_passage_until_canceled(id, page, sentence_id, target, expected, marian_only, canceled)
     }
 
     pub fn lookup_detached_pdf_word(
@@ -1197,6 +1204,13 @@ impl Store {
         &mut self, id: &str, page: Option<u16>, sentence_id: &str, target: &str,
         expected: Option<(&str, &str)>, canceled: &dyn Fn() -> bool,
     ) -> Result<Option<OfflinePassageTranslation>> {
+        self.translate_passage_until_canceled(id, page, sentence_id, target, expected, false, canceled)
+    }
+
+    pub fn translate_passage_until_canceled(
+        &mut self, id: &str, page: Option<u16>, sentence_id: &str, target: &str,
+        expected: Option<(&str, &str)>, marian_only: bool, canceled: &dyn Fn() -> bool,
+    ) -> Result<Option<OfflinePassageTranslation>> {
         if canceled() {
             return Err("Офлайн-переклад уривка скасовано.".into());
         }
@@ -1211,7 +1225,8 @@ impl Store {
             .unzip();
         let directory = self.model_directory.clone();
         let catalog: Vec<_> = catalog::PACKAGES.iter().map(Package::edge).collect();
-        let mut provider = self.reader_translation_provider(&directory, &source, target, false, canceled)?;
+        let mut provider = if marian_only { MarianProvider { canceled, ..MarianProvider::interactive(&directory) } }
+            else { self.reader_translation_provider(&directory, &source, target, false, canceled)? };
         let translated = self.translate_aligned_with_catalog(
             &mut provider,
             TranslationRequest {
@@ -1972,6 +1987,8 @@ mod tests {
         let passage = store.translate_offline_passage(&document.id, None, &sentence.id, "uk").unwrap().unwrap();
         assert_eq!(passage.text, expected);
         assert!(passage.pivot_language.is_none());
+        assert!(store.translate_passage_until_canceled(&document.id, None, &sentence.id, "uk", None, true,
+            &|| false).unwrap().is_none());
         let gloss = store.translate_dictionary_glosses(&document.id, "fr", "uk", &[text.into()]).unwrap();
         assert_eq!(gloss, [Some(expected.into())]);
     }

@@ -679,9 +679,9 @@ public sealed class CoreClient : IDisposable
         string? revisionId = null, string? sourceLanguage = null) =>
         Call<string>(new { version = 1, operation = "passage_source", id, page, sentenceId, revisionId, sourceLanguage });
     public OfflinePassageTranslation? TranslateOfflinePassage(string id, int? page, string sentenceId, string target,
-        CancellationToken cancellationToken = default, string? revisionId = null, string? sourceLanguage = null) =>
+        CancellationToken cancellationToken = default, string? revisionId = null, string? sourceLanguage = null, bool marianOnly = false) =>
         CallCancelable<OfflinePassageTranslation?>(ref nextOfflinePassageRequest, cancellationToken,
-            requestId => new { version = 1, operation = "translate_offline_passage", id, page, sentenceId, target, requestId, revisionId, sourceLanguage },
+            requestId => new { version = 1, operation = "translate_offline_passage", id, page, sentenceId, target, requestId, revisionId, sourceLanguage, marianOnly },
             requestId => new { version = 1, operation = "cancel_offline_passage", requestId });
     public MachineTranslation? TranslateDictionaryGloss(string id, string source, string gloss, string target = "uk") =>
         CallIndependent<MachineTranslation?>(new { version = 1, operation = "translate_dictionary_gloss", id, source, gloss, target });

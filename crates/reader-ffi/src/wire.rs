@@ -562,6 +562,8 @@ pub enum Command {
         source_language: Option<String>,
         #[serde(rename = "requestId")]
         request_id: Option<u64>,
+        #[serde(default, rename = "marianOnly")]
+        marian_only: bool,
     },
     CancelOfflinePassage {
         #[serde(rename = "requestId")]

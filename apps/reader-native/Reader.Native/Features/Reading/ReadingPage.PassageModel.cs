@@ -209,7 +209,7 @@ public partial class ReadingPage
     {
         var content = new VerticalStackLayout { Padding = new Thickness(22, 14), Spacing = 12 };
         AddPassageComparisonSection(content, "Оригінал", source);
-        var (offlineHeading, offlineText) = AddPassageComparisonSection(content, "Офлайн-переклад", "Перекладаємо уривок…");
+        var (offlineHeading, offlineText) = AddPassageComparisonSection(content, "Офлайн-переклад · Marian", "Перекладаємо уривок…");
         AddPassageComparisonSection(content, modelName, modelText);
         var close = new Button { Text = "Закрити", HorizontalOptions = LayoutOptions.End, Margin = new Thickness(12) };
         DescribeButton(close, "Закрити порівняння перекладів");
@@ -231,10 +231,10 @@ public partial class ReadingPage
             presented = true;
             var offline = await AppState.Session.TranslateOfflinePassageAsync(
                 address.Document, address.Page, address.Sentence, address.Target, cancellation.Token,
-                address.Revision, address.SourceLanguage);
+                address.Revision, address.SourceLanguage, marianOnly: true);
             if (cancellation.IsCancellationRequested) return;
             if (offline is null)
-                offlineText.Text = "Офлайн-переклад уривка недоступний. Перевірте мовні пакети в налаштуваннях.";
+                offlineText.Text = "Для цього порівняння потрібен мовний пакет Marian. Перевірте пакети перекладу в налаштуваннях.";
             else if (!string.Equals(offline.SourceText, source, StringComparison.Ordinal))
                 offlineText.Text = "Уривок змінився. Відкрийте порівняння ще раз.";
             else

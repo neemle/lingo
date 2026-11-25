@@ -726,8 +726,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
         Task.Run(() => client.TranslateWithModel(id, page, sentenceId, target, regenerate, cancellationToken, revisionId, sourceLanguage), cancellationToken);
 
     public Task<OfflinePassageTranslation?> TranslateOfflinePassageAsync(string id, int? page, string sentenceId, string target,
-        CancellationToken cancellationToken = default, string? revisionId = null, string? sourceLanguage = null) =>
-        Task.Run(() => client.TranslateOfflinePassage(id, page, sentenceId, target, cancellationToken, revisionId, sourceLanguage), cancellationToken);
+        CancellationToken cancellationToken = default, string? revisionId = null, string? sourceLanguage = null, bool marianOnly = false) =>
+        Task.Run(() => client.TranslateOfflinePassage(id, page, sentenceId, target, cancellationToken, revisionId, sourceLanguage, marianOnly), cancellationToken);
     public Task<ModelPassageTranslation?> CachedModelTranslationAsync(string id, int? page, string sentenceId, string target,
         string? revisionId = null, string? sourceLanguage = null) =>
         Task.Run(() => client.CachedModelTranslation(id, page, sentenceId, target, revisionId, sourceLanguage));
