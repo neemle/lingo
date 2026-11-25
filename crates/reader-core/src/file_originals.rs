@@ -480,6 +480,7 @@ impl Store {
             pdf_quote_boundaries: true,
             pdf_reference_boundaries: true,
             pdf_list_item_boundaries: true,
+            photo_list_item_boundaries: false,
             prose_sentence_boundaries: false,
             created_at: now(),
             source_hash: hash,

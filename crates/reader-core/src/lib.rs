@@ -128,6 +128,8 @@ pub struct Document {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) pdf_list_item_boundaries: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) photo_list_item_boundaries: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) prose_sentence_boundaries: bool,
     pub created_at: i64,
     pub source_hash: String,
@@ -624,7 +626,8 @@ impl Store {
         card_learning::upgrade_noun_keys(connection)?;
         pdf_sentences::upgrade_prose_documents(connection)?;
         pdf_sentences::upgrade_pdf_references(connection)?;
-        pdf_sentences::upgrade_pdf_list_items(connection)
+        pdf_sentences::upgrade_pdf_list_items(connection)?;
+        pdf_sentences::upgrade_photo_list_items(connection)
     }
     pub fn snapshot(&self) -> Result<Snapshot> {
         fn rows<T: serde::de::DeserializeOwned>(
@@ -904,10 +907,9 @@ impl Store {
             .unwrap_or("txt")
             .to_lowercase();
         let prose_sentence_boundaries = matches!(format.as_str(), "txt" | "docx") && ocr_lines.is_none();
-        let sentences = if format == "pdf" {
+        let photo_list_item_boundaries = format != "pdf" && ocr_lines.is_some();
+        let sentences = if format == "pdf" || photo_list_item_boundaries {
             pdf_sentences::Layout::ListItems.segment(&text, &id)
-        } else if ocr_lines.is_some() {
-            pdf_sentences::Layout::ClosingQuotes.segment(&text, &id)
         } else if prose_sentence_boundaries {
             pdf_sentences::segment_prose(&text, &id)
         } else {
@@ -945,6 +947,7 @@ impl Store {
             pdf_quote_boundaries: format == "pdf",
             pdf_reference_boundaries: format == "pdf",
             pdf_list_item_boundaries: format == "pdf",
+            photo_list_item_boundaries,
             prose_sentence_boundaries,
             created_at: now(),
             source_hash: hash,

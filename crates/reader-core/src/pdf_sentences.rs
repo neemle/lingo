@@ -48,7 +48,9 @@ impl Layout {
 }
 
 pub(crate) fn segment_document(document: &Document, text: &str) -> Vec<Sentence> {
-    if document.format == "pdf" && document.pdf_list_item_boundaries {
+    if (document.format == "pdf" && document.pdf_list_item_boundaries)
+        || (document.ocr_lines.is_some() && document.photo_list_item_boundaries)
+    {
         Layout::ListItems.segment(text, &document.id)
     } else if document.format == "pdf" && document.pdf_reference_boundaries {
         Layout::PageReferences.segment(text, &document.id)
@@ -205,18 +207,29 @@ pub(crate) fn upgrade_documents(connection: &mut Connection) -> Result<()> {
 }
 
 pub(crate) fn upgrade_prose_documents(connection: &mut Connection) -> Result<()> {
-    upgrade_anchored_sentences(connection, 7, None)
+    upgrade_anchored_sentences(connection, 7, BoundaryUpgrade::Prose)
 }
 
 pub(crate) fn upgrade_pdf_references(connection: &mut Connection) -> Result<()> {
-    upgrade_anchored_sentences(connection, 8, Some(Layout::PageReferences))
+    upgrade_anchored_sentences(connection, 8, BoundaryUpgrade::Pdf(Layout::PageReferences))
 }
 
 pub(crate) fn upgrade_pdf_list_items(connection: &mut Connection) -> Result<()> {
-    upgrade_anchored_sentences(connection, 9, Some(Layout::ListItems))
+    upgrade_anchored_sentences(connection, 9, BoundaryUpgrade::Pdf(Layout::ListItems))
 }
 
-fn upgrade_anchored_sentences(connection: &mut Connection, target_version: u32, pdf_layout: Option<Layout>) -> Result<()> {
+pub(crate) fn upgrade_photo_list_items(connection: &mut Connection) -> Result<()> {
+    upgrade_anchored_sentences(connection, 10, BoundaryUpgrade::PhotoLists)
+}
+
+#[derive(Clone, Copy)]
+enum BoundaryUpgrade {
+    Prose,
+    Pdf(Layout),
+    PhotoLists,
+}
+
+fn upgrade_anchored_sentences(connection: &mut Connection, target_version: u32, upgrade: BoundaryUpgrade) -> Result<()> {
     let version = |db: &Connection| db.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
         .map_err(storage_error);
     if version(connection)? >= target_version {
@@ -226,15 +239,18 @@ fn upgrade_anchored_sentences(connection: &mut Connection, target_version: u32, 
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(storage_error)?;
     if version(&tx)? < target_version {
         let ids = {
-            let selection = match pdf_layout {
-                Some(Layout::ListItems) => "SELECT id FROM documents WHERE json_extract(body,'$.format')='pdf'
+            let selection = match upgrade {
+                BoundaryUpgrade::PhotoLists => "SELECT id FROM documents WHERE json_extract(body,'$.format')!='pdf'
+                 AND json_type(body,'$.ocrLines')='array'
+                 AND coalesce(json_extract(body,'$.photoListItemBoundaries'),0)=0",
+                BoundaryUpgrade::Pdf(Layout::ListItems) => "SELECT id FROM documents WHERE json_extract(body,'$.format')='pdf'
                  AND json_extract(body,'$.pdfQuoteBoundaries')=1
                  AND coalesce(json_extract(body,'$.pdfListItemBoundaries'),0)=0",
-                Some(_) => "SELECT id FROM documents WHERE json_extract(body,'$.format')='pdf'
+                BoundaryUpgrade::Pdf(_) => "SELECT id FROM documents WHERE json_extract(body,'$.format')='pdf'
                  AND json_extract(body,'$.pdfQuoteBoundaries')=1
                  AND coalesce(json_extract(body,'$.pdfReferenceBoundaries'),0)=0
                  AND instr(lower(json_extract(body,'$.text')),'p.')>0",
-                None => "SELECT id FROM documents WHERE json_extract(body,'$.format') IN ('txt','docx')
+                BoundaryUpgrade::Prose => "SELECT id FROM documents WHERE json_extract(body,'$.format') IN ('txt','docx')
                  AND coalesce(json_extract(body,'$.proseSentenceBoundaries'),0)=0
                  AND coalesce(json_type(body,'$.ocrLines'),'null')='null'",
             };
@@ -248,14 +264,14 @@ fn upgrade_anchored_sentences(connection: &mut Connection, target_version: u32, 
                 [&id], |row| Ok((row.get(0)?, row.get(1)?)),
             ).map_err(storage_error)?;
             let mut document: Document = serde_json::from_str(&body).map_err(storage_error)?;
-            if pdf_layout == Some(Layout::ListItems) && !has_list_marker(&document.text) {
+            if matches!(upgrade, BoundaryUpgrade::Pdf(Layout::ListItems)) && !has_list_marker(&document.text) {
                 continue;
             }
-            let sentences = if let Some(layout) = pdf_layout {
-                layout.segment(&document.text, &document.id)
-            } else if document.ocr_lines.is_none() {
-                segment_prose(&document.text, &document.id)
-            } else { continue; };
+            let sentences = match upgrade {
+                BoundaryUpgrade::Pdf(layout) => layout.segment(&document.text, &document.id),
+                BoundaryUpgrade::PhotoLists => Layout::ListItems.segment(&document.text, &document.id),
+                BoundaryUpgrade::Prose => segment_prose(&document.text, &document.id),
+            };
             if document.sentences.len() == sentences.len() && document.sentences.iter().zip(&sentences)
                 .all(|(old, new)| (old.start_utf8, old.end_utf8) == (new.start_utf8, new.end_utf8))
             {
@@ -280,18 +296,20 @@ fn upgrade_anchored_sentences(connection: &mut Connection, target_version: u32, 
                 });
             }
             document.sentences = sentences;
-            if let Some(layout) = pdf_layout {
-                document.pdf_reference_boundaries = true;
-                document.pdf_list_item_boundaries = layout == Layout::ListItems;
-            } else {
-                document.prose_sentence_boundaries = true;
+            match upgrade {
+                BoundaryUpgrade::Pdf(layout) => {
+                    document.pdf_reference_boundaries = true;
+                    document.pdf_list_item_boundaries = layout == Layout::ListItems;
+                }
+                BoundaryUpgrade::PhotoLists => document.photo_list_item_boundaries = true,
+                BoundaryUpgrade::Prose => document.prose_sentence_boundaries = true,
             }
             document.speech_resume = inline_resume;
             crate::document_revisions::append(&mut document, &tx)?;
             let body = serde_json::to_string(&document).map_err(storage_error)?;
             tx.execute("UPDATE documents SET body=?1 WHERE id=?2", params![body, id]).map_err(storage_error)?;
         }
-        if let Some(layout) = pdf_layout {
+        if let BoundaryUpgrade::Pdf(layout) = upgrade {
             crate::pdf_detached_pages::upgrade_sentence_layouts(&tx, layout)?;
         }
         tx.pragma_update(None, "user_version", target_version).map_err(storage_error)?;
