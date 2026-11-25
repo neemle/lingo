@@ -8,7 +8,7 @@ const SMALL: [&str; 17] = [
 const TENS: [&str; 5] = ["vingt", "trente", "quarante", "cinquante", "soixante"];
 const HYPHENS: [char; 3] = ['-', '‐', '‑'];
 const MAX_WORDS: usize = 13;
-pub(crate) const NORMALIZATION_REVISION: &str = "fr-uk-cardinals-v2";
+pub(crate) const NORMALIZATION_REVISION: &str = "fr-uk-cardinals-v3";
 
 pub(crate) fn spoken_cardinal(number: usize) -> Option<String> {
     if number > 999_999 {
@@ -70,7 +70,25 @@ fn small(word: &str) -> Option<usize> {
     if word == "une" { Some(1) } else { SMALL.iter().position(|&value| value == word) }
 }
 
+fn regional_tens(word: &str) -> Option<usize> {
+    match word {
+        "septante" => Some(70),
+        "huitante" | "octante" => Some(80),
+        "nonante" => Some(90),
+        _ => None,
+    }
+}
+
 fn under_hundred(words: &[&str]) -> Option<usize> {
+    if let Some(base) = words.first().and_then(|word| regional_tens(word)) {
+        let unit = match &words[1..] {
+            [] => 0,
+            ["et", "un" | "une"] => 1,
+            [word] => small(word).filter(|value| (1..=9).contains(value))?,
+            _ => return None,
+        };
+        return Some(base + unit);
+    }
     let (base, rest) = match words {
         [word] => return small(word).or_else(|| TENS.iter().position(|&value| value == *word).map(|i| 20 + i * 10)),
         ["dix", word] => return small(word).filter(|unit| (7..=9).contains(unit)).map(|unit| 10 + unit),
@@ -123,7 +141,12 @@ pub(crate) fn compound(text: &str) -> Option<usize> {
         words.push(word);
         end = start + word.len();
     }
-    (words.len() >= 2 && end == normalized.len()).then(|| parse(&words)).flatten()
+    let complete = end == normalized.len();
+    match words.as_slice() {
+        [word] if complete => regional_tens(word),
+        [_, _, ..] if complete => parse(&words),
+        _ => None,
+    }
 }
 
 fn joins_number(gap: &str) -> bool {
@@ -132,7 +155,8 @@ fn joins_number(gap: &str) -> bool {
 }
 
 fn number_start(word: &str) -> bool {
-    small(word).is_some() || TENS.contains(&word) || matches!(word, "cent" | "mille")
+    small(word).is_some() || TENS.contains(&word) || regional_tens(word).is_some()
+        || matches!(word, "cent" | "mille")
 }
 
 pub(crate) fn digits_in_text(text: &str) -> String {
@@ -152,9 +176,11 @@ pub(crate) fn digits_in_text(text: &str) -> String {
             index += 1;
             continue;
         }
-        let mut words = vec![first];
         let mut end = start + word.len();
-        let mut best = None;
+        let mut best = regional_tens(&first)
+            .filter(|_| !text[end..].starts_with(HYPHENS))
+            .map(|value| (end, 1, value));
+        let mut words = vec![first];
         for &(next, word) in spans.iter().skip(index + 1).take(MAX_WORDS - 1) {
             if !joins_number(&text[end..next]) { break; }
             let word_lower: String = word.to_lowercase().nfc().collect();
@@ -192,36 +218,47 @@ mod tests {
             ("soixante et onze", 71), ("quatre‑vingt dix neuf", 99),
             ("mille huit cent quatre-vingt-douze", 1892), ("deux cent un", 201),
             ("quatre-vingt-un mille deux cents", 81_200),
+            ("septante et un", 71), ("huitante-trois", 83), ("octante", 80),
+            ("deux cent nonante-neuf", 299), ("mille septante et une", 1071),
         ] {
             assert_eq!(compound(text), Some(value), "{text}");
         }
         assert_eq!(digits_in_text("Il a dix neuf ans. Le 25 octobre mille huit cent quatre-vingt-douze."),
             "Il a 19 ans. Le 25 octobre 1892.");
+        assert_eq!(digits_in_text("Dans les années nonante, il avait septante et un ans et comptait huitante-trois livres."),
+            "Dans les années 90, il avait 71 ans et comptait 83 livres.");
     }
 
     #[test]
     fn leaves_standalone_ambiguous_words_and_noncardinal_hyphenated_words_intact() {
-        for text in ["un bateau neuf", "le dix-neuvième jour", "avant-dix-neuf", "vingt, et un marin"] {
+        for text in ["un bateau neuf", "le dix-neuvième jour", "avant-dix-neuf", "vingt, et un marin",
+            "sa nonante-huitième année", "association-nonante"] {
             assert_eq!(digits_in_text(text), text);
         }
         assert_eq!(compound("neuf"), None);
     }
 
     #[test]
-    fn selected_spaced_age_translates_without_installing_language_packages() {
+    fn selected_cardinals_translate_without_installing_language_packages() {
         use crate::translation::{SelectedTranslation, TranslationSelection};
         let directory = tempfile::tempdir().unwrap();
         let mut store = crate::Store::open(&directory.path().join("reader.sqlite")).unwrap();
-        let source = "Il a dix neuf ans.";
-        let document = store.import("page.txt", source.as_bytes(), "fr").unwrap();
-        let selected = TranslationSelection {
-            page: None, revision_id: document.current_revision_id.unwrap(),
-            start_utf16: "Il a ".len(), text: "dix neuf".into(),
-        };
-        let Some(SelectedTranslation::Cardinal { text, source_text }) =
-            store.translate_selected_text(&document.id, "uk", &selected).unwrap()
-        else { panic!("expected deterministic translation"); };
-        assert_eq!(text, "дев’ятнадцять");
-        assert_eq!(source_text, "dix neuf");
+        for (number, translation) in [
+            ("dix neuf", "дев’ятнадцять"),
+            ("nonante-neuf", "дев’яносто дев’ять"),
+            ("huitante", "вісімдесят"),
+        ] {
+            let source = format!("Il a {number} ans.");
+            let document = store.import("page.txt", source.as_bytes(), "fr").unwrap();
+            let selected = TranslationSelection {
+                page: None, revision_id: document.current_revision_id.unwrap(),
+                start_utf16: "Il a ".len(), text: number.into(),
+            };
+            let Some(SelectedTranslation::Cardinal { text, source_text }) =
+                store.translate_selected_text(&document.id, "uk", &selected).unwrap()
+            else { panic!("expected deterministic translation"); };
+            assert_eq!(text, translation);
+            assert_eq!(source_text, number);
+        }
     }
 }
