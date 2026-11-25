@@ -18,6 +18,7 @@ public partial class ReadingPage
     private bool PdfFollowsScroll => inlinePdfFit != PdfFit.WholePage;
     private (string Document, int Page, int Start, int End, double SurfaceHeight, double ViewportHeight)? lastInlinePdfFollow;
     private int followingInlinePdf;
+    private int inlinePdfPositionRequest;
     private int inlinePdfRequest;
     private InlinePdfAddress? inlinePdfAddress;
     private InlinePdfAddress? inlinePdfLoading;
@@ -76,6 +77,7 @@ public partial class ReadingPage
     private void ClearInlineOriginal()
     {
         showInlineOriginal = false;
+        inlinePdfPositionRequest++;
         inlinePdfRequest++;
         inlinePdfLoading = null;
         inlinePdfLoad?.Cancel();
@@ -111,6 +113,7 @@ public partial class ReadingPage
             return;
         }
 
+        var positionRequest = ++inlinePdfPositionRequest;
         var request = inlinePdfRequest;
         var isPdf = document.Format == "pdf";
         CancellationTokenSource? work = null;
@@ -124,7 +127,10 @@ public partial class ReadingPage
                         ? await session.PdfReadingPageAsync(document.Id) ?? session.OriginalPageIndex()
                         : session.OriginalPageIndex();
             }
-            if (request != inlinePdfRequest || !showInlineOriginal) return;
+            // Reading-position lookups may complete out of order before any frame starts.
+            if (positionRequest != inlinePdfPositionRequest || !showInlineOriginal ||
+                session.Document is not { } selected || selected.Id != document.Id ||
+                selected.CurrentRevisionId != document.CurrentRevisionId) return;
             var detachedText = detachedAddress is { } detached && detached.Document == document.Id &&
                 detached.Page == page && DetachedPdfReader.IsVisible ? detached.Text : null;
             var address = new InlinePdfAddress(document.Id, page, document.CurrentRevisionId, detachedText);
@@ -204,7 +210,8 @@ public partial class ReadingPage
 
             if (cancellation.IsCancellationRequested || request != inlinePdfRequest || !showInlineOriginal || !readingPageActive ||
                 session.Document is not { } current || current.Id != address.Document ||
-                current.CurrentRevisionId != address.Revision) return;
+                current.CurrentRevisionId != address.Revision ||
+                (isPdf && CurrentNativePdfWindow(address.Document) is { } activeWindow && activeWindow.Center != address.Page)) return;
             var changedPage = previous is null ||
                 previous.Document != address.Document || previous.Page != address.Page;
             inlinePdfAddress = address;
@@ -233,13 +240,17 @@ public partial class ReadingPage
         catch (OperationCanceledException) when (work?.IsCancellationRequested == true) { }
         catch (Exception error)
         {
-            if (request != inlinePdfRequest) return;
+            if (request != inlinePdfRequest || (work is null && positionRequest != inlinePdfPositionRequest)) return;
             ClearInlineOriginal();
             await DisplayAlertAsync(isPdf ? "Сторінка PDF" : "Фото", error.Message, "Гаразд");
         }
         finally
         {
-            if (ReferenceEquals(inlinePdfLoad, work)) inlinePdfLoad = null;
+            if (work is not null && ReferenceEquals(inlinePdfLoad, work))
+            {
+                inlinePdfLoad = null;
+                inlinePdfLoading = null;
+            }
             work?.Dispose();
         }
     }
