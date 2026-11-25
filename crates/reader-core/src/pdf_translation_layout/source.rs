@@ -106,7 +106,10 @@ pub fn project(
         .collect::<Vec<_>>();
     let mut layout = plan(&fragments)?;
     let gutters: Vec<_> = if preserve_artwork {
-        geometry.iter().flat_map(ocr_line_gutters).collect()
+        geometry.iter().flat_map(crate::ocr::line_gutters).map(|gutter| {
+            let (x, y, width, height) = gutter.bounds;
+            Bounds { x, y, width, height }
+        }).collect()
     } else {
         Vec::new()
     };
@@ -180,34 +183,6 @@ pub fn project(
         })
         .collect();
     Ok(ProjectedLayout { layout, anchors })
-}
-
-// OCR sometimes groups labels on either side of an icon or a column gutter into
-// one line. The gap may contain artwork even when the words have safe masks.
-fn ocr_line_gutters(line: &OcrLine) -> impl Iterator<Item = Bounds> {
-    let rotation = crate::ocr::line_rotation(line).unwrap_or_default();
-    let mut words: Vec<_> = line.words.iter()
-        .filter(|word| word.width > 0.0 && word.height > 0.0)
-        .map(|word| Bounds { x: word.x, y: word.y, width: word.width, height: word.height }
-            .reading_box(rotation))
-        .collect();
-    words.sort_unstable_by(|left, right| left.x.total_cmp(&right.x));
-    let mut before = None::<Bounds>;
-    words.into_iter().filter_map(move |right| {
-        let previous = before;
-        if previous.is_none_or(|previous| right.right() > previous.right()) {
-            before = Some(right);
-        }
-        let previous = previous?;
-        let width = right.x - previous.right();
-        let top = previous.y.max(right.y);
-        let height = previous.bottom().min(right.bottom()) - top;
-        let word_height = previous.height.max(right.height);
-        (width > 3.0 * word_height && height >= 0.5 * word_height).then(|| {
-            let gap = Bounds { x: previous.right(), y: top, width, height };
-            gap.reading_box((360 - rotation) % 360)
-        })
-    })
 }
 
 fn wider_line(

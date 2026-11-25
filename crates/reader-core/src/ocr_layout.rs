@@ -160,10 +160,60 @@ fn separator_width(index: usize, line: &OcrLine) -> usize {
 
 fn reconstruct_with_drop_caps(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
     if lines.iter().any(|line| line.correction.is_some()) { return None; }
-    match drop_caps::join(lines) {
+    let rebuilt = match drop_caps::join(lines) {
         Some(joined) => Some(reconstruct_page(&joined).unwrap_or(joined)),
         None => reconstruct_page(lines),
+    };
+    split_isolated_label_rows(rebuilt.as_deref().unwrap_or(lines)).or(rebuilt)
+}
+
+fn split_isolated_label_rows(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
+    let mut rebuilt = None;
+    let mut previous_split = false;
+    for (index, line) in lines.iter().enumerate() {
+        if let Some(parts) = split_label_row(line) {
+            rebuilt.get_or_insert_with(|| lines[..index].to_vec()).extend(parts);
+            previous_split = true;
+        } else if let Some(rebuilt) = &mut rebuilt {
+            let mut line = line.clone();
+            line.block_start |= previous_split;
+            rebuilt.push(line);
+            previous_split = false;
+        }
     }
+    rebuilt
+}
+
+fn split_label_row(line: &OcrLine) -> Option<Vec<OcrLine>> {
+    if line.words.len() < 4 { return None; }
+    let raw = line.reading_text();
+    let mut cuts = crate::ocr::line_gutters(line).peekable();
+    cuts.peek()?;
+    let mut pieces = Vec::new();
+    let mut start = 0;
+    let rotation = crate::ocr::line_rotation(line);
+    for gutter in cuts {
+        let end = gutter.before.raw_start_utf16?.checked_add(gutter.before.text.encode_utf16().count())?;
+        let next = gutter.after.raw_start_utf16?;
+        let gap = raw.get(byte_at_utf16(raw, end)?..byte_at_utf16(raw, next)?)?;
+        if end <= start || gap.is_empty() || !gap.chars().all(char::is_whitespace) { return None; }
+        pieces.push(slice_line(line, start, end)?);
+        start = next;
+    }
+    pieces.push(slice_line(line, start, raw.encode_utf16().count())?);
+    // Keep a standalone word, an orphan punctuation mark or unanchored ink joined.
+    if pieces.iter().any(|piece| piece.words.iter()
+        .filter(|word| word.text.chars().any(char::is_alphabetic)).take(2).count() < 2)
+        || pieces.iter().map(|piece| piece.words.len()).sum::<usize>() != line.words.len()
+        || !pieces.iter().flat_map(|piece| piece.text.split_whitespace()).eq(raw.split_whitespace())
+    {
+        return None;
+    }
+    for piece in &mut pieces {
+        piece.block_start = true;
+        piece.rotation = rotation;
+    }
+    Some(pieces)
 }
 
 fn reconstruct_page(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
@@ -522,6 +572,33 @@ mod tests {
                     text: text.into(), x, y: 0.3, width: 0.04, height: 0.02,
                     raw_start_utf16: Some(offset), source_span: None,
                 }).collect(),
+        }
+    }
+
+    #[test]
+    fn separates_spatially_independent_labels_before_creating_text_anchors() {
+        for angle in [0, 90, 180, 270] {
+            let mut line = caption_line();
+            let original = |x, y, w, h| crate::ocr::reading_box((x, y, w, h), (360 - angle) % 360);
+            (line.x, line.y, line.width, line.height) = original(line.x, line.y, line.width, line.height);
+            for word in &mut line.words {
+                (word.x, word.y, word.width, word.height) = original(word.x, word.y, word.width, word.height);
+            }
+            let original_right = (line.words[2].x, line.words[2].y);
+            let expected = "Left caption\n\nRight caption";
+            let mut rebuilt = vec![line.clone()];
+            reconstruct_blocks(&mut rebuilt);
+            assert_eq!(crate::ocr::recognized_lines(&rebuilt, 1).unwrap(), expected, "{angle}°");
+            crate::ocr::refresh_line_provenance(expected, &mut rebuilt, None);
+            assert_eq!(crate::ocr::line_rotation(&rebuilt[1]), Some(angle));
+            assert_eq!((rebuilt[1].words[0].x, rebuilt[1].words[0].y), original_right);
+            assert_eq!(rebuilt[1].words[0].source_span.unwrap().start_utf16, 14);
+
+            let (_, updated, edits) = upgrade_cached_page(std::slice::from_ref(&line), &line.text).unwrap();
+            assert_eq!(updated, expected);
+            assert_eq!((edits[0].start_utf16, edits[0].old_len, edits[0].new_len), (12, 1, 2));
+            line.correction = Some("Left label Right label".into());
+            assert!(upgrade_cached_page(std::slice::from_ref(&line), line.reading_text()).is_none());
         }
     }
 

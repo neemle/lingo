@@ -1,4 +1,4 @@
-use super::OcrLine;
+use super::{OcrLine, OcrWord};
 use crate::Result;
 
 /// Convert an original-page rectangle to reading coordinates for a quarter turn.
@@ -29,6 +29,37 @@ pub(crate) fn line_rotation(line: &OcrLine) -> Option<u16> {
     } else {
         None
     }
+}
+
+pub(crate) struct LineGutter<'a> {
+    pub before: &'a OcrWord,
+    pub after: &'a OcrWord,
+    pub bounds: (f64, f64, f64, f64),
+}
+
+/// Large internal gaps may separate independent text groups on the same baseline.
+pub(crate) fn line_gutters(line: &OcrLine) -> impl Iterator<Item = LineGutter<'_>> {
+    let rotation = line_rotation(line).unwrap_or_default();
+    let mut words: Vec<_> = line.words.iter()
+        .filter(|word| word.width > 0.0 && word.height > 0.0)
+        .map(|word| (word, reading_box((word.x, word.y, word.width, word.height), rotation)))
+        .collect();
+    words.sort_unstable_by(|(_, a), (_, b)| a.0.total_cmp(&b.0));
+    let mut before = None::<(&OcrWord, (f64, f64, f64, f64))>;
+    words.into_iter().filter_map(move |(after, (x, y, width, height))| {
+        let previous = before;
+        if previous.is_none_or(|(_, (px, _, pw, _))| x + width > px + pw) {
+            before = Some((after, (x, y, width, height)));
+        }
+        let (before, (px, py, pw, ph)) = previous?;
+        let gap = x - (px + pw);
+        let top = py.max(y);
+        let overlap = (py + ph).min(y + height) - top;
+        let word_height = ph.max(height);
+        (gap > 3.0 * word_height && overlap >= 0.5 * word_height).then(|| LineGutter {
+            before, after, bounds: reading_box((px + pw, top, gap, overlap), (360 - rotation) % 360),
+        })
+    })
 }
 
 /// Fold trustworthy sideways or inverted lines into the portable result.
