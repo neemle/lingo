@@ -416,12 +416,18 @@ public partial class ReadingPage
     private async Task RefreshDetachedSentenceTranslationAsync()
     {
         if (detachedAddress is not { } address || detachedSentence is not { } current || TargetCode is not { } target ||
-            AppState.Session.Document is not { } document || document.Id != address.Document) return;
+            AppState.Session.Document is not { } document || document.Id != address.Document ||
+            document.Language != address.Language || current.Language != address.Language) return;
         var refreshAddress = new PdfLayoutAddress(address.Document, address.Page, document.CurrentRevisionId,
             address.Language, target, address.Text);
         var run = ++detachedTranslationRun;
+        bool IsCurrent() => readingPageActive && run == detachedTranslationRun &&
+            ReferenceEquals(detachedAddress, address) && detachedSentence?.Sentence.Id == current.Sentence.Id &&
+            AppState.Session.Document is { } active && active.Id == address.Document &&
+            active.Language == address.Language && TargetCode == target;
         translatingDetachedSentence = true;
         UpdateDetachedControls();
+        ShowDetachedOfflineStatus("Перекладаємо речення заново…");
         try
         {
             var refresh = new PdfSentenceRefresh(current.Sentence.StartUtf16,
@@ -429,11 +435,15 @@ public partial class ReadingPage
             await AppState.Session.PdfPageTranslationAsync(address.Document, address.Page, target,
                 cachedOnly: false, refresh: refresh,
                 source: PdfTranslationSource.FromPage(address.Language, current.RevisionId, address.Text));
-            if (run == detachedTranslationRun) ClearTranslationFocus();
+            if (IsCurrent())
+            {
+                ClearTranslationFocus();
+                ShowDetachedOfflineStatus("Речення перекладено заново.");
+            }
         }
         catch (Exception error)
         {
-            if (run == detachedTranslationRun) await DisplayAlertAsync("Переклад речення", error.Message, "Гаразд");
+            if (IsCurrent()) ShowDetachedOfflineStatus(error.Message);
             return;
         }
         finally
