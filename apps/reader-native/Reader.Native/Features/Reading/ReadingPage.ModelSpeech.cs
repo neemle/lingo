@@ -182,7 +182,7 @@ public partial class ReadingPage
             if (millis <= lastCheckpointMs || millis >= clipDurationMs) return;
             lastCheckpointMs = millis;
             var model = new ModelSpeechResume(voice.Id, ModelTimelineRevision(voice, document.Language), document.Language, ratePercent, millis);
-            pendingSpeechResume = (document.Id, new(sentence.Id, textHash, 0, model));
+            pendingSpeechResume = (document.Id, document.Language, new(sentence.Id, textHash, 0, model));
         }
         Action capture = CapturePosition;
         try

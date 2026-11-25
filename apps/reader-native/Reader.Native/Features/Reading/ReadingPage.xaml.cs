@@ -46,9 +46,10 @@ public partial class ReadingPage : ContentPage
     private VocabularyReadingOption[] vocabularyReadings = [];
     private string? documentId;
     private int speechRequest;
+    private int lastSpeechStartRequest;
     private bool speechPaused;
     private bool utteranceActive;
-    private (string DocumentId, SpeechResume Resume)? pendingSpeechResume;
+    private (string DocumentId, string Language, SpeechResume Resume)? pendingSpeechResume;
     private long lastSpeechSave;
     private SpeechResume? speechResume;
     private bool loadingSpeechPreferences;
@@ -1118,6 +1119,7 @@ public partial class ReadingPage : ContentPage
         if (session.Busy) return;
         pendingSpeechResume = null;
         if (session.Document is not { } document || document.Id != pending.DocumentId ||
+            document.Language != pending.Language ||
             session.Sentence is not { } sentence) return;
         if (!TrySaveSpeechResume(session, document, sentence, pending.Resume))
             pendingSpeechResume = pending;
@@ -1142,12 +1144,13 @@ public partial class ReadingPage : ContentPage
         }
     }
 
-    private async Task SaveStoppedSpeechWhenIdleAsync(ReaderSession session, int stoppedRequest,
+    private async Task SaveStoppedSpeechWhenIdleAsync(ReaderSession session, int playbackRequest,
         string documentId, string language, SpeechResume resume)
     {
         do { await session.WaitUntilIdleAsync(); }
-        while (session.Busy && speechRequest == stoppedRequest);
-        if (speechRequest != stoppedRequest) return;
+        while (session.Busy && lastSpeechStartRequest == playbackRequest);
+        // Leaving the reader can stop the same playback more than once.
+        if (lastSpeechStartRequest != playbackRequest) return;
 
         var document = session.Snapshot.Documents.FirstOrDefault(item => item.Id == documentId);
         if (document is null || document.Language != language ||
@@ -1209,6 +1212,7 @@ public partial class ReadingPage : ContentPage
         }
         CheckpointSpeechPosition();
         var request = ++speechRequest;
+        lastSpeechStartRequest = request;
         speech.Stop();
         CancelModelSpeech();
         speechPaused = false;
@@ -1381,7 +1385,7 @@ public partial class ReadingPage : ContentPage
                     SourceText.SpokenWord = spoken;
                     receivedCue();
                     if (resumeHash is null) return;
-                    pendingSpeechResume = (document.Id, new(sentence.Id, resumeHash,
+                    pendingSpeechResume = (document.Id, document.Language, new(sentence.Id, resumeHash,
                         spoken.StartUtf16 - sentence.StartUtf16));
                     if (lastSpeechSave == 0 || Stopwatch.GetElapsedTime(lastSpeechSave) >= TimeSpan.FromSeconds(2))
                         SaveSpeechResume();
@@ -1432,10 +1436,11 @@ public partial class ReadingPage : ContentPage
         PauseSpeech.Text = "Пауза";
         SpeechStatus.Text = "Озвучення зупинено.";
         if (session.Busy && source is { } stopped && pendingSpeechResume is { } pending &&
-            pending.DocumentId == stopped.Document && pending.Resume.SentenceId == stopped.Sentence)
+            pending.DocumentId == stopped.Document && pending.Language == stopped.Language &&
+            pending.Resume.SentenceId == stopped.Sentence)
         {
             pendingSpeechResume = null;
-            _ = SaveStoppedSpeechWhenIdleAsync(session, speechRequest, pending.DocumentId, stopped.Language, pending.Resume);
+            _ = SaveStoppedSpeechWhenIdleAsync(session, lastSpeechStartRequest, pending.DocumentId, pending.Language, pending.Resume);
         }
         if (readingPageActive) RefreshSpeechResume();
     }
