@@ -251,7 +251,7 @@ fn reconstruct_page(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
     for block in lines.chunk_by(|previous, next| !next.block_start &&
         previous.rotation.unwrap_or_default() == next.rotation.unwrap_or_default())
     {
-        if let Some(rebuilt) = reconstruct_columns(block, false) {
+        if let Some(rebuilt) = reconstruct_columns(block, false, None) {
             ordered.get_or_insert_with(|| lines[..start].to_vec()).extend(rebuilt);
         } else if let Some(ordered) = &mut ordered {
             ordered.extend_from_slice(block);
@@ -278,8 +278,9 @@ fn reconstruct_marked_grids(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
     let mut ordered = None;
     let mut start = 0;
     for run in lines.chunk_by(|first, second| first.rotation.unwrap_or_default() == second.rotation.unwrap_or_default()) {
-        let rebuilt = run.iter().skip(1).any(|line| line.block_start)
-            .then(|| reconstruct_columns(run, true)).flatten();
+        let rebuilt = if run.iter().skip(1).any(|line| line.block_start) {
+            reconstruct_columns(run, true, None).or_else(|| reconstruct_scrambled_grid(run))
+        } else { None };
         if let Some(rebuilt) = rebuilt {
             ordered.get_or_insert_with(|| lines[..start].to_vec()).extend(rebuilt);
         } else if let Some(ordered) = &mut ordered {
@@ -288,6 +289,24 @@ fn reconstruct_marked_grids(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
         start += run.len();
     }
     ordered
+}
+
+fn reconstruct_scrambled_grid(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
+    if lines.len() < 6 || !lines.first()?.is_rotated() { return None; }
+    let mut sorted = lines.iter().enumerate().map(|(index, line)| {
+        let (x, y, _, height) = line.reading_bounds();
+        (index, x, y + height / 2.0, height)
+    }).collect::<Vec<_>>();
+    sorted.sort_by(|a, b| a.2.total_cmp(&b.2));
+    for row in sorted.chunk_by_mut(|a, b| (a.2 - b.2).abs() < 0.55 * a.3.min(b.3)) {
+        row.sort_by(|a, b| a.1.total_cmp(&b.1));
+    }
+    let moved = |(index, entry): (usize, &(usize, f64, f64, f64))| index != entry.0;
+    let first = sorted.iter().enumerate().position(moved)?;
+    let last = sorted.iter().enumerate().rposition(moved)?;
+    let sorted = sorted.into_iter().map(|entry| lines[entry.0].clone()).collect::<Vec<_>>();
+    // A confirmed grid must account for every moved line, including those between its first and last moves.
+    reconstruct_columns(&sorted, true, Some(first..last + 1))
 }
 
 fn vertical_block_break(upper: &OcrLine, lower: &OcrLine) -> bool {
@@ -307,7 +326,7 @@ fn vertical_block_break(upper: &OcrLine, lower: &OcrLine) -> bool {
         display_line.reading_text().split_whitespace().take(13).count() <= 12
 }
 
-fn reconstruct_columns(lines: &[OcrLine], grids_only: bool) -> Option<Vec<OcrLine>> {
+fn reconstruct_columns(lines: &[OcrLine], grids_only: bool, moved_lines: Option<Range<usize>>) -> Option<Vec<OcrLine>> {
     if lines.len() < 2 && !lines.iter().any(|line| line.words.len() >= 4) {
         return None;
     }
@@ -358,6 +377,13 @@ fn reconstruct_columns(lines: &[OcrLine], grids_only: bool) -> Option<Vec<OcrLin
     let edits = if grids_only { separate_confirmed_grids(&text, &positioned) }
         else { separate_blocks(&text, &positioned, 1.0) }.ok()?;
     if edits.is_empty() { return None; }
+    if let Some(moved) = moved_lines {
+        let start = spans[moved.start].start;
+        let end = spans[moved.end - 1].end;
+        if !edits.iter().any(|edit| !edit.slices.is_empty() && edit.start <= start && edit.end >= end) {
+            return None;
+        }
+    }
 
     let mut output = Vec::with_capacity(lines.len());
     let mut cursor = 0;
@@ -717,15 +743,22 @@ mod tests {
             ("Right", 0.81), ("detail", 0.91)];
         let root = tempfile::tempdir().unwrap();
         let short_text = "Left\nLeft ends\nLeft detail\n\nMiddle\nMiddle ends\nMiddle detail\n\nRight\nRight ends\nRight detail";
-        for (index, (top, top_positions, expected, angle)) in [
-            (&full_top[..], [0.05, 0.46, 0.81], "Left starts\nLeft ends\nLeft detail\n\nMiddle starts\nMiddle ends\nMiddle detail\n\nRight starts\nRight ends\nRight detail", 0),
-            (&short_top[..], [0.05, 0.46, 0.81], short_text, 0),
-            (&centered_top[..], [0.1, 0.515, 0.86], short_text, 0),
-            (&centered_top[..], [0.1, 0.515, 0.86], short_text, 90),
-            (&centered_top[..], [0.1, 0.515, 0.86], short_text, 180),
-            (&centered_top[..], [0.1, 0.515, 0.86], short_text, 270),
+        for (index, (top, top_positions, expected, angle, mixed_order)) in [
+            (&full_top[..], [0.05, 0.46, 0.81], "Left starts\nLeft ends\nLeft detail\n\nMiddle starts\nMiddle ends\nMiddle detail\n\nRight starts\nRight ends\nRight detail", 0, false),
+            (&short_top[..], [0.05, 0.46, 0.81], short_text, 0, false),
+            (&centered_top[..], [0.1, 0.515, 0.86], short_text, 0, false),
+            (&centered_top[..], [0.1, 0.515, 0.86], short_text, 90, false),
+            (&centered_top[..], [0.1, 0.515, 0.86], short_text, 180, true),
+            (&centered_top[..], [0.1, 0.515, 0.86], short_text, 270, true),
         ].into_iter().enumerate() {
-            let cached = [row(top, 0.3, angle), row(&body, 0.34, angle), row(&continuation, 0.38, angle)];
+            let cached = if mixed_order {
+                vec![row(&body[..2], 0.34, angle), row(&continuation[..2], 0.38, angle),
+                    row(&top[..1], 0.3, angle), row(&top[1..2], 0.3, angle), row(&top[2..], 0.3, angle),
+                    row(&body[2..4], 0.34, angle), row(&body[4..], 0.34, angle),
+                    row(&continuation[2..4], 0.38, angle), row(&continuation[4..], 0.38, angle)]
+            } else {
+                vec![row(top, 0.3, angle), row(&body, 0.34, angle), row(&continuation, 0.38, angle)]
+            };
             let old = crate::ocr::recognized_lines(&cached, 1).unwrap();
             let (rebuilt, revised, edits) = upgrade_cached_page(&cached, &old).unwrap();
             assert_eq!(revised, expected);
@@ -736,12 +769,13 @@ mod tests {
 
             let mut store = crate::Store::open(&root.path().join(format!("reader-{index}.db"))).unwrap();
             let document = store.import_scanned_pdf("grid.pdf", b"%PDF-1.4\n", "en",
-                cached.to_vec(), 1).unwrap();
+                cached, 1).unwrap();
             assert_eq!(document.text, expected);
             let layout = store.pdf_page_translation(&document.id, 0, "uk", true).unwrap();
             let layout = serde_json::to_value(layout).unwrap();
-            let columns = layout.as_array().unwrap().iter()
+            let mut columns = layout.as_array().unwrap().iter()
                 .map(|row| row["sourceBlockIndex"].as_u64()).collect::<Vec<_>>();
+            columns.dedup();
             assert_eq!(columns, [Some(0), Some(1), Some(2)]);
             let geometry = document.ocr_lines.unwrap();
             let positions = top_positions.into_iter().zip([0.05, 0.46, 0.81])
