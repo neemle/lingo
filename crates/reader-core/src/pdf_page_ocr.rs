@@ -891,6 +891,7 @@ impl Store {
             crate::ocr_layout::reconstruct_blocks(&mut lines);
             if self.repair_pdf_ocr(&language, &mut lines).is_err() {
                 lines.iter_mut().for_each(|line| line.correction = None);
+                crate::ocr_layout::repair_numeric_labels(&mut lines);
             }
             Some(language)
         } else {
@@ -901,6 +902,7 @@ impl Store {
         self.edit_document(id, |document, tx| {
             if corrected_language.as_deref().is_some_and(|language| language != document.language) {
                 lines.iter_mut().for_each(|line| line.correction = None);
+                crate::ocr_layout::repair_numeric_labels(&mut lines);
             }
             if let Some(token) = token {
                 let current: bool = tx

@@ -3,7 +3,12 @@ use crate::pdf_text_blocks::{separate_blocks, separate_confirmed_grids, Position
 use std::ops::Range;
 
 mod drop_caps;
+mod numeric_labels;
 pub(crate) use drop_caps::{corrected_initial_lengths, is_initial, is_initial_artifact, recover_sparse_initials};
+
+pub(crate) fn repair_numeric_labels(page: &mut [OcrLine]) {
+    numeric_labels::repair(page);
+}
 
 /// Applies shared page-layout decisions before recognition results acquire canonical anchors.
 pub(crate) fn reconstruct_blocks(lines: &mut Vec<OcrLine>) {
@@ -16,7 +21,9 @@ pub(crate) fn reconstruct_blocks(lines: &mut Vec<OcrLine>) {
             page.push(line);
         }
         group_rotated_lines(&mut page);
-        result.extend(reconstruct_with_drop_caps(&page).unwrap_or(page));
+        let mut page = reconstruct_with_drop_caps(&page).unwrap_or(page);
+        repair_numeric_labels(&mut page);
+        result.extend(page);
     }
     *lines = result;
 }
@@ -54,11 +61,28 @@ fn group_rotated_lines(page: &mut [OcrLine]) {
 pub(crate) fn upgrade_cached_page(lines: &[OcrLine], text: &str) -> Option<(Vec<OcrLine>, String, Vec<TranscriptEdit>)> {
     let pages = lines.first()?.page.checked_add(1)?;
     if crate::ocr::recognized_lines(lines, pages).ok()? != text { return None; }
-    let lines = reconstruct_with_drop_caps(lines)?;
-    let revised = crate::ocr::recognized_lines(&lines, pages).ok()?;
-    if revised == text { return None; }
-    let edits = layout_edits(text, &revised);
-    Some((lines, revised, edits))
+    if let Some(rebuilt) = reconstruct_with_drop_caps(lines) {
+        let revised = crate::ocr::recognized_lines(&rebuilt, pages).ok()?;
+        if revised != text {
+            let edits = layout_edits(text, &revised);
+            return Some((rebuilt, revised, edits));
+        }
+    }
+    let mut repaired = lines.to_vec();
+    if !numeric_labels::repair(&mut repaired) { return None; }
+    let mut offset = 0;
+    let mut edits = Vec::new();
+    for (index, (before, after)) in lines.iter().zip(&repaired).enumerate() {
+        offset += separator_width(index, before);
+        let old = before.reading_text();
+        let new = after.reading_text();
+        if old != new {
+            edits.push(TranscriptEdit::between(offset, old, new));
+        }
+        offset += old.encode_utf16().count();
+    }
+    let revised = crate::ocr::recognized_lines(&repaired, pages).ok()?;
+    Some((repaired, revised, edits))
 }
 
 fn layout_edits(old: &str, new: &str) -> Vec<TranscriptEdit> {
