@@ -413,19 +413,32 @@ impl Store {
                     context = Some(card.context.clone());
                 }
             }
-            if progress.question.is_none() {
-                let card = &cards[index];
-                let answers = question_answers(&tx, card, reverse)?;
-                let options = if progress.mode == 2 {
-                    if collection.is_some() {
-                        let vocabulary = dictionary_transfer::collection_cards(&tx, None, None)?;
-                        choices(card, &vocabulary, reverse, &answers)
-                    } else {
-                        choices(card, &cards, reverse, &answers)
-                    }
+            let card = &cards[index];
+            let mode = progress.mode;
+            let options_for = |answers: &[String]| -> Result<Vec<String>> {
+                if mode != 2 {
+                    return Ok(Vec::new());
+                }
+                if collection.is_some() {
+                    let vocabulary = dictionary_transfer::collection_cards(&tx, None, None)?;
+                    Ok(choices(card, &vocabulary, reverse, answers))
                 } else {
-                    Vec::new()
-                };
+                    Ok(choices(card, &cards, reverse, answers))
+                }
+            };
+            if let Some(question) = &mut progress.question {
+                // The dictionary may have changed since the question was created.
+                // Keep a typed response in progress if choices were unavailable.
+                if mode == 2 && !question.revealed && question.options.is_empty() && question.draft.is_none() {
+                    let options = options_for(&question.answers)?;
+                    if !options.is_empty() {
+                        question.options = options;
+                        changed = true;
+                    }
+                }
+            } else {
+                let answers = question_answers(&tx, card, reverse)?;
+                let options = options_for(&answers)?;
                 progress.question = Some(SavedQuestion {
                     card_id: card.id.clone(),
                     prompt: prompt(card, reverse).to_owned(),
@@ -603,6 +616,62 @@ pub(crate) fn restore_if_fresh(
 mod tests {
     use super::*;
     use crate::{ReviewState, Vocabulary};
+
+    #[test]
+    fn multiple_choice_recovers_when_a_distractor_becomes_an_accepted_answer() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("reader.db");
+        let mut store = Store::open(&path).unwrap();
+        let card = store.save_word(Vocabulary {
+            id: String::new(),
+            word: "bonjour".into(),
+            translation: "добрий день".into(),
+            language: "fr".into(),
+            target_language: "uk".into(),
+            context: String::new(),
+            document_id: String::new(),
+            forward: ReviewState::default(),
+            reverse: ReviewState::default(),
+            analysis: None,
+            expression: None,
+            sense: None,
+            accepted_translations: Vec::new(),
+        }).unwrap();
+        for (word, translation) in [("salut", "привіт"), ("port", "порт"), ("rivage", "берег")] {
+            store.save_word(Vocabulary {
+                id: String::new(), word: word.into(), translation: translation.into(), ..card.clone()
+            }).unwrap();
+        }
+        let progress = store.set_practice(PracticeProgress {
+            mode: 2,
+            question: Some(SavedQuestion {
+                card_id: card.id.clone(),
+                prompt: card.word,
+                answers: vec![card.translation],
+                options: vec!["добрий день".into(), "привіт".into(), "порт".into()],
+                revealed: false,
+                given_answer: None,
+                draft: None,
+                elapsed_ms: None,
+            }),
+            ..PracticeProgress::default()
+        }).unwrap();
+        store.set_vocabulary_variants(&card.id, vec!["привіт".into()]).unwrap();
+        let queue = store.next_practice_question(progress.revision).unwrap();
+        assert_eq!(queue.progress.revision, progress.revision + 1);
+        let question = queue.progress.question.unwrap();
+        assert_eq!(question.card_id, card.id);
+        assert_eq!(question.answers, ["добрий день", "привіт"]);
+        assert_eq!(
+            question.options.iter().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from(["добрий день", "порт", "берег"]),
+        );
+        drop(store);
+        let mut store = Store::open(&path).unwrap();
+        let restored = store.next_practice_question(queue.progress.revision).unwrap();
+        assert_eq!(restored.progress.revision, queue.progress.revision);
+        assert_eq!(restored.progress.question.unwrap().options, question.options);
+    }
 
     #[test]
     fn forward_practice_accepts_other_senses_only_without_context() {
