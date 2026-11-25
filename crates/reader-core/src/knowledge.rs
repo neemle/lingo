@@ -440,9 +440,26 @@ impl Store {
         if gloss.len() > 512 || texts.len() > 64 || texts.iter().map(String::len).sum::<usize>() > 128_000 {
             return Err("Забагато тексту для підсвічування перекладу.".into());
         }
+        let numeric_gloss = (language == "uk").then(|| word_key(gloss));
+        let numeric_spans = |text: &str| -> Vec<crate::ocr::OcrSpan> {
+            let Some(gloss) = &numeric_gloss else { return Vec::new(); };
+            let (mut last_byte, mut last_utf16) = (0, 0);
+            crate::tts::uk_numbers::expanded_cardinals(text).filter_map(|(span, spoken)| {
+                if word_key(&spoken) != *gloss { return None; }
+                let start_utf16 = last_utf16 + text[last_byte..span.start].encode_utf16().count();
+                last_byte = span.end;
+                last_utf16 = start_utf16 + span.len();
+                Some(crate::ocr::OcrSpan {
+                    start_utf8: span.start,
+                    end_utf8: span.end,
+                    start_utf16,
+                    end_utf16: last_utf16,
+                })
+            }).collect()
+        };
         let index = self.open_knowledge_index(language)?;
         let Some((_, db, _)) = versioned_index(&index)? else {
-            return Ok(vec![Vec::new(); texts.len()]);
+            return Ok(texts.iter().map(|text| numeric_spans(text)).collect());
         };
         let mut forms = db.prepare_cached("SELECT DISTINCT lemma FROM forms WHERE term=?1 LIMIT 2")
             .map_err(|error| error.to_string())?;
@@ -472,7 +489,7 @@ impl Store {
         }
         texts.iter().map(|text| {
             let words = crate::document_tokens::word_parts(text).collect::<Vec<_>>();
-            let mut spans = Vec::new();
+            let mut spans = numeric_spans(text);
             let mut next = 0;
             for (index, candidate) in words.windows(needles.len()).enumerate() {
                 if index < next || candidate.windows(2).any(|pair| {
@@ -497,6 +514,7 @@ impl Store {
                     next = index + candidate.len();
                 }
             }
+            spans.sort_unstable_by_key(|span| span.start_utf16);
             Ok(spans)
         }).collect()
     }
@@ -1082,6 +1100,20 @@ mod tests {
         assert!(matches[1].is_empty());
         assert!(matches[2].is_empty());
         assert!(store.translation_gloss_matches("fr", "grue", &inputs).unwrap().iter().all(Vec::is_empty));
+    }
+
+    #[test]
+    fn translated_number_gloss_highlights_the_complete_integer_without_a_language_pack() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(&directory.path().join("user.sqlite")).unwrap();
+        let text = "📚 Мені 19 років, сестрі теж 19.";
+        let inputs = [text.into(), "19,5; 19–20; A19; 019; 119.".into()];
+        let matches = store.translation_gloss_matches("uk", "дев’ятнадцять", &inputs).unwrap();
+        let starts = text.match_indices("19").map(|(start, _)| text[..start].encode_utf16().count()).collect::<Vec<_>>();
+        assert_eq!(matches[0].iter().map(|span| span.start_utf16).collect::<Vec<_>>(), starts);
+        assert!(matches[0].iter().all(|span| &text[span.start_utf8..span.end_utf8] == "19" &&
+            span.end_utf16 == span.start_utf16 + 2));
+        assert!(matches[1].is_empty());
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::ops::Range;
 
 const SMALL: [&str; 20] = [
     "нуль",
@@ -48,10 +49,24 @@ const HUNDREDS: [&str; 10] = [
 ];
 
 pub(super) fn expand(text: &str) -> Cow<'_, str> {
-    let mut characters = text.char_indices().peekable();
     let mut expanded = String::new();
     let mut copied = 0;
-    while let Some((start, first)) = characters.next() {
+    for (span, spoken) in expanded_cardinals(text) {
+        expanded.push_str(&text[copied..span.start]);
+        expanded.push_str(&spoken);
+        copied = span.end;
+    }
+    if copied == 0 {
+        return Cow::Borrowed(text);
+    }
+    expanded.push_str(&text[copied..]);
+    Cow::Owned(expanded)
+}
+
+pub(crate) fn expanded_cardinals(text: &str) -> impl Iterator<Item = (Range<usize>, String)> + '_ {
+    let mut characters = text.char_indices().peekable();
+    std::iter::from_fn(move || loop {
+        let (start, first) = characters.next()?;
         if !first.is_ascii_digit() {
             continue;
         }
@@ -76,15 +91,8 @@ pub(super) fn expand(text: &str) -> Cow<'_, str> {
         let Ok(number) = digits.parse::<usize>() else {
             continue;
         };
-        expanded.push_str(&text[copied..start]);
-        expanded.push_str(&cardinal_with_gender(number, feminine));
-        copied = end;
-    }
-    if copied == 0 {
-        return Cow::Borrowed(text);
-    }
-    expanded.push_str(&text[copied..]);
-    Cow::Owned(expanded)
+        return Some((start..end, cardinal_with_gender(number, feminine)));
+    })
 }
 
 fn feminine_count_target(following: &str) -> bool {
