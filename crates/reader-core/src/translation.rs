@@ -3878,6 +3878,8 @@ fn cache_key(
             .unwrap_or(4)
     };
     let version = match route {
+        _ if segments.iter().any(|text| crate::protected_translation::contains_percentage(text.as_ref()))
+            || context.is_some_and(crate::protected_translation::contains_percentage) => 21,
         Route::Direct(edge) if edge.source == "fr" && edge.target == "uk" && segments.iter().any(|text|
             crate::marian_target_uk::has_french_initial_address(text.as_ref())) => 20,
         Route::Direct(ModelEdge { target, .. }) | Route::Pivot { second: ModelEdge { target, .. }, .. }

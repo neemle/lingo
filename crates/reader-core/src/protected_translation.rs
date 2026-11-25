@@ -11,21 +11,26 @@ static WEB_ADDRESSES: LazyLock<Regex> = LazyLock::new(|| {
     )).expect("web addresses")
 });
 
+const AMOUNT: &str = concat!(
+    r"[+\-−]?(?:[0-9]{1,3}(?:\.[0-9]{3})+,[0-9]+",
+    r"|[0-9]{1,3}(?:,[0-9]{3})+\.[0-9]+",
+    r"|(?:[0-9]{1,3}(?:[ \u{a0}\u{202f}][0-9]{3})+|[0-9]+)(?:[,.][0-9]+)?)",
+);
+const SPACE: &str = r"[ \u{a0}\u{202f}]*";
+
 static EURO_AMOUNTS: LazyLock<Regex> = LazyLock::new(|| {
-    const AMOUNT: &str = concat!(
-        r"[+\-−]?(?:[0-9]{1,3}(?:\.[0-9]{3})+,[0-9]+",
-        r"|[0-9]{1,3}(?:,[0-9]{3})+\.[0-9]+",
-        r"|(?:[0-9]{1,3}(?:[ \u{a0}\u{202f}][0-9]{3})+|[0-9]+)(?:[,.][0-9]+)?)",
-    );
-    const SPACE: &str = r"[ \u{a0}\u{202f}]*";
     Regex::new(&format!(
         r"(?i)(?P<before>{AMOUNT}){SPACE}(?:euros?|EUR|€)|(?:EUR|€){SPACE}(?P<after>{AMOUNT})",
     )).expect("euro amounts")
 });
 
-fn euro_amounts(source: &str) -> impl Iterator<Item = (Range<usize>, &str)> + '_ {
+static PERCENTAGES: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(r"{AMOUNT}{SPACE}[%‰]")).expect("percentages and per-mille figures")
+});
+
+fn numeric_matches<'a>(pattern: &'static Regex, source: &'a str) -> impl Iterator<Item = regex::Captures<'a>> {
     let mut addresses = web_address_spans(source).peekable();
-    EURO_AMOUNTS.captures_iter(source).filter_map(move |matched| {
+    pattern.captures_iter(source).filter_map(move |matched| {
         let range = matched.get(0)?.range();
         let adjacent = |ch: char| ch.is_alphanumeric() || ch == '_';
         if source[..range.start].ends_with(adjacent) || source[range.end..].starts_with(adjacent) {
@@ -37,9 +42,23 @@ fn euro_amounts(source: &str) -> impl Iterator<Item = (Range<usize>, &str)> + '_
         if addresses.peek().is_some_and(|address| address.start < range.end) {
             return None;
         }
-        let amount = matched.name("before").or_else(|| matched.name("after"))?;
-        Some((range, amount.as_str()))
+        Some(matched)
     })
+}
+
+fn euro_amounts(source: &str) -> impl Iterator<Item = (Range<usize>, &str)> + '_ {
+    numeric_matches(&EURO_AMOUNTS, source).filter_map(|matched| {
+        let amount = matched.name("before").or_else(|| matched.name("after"))?;
+        Some((matched.get(0)?.range(), amount.as_str()))
+    })
+}
+
+fn percentage_spans(source: &str) -> impl Iterator<Item = Range<usize>> + '_ {
+    numeric_matches(&PERCENTAGES, source).filter_map(|matched| matched.get(0).map(|value| value.range()))
+}
+
+pub(crate) fn contains_percentage(source: &str) -> bool {
+    percentage_spans(source).next().is_some()
 }
 
 pub(crate) fn contains_euro_amount(source: &str) -> bool {
@@ -116,15 +135,25 @@ impl<'a> ProtectedText<'a> {
         let mut number = 1;
         let mut unprotected_letters = false;
         let mut source_upper = None;
-        let amounts: Vec<_> = if target == "uk" { euro_amounts(source).collect() } else { Vec::new() };
+        let mut numeric: Vec<_> = percentage_spans(source).map(|range| {
+            let replacement = Cow::Borrowed(&source[range.clone()]);
+            (range, replacement)
+        }).collect();
+        let overlaps = |left: &Range<usize>, right: &Range<usize>| left.start < right.end && right.start < left.end;
+        if target == "uk" {
+            let amounts: Vec<_> = euro_amounts(source).filter(|(range, _)| {
+                !numeric.iter().any(|(other, _)| overlaps(other, range))
+            }).map(|(range, amount)| (range, Cow::Owned(format!("{amount} євро")))).collect();
+            numeric.extend(amounts);
+        }
         let identifiers = protected_spans(source).filter(|(range, _)| {
-            !amounts.iter().any(|(amount, _)| amount.start < range.end && range.start < amount.end)
+            !numeric.iter().any(|(other, _)| overlaps(other, range))
         }).map(|(range, value)| {
             let replacement = value.filter(|_| target == "uk").unwrap_or(&source[range.clone()]);
             (range, Cow::Borrowed(replacement))
         });
         let mut spans: Vec<_> = identifiers.collect();
-        spans.extend(amounts.into_iter().map(|(range, amount)| (range, Cow::Owned(format!("{amount} євро")))));
+        spans.extend(numeric);
         spans.sort_unstable_by_key(|(range, _)| range.start);
         for (range, replacement) in spans {
             let token = loop {
@@ -230,7 +259,8 @@ pub(crate) fn contains_protected(source: &str) -> bool {
 
 pub(crate) fn passage_token_spans(source: &str) -> Vec<Range<usize>> {
     let mut spans: Vec<_> = protected_spans(source).map(|(span, _)| span)
-        .chain(euro_amounts(source).map(|(span, _)| span)).collect();
+        .chain(euro_amounts(source).map(|(span, _)| span))
+        .chain(percentage_spans(source)).collect();
     spans.sort_unstable_by_key(|span| span.start);
     let mut merged: Vec<Range<usize>> = Vec::with_capacity(spans.len());
     for span in spans {
@@ -382,6 +412,21 @@ fn is_identifier(word: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn percentages_preserve_the_value_unit_and_multiplicity() {
+        let source = "L’ONU indique −19,50\u{a0}%, 1\u{202f}250,5 ‰ et −19,50\u{a0}%.";
+        let protected = ProtectedText::new(source, "uk");
+        assert_eq!(protected.input(), "L’ZXQ001QXZ indique ZXQ002QXZ, ZXQ003QXZ et ZXQ004QXZ.");
+        assert_eq!(protected.restore("ZXQ001QXZ повідомляє про ZXQ003QXZ, ZXQ002QXZ і ZXQ004QXZ.".into()).unwrap(),
+            "ООН повідомляє про 1\u{202f}250,5 ‰, −19,50\u{a0}% і −19,50\u{a0}%.");
+        assert!(protected.restore("ZXQ001QXZ повідомляє про ZXQ002QXZ і ZXQ003QXZ.".into()).is_err());
+        let percentages: Vec<_> = percentage_spans(source).map(|span| &source[span]).collect();
+        assert_eq!(percentages, ["−19,50\u{a0}%", "1\u{202f}250,5 ‰", "−19,50\u{a0}%"]);
+        assert!(!contains_percentage("Voir https://example.org/19%20ou%20−1,5%."));
+        assert!(!contains_percentage("Code AB19% affiché."));
+        assert!(ProtectedText::new("−19,50 %", "en").only_protected());
+    }
 
     #[test]
     fn explicit_euro_amounts_keep_their_value_precision_and_position_in_ukrainian() {

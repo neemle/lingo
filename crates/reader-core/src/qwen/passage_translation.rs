@@ -135,7 +135,9 @@ impl Store {
                     };
                     (HINT_GENERATION_MODEL, SYSTEM, example, cache_kind)
                 };
-                let cache_kind = if has_repeated_numbers(prompt_text) {
+                let cache_kind = if protected_translation::contains_percentage(prompt_text) {
+                    "passage-protected-percentages-v1"
+                } else if has_repeated_numbers(prompt_text) {
                     "passage-repeated-numbers-v1"
                 } else if target == "uk" && protected_translation::contains_euro_amount(prompt_text) {
                     "passage-protected-euro-amounts-v1"
