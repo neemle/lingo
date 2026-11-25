@@ -1,5 +1,7 @@
 use crate::ocr::{reading_box, OcrLine, OcrWord};
 
+const APOSTROPHES: [char; 3] = ['’', '\'', 'ʼ'];
+
 /// Retain a sparse-only initial when its geometry matches a line in the primary OCR.
 pub(crate) fn recover_sparse_initials(primary: &mut [OcrLine], sparse: &[OcrLine], aspect: f64) {
     for cap in sparse.iter().filter(|line| {
@@ -118,7 +120,17 @@ pub(super) fn cached_initial_repair<'a>(saved: &OcrLine, incoming: &'a [OcrLine]
 
 pub(crate) fn is_initial(text: &str) -> bool {
     let mut letters = text.chars();
-    letters.next().is_some_and(char::is_uppercase) && letters.next().is_none()
+    letters.next().is_some_and(char::is_uppercase)
+        && letters.next().is_none_or(|ch| APOSTROPHES.contains(&ch) && letters.next().is_none())
+}
+
+fn starts_initial_tail(initial: &str, tail: &str) -> bool {
+    let tail = if initial.ends_with(APOSTROPHES) {
+        tail
+    } else {
+        tail.strip_prefix(APOSTROPHES).unwrap_or(tail)
+    };
+    tail.chars().next().is_some_and(|ch| !APOSTROPHES.contains(&ch) && ch.is_lowercase())
 }
 
 /// Join an isolated ornamental initial with the lowercase text aligned to its top right.
@@ -164,7 +176,7 @@ fn join_inline(line: &OcrLine) -> Option<OcrLine> {
     let (cap_x, cap_y, cap_width, cap_height) = reading_box((cap.x, cap.y, cap.width, cap.height), angle);
     let (tail_x, tail_y, _, tail_height) = reading_box((tail.x, tail.y, tail.width, tail.height), angle);
     if cap.raw_start_utf16 != Some(0) || !is_initial(&cap.text)
-        || !tail.text.chars().next().is_some_and(char::is_lowercase)
+        || !starts_initial_tail(&cap.text, &tail.text)
         || !close_to_initial(cap_x + cap_width, cap_y, cap_height, tail_x, tail_y, tail_height)
     {
         return None;
@@ -198,11 +210,10 @@ fn join_inline(line: &OcrLine) -> Option<OcrLine> {
 }
 
 fn distance(cap: &OcrLine, body: &OcrLine, aspect: f64) -> Option<f64> {
-    let start = body.text.trim_start_matches(['’', '\'', 'ʼ']);
     let angle = body.rotation.unwrap_or(0);
     if cap.rotation.unwrap_or(0) != angle || cap.page != body.page
         || cap.correction.is_some() || body.correction.is_some()
-        || !start.chars().next().is_some_and(char::is_lowercase)
+        || !starts_initial_tail(&cap.text, &body.text)
         || body.text.chars().take(3).count() < 3 || body.text.len() + cap.text.len() > 8192
     {
         return None;

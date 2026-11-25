@@ -415,6 +415,56 @@ mod tests {
     }
 
     #[test]
+    fn joins_decorative_initial_on_either_side_of_an_ocr_apostrophe_break() {
+        for (initial, tail) in [("L", "’homme"), ("L’", "homme"), ("L'", "homme")] {
+            let mut line = caption_line();
+            line.text = format!("{initial} {tail} arrive");
+            line.words.truncate(3);
+            let tail_start = initial.encode_utf16().count() + 1;
+            let next_start = tail_start + tail.encode_utf16().count() + 1;
+            for (word, (text, start, x)) in line.words.iter_mut().zip([
+                (initial, 0, 0.12), (tail, tail_start, 0.16), ("arrive", next_start, 0.22),
+            ]) {
+                word.text = text.into();
+                word.raw_start_utf16 = Some(start);
+                word.x = x;
+            }
+            line.words[0].width = 0.035;
+            let mut regular = vec![line.clone()];
+            reconstruct_blocks(&mut regular);
+            assert_eq!(regular[0].text, line.text);
+
+            line.words[0].height = 0.045;
+            line.words[0].y = 0.295;
+            let expected = format!("{initial}{tail} arrive");
+            let mut inline = vec![line.clone()];
+            reconstruct_blocks(&mut inline);
+            crate::ocr::refresh_line_provenance(&expected, &mut inline, None);
+            assert_eq!(inline[0].text, expected);
+            assert_eq!(inline[0].words[0].x, 0.12);
+            assert_eq!(inline[0].words[1].source_span.unwrap().start_utf16, next_start - 1);
+
+            let mut cap = caption_line();
+            cap.text = initial.into();
+            cap.words.clear();
+            cap.x = 0.12;
+            cap.y = 0.295;
+            cap.width = 0.035;
+            cap.height = 0.045;
+            line.text = format!("{tail} arrive");
+            line.words.remove(0);
+            for word in &mut line.words {
+                word.raw_start_utf16 = word.raw_start_utf16.map(|start| start - tail_start);
+            }
+            let mut isolated = vec![line, cap];
+            reconstruct_blocks(&mut isolated);
+            assert_eq!(isolated.len(), 1);
+            assert_eq!(isolated[0].text, expected);
+            assert_eq!(isolated[0].words[1].raw_start_utf16, Some(next_start - 1));
+        }
+    }
+
+    #[test]
     fn inline_drop_cap_joins_located_words_without_merging_regular_initials() {
         let mut line = caption_line();
         line.text = "L e bateau".into();
