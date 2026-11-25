@@ -384,11 +384,20 @@ mod tests {
             "5\t1\t3\t1\t1\t2\t35\t20\t9\t10\t97\t15\n",
             "5\t1\t3\t1\t1\t3\t47\t19\t25\t11\t97\tfévrier\n",
         ));
-        let primary = parse_tesseract_tsv(&primary, 100, 100).unwrap();
-        let merged = recover_tesseract_lines(primary.clone(), &sparse, 100, 100);
-        assert_eq!(merged[0].text, "Le 15 février");
-        assert_eq!(merged[0].words[1].raw_start_utf16, Some(3));
         let conflicting = sparse.replace("février", "janvier");
-        assert_eq!(recover_tesseract_lines(primary, &conflicting, 100, 100)[0].text, "L_: 15 février");
+        for damaged in ["L_:", "[L_:", "©"] {
+            let input = parse_tesseract_tsv(&primary.replace("L_:", damaged), 100, 100).unwrap();
+            let mut merged = recover_tesseract_lines(input.clone(), &sparse, 100, 100);
+            assert_eq!(merged[0].text, "Le 15 février");
+            assert_eq!(merged[0].words[0].text, "Le");
+            assert_eq!(merged[0].words[0].x, 0.1);
+            assert_eq!(merged[0].words[1].raw_start_utf16, Some(3));
+            crate::ocr::refresh_line_provenance("Le 15 février", &mut merged, None);
+            assert_eq!(merged[0].words[0].source_span.unwrap().end_utf16, 2);
+            assert_eq!(recover_tesseract_lines(input, &conflicting, 100, 100)[0].text,
+                format!("{damaged} 15 février"));
+        }
+        let bullet = parse_tesseract_tsv(&primary.replace("L_:", "•"), 100, 100).unwrap();
+        assert_eq!(recover_tesseract_lines(bullet, &sparse, 100, 100)[0].text, "• 15 février");
     }
 }

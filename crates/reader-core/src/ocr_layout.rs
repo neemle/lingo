@@ -3,7 +3,7 @@ use crate::pdf_text_blocks::{separate_blocks, separate_confirmed_grids, Position
 use std::ops::Range;
 
 mod drop_caps;
-pub(crate) use drop_caps::{is_initial, recover_sparse_initials};
+pub(crate) use drop_caps::{is_initial, is_initial_artifact, recover_sparse_initials};
 
 /// Applies shared page-layout decisions before recognition results acquire canonical anchors.
 pub(crate) fn reconstruct_blocks(lines: &mut Vec<OcrLine>) {

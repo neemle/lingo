@@ -6,12 +6,15 @@ pub(crate) fn recover_sparse_initials(primary: &mut [OcrLine], sparse: &[OcrLine
         line.correction.is_none() && is_initial(&line.text)
             && line.confidence.is_some_and(|score| score >= 0.90)
     }).take(32) {
+        if nearest_body(cap, sparse, aspect)
+            .is_some_and(|index| repair_damaged_initial(primary, cap, &sparse[index]))
+        {
+            continue;
+        }
         if let Some(target) = nearest_body(cap, primary, aspect) {
             if !primary.iter().any(|line| is_initial(&line.text) && distance(line, &primary[target], aspect).is_some()) {
                 prefix(&mut primary[target], cap);
             }
-        } else if let Some(recovered) = nearest_body(cap, sparse, aspect).map(|index| &sparse[index]) {
-            repair_damaged_initial(primary, cap, recovered);
         }
     }
 }
@@ -23,16 +26,18 @@ fn nearest_body(cap: &OcrLine, lines: &[OcrLine], aspect: f64) -> Option<usize> 
         .map(|(index, _)| index)
 }
 
-fn repair_damaged_initial(primary: &mut [OcrLine], cap: &OcrLine, sparse_body: &OcrLine) {
-    let [tail, first_anchor, second_anchor, ..] = sparse_body.words.as_slice() else { return };
+fn repair_damaged_initial(primary: &mut [OcrLine], cap: &OcrLine, sparse_body: &OcrLine) -> bool {
+    let [tail, first_anchor, second_anchor, ..] = sparse_body.words.as_slice() else { return false };
+    if tail.raw_start_utf16 != Some(0) || !sparse_body.text.starts_with(&tail.text) {
+        return false;
+    }
     let mut candidates = primary.iter_mut().filter(|line| {
         let [damaged, first, second, ..] = line.words.as_slice() else { return false };
         line.correction.is_none() && line.page == cap.page
             && line.rotation.unwrap_or(0) == cap.rotation.unwrap_or(0)
             && damaged.raw_start_utf16 == Some(0)
-            && damaged.text.strip_prefix(&cap.text).is_some_and(|suffix| {
-                !suffix.is_empty() && !suffix.chars().any(char::is_alphanumeric)
-            })
+            && (is_initial_artifact(&damaged.text) || damaged.text.len() > cap.text.len()
+                && damaged.text.chars().filter(|ch| ch.is_alphanumeric()).eq(cap.text.chars()))
             && (damaged.x - cap.x).abs() <= cap.width * 0.35
             && (damaged.y - cap.y).abs() <= cap.height * 0.35
             && [first, second].into_iter().zip([first_anchor, second_anchor]).all(|(a, b)| {
@@ -40,13 +45,13 @@ fn repair_damaged_initial(primary: &mut [OcrLine], cap: &OcrLine, sparse_body: &
                     && (a.x - b.x).abs() <= b.width * 0.25
             })
     });
-    let Some(line) = candidates.next() else { return };
+    let Some(line) = candidates.next() else { return false };
     if candidates.next().is_some() || !line.text.starts_with(&line.words[0].text) {
-        return;
+        return false;
     }
     let damaged = &line.words[0].text;
     if line.text.len() - damaged.len() + tail.text.len() + cap.text.len() > 8192 {
-        return;
+        return false;
     }
     let original_units = damaged.encode_utf16().count();
     let recovered_units = tail.text.encode_utf16().count();
@@ -58,6 +63,11 @@ fn repair_damaged_initial(primary: &mut [OcrLine], cap: &OcrLine, sparse_body: &
             .map(|offset| offset + recovered_units);
     }
     prefix(line, cap);
+    true
+}
+
+pub(crate) fn is_initial_artifact(text: &str) -> bool {
+    matches!(text, "©" | "®" | "@" | "§")
 }
 
 pub(crate) fn is_initial(text: &str) -> bool {

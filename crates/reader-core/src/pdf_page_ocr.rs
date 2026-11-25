@@ -1260,7 +1260,7 @@ fn repair_ocr_drop_caps(reference: &str, lines: &mut [ocr::OcrLine]) -> bool {
         let words: Vec<_> = word_parts(opening).take(ANCHORS + 1).collect();
         if let Some(&(start, _, word)) = words.first() {
             let prefix = opening[..start].trim();
-            let corrected = if matches!(prefix, "©" | "®" | "@" | "§") {
+            let corrected = if crate::ocr_layout::is_initial_artifact(prefix) {
                 replacement(&words)
                     .filter(|candidate| {
                         candidate.chars().count() <= 3
