@@ -90,11 +90,14 @@ fn upgrade_legacy_pages(db: &mut Connection) -> Result<()> {
     tx.commit().map_err(database_error)
 }
 
-pub(crate) fn upgrade_sentence_layouts(db: &Connection, target: Layout) -> Result<()> {
+pub(crate) fn upgrade_sentence_layouts(db: &Connection, target: Layout, document_id: Option<&str>) -> Result<()> {
     let pages = {
         let mut statement = db.prepare(
             "SELECT p.document_id,p.page FROM pdf_detached_pages p
-             WHERE p.soft_lines<?1 AND (?1=4 OR (?1=5 AND p.soft_lines=4 AND instr(lower(p.text),'p.')>0)
+             WHERE p.document_id IN (
+                 SELECT id FROM documents WHERE ?2 IS NULL UNION ALL SELECT ?2 WHERE ?2 IS NOT NULL
+             )
+             AND p.soft_lines<?1 AND (?1=4 OR (?1=5 AND p.soft_lines=4 AND instr(lower(p.text),'p.')>0)
                  OR (?1=6 AND p.soft_lines IN (4,5)))
              AND NOT EXISTS(
                  SELECT 1 FROM pdf_detached_speech_resume s WHERE s.document_id=p.document_id AND s.page=p.page
@@ -104,7 +107,7 @@ pub(crate) fn upgrade_sentence_layouts(db: &Connection, target: Layout) -> Resul
              )
              )",
         ).map_err(database_error)?;
-        let rows = statement.query_map([target as u8], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u16>(1)?)))
+        let rows = statement.query_map(params![target as u8, document_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u16>(1)?)))
             .map_err(database_error)?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(database_error)?
     };
@@ -771,6 +774,31 @@ mod tests {
             assert_eq!(restored.position, Some(1));
             Ok(())
         }).unwrap();
+    }
+
+    #[test]
+    fn portable_restore_upgrades_detached_exercise_boundaries_and_keeps_reading_position() {
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("book.pdf");
+        let archive = root.path().join("library.zip");
+        std::fs::write(&original, b"%PDF-1.4\n").unwrap();
+        let mut source = Store::open(&root.path().join("source.db")).unwrap();
+        let prepared = crate::file_originals::prepare_pdf_import(
+            source.pdf_original_root(), "book.pdf", &original, "fr", vec![String::new()], vec![],
+        ).unwrap();
+        let document = source.import_pdf_file(prepared).unwrap();
+        let text = "11. Préparez votre essai.";
+        write(&source.connection, &document.id, 0, text, None, None, Layout::PageReferences).unwrap();
+        let legacy = source.detached_pdf_sentence(&document.id, 0, Some(1)).unwrap().unwrap();
+        assert_eq!(legacy.sentence.text, "Préparez votre essai.");
+        source.export_backup_file(&archive).unwrap();
+
+        let mut target = Store::open(&root.path().join("target.db")).unwrap();
+        target.restore_backup_file(&archive).unwrap();
+        let restored = target.detached_pdf_sentence(&document.id, 0, None).unwrap().unwrap();
+        assert_eq!(restored.sentence.text, text);
+        assert_eq!(restored.position, 0);
+        assert!(page_layout(&target.connection, &document.id, 0).unwrap() == Layout::ListItems);
     }
 
     #[test]

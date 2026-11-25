@@ -1691,6 +1691,7 @@ impl Store {
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
+        let mut restored_ids = Vec::new();
         for prepared in validated {
             if let Some(id) =
                 backup_files::restore_document(&tx, prepared.document, prepared.history)?
@@ -1700,9 +1701,11 @@ impl Store {
                     params![id, prepared.original.name, prepared.original.bytes],
                 )
                 .map_err(|e| e.to_string())?;
+                restored_ids.push(id);
             }
         }
         backup_files::restore_library_data(&tx, backup)?;
+        pdf_sentences::upgrade_restored_boundaries(&tx, &restored_ids)?;
         tx.commit().map_err(|e| e.to_string())
     }
 }

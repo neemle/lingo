@@ -1,4 +1,4 @@
-use crate::{Document, Result, Sentence};
+use crate::{Document, Result, Sentence, SpeechResume};
 use rusqlite::{params, Connection, TransactionBehavior};
 
 pub(crate) fn segment(text: &str, id: &str, soft_lines: bool) -> Vec<Sentence> {
@@ -199,7 +199,7 @@ pub(crate) fn upgrade_documents(connection: &mut Connection) -> Result<()> {
                 .map_err(storage_error)?;
             }
         }
-        crate::pdf_detached_pages::upgrade_sentence_layouts(&tx, Layout::ClosingQuotes)?;
+        crate::pdf_detached_pages::upgrade_sentence_layouts(&tx, Layout::ClosingQuotes, None)?;
         tx.pragma_update(None, "user_version", 5)
             .map_err(storage_error)?;
     }
@@ -259,62 +259,114 @@ fn upgrade_anchored_sentences(connection: &mut Connection, target_version: u32, 
             rows.collect::<rusqlite::Result<Vec<_>>>().map_err(storage_error)?
         };
         for id in ids {
-            let (body, checkpoint): (String, Option<String>) = tx.query_row(
-                "SELECT d.body,s.body FROM documents d LEFT JOIN speech_resume s ON s.document_id=d.id WHERE d.id=?1",
-                [&id], |row| Ok((row.get(0)?, row.get(1)?)),
-            ).map_err(storage_error)?;
-            let mut document: Document = serde_json::from_str(&body).map_err(storage_error)?;
-            if matches!(upgrade, BoundaryUpgrade::Pdf(Layout::ListItems)) && !has_list_marker(&document.text) {
-                continue;
+            let Some((mut document, checkpoint)) = read_upgrade_candidate(&tx, &id)? else { continue; };
+            if upgrade.apply(&tx, &mut document, checkpoint.as_ref())? {
+                save_upgrade(&tx, &mut document)?;
             }
-            let sentences = match upgrade {
-                BoundaryUpgrade::Pdf(layout) => layout.segment(&document.text, &document.id),
-                BoundaryUpgrade::PhotoLists => Layout::ListItems.segment(&document.text, &document.id),
-                BoundaryUpgrade::Prose => segment_prose(&document.text, &document.id),
-            };
-            if document.sentences.len() == sentences.len() && document.sentences.iter().zip(&sentences)
-                .all(|(old, new)| (old.start_utf8, old.end_utf8) == (new.start_utf8, new.end_utf8))
-            {
-                continue;
-            }
-            let inline_resume = document.speech_resume.take();
-            let Ok(checkpoint) = checkpoint.as_deref().map(serde_json::from_str).transpose() else {
-                continue;
-            };
-            document.speech_resume = checkpoint.or_else(|| inline_resume.clone());
-            if !preserves_anchors(&document, &sentences) ||
-                !preserves_dictionary_anchors(&tx, &document, &sentences)?
-            {
-                continue;
-            }
-            if let Some(cursor) = document.sentences.get(document.position) {
-                let offset = cursor.start_utf16.saturating_add(document.reading_token_utf16.unwrap_or(0));
-                document.position = position_at(&sentences, offset);
-                document.reading_token_utf16 = sentences.get(document.position).and_then(|sentence| {
-                    (sentence.start_utf16 < offset && offset < sentence.end_utf16)
-                        .then(|| offset - sentence.start_utf16)
-                });
-            }
-            document.sentences = sentences;
-            match upgrade {
-                BoundaryUpgrade::Pdf(layout) => {
-                    document.pdf_reference_boundaries = true;
-                    document.pdf_list_item_boundaries = layout == Layout::ListItems;
-                }
-                BoundaryUpgrade::PhotoLists => document.photo_list_item_boundaries = true,
-                BoundaryUpgrade::Prose => document.prose_sentence_boundaries = true,
-            }
-            document.speech_resume = inline_resume;
-            crate::document_revisions::append(&mut document, &tx)?;
-            let body = serde_json::to_string(&document).map_err(storage_error)?;
-            tx.execute("UPDATE documents SET body=?1 WHERE id=?2", params![body, id]).map_err(storage_error)?;
         }
         if let BoundaryUpgrade::Pdf(layout) = upgrade {
-            crate::pdf_detached_pages::upgrade_sentence_layouts(&tx, layout)?;
+            crate::pdf_detached_pages::upgrade_sentence_layouts(&tx, layout, None)?;
         }
         tx.pragma_update(None, "user_version", target_version).map_err(storage_error)?;
     }
     tx.commit().map_err(storage_error)
+}
+
+pub(crate) fn upgrade_restored_boundaries(db: &Connection, ids: &[String]) -> Result<()> {
+    for id in ids {
+        let Some((mut document, checkpoint)) = read_upgrade_candidate(db, id)? else { continue; };
+        let upgrades: &[BoundaryUpgrade] = if document.format == "pdf" {
+            &[
+                BoundaryUpgrade::Pdf(Layout::PageReferences),
+                BoundaryUpgrade::Pdf(Layout::ListItems),
+            ]
+        } else if document.ocr_lines.is_some() {
+            &[BoundaryUpgrade::PhotoLists]
+        } else {
+            &[BoundaryUpgrade::Prose]
+        };
+        let mut changed = false;
+        for upgrade in upgrades {
+            changed |= upgrade.apply(db, &mut document, checkpoint.as_ref())?;
+        }
+        if changed {
+            save_upgrade(db, &mut document)?;
+        }
+
+        if document.format == "pdf" {
+            for layout in [Layout::ClosingQuotes, Layout::PageReferences, Layout::ListItems] {
+                crate::pdf_detached_pages::upgrade_sentence_layouts(db, layout, Some(id))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_upgrade_candidate(db: &Connection, id: &str) -> Result<Option<(Document, Option<SpeechResume>)>> {
+    let (body, checkpoint): (String, Option<String>) = db.query_row(
+        "SELECT d.body,s.body FROM documents d LEFT JOIN speech_resume s ON s.document_id=d.id WHERE d.id=?1",
+        [id], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).map_err(storage_error)?;
+    let Ok(checkpoint) = checkpoint.as_deref().map(serde_json::from_str).transpose() else {
+        return Ok(None);
+    };
+    let document = serde_json::from_str(&body).map_err(storage_error)?;
+    Ok(Some((document, checkpoint)))
+}
+
+impl BoundaryUpgrade {
+    fn apply(self, db: &Connection, document: &mut Document, checkpoint: Option<&SpeechResume>) -> Result<bool> {
+        let sentences = match self {
+            Self::Pdf(Layout::ListItems)
+                if document.pdf_quote_boundaries && !document.pdf_list_item_boundaries
+                    && has_list_marker(&document.text) =>
+                Layout::ListItems.segment(&document.text, &document.id),
+            Self::Pdf(Layout::PageReferences)
+                if document.pdf_quote_boundaries && !document.pdf_reference_boundaries =>
+                Layout::PageReferences.segment(&document.text, &document.id),
+            Self::PhotoLists if !document.photo_list_item_boundaries =>
+                Layout::ListItems.segment(&document.text, &document.id),
+            Self::Prose if matches!(document.format.as_str(), "txt" | "docx")
+                && !document.prose_sentence_boundaries => segment_prose(&document.text, &document.id),
+            _ => return Ok(false),
+        };
+        if document.sentences.iter().map(|s| (s.start_utf8, s.end_utf8))
+            .eq(sentences.iter().map(|s| (s.start_utf8, s.end_utf8)))
+        {
+            return Ok(false);
+        }
+        if checkpoint.is_some_and(|resume| !unchanged_sentence(&document.sentences, &sentences, &resume.sentence_id))
+            || !preserves_anchors(document, &sentences)
+            || !preserves_dictionary_anchors(db, document, &sentences)?
+        {
+            return Ok(false);
+        }
+        if let Some(cursor) = document.sentences.get(document.position) {
+            let offset = cursor.start_utf16.saturating_add(document.reading_token_utf16.unwrap_or(0));
+            document.position = position_at(&sentences, offset);
+            document.reading_token_utf16 = sentences.get(document.position).and_then(|sentence| {
+                (sentence.start_utf16 < offset && offset < sentence.end_utf16)
+                    .then(|| offset - sentence.start_utf16)
+            });
+        }
+        document.sentences = sentences;
+        match self {
+            Self::Pdf(layout) => {
+                document.pdf_reference_boundaries = true;
+                document.pdf_list_item_boundaries = layout == Layout::ListItems;
+            }
+            Self::PhotoLists => document.photo_list_item_boundaries = true,
+            Self::Prose => document.prose_sentence_boundaries = true,
+        }
+        Ok(true)
+    }
+}
+
+fn save_upgrade(db: &Connection, document: &mut Document) -> Result<()> {
+    crate::document_revisions::append(document, db)?;
+    let body = serde_json::to_string(document).map_err(storage_error)?;
+    db.execute("UPDATE documents SET body=?1 WHERE id=?2", params![body, document.id]).map_err(storage_error)?;
+    Ok(())
 }
 
 fn preserves_dictionary_anchors(db: &Connection, document: &Document, sentences: &[Sentence]) -> Result<bool> {

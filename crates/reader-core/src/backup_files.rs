@@ -613,6 +613,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_json_restore_upgrades_photo_boundaries_without_moving_protected_notes() {
+        let mut source = Store::open(Path::new(":memory:")).unwrap();
+        let text = "11. Préparez votre essai.";
+        let original = b"\xff\xd8\xff";
+        let photo = source.import_image("essai.jpg", original, "fr", vec![ocr::OcrLine {
+            page: 0, text: text.into(), x: 0.1, y: 0.1, width: 0.7, height: 0.04,
+            confidence: None, rotation: None, correction: None, block_start: false,
+            words: Vec::new(), source_span: None,
+        }]).unwrap();
+        let mut backup = source.export().unwrap();
+        let archived = &mut backup.snapshot.documents[0];
+        archived.photo_list_item_boundaries = false;
+        archived.sentences = crate::pdf_sentences::Layout::ClosingQuotes.segment(text, &photo.id);
+        archived.position = 1;
+        assert_eq!(archived.sentences[0].text, "11.");
+        let note_sentence = archived.sentences[1].id.clone();
+
+        let mut target = Store::open(Path::new(":memory:")).unwrap();
+        target.restore(backup.clone()).unwrap();
+        let updated = &target.snapshot().unwrap().documents[0];
+        assert_eq!(updated.sentences.len(), 1);
+        assert_eq!(updated.sentences[0].text, text);
+        assert_eq!((updated.position, updated.reading_token_utf16), (0, Some(4)));
+        assert_eq!(target.original(&photo.id).unwrap().bytes, original);
+
+        backup.snapshot.documents[0].notes.insert(note_sentence.clone(), "Relire cette phrase".into());
+        let mut target = Store::open(Path::new(":memory:")).unwrap();
+        target.restore(backup).unwrap();
+        let protected = &target.snapshot().unwrap().documents[0];
+        assert_eq!(protected.sentences[1].id, note_sentence);
+        assert_eq!(protected.notes[&note_sentence], "Relire cette phrase");
+    }
+
+    #[test]
     fn inspection_counts_originals_and_rejects_ambiguous_or_corrupt_data() {
         let root = tempfile::tempdir().unwrap();
         let database_path = root.path().join("reader.db");

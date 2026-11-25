@@ -202,6 +202,7 @@ pub(crate) fn restore(store: &mut Store, file: File) -> Result<Vec<BackupResourc
         .connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(archive_error)?;
+    let mut restored_ids = Vec::new();
     for (index, ((document, history, staged), entry)) in
         documents.into_iter().zip(&backup.originals).enumerate()
     {
@@ -248,6 +249,7 @@ pub(crate) fn restore(store: &mut Store, file: File) -> Result<Vec<BackupResourc
             )
             .map_err(archive_error)?;
         }
+        restored_ids.push(id);
     }
     restore_model_hints(&mut zip, &tx, &backup)?;
     for id in &backup.pending_intake {
@@ -257,6 +259,7 @@ pub(crate) fn restore(store: &mut Store, file: File) -> Result<Vec<BackupResourc
         }
     }
     restore_library_data(&tx, backup)?;
+    crate::pdf_sentences::upgrade_restored_boundaries(&tx, &restored_ids)?;
     if !published.paths.is_empty() {
         file_originals::sync_directory(root)?;
     }
