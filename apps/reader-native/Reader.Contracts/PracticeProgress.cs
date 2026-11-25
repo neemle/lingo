@@ -11,6 +11,6 @@ public sealed record SavedQuestion(string CardId, string Prompt, string[] Answer
     bool Revealed = false, string? GivenAnswer = null, long? ElapsedMs = null, string? Draft = null);
 
 public sealed record PracticeQueue(PracticeProgress Progress, int DueCount, int TotalCards, bool? MatchesDictionary,
-    string? Context = null);
+    string? Context = null, long? NextDueAt = null);
 
 public sealed record PracticeAnswer(PracticeProgress Progress, bool? MatchesDictionary);

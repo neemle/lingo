@@ -243,6 +243,12 @@ public partial class PracticePage : ContentPage, IQueryAttributable
             ? noCards ? emptyHint : "Усі картки цього напряму повторено. Можна змінити напрям або повернутися до читання."
             : state.Direction == "reverse" ? "Згадайте слово мовою оригіналу."
                 : next.Context ?? card?.Context;
+        if (saved is null && !noCards && next.NextDueAt is long due &&
+            due > 0 && due <= DateTimeOffset.MaxValue.ToUnixTimeSeconds())
+        {
+            var local = DateTimeOffset.FromUnixTimeSeconds(due).ToLocalTime();
+            context += $"{Environment.NewLine}Наступне повторення · {local:g}";
+        }
         if (state.Direction == "forward" && card?.Sense is { } sense)
         {
             var showGloss = saved?.Revealed == true &&

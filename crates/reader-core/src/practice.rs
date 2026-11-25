@@ -50,6 +50,7 @@ pub struct PracticeQueue {
     pub progress: PracticeProgress,
     pub due_count: usize,
     pub total_cards: usize,
+    pub next_due_at: Option<i64>,
     pub matches_dictionary: Option<bool>,
     pub context: Option<String>,
 }
@@ -462,6 +463,7 @@ impl Store {
             progress,
             due_count,
             total_cards: cards.len(),
+            next_due_at: cards.iter().map(due_at).filter(|&deadline| deadline > now).min(),
             context,
         })
     }
@@ -886,6 +888,10 @@ mod tests {
         let card = &store.snapshot().unwrap().vocabulary[0];
         assert_eq!(card.forward.reviews, 0);
         assert_eq!(card.reverse.reviews, 1);
+        let scheduled = store.next_practice_question(store.practice().unwrap().revision).unwrap();
+        assert!(scheduled.progress.question.is_none());
+        assert_eq!(scheduled.due_count, 0);
+        assert_eq!(scheduled.next_due_at, Some(card.reverse.due_at));
         let completed = store.export().unwrap();
         assert_eq!(completed.reviews.len(), 1);
         let review = store
@@ -944,5 +950,11 @@ mod tests {
         assert_eq!(clean.practice().unwrap().question.unwrap().options, options);
         store.restore(archive).unwrap();
         assert!(store.practice().unwrap().question.is_none());
+        let revision = store.practice().unwrap().revision;
+        let forward = store.practice_queue(revision, Some(PracticeSettings {
+            direction: "forward".into(), mode: 2, collection: None,
+        })).unwrap();
+        assert_eq!(forward.due_count, 1);
+        assert_eq!(forward.next_due_at, None);
     }
 }
