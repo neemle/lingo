@@ -4,20 +4,24 @@ use std::{collections::BTreeMap, path::Path};
 pub(crate) const PACKAGE_OVERHEAD: u64 = 64 * 1024;
 
 pub(crate) fn ensure_capacity<const N: usize>(paths: [(&Path, u64); N]) -> Result<()> {
+    ensure_capacity_for(paths, "мовного пакета")
+}
+
+pub(crate) fn ensure_capacity_for<const N: usize>(paths: [(&Path, u64); N], purpose: &str) -> Result<()> {
     let requirements = paths
         .into_iter()
         .filter(|(_, bytes)| *bytes != 0)
         .map(|(path, bytes)| {
             let (volume, available) = space(path).map_err(|error| {
-                format!("Не вдалося перевірити місце для мовного пакета. {error}")
+                format!("Не вдалося перевірити місце для {purpose}. {error}")
             })?;
             Ok((volume, available, bytes))
         })
         .collect::<Result<Vec<_>>>()?;
-    check_volumes(requirements)
+    check_volumes(requirements, purpose)
 }
 
-fn check_volumes<K: Ord>(requirements: impl IntoIterator<Item = (K, u64, u64)>) -> Result<()> {
+fn check_volumes<K: Ord>(requirements: impl IntoIterator<Item = (K, u64, u64)>, purpose: &str) -> Result<()> {
     let mut by_volume = BTreeMap::<K, (u64, u64)>::new();
     for (volume, available, bytes) in requirements {
         let budget = by_volume.entry(volume).or_insert((available, 0));
@@ -28,7 +32,7 @@ fn check_volumes<K: Ord>(requirements: impl IntoIterator<Item = (K, u64, u64)>) 
         if required > available {
             const MIB: u64 = 1024 * 1024;
             return Err(format!(
-                "Бракує місця для мовного пакета. Потрібно {} МіБ, доступно {} МіБ.",
+                "Бракує місця для {purpose}. Потрібно {} МіБ, доступно {} МіБ.",
                 required.div_ceil(MIB),
                 available / MIB
             ));
@@ -100,25 +104,25 @@ mod tests {
             ("disk", 1_100, 250),
             ("disk", 1_050, 400),
             ("disk", 1_100, 400)
-        ])
+        ], "мовного пакета")
         .is_ok());
         assert!(check_volumes([
             ("disk", 1_000, 250),
             ("disk", 1_000, 400),
             ("disk", 1_000, 400)
-        ])
+        ], "мовного пакета")
         .is_err());
         assert!(check_volumes([
             ("cache", 650, 250),
             ("cache", 650, 400),
             ("model", 400, 400)
-        ])
+        ], "мовного пакета")
         .is_ok());
         assert!(check_volumes([
             ("cache", 650, 250),
             ("cache", 650, 400),
             ("model", 399, 400)
-        ])
+        ], "мовного пакета")
         .is_err());
     }
 }

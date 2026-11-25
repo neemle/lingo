@@ -823,6 +823,8 @@ public sealed class ReaderSession : INotifyPropertyChanged, IDisposable, IModelT
     public Task<Backup> ExportAsync() => Task.Run(client.Export);
     public Task ExportBackupFileAsync(string path) => Task.Run(() => client.ExportBackupFile(path));
     public Task<BackupPreview> InspectBackupFileAsync(string path) => Task.Run(() => client.InspectBackupFile(path));
+    public Task CheckBackupStagingSpaceAsync(string directory, long bytes) =>
+        Task.Run(() => client.CheckBackupStagingSpace(directory, bytes));
     public async Task<BackupResource[]?> RestoreBackupFileAsync(string path)
     {
         BackupResource[]? resources = null;

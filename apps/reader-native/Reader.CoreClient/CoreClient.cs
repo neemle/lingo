@@ -158,6 +158,8 @@ public sealed class CoreClient : IDisposable
         Call<JsonElement>(new { version = 1, operation = "export_backup_file", path });
     public BackupPreview InspectBackupFile(string path) =>
         CallIndependent<BackupPreview>(new { version = 1, operation = "inspect_backup_file", path });
+    public void CheckBackupStagingSpace(string directory, long bytes) =>
+        Call<JsonElement>(new { version = 1, operation = "check_backup_staging_space", directory, bytes });
     public BackupResource[] RestoreBackupFile(string path) =>
         Call<BackupResource[]>(new { version = 1, operation = "restore_backup_file", path });
     public Original Original(string id) => Call<Original>(new { version = 1, operation = "original", id });

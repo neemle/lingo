@@ -257,6 +257,11 @@ pub(crate) fn assemble<O>(
 }
 
 impl Store {
+    pub fn check_backup_staging_space(&self, directory: &Path, bytes: u64) -> Result<()> {
+        validate_path(directory)?;
+        crate::space::ensure_capacity_for([(directory, bytes)], "тимчасової копії архіву")
+    }
+
     pub fn export(&self) -> Result<Backup> {
         let tx = self
             .connection

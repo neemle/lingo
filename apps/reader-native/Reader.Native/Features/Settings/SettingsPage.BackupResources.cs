@@ -22,10 +22,10 @@ public partial class SettingsPage
             Status.Text = "Копіюємо резервну копію…";
             directory = Directory.CreateTempSubdirectory("lingo-restore-");
             var path = Path.Combine(directory.FullName, "library.backup");
-            await StageBackupAsync(file, path);
+            var session = AppState.Session;
+            await StageBackupAsync(session, file, path);
 
             Status.Text = "Перевіряємо оригінали в архіві…";
-            var session = AppState.Session;
             var preview = await session.InspectBackupFileAsync(path);
             var summary = $"Документи — {preview.Documents}\n" +
                 $"Словникові картки — {preview.Vocabulary}\n" +
@@ -94,7 +94,7 @@ public partial class SettingsPage
         }
     }
 
-    private async Task StageBackupAsync(FileResult file, string path)
+    private async Task StageBackupAsync(ReaderSession session, FileResult file, string path)
     {
         await using var source = await file.OpenReadAsync();
         var prefix = new byte[4];
@@ -102,6 +102,12 @@ public partial class SettingsPage
         var isZip = length == prefix.Length && prefix.AsSpan().SequenceEqual("PK\u0003\u0004"u8);
         // ZIP originals are streamed and checked individually by the core. Legacy JSON is decoded in memory.
         var maximum = isZip ? long.MaxValue : Client.MaxBackupFileBytes;
+        if (KnownBackupLength(source) is { } archiveBytes)
+        {
+            if (archiveBytes > maximum)
+                throw new InvalidDataException("Резервна копія JSON перевищує 1 ГіБ.");
+            await session.CheckBackupStagingSpaceAsync(Path.GetDirectoryName(path)!, archiveBytes);
+        }
         await using var destination = new FileStream(path, FileMode.CreateNew, FileAccess.Write,
             FileShare.None, 64 * 1024, FileOptions.Asynchronous);
         await destination.WriteAsync(prefix.AsMemory(0, length));
@@ -111,6 +117,13 @@ public partial class SettingsPage
                 Status.Text = $"Копіюємо резервну копію · {(bytes + length) / (1024d * 1024):F0} МіБ";
         });
         await NativeFiles.CopyBoundedAsync(source, destination, maximum - length, progress: progress);
+    }
+
+    private static long? KnownBackupLength(Stream stream)
+    {
+        if (!stream.CanSeek) return null;
+        try { return stream.Length; }
+        catch (NotSupportedException) { return null; }
     }
 
     private async Task ReportBackupResourcesAsync(BackupResource[] resources)

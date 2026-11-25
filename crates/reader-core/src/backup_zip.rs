@@ -499,12 +499,7 @@ fn validate_entries(
         backup.snapshot.documents.iter().map(|doc| doc.id.as_str()),
     )?;
     let mut documents = Vec::with_capacity(backup.originals.len());
-    let mut local_pdf = staging.map(|(_, db)| {
-        db.prepare_cached(
-            "SELECT documents.id FROM documents JOIN file_originals ON file_originals.document_id=documents.id
-             WHERE documents.source_hash=?1",
-        ).map_err(archive_error)
-    }).transpose()?;
+    let pdf_copies = staging.map(|(root, db)| plan_pdf_copies(root, db, backup)).transpose()?;
     for (index, (entry, doc)) in backup
         .originals
         .iter()
@@ -513,18 +508,8 @@ fn validate_entries(
     {
         let history = revisions.remove(doc.id.as_str());
         let prepared = if let Some(pages) = &entry.pdf_page_text {
-            let stage_root = if let (Some((root, _)), Some(local_pdf)) = (staging, &mut local_pdf) {
-                let local_id = local_pdf.query_row([&doc.source_hash], |row| row.get::<_, String>(0))
-                    .optional().map_err(archive_error)?;
-                if let Some(id) = local_id {
-                    file_originals::ensure_root(root)?;
-                    original_file_missing(root, &id)?.then_some(root)
-                } else {
-                    Some(root)
-                }
-            } else {
-                None
-            };
+            let stage_root = staging.filter(|_| pdf_copies.as_ref().is_some_and(|copies| copies[index]))
+                .map(|(root, _)| root);
             let staged = if let Some(root) = stage_root {
                 Some(stage_pdf_original(zip, root, index, entry, &doc.source_hash)?)
             } else {
@@ -554,6 +539,40 @@ fn validate_entries(
         }
     }
     Ok(documents)
+}
+
+fn plan_pdf_copies(root: &Path, db: &Connection, backup: &Manifest) -> Result<Vec<bool>> {
+    if backup.originals.iter().any(|entry| entry.pdf_page_text.is_some()) {
+        file_originals::ensure_root(root)?;
+    }
+    let mut local = db.prepare_cached(
+        "SELECT documents.id, file_originals.document_id IS NOT NULL
+         FROM documents LEFT JOIN file_originals ON file_originals.document_id=documents.id
+         WHERE documents.source_hash=?1",
+    ).map_err(archive_error)?;
+    let mut planned = Vec::with_capacity(backup.originals.len());
+    let mut bytes = 0u64;
+    for (entry, document) in backup.originals.iter().zip(&backup.snapshot.documents) {
+        let copy = if entry.pdf_page_text.is_some() {
+            match local.query_row([&document.source_hash], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
+            })
+                .optional().map_err(archive_error)?
+            {
+                Some((id, true)) => original_file_missing(root, &id)?,
+                Some((_, false)) => false,
+                None => true,
+            }
+        } else {
+            false
+        };
+        if copy { bytes = bytes.saturating_add(entry.size); }
+        planned.push(copy);
+    }
+    if bytes > 0 {
+        crate::space::ensure_capacity_for([(root, bytes)], "відновлення оригіналів PDF")?;
+    }
+    Ok(planned)
 }
 
 fn original_file_missing(root: &Path, id: &str) -> Result<bool> {
@@ -863,10 +882,16 @@ mod tests {
         let mut target = Store::open(&root.path().join("target.db")).unwrap();
         target.restore_backup_file(&archive).unwrap();
         {
-            let (mut zip, manifest) = open(File::open(&archive).unwrap()).unwrap();
+            let (mut zip, mut manifest) = open(File::open(&archive).unwrap()).unwrap();
             let staging = (target.pdf_original_root(), &target.connection);
             let validated = validate_entries(&mut zip, &manifest, Some(staging)).unwrap();
             assert!(validated.iter().all(|(_, _, staged)| staged.is_none()));
+            manifest.originals.iter_mut().find(|entry| entry.pdf_page_text.is_some()).unwrap().size = u64::MAX;
+            assert_eq!(plan_pdf_copies(staging.0, staging.1, &manifest).unwrap(), [false, false]);
+
+            let empty = Store::open(&root.path().join("empty-for-budget.db")).unwrap();
+            assert!(plan_pdf_copies(empty.pdf_original_root(), &empty.connection, &manifest)
+                .unwrap_err().contains("Бракує місця для відновлення оригіналів PDF"));
         }
         let original = target.original_file(&large.id).unwrap().unwrap().path;
         fs::remove_file(&original).unwrap();

@@ -482,6 +482,9 @@ pub fn execute(store: &mut Store, command: Command) -> Result<Value> {
         Command::InspectBackupFile { path } => value(reader_core::inspect_backup_file(
             std::path::Path::new(&path),
         )),
+        Command::CheckBackupStagingSpace { directory, bytes } => {
+            value(store.check_backup_staging_space(std::path::Path::new(&directory), bytes))
+        }
         Command::RestoreBackupFile { path } => {
             value(store.restore_backup_file(std::path::Path::new(&path)))
         }

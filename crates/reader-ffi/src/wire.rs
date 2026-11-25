@@ -999,6 +999,10 @@ pub enum Command {
     InspectBackupFile {
         path: String,
     },
+    CheckBackupStagingSpace {
+        directory: String,
+        bytes: u64,
+    },
     RestoreBackupFile {
         path: String,
     },
