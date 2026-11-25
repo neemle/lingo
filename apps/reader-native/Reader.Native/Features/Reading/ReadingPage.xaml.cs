@@ -8,6 +8,8 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage : ContentPage
 {
+    private const string PlayGlyph = "\uf04b";
+    private const string PauseGlyph = "\uf04c";
     private (string Code, string Name)[] availableTargets = [];
     private (string Document, string Language)? translationSource;
     private string? preferredTargetCode;
@@ -344,7 +346,7 @@ public partial class ReadingPage : ContentPage
     {
         if (PrimarySpeech is null || PauseSpeech is null) return;
         var playing = PauseSpeech.IsEnabled && !speechPaused;
-        PrimarySpeech.Text = playing ? "Ⅱ" : "▶";
+        PrimarySpeech.Text = playing ? PauseGlyph : PlayGlyph;
         var label = playing ? "Призупинити озвучення"
             : PauseSpeech.IsEnabled && speechPaused ? "Продовжити озвучення"
             : speechResume is not null && !utteranceActive && ResumeSpeech.Text is { } resumeLabel ? resumeLabel
