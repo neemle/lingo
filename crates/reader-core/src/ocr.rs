@@ -410,6 +410,8 @@ pub(crate) fn refresh_line_provenance(
             .map(|(c, _)| c.len_utf8())
             .sum();
         let corrected_words = (raw != reading).then(|| corrected_word_ranges(raw, reading)).flatten();
+        let corrected_initial = line.correction.as_ref()
+            .and_then(|_| crate::ocr_layout::corrected_initial_lengths(line, raw, reading));
         let mut raw_byte = 0;
         let mut raw_utf16 = 0;
         let mut reading_byte = 0;
@@ -433,6 +435,8 @@ pub(crate) fn refresh_line_provenance(
                 });
                 let reading_range = if let Some(corrected) = corrected {
                     corrected
+                } else if let Some((_, length)) = corrected_initial.filter(|(old, _)| start == 0 && end == *old) {
+                    0..length
                 } else if end < prefix
                     || (end == prefix
                         && raw[end..].chars().next().is_none_or(char::is_whitespace)

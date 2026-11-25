@@ -758,7 +758,7 @@ public partial class ReadingPage
         UpdatePdfPageDisplay();
         try
         {
-            const string supplement = "Знайти пропущені рядки";
+            const string supplement = "Повторно розпізнати зі скану";
             const string reconcile = "Звірити текст OCR";
             var action = page.HasOcr
                 ? await DisplayActionSheetAsync("Розпізнавання сторінки", "Скасувати", null, supplement, reconcile)
@@ -794,7 +794,7 @@ public partial class ReadingPage
                 }
                 if (!changed && readingPageActive && !run.IsCancellationRequested && session.Document?.Id == document.Id)
                 {
-                    var message = action == supplement ? "Нових рядків з достатньою впевненістю не знайдено."
+                    var message = action == supplement ? "Нових рядків або підтверджених виправлень не знайдено."
                         : "Не знайдено розбіжностей, які можна впевнено виправити.";
                     await DisplayAlertAsync("Розпізнавання сторінки", message, "Гаразд");
                     return;

@@ -3,7 +3,7 @@ use crate::pdf_text_blocks::{separate_blocks, separate_confirmed_grids, Position
 use std::ops::Range;
 
 mod drop_caps;
-pub(crate) use drop_caps::{is_initial, is_initial_artifact, recover_sparse_initials};
+pub(crate) use drop_caps::{corrected_initial_lengths, is_initial, is_initial_artifact, recover_sparse_initials};
 
 /// Applies shared page-layout decisions before recognition results acquire canonical anchors.
 pub(crate) fn reconstruct_blocks(lines: &mut Vec<OcrLine>) {
@@ -96,38 +96,52 @@ pub(crate) fn intersects_edits(start: usize, end: usize, edits: &[TranscriptEdit
     edits.iter().any(|edit| edit.start_utf16 < end && edit.start_utf16 + edit.old_len > start)
 }
 
-/// Fill holes in saved OCR without replacing existing lines or their corrections.
+/// Fill holes and recover confirmed initials without replacing raw OCR or manual corrections.
 pub(crate) fn supplement_page(
     saved: &[OcrLine], incoming: Vec<OcrLine>,
 ) -> crate::Result<Option<(Vec<OcrLine>, Vec<TranscriptEdit>)>> {
+    let repairs: Vec<_> = saved.iter().map(|line| {
+        drop_caps::cached_initial_repair(line, &incoming).map(|(initial, old_bytes)| {
+            let old_len = line.text[..old_bytes].encode_utf16().count();
+            let new_len = initial.encode_utf16().count();
+            (format!("{initial}{}", &line.text[old_bytes..]), old_len, new_len)
+        })
+    }).collect();
     let mut merged = crate::ocr::merge_missing_lines(saved.to_vec(), incoming);
-    if merged.len() == saved.len() {
+    let appended = merged.len() != saved.len();
+    if !appended && repairs.iter().all(Option::is_none) {
         return Ok(None);
     }
     // Corrections inhibit the generic reorder pass. Their blocks and word
     // coordinates stay attached to the original lines.
-    if let Some(reconstructed) = reconstruct_page(&merged) {
-        merged = reconstructed;
+    if appended {
+        if let Some(reconstructed) = reconstruct_page(&merged) {
+            merged = reconstructed;
+        }
     }
     let mut edits = Vec::new();
     let mut old_end = 0;
-    let mut rows = merged.iter().enumerate();
-    for (index, original) in saved.iter().enumerate() {
+    let mut rows = merged.iter_mut().enumerate();
+    for (index, (original, repair)) in saved.iter().zip(repairs).enumerate() {
         let old_gap = separator_width(index, original);
         let mut new_gap = 0;
-        loop {
+        let row = loop {
             let (new_index, row) = rows.next()
                 .ok_or("Нове OCR змінює порядок збережених рядків.")?;
             new_gap += separator_width(new_index, row);
             if row.text == original.text && row.correction == original.correction
                 && row.x == original.x && row.y == original.y
             {
-                break;
+                break row;
             }
             new_gap += row.reading_text().encode_utf16().count();
-        }
+        };
         if old_gap != new_gap {
             edits.push(TranscriptEdit { start_utf16: old_end, old_len: old_gap, new_len: new_gap });
+        }
+        if let Some((correction, old_len, new_len)) = repair {
+            row.correction = Some(correction);
+            edits.push(TranscriptEdit { start_utf16: old_end + old_gap, old_len, new_len });
         }
         let length = original.reading_text().encode_utf16().count();
         old_end += old_gap + length;
@@ -459,6 +473,29 @@ mod tests {
                     raw_start_utf16: Some(offset), source_span: None,
                 }).collect(),
         }
+    }
+
+    #[test]
+    fn re_recognition_repairs_a_cached_initial_without_replacing_raw_ocr() {
+        let mut saved = caption_line();
+        saved.text = "[L_: 15 février.".into();
+        saved.words.truncate(3);
+        for (word, (text, offset)) in saved.words.iter_mut().zip([("[L_:", 0), ("15", 5), ("février.", 8)]) {
+            word.text = text.into();
+            word.raw_start_utf16 = Some(offset);
+        }
+        saved.words[0].height = 0.05;
+        let mut recovered = saved.clone();
+        recovered.text = "Le 15 février.".into();
+        recovered.words[0].text = "Le".into();
+        recovered.words[1].raw_start_utf16 = Some(3);
+        recovered.words[2].raw_start_utf16 = Some(6);
+        let (lines, edits) = supplement_page(&[saved.clone()], vec![recovered.clone()]).unwrap().unwrap();
+        assert_eq!(lines[0].text, saved.text);
+        assert_eq!(lines[0].reading_text(), "Le 15 février.");
+        assert_eq!((edits[0].start_utf16, edits[0].old_len, edits[0].new_len), (0, 4, 2));
+        saved.correction = Some("Le quinze février.".into());
+        assert!(supplement_page(&[saved], vec![recovered]).unwrap().is_none());
     }
 
     #[test]

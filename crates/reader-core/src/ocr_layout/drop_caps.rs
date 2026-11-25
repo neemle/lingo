@@ -1,4 +1,4 @@
-use crate::ocr::{reading_box, OcrLine};
+use crate::ocr::{reading_box, OcrLine, OcrWord};
 
 /// Retain a sparse-only initial when its geometry matches a line in the primary OCR.
 pub(crate) fn recover_sparse_initials(primary: &mut [OcrLine], sparse: &[OcrLine], aspect: f64) {
@@ -36,14 +36,10 @@ fn repair_damaged_initial(primary: &mut [OcrLine], cap: &OcrLine, sparse_body: &
         line.correction.is_none() && line.page == cap.page
             && line.rotation.unwrap_or(0) == cap.rotation.unwrap_or(0)
             && damaged.raw_start_utf16 == Some(0)
-            && (is_initial_artifact(&damaged.text) || damaged.text.len() > cap.text.len()
-                && damaged.text.chars().filter(|ch| ch.is_alphanumeric()).eq(cap.text.chars()))
+            && damaged_initial(&damaged.text, cap.text.chars().next().expect("verified initial"))
             && (damaged.x - cap.x).abs() <= cap.width * 0.35
             && (damaged.y - cap.y).abs() <= cap.height * 0.35
-            && [first, second].into_iter().zip([first_anchor, second_anchor]).all(|(a, b)| {
-                a.text == b.text && (a.y - b.y).abs() <= b.height * 0.25
-                    && (a.x - b.x).abs() <= b.width * 0.25
-            })
+            && same_anchor(first, first_anchor) && same_anchor(second, second_anchor)
     });
     let Some(line) = candidates.next() else { return false };
     if candidates.next().is_some() || !line.text.starts_with(&line.words[0].text) {
@@ -68,6 +64,56 @@ fn repair_damaged_initial(primary: &mut [OcrLine], cap: &OcrLine, sparse_body: &
 
 pub(crate) fn is_initial_artifact(text: &str) -> bool {
     matches!(text, "©" | "®" | "@" | "§")
+}
+
+fn damaged_initial(text: &str, letter: char) -> bool {
+    is_initial_artifact(text) || text.len() > letter.len_utf8()
+        && text.chars().filter(|ch| ch.is_alphanumeric()).eq([letter])
+}
+
+fn same_anchor(a: &OcrWord, b: &OcrWord) -> bool {
+    a.text == b.text && (a.y - b.y).abs() <= b.height * 0.25 && (a.x - b.x).abs() <= b.width * 0.25
+}
+
+pub(crate) fn corrected_initial_lengths(line: &OcrLine, raw: &str, reading: &str) -> Option<(usize, usize)> {
+    let [old, next, ..] = line.words.as_slice() else { return None };
+    let initial = reading.split_whitespace().next()?;
+    let letter = initial.chars().next().filter(|ch| ch.is_uppercase())?;
+    let angle = line.rotation.unwrap_or(0);
+    let height = |word: &OcrWord| reading_box((word.x, word.y, word.width, word.height), angle).3;
+    let tail = raw.strip_prefix(&old.text)?;
+    (old.raw_start_utf16 == Some(0) && height(old) >= 1.35 * height(next)
+        && initial.chars().skip(1).any(char::is_lowercase) && damaged_initial(&old.text, letter)
+        && reading.strip_prefix(initial) == Some(tail))
+        .then_some((old.text.len(), initial.len()))
+}
+
+pub(super) fn cached_initial_repair<'a>(saved: &OcrLine, incoming: &'a [OcrLine]) -> Option<(&'a str, usize)> {
+    let [damaged, first, second, ..] = saved.words.as_slice() else { return None };
+    let angle = saved.rotation.unwrap_or(0);
+    let height = |word: &OcrWord| reading_box((word.x, word.y, word.width, word.height), angle).3;
+    if saved.correction.is_some() || damaged.raw_start_utf16 != Some(0)
+        || !saved.text.starts_with(&damaged.text) || height(damaged) < 1.35 * height(first)
+        || !(is_initial_artifact(&damaged.text) || damaged.text.chars().any(|ch| !ch.is_alphanumeric()))
+    {
+        return None;
+    }
+    let mut candidates = incoming.iter().filter_map(|line| {
+        let [recovered, first_anchor, second_anchor, ..] = line.words.as_slice() else { return None };
+        let letter = recovered.text.chars().next().filter(|ch| ch.is_uppercase())?;
+        (line.page == saved.page && line.rotation.unwrap_or(0) == angle
+            && recovered.raw_start_utf16 == Some(0) && line.text.starts_with(&recovered.text)
+            && recovered.text.chars().skip(1).any(char::is_lowercase)
+            && damaged_initial(&damaged.text, letter)
+            && height(recovered) >= 1.35 * height(first_anchor)
+            && (recovered.x - damaged.x).abs() <= damaged.width * 0.35
+            && (recovered.y - damaged.y).abs() <= damaged.height * 0.35
+            && same_anchor(first, first_anchor) && same_anchor(second, second_anchor)
+            && saved.text.len() - damaged.text.len() + recovered.text.len() <= 8192)
+            .then_some(recovered.text.as_str())
+    });
+    let recovered = candidates.next()?;
+    candidates.all(|candidate| candidate == recovered).then_some((recovered, damaged.text.len()))
 }
 
 pub(crate) fn is_initial(text: &str) -> bool {
