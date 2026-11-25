@@ -220,6 +220,9 @@ public partial class ReadingPage : ContentPage
         // Notifications describe a completed session state. Update once per state change.
         if (args.PropertyName == nameof(ReaderSession.Snapshot))
         {
+            if (translationSource is { } previous && AppState.Session.Document is { } current &&
+                previous.Document == current.Id && previous.Language != current.Language)
+                ResetSourceLanguageContext();
             SyncReaderPdf();
             SyncInlineOriginalMode();
             SyncAnalysisPrefetch();
@@ -239,6 +242,21 @@ public partial class ReadingPage : ContentPage
         if (args.PropertyName == nameof(ReaderSession.Error) && AppState.Session.Error.Length > 0)
             SemanticScreenReader.Default.Announce(AppState.Session.Error);
     }
+
+    private void ResetSourceLanguageContext()
+    {
+        CloseWordPopup();
+        selection = null;
+        wordTranslation = null;
+        SetSelectedSense(null);
+        Translation.Text = "";
+        if (documentFindFocus?.Translation is not null) documentFindFocus = null;
+        pdfFragmentFocus = null;
+        CancelScheduledTranslation();
+        InvalidateModelPassageCache();
+        StopDetachedPdfReader();
+    }
+
     private void UpdateHighlight()
     {
         var document = AppState.Session.Document;
@@ -636,8 +654,6 @@ public partial class ReadingPage : ContentPage
                 current.Id != document.Id || current.Language != document.Language)
                 return;
 
-            WordCard.IsVisible = DetachedWordCard.IsVisible = false;
-            StopWordDetail();
             await session.SetDocumentLanguageAsync(document.Id, language);
         }
         finally { choosingLanguage = false; }

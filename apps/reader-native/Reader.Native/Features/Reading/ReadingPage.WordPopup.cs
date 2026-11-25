@@ -30,7 +30,9 @@ public partial class ReadingPage
         _ = LoadPopupTranslationAsync(card == DetachedWordCard);
     }
 
-    private void CloseWordPopupClicked(object? sender, EventArgs args)
+    private void CloseWordPopupClicked(object? sender, EventArgs args) => CloseWordPopup();
+
+    private void CloseWordPopup()
     {
         WordCard.IsVisible = DetachedWordCard.IsVisible = false;
         wordPopup = null;
