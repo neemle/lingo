@@ -154,11 +154,15 @@ impl Store {
     }
 
     fn checkpoint_storage(&self) -> Result<()> {
-        let busy: bool = self.connection
-            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))
+        let (busy, frames, checkpointed): (bool, i64, i64) = self.connection
+            .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
             .map_err(storage_error)?;
-        if busy {
-            return Err(storage_error("Дані очищено, але база зайнята. Спробуйте ще раз, щоб звільнити місце."));
+        // Deletion is already committed. A reader may keep older frames pinned
+        // until it releases its snapshot; it must not interrupt the rest of the reset.
+        if !busy && frames >= 0 && frames == checkpointed {
+            self.connection
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+                .map_err(storage_error)?;
         }
         Ok(())
     }
@@ -246,6 +250,34 @@ fn storage_error(error: impl std::fmt::Display) -> String {
 mod tests {
     use super::*;
     use crate::reader_preferences::ReaderPreferenceChange;
+
+    #[test]
+    fn full_reset_allows_new_import_while_an_old_read_snapshot_is_open() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("reader.db");
+        let mut store = Store::open(&path).unwrap();
+        store.connection.busy_timeout(std::time::Duration::ZERO).unwrap();
+        store.import("old.txt", b"This document existed before clearing the library.", "en").unwrap();
+        let model = store.optional_model_directory.join("temporary-download");
+        fs::create_dir_all(&model).unwrap();
+        fs::write(model.join("model.onnx"), [0; 16]).unwrap();
+
+        let old_reader = Connection::open(&path).unwrap();
+        old_reader.execute_batch("BEGIN").unwrap();
+        let old_count = || old_reader.query_row("SELECT count(*) FROM documents", [], |row| row.get::<_, i64>(0)).unwrap();
+        assert_eq!(old_count(), 1);
+
+        store.clear_storage(StorageScope::All).unwrap();
+        assert!(store.snapshot().unwrap().documents.is_empty());
+        assert!(!model.exists());
+        assert_eq!(old_count(), 1);
+        store.import("new.txt", b"This document was imported after clearing the library.", "en").unwrap();
+        old_reader.execute_batch("COMMIT").unwrap();
+        assert_eq!(old_count(), 1);
+        let documents = store.snapshot().unwrap().documents;
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0].title, "new");
+    }
 
     #[test]
     fn cache_downloads_and_full_reset_delete_only_their_own_data() {
