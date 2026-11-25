@@ -31,6 +31,8 @@ ws ::= [ \t]{0,2}
 "#;
 const RECOVERY_ATTEMPTS: u8 = 7;
 const CHUNK_TIMEOUT: Duration = Duration::from_secs(55);
+const INCOMPLETE_TRANSLATION: &str = "Модель не повернула повного перекладу.";
+const WRONG_TRANSLATION_LANGUAGE: &str = "Модель не повернула перекладу вибраною мовою.";
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -59,6 +61,12 @@ pub struct TranslatePassageJob {
     hy_model: Option<hy_translation::Model>,
     chunks: Vec<HintWork<TranslationChunk>>,
     separators: Vec<&'static str>,
+    fallback: Option<PassageFallback>,
+}
+
+struct PassageFallback {
+    hy_model: Option<hy_translation::Model>,
+    chunks: Vec<HintWork<TranslationChunk>>,
 }
 
 impl Store {
@@ -182,6 +190,21 @@ impl Store {
                 }
             }
         }
+        let fallback = if hy_model.is_some() && !matches!(mode, HintCacheMode::ReadOnly) && !complete(&chunks)
+            // A failed refresh keeps its complete saved passage. Do not display an
+            // alternate that would be hidden by that previous result on reopening.
+            && (!matches!(mode, HintCacheMode::Refresh) || !complete(&prepare(hy_model, HintCacheMode::ReadOnly)?))
+        {
+            let candidates = [Some(hy_translation::Model::Small), None];
+            candidates.into_iter().find(|&candidate| {
+                let id = candidate.map_or(HINT_GENERATION_MODEL, hy_translation::Model::id);
+                candidate != hy_model && self.has_optional_model_files(id) && self.optional_model_memory_ready(id)
+            }).map(|candidate| {
+                prepare(candidate, mode).map(|chunks| PassageFallback { hy_model: candidate, chunks })
+            }).transpose()?
+        } else {
+            None
+        };
         snapshot.commit().map_err(|error| error.to_string())?;
         Ok(TranslatePassageJob {
             source: language,
@@ -191,6 +214,7 @@ impl Store {
             hy_model,
             chunks,
             separators,
+            fallback,
         })
     }
 }
@@ -213,6 +237,29 @@ impl TranslatePassageJob {
     }
 
     pub fn run_until_canceled(self, canceled: impl Fn() -> bool) -> Result<PassageTranslation> {
+        self.run_with_fallback(&canceled, |job| job.run_selected(&canceled))
+    }
+
+    fn run_with_fallback(
+        mut self, canceled: &impl Fn() -> bool, mut run: impl FnMut(&Self) -> Result<PassageTranslation>,
+    ) -> Result<PassageTranslation> {
+        let first = run(&self);
+        let (Err(error), Some(fallback)) = (first.as_ref(), self.fallback.take()) else { return first; };
+        if canceled() {
+            return Err("Переклад скасовано.".into());
+        }
+        if !matches!(error.as_str(), INCOMPLETE_TRANSLATION | WRONG_TRANSLATION_LANGUAGE |
+            GENERATION_TIMEOUT | GENERATION_INPUT_TOO_LONG | MARKER_ERROR)
+        {
+            return first;
+        }
+        // Run a full alternate passage under its own model lock and cache identity.
+        self.hy_model = fallback.hy_model;
+        self.chunks = fallback.chunks;
+        run(&self)
+    }
+
+    fn run_selected(&self, canceled: &impl Fn() -> bool) -> Result<PassageTranslation> {
         let check = || -> Result<()> {
             if canceled() {
                 return Err("Переклад скасовано.".into());
@@ -227,7 +274,7 @@ impl TranslatePassageJob {
             return self.cached()?.ok_or_else(|| "Збережений переклад не знайдено.".into());
         };
 
-        let result = model.run_requested_with_cache(Some(&canceled), || {
+        let result = model.run_requested_with_cache(Some(canceled), || {
             check()?;
             self.cached()
         }, |directory, should_yield| {
@@ -447,7 +494,7 @@ fn has_invented_ukrainian_year(source: &str, target: &str) -> bool {
 }
 
 fn parse(bytes: &[u8], target: &str, source_text: &str) -> Result<TranslationChunk> {
-    let error = "Модель не повернула повного перекладу.";
+    let error = INCOMPLETE_TRANSLATION;
     let result: TranslationChunk =
         serde_json::from_str(json_output(bytes).ok_or(error)?).map_err(|_| error)?;
     let text = result.text.trim();
@@ -474,7 +521,7 @@ fn parse(bytes: &[u8], target: &str, source_text: &str) -> Result<TranslationChu
         || (target == "uk" && crate::marian_target_uk::clearly_russian(&sample))
         || crate::language_detection::detect(&sample).is_some_and(|language| language != target)
     {
-        return Err("Модель не повернула перекладу вибраною мовою.".into());
+        return Err(WRONG_TRANSLATION_LANGUAGE.into());
     }
     Ok(TranslationChunk { text: text.into() })
 }
@@ -506,6 +553,42 @@ fn language_name(language: &str) -> Result<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incomplete_passage_tries_an_alternate_but_cancellation_and_storage_errors_do_not() {
+        for (failure, canceled, expected_calls) in [
+            (INCOMPLETE_TRANSLATION, false, 2),
+            (WRONG_TRANSLATION_LANGUAGE, false, 2),
+            (GENERATION_TIMEOUT, false, 2),
+            (INCOMPLETE_TRANSLATION, true, 1),
+            ("cache unavailable", false, 1),
+        ] {
+            let job = TranslatePassageJob {
+                source: "fr".into(), source_text: "Le bateau revient.".into(), target: "uk".into(),
+                regenerate: false, hy_model: Some(hy_translation::Model::Small), chunks: vec![], separators: vec![""],
+                fallback: Some(PassageFallback { hy_model: None, chunks: vec![] }),
+            };
+            let mut calls = 0;
+            let result = job.run_with_fallback(&|| canceled, |attempt| {
+                calls += 1;
+                if calls == 1 {
+                    assert!(attempt.hy_model.is_some());
+                    Err(failure.into())
+                } else {
+                    assert!(attempt.hy_model.is_none());
+                    Ok(attempt.combine(vec![TranslationChunk { text: "Корабель повертається.".into() }], false))
+                }
+            });
+            assert_eq!(calls, expected_calls);
+            if calls == 2 {
+                let repaired = result.unwrap();
+                assert_eq!(repaired.model_name, "Qwen 2B");
+                assert_eq!(repaired.text, "Корабель повертається.");
+            } else {
+                assert_eq!(result.err().unwrap(), if canceled { "Переклад скасовано." } else { failure });
+            }
+        }
+    }
 
     #[test]
     fn rejects_a_year_invented_for_a_month_only_in_the_original() {
