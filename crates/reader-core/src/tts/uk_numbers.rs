@@ -63,7 +63,9 @@ pub(super) fn expand(text: &str) -> Cow<'_, str> {
         }
         let end = characters.peek().map_or(text.len(), |&(offset, _)| offset);
         let digits = &text[start..end];
-        if digits.len() < 2
+        let following = &text[end..];
+        let feminine = feminine_count_target(following);
+        if (digits.len() < 2 && !(feminine && digits == "2"))
             || digits.len() > 9
             || digits.starts_with('0')
             || joined_number(text[..start].chars().rev(), digits.len() == 3, 1)
@@ -75,7 +77,7 @@ pub(super) fn expand(text: &str) -> Cow<'_, str> {
             continue;
         };
         expanded.push_str(&text[copied..start]);
-        expanded.push_str(&cardinal(number));
+        expanded.push_str(&cardinal_with_gender(number, feminine));
         copied = end;
     }
     if copied == 0 {
@@ -83,6 +85,16 @@ pub(super) fn expand(text: &str) -> Cow<'_, str> {
     }
     expanded.push_str(&text[copied..]);
     Cow::Owned(expanded)
+}
+
+fn feminine_count_target(following: &str) -> bool {
+    if !following.starts_with(char::is_whitespace) {
+        return false;
+    }
+    let word = following.trim_start()
+        .split(|ch: char| !ch.is_alphabetic() && ch != super::STRESS_MARK)
+        .next().unwrap_or("");
+    matches!(word.replace(super::STRESS_MARK, "").to_lowercase().as_str(), "руки" | "ноги")
 }
 
 fn joined_number(mut neighbour: impl Iterator<Item = char>, allow_grouping: bool, group_width: usize) -> bool {
@@ -99,6 +111,10 @@ fn joined_number(mut neighbour: impl Iterator<Item = char>, allow_grouping: bool
 }
 
 pub(crate) fn cardinal(number: usize) -> String {
+    cardinal_with_gender(number, false)
+}
+
+fn cardinal_with_gender(number: usize, feminine: bool) -> String {
     let mut words = Vec::new();
     let millions = number / 1_000_000;
     if millions > 0 {
@@ -110,7 +126,7 @@ pub(crate) fn cardinal(number: usize) -> String {
         group(&mut words, thousands, true);
         words.push(counted(thousands, ["тисяча", "тисячі", "тисяч"]));
     }
-    group(&mut words, number % 1000, false);
+    group(&mut words, number % 1000, feminine);
     words.join(" ")
 }
 

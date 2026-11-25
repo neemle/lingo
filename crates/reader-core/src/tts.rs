@@ -307,12 +307,6 @@ pub fn ukrainian_stress(text: &str) -> std::borrow::Cow<'_, str> {
 }
 
 fn window_stress(earlier: &str, prior: &str, next: &str) -> Option<usize> {
-    // Two, three, and four retain the genitive singular stress in this plural form.
-    let count = |token: &str| {
-        matches!(token, "два" | "обидва" | "три" | "чотири")
-            || token.parse::<u8>().is_ok_and(|number| number < 100
-                && matches!(number % 10, 2..=4) && !matches!(number, 12..=14))
-    };
     let plural_modifier = |token: &str| {
         matches!(
             token,
@@ -346,13 +340,13 @@ fn window_stress(earlier: &str, prior: &str, next: &str) -> Option<usize> {
     };
 
     match (earlier, prior) {
-        (_, token) if genitive_preposition(token) || count(token) => Some(4),
+        (_, token) if genitive_preposition(token) || few_count(token, false) => Some(4),
         // These prepositions can take the accusative plural «вікна»,
         // but the singular forms for their cases have different endings.
         (_, "в" | "у" | "на" | "під" | "крізь" | "через" | "про" | "повз") => Some(1),
         (preposition, modifier)
             if genitive_preposition(preposition) && modifier.ends_with("ого") => Some(4),
-        (number, token) if count(number) && plural_modifier(token) => Some(4),
+        (number, token) if few_count(number, false) && plural_modifier(token) => Some(4),
         (_, token) if matches!(
             token,
             "цього" | "того" | "одного" | "мого" | "твого" | "свого" | "нашого" | "вашого"
@@ -367,6 +361,15 @@ fn window_stress(earlier: &str, prior: &str, next: &str) -> Option<usize> {
         (_, "") if plural_predicate(next) => Some(1),
         _ => None,
     }
+}
+
+// These counted plurals retain the stress of the corresponding genitive singular.
+fn few_count(token: &str, feminine: bool) -> bool {
+    matches!(token, "три" | "чотири")
+        || matches!((feminine, token), (false, "два" | "обидва") | (true, "дві" | "обидві"))
+        || token.parse::<u64>().is_ok_and(|number| {
+            matches!(number % 10, 2..=4) && !matches!(number % 100, 12..=14)
+        })
 }
 
 fn castle_or_lock_stress(prior: &str, next: &str) -> Option<usize> {
@@ -396,7 +399,8 @@ fn genitive_preposition(token: &str) -> bool {
 
 fn feminine_noun_stress(noun: &str, earlier: &str, prior: &str, next: &str) -> Option<usize> {
     let genitive_index = if noun == "голови" { 5 } else { 3 };
-    if genitive_preposition(prior)
+    if (matches!(noun, "руки" | "ноги") && few_count(prior, true))
+        || genitive_preposition(prior)
         || matches!(prior, "моєї" | "твоєї" | "своєї" | "нашої" | "вашої" | "цієї" | "тієї" | "лівої" | "правої")
         || (genitive_preposition(earlier) && (prior.ends_with("ої") || prior.ends_with("єї")))
         || matches!((noun, prior), ("води", "склянка" | "склянку" | "літр" | "пляшка" | "пляшку" | "ковток"))
@@ -407,7 +411,7 @@ fn feminine_noun_stress(noun: &str, earlier: &str, prior: &str, next: &str) -> O
         prior,
         "мої" | "твої" | "свої" | "наші" | "ваші" | "ці" | "ті" | "усі" | "всі"
     ) || matches!((noun, prior),
-        ("руки" | "ноги", "обидві" | "підняв" | "підняла" | "підніми" | "помий" | "мити")
+        ("руки" | "ноги", "підняв" | "підняла" | "підніми" | "помий" | "мити")
         | ("води", "мінеральні" | "територіальні" | "підземні")
     ) || (prior.is_empty() && matches!((noun, next),
         ("руки" | "ноги", "тремтять" | "змерзли" | "втомилися" | "опустилися")
@@ -619,7 +623,7 @@ fn speech_error(error: impl std::fmt::Display) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{speech_signal_bounds, to_wav, ukrainian_stress, SAMPLE_RATE};
+    use super::{few_count, speech_signal_bounds, to_wav, ukrainian_narration, ukrainian_stress, SAMPLE_RATE};
 
     #[test]
     fn piper_splits_at_a_pause_without_repeating_words_or_losing_stress() {
@@ -643,6 +647,17 @@ mod tests {
         for broken in [&silent[..], &[], &[0.02, 0.02], &[0.1, f32::NAN]] {
             assert!(speech_signal_bounds(broken).is_err());
         }
+    }
+
+    #[test]
+    fn preserves_counted_stress_in_ukrainian_speech() {
+        let source = "102 вікна й 112 вікон. Дві руки, 23 ноги й обидві руки. Мої руки тремтять.";
+        assert_eq!(ukrainian_stress(source),
+            "102 вікна́ й 112 вікон. Дві руки́, 23 ноги́ й обидві руки́. Мої ру́ки тремтять.");
+        assert_eq!(ukrainian_narration("Підняв 2 руки. Є 22 ноги та 102 вікна."),
+            "Підняв дві руки́. Є двадцять дві ноги́ та сто два вікна́.");
+        assert!(!few_count("112", false));
+        assert!(!few_count("213", true));
     }
 
     #[test]
