@@ -197,6 +197,9 @@ public partial class SettingsPage
         SettingsScroll.IsEnabled = false;
         var importGateHeld = false;
         var inboxPaused = false;
+#if IOS
+        var sharedReceivingPaused = false;
+#endif
         var exportsPaused = false;
         var storageOperationStarted = false;
         BackgroundTranslation? pausedWorker = null;
@@ -222,6 +225,14 @@ public partial class SettingsPage
             }
             if (scope == "all")
             {
+#if IOS
+                sharedReceivingPaused = IosSharedImports.TryPauseReceiving();
+                if (!sharedReceivingPaused)
+                {
+                    StorageStatus.Text = "Зачекайте, поки завершиться імпорт файла.";
+                    return;
+                }
+#endif
                 inboxPaused = ShareInbox.TryPauseStaging();
                 if (!inboxPaused || DesktopImport.HasIncoming)
                 {
@@ -248,6 +259,10 @@ public partial class SettingsPage
                 if (scope == "all")
                     Preferences.Default.Clear();
                 await Task.Run(() => RemoveAuxiliaryFiles(scope));
+#if IOS
+                if (scope == "all" && SharedImportFolder.GetPath() is { } shared)
+                    await Task.Run(() => SharedImportFolder.ClearPublishedAsync(shared));
+#endif
                 StorageStatus.Text = scope switch
                 {
                     "cache" => "Кеш очищено. Фоновий переклад вимкнено.",
@@ -269,6 +284,9 @@ public partial class SettingsPage
         {
             if (exportsPaused) NativeFiles.ResumeExports();
             if (inboxPaused) ShareInbox.ResumeStaging();
+#if IOS
+            if (sharedReceivingPaused) IosSharedImports.ResumeReceiving();
+#endif
             if (importGateHeld) DesktopImport.Gate.Release();
             try
             {
@@ -308,9 +326,6 @@ public partial class SettingsPage
         {
             foreach (var name in LocalIntake)
                 RemoveFolder(Path.Combine(FileSystem.AppDataDirectory, name));
-#if IOS
-            if (SharedImportFolder.GetPath() is { } shared) RemoveFolder(shared);
-#endif
         }
         if (scope != "downloads") NativeFiles.ClearPausedExports();
     }

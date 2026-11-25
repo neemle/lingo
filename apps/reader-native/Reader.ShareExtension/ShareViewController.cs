@@ -203,8 +203,8 @@ public sealed class ShareViewController(ObjCRuntime.NativeHandle handle) : UIVie
                     .ConfigureAwait(false);
             }
             cancellation.ThrowIfCancellationRequested();
-            using var publication = File.Open(Path.Combine(root, ".publish"), FileMode.OpenOrCreate,
-                FileAccess.ReadWrite, FileShare.None);
+            using var publication = await SharedImportFolder.LockPublicationAsync(root, cancellation)
+                .ConfigureAwait(false);
             EnsureCapacity();
             Directory.Move(temporary, Path.Combine(root, SharedImportFolder.BatchPrefix + id));
         }

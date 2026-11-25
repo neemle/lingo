@@ -6,11 +6,14 @@ internal static class IosSharedImports
 
     private static readonly SemaphoreSlim Gate = new(1);
 
+    internal static bool TryPauseReceiving() => Gate.Wait(0);
+
+    internal static void ResumeReceiving() => Gate.Release();
+
     internal static async Task<Received?> ReceiveAsync()
     {
-        if (!await Gate.WaitAsync(0).ConfigureAwait(false)) return null;
+        await Gate.WaitAsync().ConfigureAwait(false);
         var received = new Received([], []);
-        using var incoming = DesktopImport.TrackIncoming();
         try
         {
             if (SharedImportFolder.GetPath() is not { } root || !Directory.Exists(root)) return null;

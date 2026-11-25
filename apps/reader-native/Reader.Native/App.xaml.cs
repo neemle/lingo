@@ -44,9 +44,10 @@ public partial class App : Application
 
         async Task ReceiveSharedFilesAsync()
         {
+            using var incoming = Services.DesktopImport.TrackIncoming();
             var batch = await Task.Run(Services.IosSharedImports.ReceiveAsync).ConfigureAwait(false);
             if (batch is not null)
-                window.Dispatcher.Dispatch(() =>
+                await window.Dispatcher.DispatchAsync(() =>
                 {
                     if (!shell.IsClosing) Services.DesktopImport.PublishBatch(batch.Items, batch.Rejected);
                 });

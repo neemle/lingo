@@ -31,6 +31,36 @@ internal static class SharedImportFolder
         _ => 0,
     };
 
+    internal static async Task<FileStream> LockPublicationAsync(string root, CancellationToken cancellation = default)
+    {
+        Directory.CreateDirectory(root);
+        var path = Path.Combine(root, ".publish");
+        for (var attempt = 0; ; attempt++)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            try { return File.Open(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+            catch (IOException) when (attempt < 9)
+            {
+                await Task.Delay(100, cancellation).ConfigureAwait(false);
+            }
+        }
+    }
+
+    internal static async Task ClearPublishedAsync(string root)
+    {
+        if (!Directory.Exists(root)) return;
+        using var publication = await LockPublicationAsync(root).ConfigureAwait(false);
+        // Hidden staging is owned by the extension until it publishes a complete batch.
+        foreach (var path in ExistingDirectories(root))
+        {
+            var name = Path.GetFileName(path);
+            if (Guid.TryParseExact(name, "N", out _) ||
+                name.StartsWith(BatchPrefix, StringComparison.Ordinal) &&
+                Guid.TryParseExact(name.AsSpan(BatchPrefix.Length), "N", out _))
+                Directory.Delete(path, recursive: IsQueueDirectory(path));
+        }
+    }
+
     internal static IEnumerable<(string Path, Guid Id, string? Batch)> QueuedFiles(string root)
     {
         foreach (var path in ExistingDirectories(root))
