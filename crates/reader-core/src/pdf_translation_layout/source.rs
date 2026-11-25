@@ -105,12 +105,22 @@ pub fn project(
         .map(|row| project_row(row, geometry, offset, &styles))
         .collect::<Vec<_>>();
     let mut layout = plan(&fragments)?;
+    let gutters: Vec<_> = if preserve_artwork {
+        geometry.iter().flat_map(ocr_line_gutters).collect()
+    } else {
+        Vec::new()
+    };
     let mut recovered = Vec::new();
     let (regions, overflow) = (&mut layout.regions, &mut layout.overflow);
     regions.retain_mut(|region| {
-        let masks_for = |bounds, indices: &[usize]| super::masks::plan(
-            bounds, indices.iter().map(|&index| rows[index].page_span(offset)), geometry, &styles,
-        );
+        let masks_for = |bounds: Bounds, indices: &[usize]| {
+            if gutters.iter().any(|&gap| bounds.intersects(gap)) {
+                return None;
+            }
+            super::masks::plan(
+                bounds, indices.iter().map(|&index| rows[index].page_span(offset)), geometry, &styles,
+            )
+        };
         let standalone = |&index: &usize| {
             let fragment = &fragments[index];
             let bounds = fragment.bounds?;
@@ -170,6 +180,34 @@ pub fn project(
         })
         .collect();
     Ok(ProjectedLayout { layout, anchors })
+}
+
+// OCR sometimes groups labels on either side of an icon or a column gutter into
+// one line. The gap may contain artwork even when the words have safe masks.
+fn ocr_line_gutters(line: &OcrLine) -> impl Iterator<Item = Bounds> {
+    let rotation = crate::ocr::line_rotation(line).unwrap_or_default();
+    let mut words: Vec<_> = line.words.iter()
+        .filter(|word| word.width > 0.0 && word.height > 0.0)
+        .map(|word| Bounds { x: word.x, y: word.y, width: word.width, height: word.height }
+            .reading_box(rotation))
+        .collect();
+    words.sort_unstable_by(|left, right| left.x.total_cmp(&right.x));
+    let mut before = None::<Bounds>;
+    words.into_iter().filter_map(move |right| {
+        let previous = before;
+        if previous.is_none_or(|previous| right.right() > previous.right()) {
+            before = Some(right);
+        }
+        let previous = previous?;
+        let width = right.x - previous.right();
+        let top = previous.y.max(right.y);
+        let height = previous.bottom().min(right.bottom()) - top;
+        let word_height = previous.height.max(right.height);
+        (width > 3.0 * word_height && height >= 0.5 * word_height).then(|| {
+            let gap = Bounds { x: previous.right(), y: top, width, height };
+            gap.reading_box((360 - rotation) % 360)
+        })
+    })
 }
 
 fn wider_line(
@@ -400,12 +438,44 @@ mod tests {
     }
 
     #[test]
+    fn a_scan_line_cannot_paint_across_a_column_gutter_in_any_orientation() {
+        let span = |start, end| Some(OcrSpan {
+            start_utf8: start, end_utf8: end, start_utf16: start, end_utf16: end,
+        });
+        for rotation in [0, 90, 180, 270] {
+            let inverse = (360 - rotation) % 360;
+            let word = |text: &str, x, start, end| {
+                let bounds = Bounds { x, y: 0.2, width: 0.12, height: 0.025 }.reading_box(inverse);
+                OcrWord { text: text.into(), x: bounds.x, y: bounds.y, width: bounds.width,
+                    height: bounds.height, raw_start_utf16: None, source_span: span(start, end) }
+            };
+            let words = vec![word("Gauche", 0.1, 0, 6), word("Droite", 0.56, 7, 13)];
+            let bounds = Bounds { x: 0.1, y: 0.2, width: 0.58, height: 0.025 }.reading_box(inverse);
+            let line = OcrLine { rotation: Some(rotation), page: 0, text: "Gauche Droite".into(),
+                x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height,
+                confidence: None, correction: None, block_start: true, words, source_span: span(0, 13) };
+            let row = |start_utf16, end_utf16| SourceRow {
+                start_utf16, end_utf16, block_index: Some(0), pending: false,
+            };
+            let combined = project(&[row(0, 13)], std::slice::from_ref(&line), 0, &[], true).unwrap();
+            assert!(combined.layout.regions.is_empty());
+            assert_eq!(combined.layout.overflow, [0]);
+            assert!(combined.anchors[0].bounds.is_some());
+
+            let separate = project(&[row(0, 6), row(7, 13)], &[line], 0, &[], true).unwrap();
+            assert!(separate.layout.overflow.is_empty());
+            assert_eq!(separate.layout.regions.len(), 2);
+            assert!(separate.layout.regions.iter().all(|region| region.masks.len() == 1));
+        }
+    }
+
+    #[test]
     fn preserves_four_rotations_and_keeps_masks_in_page_coordinates() {
         let entries = [
-            (0, (0.1, 0.2), (0.3, 0.2)),
-            (90, (0.8, 0.1), (0.8, 0.3)),
-            (180, (0.7, 0.8), (0.5, 0.8)),
-            (270, (0.2, 0.8), (0.2, 0.5)),
+            (0, (0.1, 0.2), (0.17, 0.2)),
+            (90, (0.8, 0.1), (0.8, 0.18)),
+            (180, (0.7, 0.8), (0.63, 0.8)),
+            (270, (0.2, 0.8), (0.2, 0.72)),
         ];
         let mut rows = Vec::new();
         let mut geometry = Vec::new();
