@@ -3,7 +3,7 @@ use crate::{Result, MAX_IMPORT};
 use quick_xml::{
     encoding::Decoder,
     events::{BytesStart, Event},
-    name::ResolveResult,
+    name::{QName, ResolveResult},
     NsReader,
 };
 use std::{
@@ -15,6 +15,7 @@ mod numbering;
 use numbering::Numbering;
 
 pub(crate) const DOCX_LAYOUT_VERSION: u8 = 6;
+const MARKUP_COMPATIBILITY: &[u8] = b"http://schemas.openxmlformats.org/markup-compatibility/2006";
 
 #[derive(Clone, Default)]
 struct ParagraphProperties {
@@ -337,11 +338,37 @@ fn parse_body(xml: &str, styles: &Styles, mut numbering: Numbering) -> Result<Ex
     let mut in_text = false;
     let mut in_properties = false;
     let mut start = 0;
+    let mut alternate_selected = Vec::new();
     loop {
         let decoder = reader.decoder();
         let (namespace, event) = reader.read_resolved_event().map_err(xml_error)?;
         let empty = matches!(event, Event::Empty(_));
         match event {
+            Event::Start(ref element) | Event::Empty(ref element)
+                if is_markup_compatibility(&namespace) =>
+            {
+                match element.local_name().as_ref() {
+                    b"AlternateContent" if !empty => alternate_selected.push(false),
+                    kind @ (b"Choice" | b"Fallback") => {
+                        if let Some(selected) = alternate_selected.last_mut() {
+                            let use_branch = !*selected && (kind == b"Fallback"
+                                || understands_choice(&reader, element, decoder)?);
+                            if use_branch {
+                                *selected = true;
+                            } else if !empty {
+                                reader.read_to_end(element.name()).map_err(xml_error)?;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(ref element)
+                if is_markup_compatibility(&namespace)
+                    && element.local_name().as_ref() == b"AlternateContent" =>
+            {
+                alternate_selected.pop();
+            }
             Event::Start(ref event) | Event::Empty(ref event)
                 if word_element(&namespace, event.name().as_ref()) =>
             {
@@ -509,11 +536,37 @@ fn block(
 }
 
 fn word_element(namespace: &ResolveResult<'_>, name: &[u8]) -> bool {
+    word_namespace(namespace) || name.starts_with(b"w:")
+}
+
+fn word_namespace(namespace: &ResolveResult<'_>) -> bool {
     matches!(namespace, ResolveResult::Bound(uri)
         if matches!(uri.as_ref(),
             b"http://schemas.openxmlformats.org/wordprocessingml/2006/main"
             | b"http://purl.oclc.org/ooxml/wordprocessingml/main"))
-        || name.starts_with(b"w:")
+}
+
+fn is_markup_compatibility(namespace: &ResolveResult<'_>) -> bool {
+    matches!(namespace, ResolveResult::Bound(uri) if uri.as_ref() == MARKUP_COMPATIBILITY)
+}
+
+fn understands_choice(
+    reader: &NsReader<&[u8]>,
+    element: &BytesStart<'_>,
+    decoder: Decoder,
+) -> Result<bool> {
+    let Some(required) = attribute(element, decoder, b"Requires")? else {
+        return Ok(false);
+    };
+    let mut prefixes = required.split_ascii_whitespace().peekable();
+    if prefixes.peek().is_none() {
+        return Ok(false);
+    }
+    Ok(prefixes.all(|prefix| {
+        let qualified = format!("{prefix}:capability");
+        let (namespace, _) = reader.resolve_element(QName(qualified.as_bytes()));
+        word_namespace(&namespace)
+    }))
 }
 
 fn xml_part(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<Option<String>> {
@@ -560,6 +613,37 @@ fn xml_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use std::io::{Cursor, Write};
+
+    #[test]
+    fn docx_alternate_content_contributes_one_supported_branch() {
+        let xml = r#"
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                xmlns:compat="http://schemas.openxmlformats.org/markup-compatibility/2006"
+                xmlns:future="https://example.invalid/new-drawing" xmlns:alias="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:body>
+                <compat:AlternateContent>
+                  <compat:Choice Requires="future alias">
+                    <w:p><w:r><w:t>Unsupported drawing.</w:t></w:r></w:p>
+                  </compat:Choice>
+                  <compat:Choice Requires="alias">
+                    <w:p><w:r><w:t>First supported choice.</w:t></w:r></w:p>
+                  </compat:Choice>
+                  <compat:Choice Requires="w">
+                    <w:p><w:r><w:t>Later supported choice.</w:t></w:r></w:p>
+                  </compat:Choice>
+                  <compat:Fallback><w:p><w:r><w:t>Unused fallback.</w:t></w:r></w:p></compat:Fallback>
+                </compat:AlternateContent>
+                <compat:AlternateContent>
+                  <compat:Choice Requires="future"><w:p><w:r><w:t>Unsupported only.</w:t></w:r></w:p></compat:Choice>
+                  <compat:Fallback><w:p><w:r><w:t>Selected fallback.</w:t></w:r></w:p></compat:Fallback>
+                </compat:AlternateContent>
+                <w:p><w:r><w:t>Next paragraph.</w:t></w:r></w:p>
+              </w:body>
+            </w:document>"#;
+        let document = super::parse_body(xml, &Default::default(), Default::default()).unwrap();
+        assert_eq!(document.text, "First supported choice.\nSelected fallback.\nNext paragraph.\n");
+        assert_eq!(document.blocks.len(), 3);
+    }
 
     #[test]
     fn docx_import_uses_linked_body_styles_and_numbering() {
