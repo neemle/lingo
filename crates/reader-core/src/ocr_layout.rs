@@ -683,14 +683,14 @@ mod tests {
 
     #[test]
     fn cached_three_column_ocr_recovers_across_previous_block_markers() {
-        let row = |words: [&str; 6], y| {
+        let row = |words: &[(&str, f64)], y| {
             let mut line = caption_line();
-            line.text = words.join(" ");
+            line.text = words.iter().map(|&(text, _)| text).collect::<Vec<_>>().join(" ");
             line.y = y;
             line.block_start = true;
             let mut offset = 0;
-            line.words = words.into_iter().zip([0.05, 0.15, 0.46, 0.57, 0.81, 0.91])
-                .map(|(text, x)| {
+            line.words = words.iter()
+                .map(|&(text, x)| {
                     let word = OcrWord { text: text.into(), x, y, width: 0.05, height: 0.02,
                         raw_start_utf16: Some(offset), source_span: None };
                     offset += text.encode_utf16().count() + 1;
@@ -698,14 +698,39 @@ mod tests {
                 }).collect();
             line
         };
-        let cached = [row(["Left", "starts", "Middle", "starts", "Right", "starts"], 0.3),
-            row(["Left", "ends", "Middle", "ends", "Right", "ends"], 0.34)];
-        let old = crate::ocr::recognized_lines(&cached, 1).unwrap();
-        let (rebuilt, revised, edits) = upgrade_cached_page(&cached, &old).unwrap();
-        assert_eq!(revised, "Left starts\nLeft ends\n\nMiddle starts\nMiddle ends\n\nRight starts\nRight ends");
-        assert_eq!(rebuilt.iter().map(|line| line.block_start).collect::<Vec<_>>(), [false, false, true, false, true, false]);
-        assert!(!edits.is_empty());
-        assert!(upgrade_cached_page(&rebuilt, &revised).is_none());
+        let full_top = [("Left", 0.05), ("starts", 0.15), ("Middle", 0.46), ("starts", 0.57),
+            ("Right", 0.81), ("starts", 0.91)];
+        let short_top = [("Left", 0.05), ("Middle", 0.46), ("Right", 0.81)];
+        let body = [("Left", 0.05), ("ends", 0.15), ("Middle", 0.46), ("ends", 0.57), ("Right", 0.81), ("ends", 0.91)];
+        let root = tempfile::tempdir().unwrap();
+        for (index, (top, expected)) in [
+            (&full_top[..], "Left starts\nLeft ends\n\nMiddle starts\nMiddle ends\n\nRight starts\nRight ends"),
+            (&short_top[..], "Left\nLeft ends\n\nMiddle\nMiddle ends\n\nRight\nRight ends"),
+        ].into_iter().enumerate() {
+            let cached = [row(top, 0.3), row(&body, 0.34)];
+            let old = crate::ocr::recognized_lines(&cached, 1).unwrap();
+            let (rebuilt, revised, edits) = upgrade_cached_page(&cached, &old).unwrap();
+            assert_eq!(revised, expected);
+            assert_eq!(rebuilt.iter().map(|line| line.block_start).collect::<Vec<_>>(), [false, false, true, false, true, false]);
+            assert!(!edits.is_empty());
+            assert!(upgrade_cached_page(&rebuilt, &revised).is_none());
+
+            let mut store = crate::Store::open(&root.path().join(format!("reader-{index}.db"))).unwrap();
+            let document = store.import_scanned_pdf("grid.pdf", b"%PDF-1.4\n", "en",
+                cached.to_vec(), 1).unwrap();
+            assert_eq!(document.text, expected);
+            let layout = store.pdf_page_translation(&document.id, 0, "uk", true).unwrap();
+            let layout = serde_json::to_value(layout).unwrap();
+            let columns = layout.as_array().unwrap().iter()
+                .map(|row| row["sourceBlockIndex"].as_u64()).collect::<Vec<_>>();
+            assert_eq!(columns, [Some(0), Some(1), Some(2)]);
+            let geometry = document.ocr_lines.unwrap();
+            for (line, x) in geometry.iter().zip([0.05, 0.05, 0.46, 0.46, 0.81, 0.81]) {
+                assert_eq!(line.x, x);
+                let span = line.source_span.unwrap();
+                assert_eq!(&expected[span.start_utf8..span.end_utf8], line.reading_text());
+            }
+        }
     }
 
     #[test]

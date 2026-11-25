@@ -276,12 +276,13 @@ fn parallel_grid(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) ->
     let first = *lines.first()?.first()?;
     let width = lines.iter().take(9)
         .take_while(|line| line.first().is_some_and(|word| same_baseline(first, *word))).count();
-    if !(3..=8).contains(&width) || lines[..width].iter().any(|line| line.len() < 2) { return None; }
+    if !(3..=8).contains(&width) { return None; }
     let start = first.start;
     let mut cursor = start;
     let mut previous = first;
     let mut rows = 0;
     let mut columns: Vec<_> = (0..width).map(|_| Vec::new()).collect();
+    let mut has_multiword_cell = [false; 8];
     for row in lines.chunks_exact(width) {
         let Some(first_word) = row[0].first().copied() else { break; };
         let drop = first_word.center_y - previous.center_y;
@@ -301,7 +302,8 @@ fn parallel_grid(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) ->
             true
         });
         if !complete { break; }
-        for (column, cell) in columns.iter_mut().zip(row) {
+        for ((column, has_multiword_cell), cell) in columns.iter_mut().zip(&mut has_multiword_cell).zip(row) {
+            *has_multiword_cell |= cell.len() >= 2;
             let separator = if rows > 0 { "\n" } else if cell[0].start == start { "" } else { "\n\n" };
             column.push(SourcePiece { start: cell[0].start, end: cell.last()?.end, separator });
         }
@@ -309,7 +311,9 @@ fn parallel_grid(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) ->
         previous = first_word;
         rows += 1;
     }
-    (rows >= 2).then(|| (BlockEdit { start, end: cursor, slices: columns.into_iter().flatten().collect() }, rows * width))
+    // A heading may be one word. Each column still needs an aligned multiword cell before reordering.
+    (rows >= 2 && has_multiword_cell[..width].iter().all(|&seen| seen))
+        .then(|| (BlockEdit { start, end: cursor, slices: columns.into_iter().flatten().collect() }, rows * width))
 }
 
 fn parallel_lines(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) -> Option<(BlockEdit, usize)> {
