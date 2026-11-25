@@ -12,6 +12,13 @@ internal sealed class BackgroundTranslation
     private readonly ReaderSession session;
     private readonly IDispatcher dispatcher;
     private readonly IDispatcherTimer timer;
+#if MACCATALYST || IOS
+    private readonly BackgroundTranslationPowerMonitor powerMonitor;
+    private bool stopped;
+    private string? powerPauseReason;
+#else
+    private static string? powerPauseReason => null;
+#endif
     private readonly Dictionary<JobKey, BackgroundTranslationProgress> jobs = [];
     private readonly Dictionary<JobKey, LibraryFailure> libraryFailures = [];
     private Task pending = Task.CompletedTask;
@@ -53,6 +60,10 @@ internal sealed class BackgroundTranslation
         timer.Tick += Tick;
         session.PdfOcrUpdated += OnPdfOcrUpdated;
         session.PropertyChanged += OnSessionChanged;
+#if MACCATALYST || IOS
+        powerMonitor = new(() => dispatcher.Dispatch(UpdatePowerState));
+        UpdatePowerState();
+#endif
         SetEnabled(session.GetReaderPreferences().BackgroundTranslation == true);
     }
 
@@ -97,7 +108,7 @@ internal sealed class BackgroundTranslation
         }
         if (enabled) Wake();
         else timer.Stop();
-        SetStatus(value ? "Перевіряємо чергу перекладу…" : "");
+        SetQueueStatus();
     }
 
     internal async Task PauseAsync()
@@ -114,8 +125,29 @@ internal sealed class BackgroundTranslation
         if (clearProgress) TranslationRoutesChanged();
         paused = false;
         Wake();
-        if (enabled) SetStatus("Перевіряємо чергу перекладу…");
+        SetQueueStatus();
     }
+
+    private void SetQueueStatus() => SetStatus(!enabled ? "" : paused ? "Фоновий переклад призупинено."
+        : powerPauseReason ?? "Перевіряємо чергу перекладу…");
+
+#if MACCATALYST || IOS
+    private void UpdatePowerState()
+    {
+        if (stopped) return;
+        var reason = BackgroundTranslationPowerMonitor.PauseReason;
+        if (powerPauseReason == reason) return;
+        powerPauseReason = reason;
+        if (!enabled || paused) return;
+        if (reason is not null)
+        {
+            timer.Stop();
+            stepCancellation?.Cancel();
+        }
+        else Wake();
+        SetQueueStatus();
+    }
+#endif
 
     internal void TranslationRoutesChanged()
     {
@@ -154,6 +186,10 @@ internal sealed class BackgroundTranslation
 
     internal void Stop()
     {
+#if MACCATALYST || IOS
+        stopped = true;
+        powerMonitor.Dispose();
+#endif
         SetEnabled(false);
         timer.Tick -= Tick;
         session.PdfOcrUpdated -= OnPdfOcrUpdated;
@@ -235,7 +271,7 @@ internal sealed class BackgroundTranslation
 
     private void Schedule(TimeSpan delay)
     {
-        if (!enabled || paused) return;
+        if (!enabled || paused || powerPauseReason is not null) return;
         if (timer.IsRunning && timer.Interval == delay) return;
         timer.Stop();
         timer.Interval = delay;
@@ -252,7 +288,8 @@ internal sealed class BackgroundTranslation
 
     private void Tick(object? sender, EventArgs args)
     {
-        if (!enabled || paused || session.Busy || !pending.IsCompleted || retryAt > DateTimeOffset.UtcNow)
+        if (!enabled || paused || powerPauseReason is not null || session.Busy ||
+            !pending.IsCompleted || retryAt > DateTimeOffset.UtcNow)
             return;
         if (session.Snapshot.Documents.Length == 0)
         {
@@ -433,7 +470,7 @@ internal sealed class BackgroundTranslation
         catch (Exception) when (cancellation.IsCancellationRequested)
         {
             if (prefetchingVisiblePage) visibleAttempt = null;
-            if (enabled && !paused) SetStatus("Перевіряємо чергу перекладу…");
+            SetQueueStatus();
         }
         catch (Exception error)
         {
