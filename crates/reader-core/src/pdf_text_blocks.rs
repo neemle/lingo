@@ -172,7 +172,8 @@ fn separate_positioned_blocks(units: &[u16], words: &[PositionedWord], page_widt
     let mut surroundings = Vec::new();
     let mut index = 0;
     while index < lines.len() {
-        if let Some((edit, line_count)) = parallel_lines(&lines[index..], units, page_width) {
+        if let Some((edit, line_count)) = parallel_grid(&lines[index..], units, page_width)
+            .or_else(|| parallel_lines(&lines[index..], units, page_width)) {
             isolate_block(units, edit.start, edit.end, &mut surroundings);
             edits.push(edit);
             index += line_count;
@@ -261,6 +262,46 @@ fn column_transition(lines: &[&[PositionedWord]], index: usize, width: f64) -> b
         upper = line[0];
     }
     false
+}
+
+fn parallel_grid(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) -> Option<(BlockEdit, usize)> {
+    let first = *lines.first()?.first()?;
+    let width = lines.iter().take(9)
+        .take_while(|line| line.first().is_some_and(|word| same_baseline(first, *word))).count();
+    if !(3..=8).contains(&width) || lines[..width].iter().any(|line| line.len() < 2) { return None; }
+    let start = first.start;
+    let mut cursor = start;
+    let mut previous = first;
+    let mut rows = 0;
+    let mut columns: Vec<_> = (0..width).map(|_| Vec::new()).collect();
+    for row in lines.chunks_exact(width) {
+        let Some(first_word) = row[0].first().copied() else { break; };
+        let drop = first_word.center_y - previous.center_y;
+        if rows > 0 && !(previous.height.min(first_word.height) * 0.6..=previous.height.max(first_word.height) * 2.5)
+            .contains(&drop) { break; }
+
+        let mut end = cursor;
+        let mut prior_word = None;
+        let complete = row.iter().zip(&lines[..width]).all(|(cell, top)| {
+            let (Some(left), Some(right)) = (cell.first(), cell.last()) else { return false; };
+            if !same_baseline(first_word, *left) || !aligned(top[0], *left) ||
+                left.start < end || !whitespace(&units[end..left.start]) ||
+                prior_word.is_some_and(|prior| !wide_gap(prior, *left, page_width))
+            { return false; }
+            end = right.end;
+            prior_word = Some(*right);
+            true
+        });
+        if !complete { break; }
+        for (column, cell) in columns.iter_mut().zip(row) {
+            let separator = if rows > 0 { "\n" } else if cell[0].start == start { "" } else { "\n\n" };
+            column.push(SourcePiece { start: cell[0].start, end: cell.last()?.end, separator });
+        }
+        cursor = end;
+        previous = first_word;
+        rows += 1;
+    }
+    (rows >= 2).then(|| (BlockEdit { start, end: cursor, slices: columns.into_iter().flatten().collect() }, rows * width))
 }
 
 fn parallel_lines(lines: &[&[PositionedWord]], units: &[u16], page_width: f64) -> Option<(BlockEdit, usize)> {
@@ -467,6 +508,28 @@ mod tests {
                 .map(|part| format!("{}{}", part.separator, &text[part.start..part.end])).collect::<String>();
             assert_eq!(reordered, "Left starts\nLeft ends\n\nRight starts\nRight ends");
         }
+    }
+
+    #[test]
+    fn keeps_three_ocr_columns_separate_from_adjacent_prose() {
+        let text = "Page heading\nLeft starts Middle starts Right starts\nLeft ends Middle ends Right ends\nPage footer";
+        let positions = [(5.0, 0.0), (15.0, 0.0), (5.0, 15.0), (15.0, 15.0), (46.0, 15.0), (57.0, 15.0),
+            (81.0, 15.0), (91.0, 15.0), (5.0, 23.0), (15.0, 23.0), (46.0, 23.0), (57.0, 23.0),
+            (81.0, 23.0), (91.0, 23.0), (5.0, 40.0), (15.0, 40.0)];
+        let words = text.split_whitespace().zip(positions).scan(0, |cursor, (word, (left, center_y))| {
+            let start = *cursor + text[*cursor..].find(word).unwrap();
+            let end = start + word.len();
+            *cursor = end;
+            Some(PositionedWord { start, end, left, right: left + 5.0, center_y, height: 4.0, rotation: None })
+        }).collect::<Vec<_>>();
+        let edits = separate_blocks(text, &words, 100.0).unwrap();
+        let [before, body, after] = edits.as_slice() else { panic!("Expected three edits, got {}", edits.len()); };
+        assert!(before.slices.is_empty() && after.slices.is_empty());
+        let recovered: String = body.slices.iter()
+            .map(|piece| format!("{}{}", piece.separator, &text[piece.start..piece.end])).collect();
+        assert_eq!(recovered, "Left starts\nLeft ends\n\nMiddle starts\nMiddle ends\n\nRight starts\nRight ends");
+        assert_eq!(&text[..before.start], "Page heading");
+        assert_eq!(&text[after.end..], "Page footer");
     }
 
     #[test]
