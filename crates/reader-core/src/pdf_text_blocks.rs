@@ -95,12 +95,12 @@ fn horizontal_run(
     units: &[u16], words: &[PositionedWord], page_width: f64, start: usize, end: usize,
 ) -> Result<Vec<BlockEdit>> {
     if start == 0 {
-        return separate_positioned_blocks(&units[..end], words, page_width);
+        return separate_positioned_blocks(&units[..end], words, page_width, false);
     }
     let relative = words.iter().map(|word| PositionedWord {
         start: word.start - start, end: word.end - start, ..*word
     }).collect::<Vec<_>>();
-    let mut edits = separate_positioned_blocks(&units[start..end], &relative, page_width)?;
+    let mut edits = separate_positioned_blocks(&units[start..end], &relative, page_width, false)?;
     for edit in &mut edits {
         edit.start += start;
         edit.end += start;
@@ -135,7 +135,11 @@ fn positioned_utf16(text: &str, words: &[PositionedWord], page_width: f64) -> Re
     Ok(units)
 }
 
-fn separate_positioned_blocks(units: &[u16], words: &[PositionedWord], page_width: f64) -> Result<Vec<BlockEdit>> {
+pub(crate) fn separate_confirmed_grids(text: &str, words: &[PositionedWord]) -> Result<Vec<BlockEdit>> {
+    separate_positioned_blocks(&positioned_utf16(text, words, 1.0)?, words, 1.0, true)
+}
+
+fn separate_positioned_blocks(units: &[u16], words: &[PositionedWord], page_width: f64, grids_only: bool) -> Result<Vec<BlockEdit>> {
     let mut line_start = 0;
     let mut remaining = words;
     let mut lines = Vec::new();
@@ -173,13 +177,17 @@ fn separate_positioned_blocks(units: &[u16], words: &[PositionedWord], page_widt
     let mut index = 0;
     while index < lines.len() {
         if let Some((edit, line_count)) = parallel_grid(&lines[index..], units, page_width)
-            .or_else(|| parallel_lines(&lines[index..], units, page_width)) {
+            .or_else(|| if grids_only { None } else { parallel_lines(&lines[index..], units, page_width) }) {
             isolate_block(units, edit.start, edit.end, &mut surroundings);
             edits.push(edit);
             index += line_count;
             continue;
         }
 
+        if grids_only {
+            index += 1;
+            continue;
+        }
         let line = lines[index];
         if let Some(next) = lines.get(index + 1).filter(|next| next.len() >= 2) {
             if line.len() >= 2 {

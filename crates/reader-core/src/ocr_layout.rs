@@ -1,5 +1,5 @@
 use crate::ocr::{byte_at_utf16, OcrLine, TranscriptEdit};
-use crate::pdf_text_blocks::{separate_blocks, PositionedWord};
+use crate::pdf_text_blocks::{separate_blocks, separate_confirmed_grids, PositionedWord};
 use std::ops::Range;
 
 mod drop_caps;
@@ -156,10 +156,12 @@ fn reconstruct_page(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
     if lines.iter().any(|line| line.correction.is_some()) {
         return None;
     }
+    let grids = reconstruct_marked_grids(lines);
+    let lines = grids.as_deref().unwrap_or(lines);
     let mut ordered = None;
     let mut start = 0;
     for block in lines.chunk_by(|previous, next| !next.block_start && previous.is_rotated() == next.is_rotated()) {
-        let rebuilt = if block[0].is_rotated() { None } else { reconstruct_columns(block) };
+        let rebuilt = if block[0].is_rotated() { None } else { reconstruct_columns(block, false) };
         if let Some(rebuilt) = rebuilt {
             ordered.get_or_insert_with(|| lines[..start].to_vec()).extend(rebuilt);
         } else if let Some(ordered) = &mut ordered {
@@ -179,6 +181,23 @@ fn reconstruct_page(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
         for index in starts {
             ordered[index].block_start = true;
         }
+    }
+    ordered.or(grids)
+}
+
+fn reconstruct_marked_grids(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
+    let mut ordered = None;
+    let mut start = 0;
+    for run in lines.chunk_by(|first, second| first.is_rotated() == second.is_rotated()) {
+        let rebuilt = if !run[0].is_rotated() && run.iter().skip(1).any(|line| line.block_start) {
+            reconstruct_columns(run, true)
+        } else { None };
+        if let Some(rebuilt) = rebuilt {
+            ordered.get_or_insert_with(|| lines[..start].to_vec()).extend(rebuilt);
+        } else if let Some(ordered) = &mut ordered {
+            ordered.extend_from_slice(run);
+        }
+        start += run.len();
     }
     ordered
 }
@@ -200,7 +219,7 @@ fn vertical_block_break(upper: &OcrLine, lower: &OcrLine) -> bool {
         display_line.reading_text().split_whitespace().take(13).count() <= 12
 }
 
-fn reconstruct_columns(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
+fn reconstruct_columns(lines: &[OcrLine], grids_only: bool) -> Option<Vec<OcrLine>> {
     if lines.len() < 2 && !lines.iter().any(|line| line.words.len() >= 4) {
         return None;
     }
@@ -245,7 +264,8 @@ fn reconstruct_columns(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
         text.push_str(raw);
     }
     positioned.sort_unstable_by_key(|word| word.start);
-    let edits = separate_blocks(&text, &positioned, 1.0).ok()?;
+    let edits = if grids_only { separate_confirmed_grids(&text, &positioned) }
+        else { separate_blocks(&text, &positioned, 1.0) }.ok()?;
     if edits.is_empty() { return None; }
 
     let mut output = Vec::with_capacity(lines.len());
@@ -258,7 +278,10 @@ fn reconstruct_columns(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
         } else {
             for part in edit.slices {
                 new_block |= part.separator == "\n\n";
+                let first = output.len();
+                let starts_block = new_block;
                 append(lines, &spans, part.start..part.end, &mut new_block, &mut output)?;
+                if grids_only { output.get_mut(first)?.block_start = starts_block; }
             }
             new_block = true;
         }
@@ -468,6 +491,33 @@ mod tests {
         let (_, revised, edits) = upgrade_cached_page(&cached, &old).unwrap();
         assert_eq!(revised, doc.text);
         assert_eq!(edits.len(), 1);
+    }
+
+    #[test]
+    fn cached_three_column_ocr_recovers_across_previous_block_markers() {
+        let row = |words: [&str; 6], y| {
+            let mut line = caption_line();
+            line.text = words.join(" ");
+            line.y = y;
+            line.block_start = true;
+            let mut offset = 0;
+            line.words = words.into_iter().zip([0.05, 0.15, 0.46, 0.57, 0.81, 0.91])
+                .map(|(text, x)| {
+                    let word = OcrWord { text: text.into(), x, y, width: 0.05, height: 0.02,
+                        raw_start_utf16: Some(offset), source_span: None };
+                    offset += text.encode_utf16().count() + 1;
+                    word
+                }).collect();
+            line
+        };
+        let cached = [row(["Left", "starts", "Middle", "starts", "Right", "starts"], 0.3),
+            row(["Left", "ends", "Middle", "ends", "Right", "ends"], 0.34)];
+        let old = crate::ocr::recognized_lines(&cached, 1).unwrap();
+        let (rebuilt, revised, edits) = upgrade_cached_page(&cached, &old).unwrap();
+        assert_eq!(revised, "Left starts\nLeft ends\n\nMiddle starts\nMiddle ends\n\nRight starts\nRight ends");
+        assert_eq!(rebuilt.iter().map(|line| line.block_start).collect::<Vec<_>>(), [false, false, true, false, true, false]);
+        assert!(!edits.is_empty());
+        assert!(upgrade_cached_page(&rebuilt, &revised).is_none());
     }
 
     #[test]
