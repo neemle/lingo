@@ -10,6 +10,7 @@ public partial class ReadingPage
 {
     private readonly LocalSpeech wordPopupSpeech = new();
     private CancellationTokenSource? wordDetailRun;
+    private int wordLookupRequest;
     private (Button Button, string Text, string Description)? wordDetailControl;
     private (VisualElement View, TextSelection Selection, Border Card, PdfWordAnchor? PdfAnchor)? wordPopup;
 
@@ -44,6 +45,7 @@ public partial class ReadingPage
         WordOverlay.IsVisible = WordCard.IsVisible || DetachedWordCard.IsVisible;
         if (!WordOverlay.IsVisible)
         {
+            wordLookupRequest++;
             StopWordDetail();
             CancelPopupTranslation();
             CancelWordExplanation();

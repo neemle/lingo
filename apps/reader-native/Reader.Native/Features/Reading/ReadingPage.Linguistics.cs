@@ -154,7 +154,7 @@ public partial class ReadingPage
     private bool AnalysisScopeIsCurrent(Document document, Sentence sentence, TextSelection selected) =>
         readingPageActive && selection == selected && AppState.Session.Document is { } current &&
         current.Id == document.Id && current.CurrentRevisionId == document.CurrentRevisionId &&
-        AppState.Session.Sentence?.Id == sentence.Id;
+        current.Language == document.Language && AppState.Session.Sentence?.Id == sentence.Id;
 
     private async Task ShowAnalysisPageAsync(string title, string text, Func<int, Task<LinguisticAnalysis>> load,
         Func<string, bool, CancellationToken, Task<SentenceReview?>>? review = null)

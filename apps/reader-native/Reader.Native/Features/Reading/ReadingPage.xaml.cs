@@ -729,6 +729,11 @@ public partial class ReadingPage : ContentPage
             Reader.Presentation.SourceRanges.TrimFootnoteReference(selected, doc.Blocks) is not { } lexical)
             return;
         selected = lexical;
+        var request = ++wordLookupRequest;
+        bool CurrentLookup() => readingPageActive && request == wordLookupRequest &&
+            WordCard.IsVisible && selection == selected && session.Document is { } current &&
+            current.Id == doc.Id && current.Language == doc.Language &&
+            current.CurrentRevisionId == doc.CurrentRevisionId;
         dictionaryFocus = null;
         RecordReadingActivity();
         if (selection != selected)
@@ -757,9 +762,8 @@ public partial class ReadingPage : ContentPage
             if (doc.CurrentRevisionId is { } revision)
             {
                 var cursor = await session.AnchorReadingSelectionAsync(doc.Id, revision, selected);
+                if (!CurrentLookup()) return;
                 anchored = cursor;
-                if (selection != selected || session.Document is not { } active || active.Id != doc.Id
-                    || active.CurrentRevisionId != revision) return;
                 if (cursor is not null)
                 {
                     canonicalWord = (doc.Id, cursor);
@@ -767,7 +771,10 @@ public partial class ReadingPage : ContentPage
                 }
             }
             else if (index >= 0 && index != doc.Position)
+            {
                 await session.SelectSentenceAsync(index);
+                if (!CurrentLookup()) return;
+            }
 
             var context = index < 0 ? null : new WordContext(
                 Reader.Presentation.SourceRanges.MaskFootnoteReferences(
@@ -787,9 +794,7 @@ public partial class ReadingPage : ContentPage
                 && canonical.StartUtf16 + offset == selected.StartUtf16 && length == selected.LengthUtf16
                 ? await session.LookupSentenceTokenAsync(doc.Id, canonical.Id, anchored.RevisionId, offset)
                 : await session.LookupWordAsync(doc.Language, selected.ReadingText, context);
-            if (selection != selected || session.Document is not { } current || current.Id != doc.Id
-                || current.Language != doc.Language || current.CurrentRevisionId != doc.CurrentRevisionId
-                || !WordCard.IsVisible) return;
+            if (!CurrentLookup()) return;
             ShowMeanings(lookup);
             ShowLocalSyntax(lookup);
             ShowExpressionOptions(lookup, selected);
@@ -840,7 +845,7 @@ public partial class ReadingPage : ContentPage
         }
         catch (Exception error)
         {
-            if (selection == selected && session.Document?.Id == doc.Id && WordCard.IsVisible)
+            if (CurrentLookup())
                 KnowledgeAnalysis.Text = $"Не вдалося виконати аналіз. {error.Message}";
         }
     }
