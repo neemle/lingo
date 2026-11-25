@@ -137,6 +137,11 @@ public partial class ReadingPage
     private async void RefreshSentenceTranslationClicked(object? sender, EventArgs args)
     {
         if (sender is not Button { IsEnabled: true }) return;
+        if (DirectPackageForSentenceRefresh() is { } direct)
+        {
+            await OpenTranslationPackagesAsync(direct);
+            return;
+        }
         if (PdfUsesPageTranslation)
         {
             if (pdfLayoutRequest is { } address && pdfLayoutSentence is { } sentence)
@@ -161,8 +166,16 @@ public partial class ReadingPage
     private void UpdateSentenceRefreshButtons()
     {
         var session = AppState.Session;
+        var needsDirectPackage = DirectPackageForSentenceRefresh() is not null;
+        var glyph = needsDirectPackage ? "\uf019" : "\uf021";
+        var description = needsDirectPackage
+            ? "Установити прямий французько-український пакет для повторного перекладу"
+            : "Перекласти речення заново";
+        LabelTranslationIcon(RefreshSentenceTranslation, glyph, description);
+        LabelTranslationIcon(DetachedRefreshSentenceTranslation, glyph, description);
         var ready = readingPageActive && TranslationVisible && !session.Busy && !translating &&
-            !translatingDetachedSentence && translatingPdfLayout is null && readiness?.Ready == true;
+            !translatingDetachedSentence && translatingPdfLayout is null &&
+            (readiness?.Ready == true || needsDirectPackage);
         var detached = DetachedPdfReader.IsVisible;
         var hasSource = !PdfUsesPageTranslation || pdfLayoutSentence is not null && pdfLayoutRequest is not null;
         RefreshSentenceTranslation.IsEnabled = ready && hasSource && !detached &&
@@ -172,6 +185,28 @@ public partial class ReadingPage
         DetachedRefreshSentenceTranslation.IsEnabled = ready && hasSource && detached && !loadingDetachedSentence &&
             detachedSentence is { Footnote: false } current && TargetCode is { } target &&
             readinessPair == (current.Language, target) && ReviewedDetachedTranslation() is null;
+    }
+
+    private Reader.Contracts.TranslationPair? DirectPackageForSentenceRefresh()
+    {
+        if (TargetCode != "uk" || readinessPair != ("fr", "uk") || readiness is not { } route)
+            return null;
+        var package = route.DirectUpgrade ?? route.Missing.FirstOrDefault(pair => pair is { Source: "fr", Target: "uk" });
+        if (package is not { Source: "fr", Target: "uk" }) return null;
+
+        var detached = DetachedPdfReader.IsVisible;
+        var session = AppState.Session;
+        if ((detached ? ReviewedDetachedTranslation() : session.ReviewedTranslation("uk")) is not null)
+            return null;
+        var showsDirect = PdfUsesPageTranslation
+            ? pdfLayoutRequest is not null && pdfLayoutRequest == CurrentPdfLayoutAddress() &&
+                pdfLayoutRows.Any(row => !row.Reviewed && row.DirectModelRevision is not null &&
+                    HasPdfTranslation(row) && IsActivePdfRow(row, pdfLayoutSentence))
+            : detached
+                ? detachedMachineTranslation?.DirectModelRevision is not null
+                : session.Document is { Language: "fr" } document &&
+                    ActiveMachineAlignment(document, "uk")?.Translation.DirectModelRevision is not null;
+        return showsDirect ? package : null;
     }
 
     private static void LabelTranslationIcon(Button button, string glyph, string label)

@@ -604,10 +604,10 @@ public partial class ReadingPage : ContentPage
 
     private async void OpenTranslationPackagesClicked(object? sender, EventArgs args) => await OpenTranslationPackagesAsync();
 
-    private async Task OpenTranslationPackagesAsync()
+    private async Task OpenTranslationPackagesAsync(Reader.Contracts.TranslationPair? requested = null)
     {
         if (readiness is not { } state) return;
-        var packages = state.DirectUpgrade is { } direct ? new[] { direct } : state.Missing;
+        var packages = (requested ?? state.DirectUpgrade) is { } direct ? new[] { direct } : state.Missing;
         if (packages.Length == 0) return;
         try
         {
