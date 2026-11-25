@@ -268,8 +268,10 @@ impl Store {
         if let Some(index) = selected {
             let selected = pdf_refresh_range(&original[index].0, &offsets, projected_offset)
                 .ok_or_else(missing_selection)?;
-            self.regenerate_document_pdf_sentences(&document,
-                physical.start + selected.start..physical.start + selected.end, reflow_input, target, boundaries, canceled)?;
+            let routes = self.translation_cache_routes_for_display(&document.language, target, true)?;
+            let positions = routes.pdf_refresh_positions(self, &document, physical.clone(),
+                physical.start + selected.start..physical.start + selected.end, target, boundaries)?;
+            self.regenerate_document_pdf_sentences(&document, positions, reflow_input, target, boundaries, canceled)?;
         } else if !cached_only {
             match self.translate_document_page(&document, physical.clone(), target, boundaries, background, canceled) {
                 // The scheduler needs to see unfinished units even when the

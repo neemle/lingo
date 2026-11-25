@@ -865,7 +865,7 @@ impl Store {
     }
 
     pub(crate) fn regenerate_document_pdf_sentences(
-        &mut self, document: &crate::Document, selected: std::ops::Range<usize>, reflow_input: Option<String>, target: &str,
+        &mut self, document: &crate::Document, selected: Vec<usize>, reflow_input: Option<String>, target: &str,
         boundaries: PageBoundaries, canceled: &dyn Fn() -> bool,
     ) -> Result<()> {
         let directory = self.model_directory.clone();

@@ -710,7 +710,7 @@ fn page_batch_len<T>(pending: &[T], size: impl Fn(&T) -> usize) -> usize {
 
 pub(crate) fn regenerate_pdf_sentences(
     store: &mut Store, provider: &mut impl TranslationProvider, document: &Document,
-    selected: Range<usize>, reflow_input: Option<String>, target: &str, boundaries: PageBoundaries,
+    selected: impl IntoIterator<Item = usize>, reflow_input: Option<String>, target: &str, boundaries: PageBoundaries,
     canceled: &dyn Fn() -> bool,
 ) -> Result<()> {
     let checkpoint = || {
@@ -866,6 +866,31 @@ impl CacheRoutes {
             translation_failure: None,
             alignment: aligned.alignment,
         })))
+    }
+
+    pub(crate) fn pdf_refresh_positions(
+        &self, store: &Store, document: &Document, physical: Range<usize>, selected: Range<usize>,
+        target: &str, boundaries: PageBoundaries,
+    ) -> Result<Vec<usize>> {
+        let mut positions: Vec<_> = selected.clone().collect();
+        for position in selected.clone() {
+            let Some(group) = self.cached_pdf_row(store, document, position, target, boundaries, UnitGrouping::LegacyContext)?
+                .filter(|group| group.sentence_ids.len() > 1) else { continue; };
+            let mut missing = Vec::new();
+            let mut already_displaced = false;
+            for index in physical.clone().filter(|&index| group.sentence_ids.contains(&document.sentences[index].id)) {
+                if self.cached_pdf_row(store, document, index, target, boundaries, UnitGrouping::Sentence)?.is_some() {
+                    already_displaced = true;
+                    break;
+                }
+                if !selected.contains(&index) { missing.push(index); }
+            }
+            // A visible legacy block can only be replaced once its neighbors have translations too.
+            if !already_displaced { positions.extend(missing); }
+        }
+        positions.sort_unstable();
+        positions.dedup();
+        Ok(positions)
     }
 
     pub(crate) fn cached_active(
@@ -2493,14 +2518,38 @@ mod tests {
         let grouped = store.pdf_page_translation(&document.id, 0, "uk", true).unwrap();
         assert_eq!(grouped[0].text.as_deref(), Some("Старий груповий переклад."));
 
+        struct Provider { edge: ModelEdge, fail: bool }
+        impl TranslationProvider for Provider {
+            fn installed_models(&self) -> Result<Vec<ModelEdge>> { Ok(vec![self.edge.clone()]) }
+
+            fn translate(&mut self, _: &ModelEdge, input: &[String], _: Option<&str>, _: TranslationSettings)
+                -> Result<Vec<String>> {
+                assert_eq!(input, ["Le bateau arrive.", "Le marin part."]);
+                if self.fail { return Err("Модель недоступна.".into()); }
+                Ok(vec!["Корабель прибуває.".into(), "Моряк вирушає.".into()])
+            }
+        }
+        let Route::Direct(edge) = route else { panic!("Expected direct translation"); };
+        let mut provider = Provider { edge, fail: true };
+        let routes = store.translation_cache_routes_for_display("fr", "uk", true).unwrap();
+        let boundaries = PageBoundaries::Canonical;
+        let positions = routes.pdf_refresh_positions(&store, &document, 0..2, 1..2, "uk", boundaries).unwrap();
+        assert_eq!(positions, [0, 1]);
+        assert!(regenerate_pdf_sentences(&mut store, &mut provider, &document, positions.clone(), None,
+            "uk", boundaries, &|| false).is_err());
+        let grouped = store.pdf_page_translation(&document.id, 0, "uk", true).unwrap();
+        assert_eq!(grouped[0].text.as_deref(), Some("Старий груповий переклад."));
+
+        provider.fail = false;
+        regenerate_pdf_sentences(&mut store, &mut provider, &document, positions, None,
+            "uk", boundaries, &|| false).unwrap();
+        assert_eq!(routes.pdf_refresh_positions(&store, &document, 0..2, 1..2, "uk", boundaries).unwrap(), [1]);
         let sentence = &document.sentences[1];
-        let sentence_key = unit_cache_key(&route, &sentence.text).unwrap();
-        store.save_cached_segments([(sentence_key, &["Моряк вирушає.".into()][..])]).unwrap();
         assert!(store.remove_translation_package("fr", "uk").unwrap());
         assert!(!store.translation_readiness("fr", "uk").unwrap().ready);
         let rows = serde_json::to_value(store.pdf_page_translation(&document.id, 0, "uk", true).unwrap()).unwrap();
         assert_eq!(rows.as_array().unwrap().len(), 2);
-        assert!(rows[0]["text"].is_null());
+        assert_eq!(rows[0]["text"], "Корабель прибуває.");
         assert_eq!(rows[1]["text"], "Моряк вирушає.");
         assert_eq!(rows[1]["sourceText"], sentence.text);
         assert_eq!(rows[1]["startUtf16"], sentence.start_utf16);
