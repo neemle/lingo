@@ -17,7 +17,7 @@ public partial class ReadingPage
         TranslationFindFragment? PdfFragment = null, TranslationPair? Translation = null);
     private DocumentFindFocus? documentFindFocus;
 #if MACCATALYST || IOS
-    private sealed record UnreadPdfFind(string Document, int Page, string Query, int Occurrence);
+    private sealed record UnreadPdfFind(string Document, int Page, string SourceLanguage, string Query, int Occurrence);
     private UnreadPdfFind? pendingUnreadPdfFind;
 #endif
     private sealed record DocumentFindCursor(int Position, int? PhysicalPage = null, bool UnreadLayer = false,
@@ -34,15 +34,16 @@ public partial class ReadingPage
         {
             var target = TargetCode;
             if (await ShowDocumentFindAsync(session, document, target) is not { } match) return;
+            bool SourceIsCurrent() => readingPageActive && session.Document is { } active &&
+                active.Id == document.Id && active.Language == document.Language &&
+                (!match.Translation || TargetCode == target);
             await session.WaitUntilIdleAsync();
-            if (!readingPageActive || session.Document is not { } current || current.Id != document.Id ||
-                current.Language != document.Language || (match.Translation && TargetCode != target))
+            if (!SourceIsCurrent() || session.Document is not { } current)
                 return;
             if (match.Translation && target is not null)
             {
                 var latest = await RefreshTranslationFindMatchAsync(session, document, match, target);
-                if (!readingPageActive || session.Document is not { } stillOpen || stillOpen.Id != document.Id ||
-                    stillOpen.Language != document.Language || TargetCode != target) return;
+                if (!SourceIsCurrent() || session.Document is not { } stillOpen) return;
                 if (latest is null)
                 {
                     await DisplayAlertAsync("Пошук у документі",
@@ -77,7 +78,7 @@ public partial class ReadingPage
                         "Текст змінився. Повторіть пошук, щоб побачити актуальні збіги.", "Гаразд");
                     return;
                 }
-                await AnchorCanonicalFindSpanAsync(session, current.Id, exactRevision, exact);
+                await AnchorCanonicalFindSpanAsync(session, current.Id, exactRevision, current.Language, exact);
                 return;
             }
 
@@ -86,20 +87,20 @@ public partial class ReadingPage
                 match.PhysicalPage is int sourcePage)
             {
                 await pdfWindowRead;
-                if (!readingPageActive || session.Document?.Id != document.Id) return;
+                if (!SourceIsCurrent()) return;
                 await OpenPdfPageAsync(sourcePage);
-                if (!readingPageActive || session.Document?.Id != document.Id || pdfWindow?.Center != sourcePage) return;
+                if (!SourceIsCurrent() || pdfWindow?.Center != sourcePage) return;
                 if (detachedAddress is { } sourceAddress && sourceAddress.Document == document.Id &&
                     sourceAddress.Page == sourcePage && sourceAddress.Language == document.Language)
                 {
                     await detachedInitialSentence;
-                    if (!ReferenceEquals(detachedAddress, sourceAddress) || !readingPageActive) return;
+                    if (!ReferenceEquals(detachedAddress, sourceAddress) || !SourceIsCurrent()) return;
                     if (detachedSentence?.RevisionId == pageRevision &&
                         detachedMatch.StartUtf16 <= sourceAddress.Text.Length - detachedMatch.LengthUtf16 &&
                         sourceAddress.Text.AsSpan(detachedMatch.StartUtf16, detachedMatch.LengthUtf16).SequenceEqual(detachedMatch.Text))
                     {
                         await LoadDetachedSentenceAsync(sourceAddress, position: null, sourceOffset: detachedMatch.StartUtf16);
-                        if (ReferenceEquals(detachedAddress, sourceAddress) && readingPageActive && !loadingDetachedSentence &&
+                        if (ReferenceEquals(detachedAddress, sourceAddress) && SourceIsCurrent() && !loadingDetachedSentence &&
                             detachedSentence is { } loaded && loaded.RevisionId == pageRevision &&
                             loaded.Sentence.StartUtf16 <= detachedMatch.StartUtf16 && detachedMatch.StartUtf16 < loaded.Sentence.EndUtf16)
                             RevealDetachedFindSpan(sourceAddress, loaded, detachedMatch);
@@ -113,12 +114,12 @@ public partial class ReadingPage
             if (match.PhysicalPage is int unreadPage && match.SentenceId is null && !match.Translation)
             {
                 await pdfWindowRead;
-                if (!readingPageActive || session.Document?.Id != document.Id) return;
+                if (!SourceIsCurrent()) return;
                 await OpenPdfPageAsync(unreadPage);
-                if (match.Query is { } query && readingPageActive && session.Document?.Id == document.Id &&
+                if (match.Query is { } query && SourceIsCurrent() &&
                     pdfWindow?.Center == unreadPage)
                 {
-                    pendingUnreadPdfFind = new(document.Id, unreadPage, query, match.Position);
+                    pendingUnreadPdfFind = new(document.Id, unreadPage, document.Language, query, match.Position);
                     ScheduleUnreadPdfFind();
                 }
                 return;
@@ -126,28 +127,25 @@ public partial class ReadingPage
             if (match.PhysicalPage is int page && match.SentenceId is { } sentenceId)
             {
                 await pdfWindowRead;
-                if (!readingPageActive || session.Document?.Id != document.Id) return;
+                if (!SourceIsCurrent()) return;
                 await OpenPdfPageAsync(page);
-                if (detachedAddress is { } address && address.Document == document.Id && address.Page == page)
+                if (SourceIsCurrent() && detachedAddress is { } address && address.Document == document.Id &&
+                    address.Page == page && address.Language == document.Language)
                 {
                     await LoadDetachedSentenceAsync(address, match.Position, sentenceId);
-                    if (ReferenceEquals(detachedAddress, address) && !loadingDetachedSentence &&
-                        detachedSentence is { } found && found.Sentence.Id == sentenceId &&
-                        !match.Translation && match.Query is { } query &&
-                        DocumentFind.PdfSourceMatches(found.Sentence.Text, query, found.Language,
-                            found.Sentence.StartUtf16).FirstOrDefault() is { } span)
-                        RevealDetachedFindSpan(address, found, span);
-                    if (ReferenceEquals(detachedAddress, address) && !loadingDetachedSentence &&
-                        detachedSentence is { } loaded && loaded.Sentence.Id == sentenceId &&
-                        match.CachedMachine is { } cached && target is not null && TargetCode == target &&
+                    if (!SourceIsCurrent() || !ReferenceEquals(detachedAddress, address) || loadingDetachedSentence ||
+                        detachedSentence is not { } selected || selected.Sentence.Id != sentenceId) return;
+                    if (!match.Translation && match.Query is { } query &&
+                        DocumentFind.PdfSourceMatches(selected.Sentence.Text, query, selected.Language,
+                            selected.Sentence.StartUtf16).FirstOrDefault() is { } span)
+                        RevealDetachedFindSpan(address, selected, span);
+                    if (match.CachedMachine is { } cached && target is not null && TargetCode == target &&
                         ReviewedDetachedTranslation() is null)
                     {
-                        ShowDetachedMachineTranslation(cached, loaded.Language, target);
+                        ShowDetachedMachineTranslation(cached, selected.Language, target);
                         UpdateDetachedControls();
                     }
-                    if (ReferenceEquals(detachedAddress, address) && !loadingDetachedSentence &&
-                        detachedSentence is { } selected && selected.Sentence.Id == sentenceId)
-                        RevealTranslationFindMatch(match, address.Document, selected.RevisionId, page, sentenceId, target);
+                    RevealTranslationFindMatch(match, address.Document, selected.RevisionId, page, sentenceId, target);
                 }
                 return;
             }
@@ -161,21 +159,22 @@ public partial class ReadingPage
                 DocumentFind.PdfSourceMatches(current.Sentences[position].Text, sourceQuery, current.Language,
                     current.Sentences[position].StartUtf16).FirstOrDefault() is { } sourceMatch)
             {
-                await AnchorCanonicalFindSpanAsync(session, current.Id, revision, sourceMatch);
+                await AnchorCanonicalFindSpanAsync(session, current.Id, revision, current.Language, sourceMatch);
                 return;
             }
 #if MACCATALYST || IOS
             if (current.Format == "pdf" && position == current.Position)
             {
                 await pdfWindowRead;
-                if (!readingPageActive || session.Document?.Id != document.Id) return;
+                if (!SourceIsCurrent()) return;
                 await OpenPdfPageAsync(match.PdfFragment?.Page ?? session.OriginalPageIndex());
+                if (!SourceIsCurrent()) return;
             }
 #endif
             StopSpeech();
             await session.SelectSentenceAsync(position, pdfPage: match.PdfFragment?.Page);
-            if (readingPageActive && session.Error.Length == 0 && session.Document is { } opened &&
-                opened.Id == document.Id && opened.CurrentRevisionId == current.CurrentRevisionId &&
+            if (SourceIsCurrent() && session.Error.Length == 0 && session.Document is { } opened &&
+                opened.CurrentRevisionId == current.CurrentRevisionId &&
                 session.Sentence is { } sentence && sentence.Id == current.Sentences[position].Id)
             {
                 if (match.Translation)
@@ -195,12 +194,14 @@ public partial class ReadingPage
     private static bool MatchesFindSource(TranslationFindPage results, Document document) =>
         results.SourceRevisionId == document.CurrentRevisionId && results.SourceLanguage == document.Language;
 
-    private async Task AnchorCanonicalFindSpanAsync(ReaderSession session, string document, string revision, TextSelection match)
+    private async Task AnchorCanonicalFindSpanAsync(ReaderSession session, string document, string revision,
+        string sourceLanguage, TextSelection match)
     {
         StopSpeech();
         var cursor = await session.AnchorReadingSelectionAsync(document, revision, match);
         if (cursor is not null && readingPageActive && session.Document is { } selected &&
-            selected.Id == document && selected.CurrentRevisionId == revision && session.Sentence?.Id == cursor.SentenceId)
+            selected.Id == document && selected.CurrentRevisionId == revision && selected.Language == sourceLanguage &&
+            session.Sentence?.Id == cursor.SentenceId)
             RevealCanonicalFindSpan(document, revision, cursor.SentenceId, match);
     }
 
@@ -376,18 +377,20 @@ public partial class ReadingPage
             if (!ReferenceEquals(pendingUnreadPdfFind, find) || !readingPageActive ||
                 pdfWindow?.Center != find.Page || session.Document is not { } document ||
                 !ReferenceEquals(pdfSnapshot, document) || document.Id != find.Document ||
+                document.Language != find.SourceLanguage ||
                 !ReferenceEquals(pdfWindow.Pages.FirstOrDefault(item => item.Page == find.Page), page))
                 return;
             pendingUnreadPdfFind = null;
             try
             {
                 if (page.State == "detached" && detachedAddress is { } address &&
-                    address.Document == find.Document && address.Page == find.Page &&
+                    address.Document == find.Document && address.Page == find.Page && address.Language == find.SourceLanguage &&
                     DocumentFind.PdfSourceMatches(address.Text, find.Query, address.Language)
                         .ElementAtOrDefault(find.Occurrence) is { } local)
                 {
                     await LoadDetachedSentenceAsync(address, position: null, sourceOffset: local.StartUtf16);
-                    if (readingPageActive && ReferenceEquals(detachedAddress, address) && !loadingDetachedSentence &&
+                    if (readingPageActive && session.Document?.Language == find.SourceLanguage &&
+                        ReferenceEquals(detachedAddress, address) && !loadingDetachedSentence &&
                         detachedSentence is { } loaded && loaded.Sentence.StartUtf16 <= local.StartUtf16 &&
                         local.StartUtf16 < loaded.Sentence.EndUtf16)
                         RevealDetachedFindSpan(address, loaded, local);
@@ -401,7 +404,8 @@ public partial class ReadingPage
                     return;
                 var cursor = await session.AnchorReadingSelectionAsync(document.Id, revision, original);
                 if (cursor is null || !readingPageActive || session.Document is not { } current ||
-                    current.Id != document.Id || current.CurrentRevisionId != revision || pdfWindow?.Center != find.Page ||
+                    current.Id != document.Id || current.CurrentRevisionId != revision ||
+                    current.Language != find.SourceLanguage || pdfWindow?.Center != find.Page ||
                     session.Sentence is not { } sentence || sentence.Id != cursor.SentenceId)
                     return;
                 RevealCanonicalFindSpan(document.Id, revision, sentence.Id, original);

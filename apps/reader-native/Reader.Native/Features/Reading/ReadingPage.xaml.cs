@@ -172,7 +172,10 @@ public partial class ReadingPage : ContentPage
         machineStatus = null;
         readinessPair = null;
         readinessRequest++;
-        if (documentFindFocus?.Translation is not null) documentFindFocus = null;
+        documentFindFocus = null;
+#if MACCATALYST || IOS
+        pendingUnreadPdfFind = null;
+#endif
         pdfLayoutRequestId++;
         pdfLayoutRequest = null;
         ReleasePdfLayoutTranslation()?.Cancel();
