@@ -248,9 +248,10 @@ fn reconstruct_page(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
     let lines = grids.as_deref().unwrap_or(lines);
     let mut ordered = None;
     let mut start = 0;
-    for block in lines.chunk_by(|previous, next| !next.block_start && previous.is_rotated() == next.is_rotated()) {
-        let rebuilt = if block[0].is_rotated() { None } else { reconstruct_columns(block, false) };
-        if let Some(rebuilt) = rebuilt {
+    for block in lines.chunk_by(|previous, next| !next.block_start &&
+        previous.rotation.unwrap_or_default() == next.rotation.unwrap_or_default())
+    {
+        if let Some(rebuilt) = reconstruct_columns(block, false) {
             ordered.get_or_insert_with(|| lines[..start].to_vec()).extend(rebuilt);
         } else if let Some(ordered) = &mut ordered {
             ordered.extend_from_slice(block);
@@ -276,10 +277,9 @@ fn reconstruct_page(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
 fn reconstruct_marked_grids(lines: &[OcrLine]) -> Option<Vec<OcrLine>> {
     let mut ordered = None;
     let mut start = 0;
-    for run in lines.chunk_by(|first, second| first.is_rotated() == second.is_rotated()) {
-        let rebuilt = if !run[0].is_rotated() && run.iter().skip(1).any(|line| line.block_start) {
-            reconstruct_columns(run, true)
-        } else { None };
+    for run in lines.chunk_by(|first, second| first.rotation.unwrap_or_default() == second.rotation.unwrap_or_default()) {
+        let rebuilt = run.iter().skip(1).any(|line| line.block_start)
+            .then(|| reconstruct_columns(run, true)).flatten();
         if let Some(rebuilt) = rebuilt {
             ordered.get_or_insert_with(|| lines[..start].to_vec()).extend(rebuilt);
         } else if let Some(ordered) = &mut ordered {
@@ -315,6 +315,7 @@ fn reconstruct_columns(lines: &[OcrLine], grids_only: bool) -> Option<Vec<OcrLin
     let mut spans = Vec::with_capacity(lines.len());
     let mut positioned = Vec::new();
     let mut utf16 = 0;
+    let angle = lines.first()?.rotation.unwrap_or_default();
     for line in lines {
         if !text.is_empty() {
             text.push('\n');
@@ -332,10 +333,12 @@ fn reconstruct_columns(lines: &[OcrLine], grids_only: bool) -> Option<Vec<OcrLin
             let whitespace = |unit: &u16| char::from_u32(u32::from(*unit)).is_some_and(char::is_whitespace);
             let left = units[..start].iter().rposition(whitespace).map_or(0, |index| index + 1);
             let right = units[end..].iter().position(whitespace).map_or(units.len(), |index| end + index);
+            // Only the geometry passed to the detector rotates. The stored word boxes stay on the original page.
+            let (x, y, width, height) = crate::ocr::reading_box((word.x, word.y, word.width, word.height), angle);
             let geometry = PositionedWord {
                 start: utf16 + left, end: utf16 + right,
-                left: word.x, right: word.x + word.width,
-                center_y: word.y + word.height / 2.0, height: word.height, rotation: None,
+                left: x, right: x + width,
+                center_y: y + height / 2.0, height, rotation: None,
             };
             if positioned.len() > first_word &&
                 positioned.last().is_some_and(|last: &PositionedWord| last.start == geometry.start) {
@@ -683,15 +686,22 @@ mod tests {
 
     #[test]
     fn cached_three_column_ocr_recovers_across_previous_block_markers() {
-        let row = |words: &[(&str, f64)], y| {
+        let row = |words: &[(&str, f64)], y, angle| {
             let mut line = caption_line();
             line.text = words.iter().map(|&(text, _)| text).collect::<Vec<_>>().join(" ");
+            line.x = words[0].1;
             line.y = y;
+            line.width = words.last().unwrap().1 + 0.05 - line.x;
+            line.height = 0.02;
             line.block_start = true;
+            line.rotation = (angle != 0).then_some(angle);
+            let to_page = |x, y, width, height| crate::ocr::reading_box((x, y, width, height), (360 - angle) % 360);
+            (line.x, line.y, line.width, line.height) = to_page(line.x, line.y, line.width, line.height);
             let mut offset = 0;
             line.words = words.iter()
                 .map(|&(text, x)| {
-                    let word = OcrWord { text: text.into(), x, y, width: 0.05, height: 0.02,
+                    let (x, y, width, height) = to_page(x, y, 0.05, 0.02);
+                    let word = OcrWord { text: text.into(), x, y, width, height,
                         raw_start_utf16: Some(offset), source_span: None };
                     offset += text.encode_utf16().count() + 1;
                     word
@@ -707,12 +717,15 @@ mod tests {
             ("Right", 0.81), ("detail", 0.91)];
         let root = tempfile::tempdir().unwrap();
         let short_text = "Left\nLeft ends\nLeft detail\n\nMiddle\nMiddle ends\nMiddle detail\n\nRight\nRight ends\nRight detail";
-        for (index, (top, top_positions, expected)) in [
-            (&full_top[..], [0.05, 0.46, 0.81], "Left starts\nLeft ends\nLeft detail\n\nMiddle starts\nMiddle ends\nMiddle detail\n\nRight starts\nRight ends\nRight detail"),
-            (&short_top[..], [0.05, 0.46, 0.81], short_text),
-            (&centered_top[..], [0.1, 0.515, 0.86], short_text),
+        for (index, (top, top_positions, expected, angle)) in [
+            (&full_top[..], [0.05, 0.46, 0.81], "Left starts\nLeft ends\nLeft detail\n\nMiddle starts\nMiddle ends\nMiddle detail\n\nRight starts\nRight ends\nRight detail", 0),
+            (&short_top[..], [0.05, 0.46, 0.81], short_text, 0),
+            (&centered_top[..], [0.1, 0.515, 0.86], short_text, 0),
+            (&centered_top[..], [0.1, 0.515, 0.86], short_text, 90),
+            (&centered_top[..], [0.1, 0.515, 0.86], short_text, 180),
+            (&centered_top[..], [0.1, 0.515, 0.86], short_text, 270),
         ].into_iter().enumerate() {
-            let cached = [row(top, 0.3), row(&body, 0.34), row(&continuation, 0.38)];
+            let cached = [row(top, 0.3, angle), row(&body, 0.34, angle), row(&continuation, 0.38, angle)];
             let old = crate::ocr::recognized_lines(&cached, 1).unwrap();
             let (rebuilt, revised, edits) = upgrade_cached_page(&cached, &old).unwrap();
             assert_eq!(revised, expected);
@@ -734,7 +747,8 @@ mod tests {
             let positions = top_positions.into_iter().zip([0.05, 0.46, 0.81])
                 .flat_map(|(top, body)| [top, body, body]);
             for (line, x) in geometry.iter().zip(positions) {
-                assert_eq!(line.x, x);
+                assert_eq!(line.rotation.unwrap_or_default(), angle);
+                assert!((line.reading_bounds().0 - x).abs() < 1e-9);
                 let span = line.source_span.unwrap();
                 assert_eq!(&expected[span.start_utf8..span.end_utf8], line.reading_text());
             }
