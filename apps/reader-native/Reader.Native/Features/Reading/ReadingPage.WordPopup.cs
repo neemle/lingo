@@ -92,6 +92,7 @@ public partial class ReadingPage
     private Rect? PdfWordBounds(PdfWordAnchor anchor)
     {
         if (inlinePdfAddress != anchor.Address || !showInlineOriginal ||
+            !anchor.Address.MatchesDocument(AppState.Session.Document) ||
             inlinePdfPreview is not { Width: > 0, Height: > 0 } preview) return null;
         var fit = OriginalPage.AspectFit(new RectF(0, 0, (float)anchor.View.Width, (float)anchor.View.Height),
             preview.Width, preview.Height);

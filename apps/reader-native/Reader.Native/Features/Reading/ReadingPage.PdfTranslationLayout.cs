@@ -10,7 +10,7 @@ public partial class ReadingPage
     private sealed record PdfLayoutAddress(string Document, int Page, string? Revision, string SourceLanguage,
         string Target, string? DetachedText)
     {
-        public InlinePdfAddress Source => new(Document, Page, Revision, DetachedText);
+        public InlinePdfAddress Source => new(Document, Page, Revision, SourceLanguage, DetachedText);
 
         public bool MatchesSource(Document? document, string? target, PdfLayoutAddress? displayed) =>
             document is not null && document.Id == Document && document.CurrentRevisionId == Revision &&
@@ -30,8 +30,8 @@ public partial class ReadingPage
         IReadOnlyDictionary<int, PdfBoxAppearance>? Appearance)
     {
         public bool Matches(PdfLayoutAddress? address) => address is not null &&
-            Page.Document == address.Document && Page.Page == address.Page &&
-            Page.Revision == address.Revision && Page.DetachedText == address.DetachedText;
+            Page.Document == address.Document && Page.Page == address.Page && Page.Revision == address.Revision &&
+            Page.SourceLanguage == address.SourceLanguage && Page.DetachedText == address.DetachedText;
     }
     private bool pdfTranslationLayout = true;
     private TaskCompletionSource? pdfTranslationScroll;
@@ -262,12 +262,12 @@ public partial class ReadingPage
     private PdfLayoutAddress? CurrentPdfLayoutAddress() =>
         showInlineOriginal && inlinePdfAddress is { } page && TargetCode is { } target &&
         AppState.Session.Document is { } document && SupportsOriginalTranslationLayout(document) &&
-        page.Document == document.Id &&
+        page.MatchesDocument(document) &&
         (pdfTranslationDestination is not { } destination || destination.Document != document.Id ||
             destination.Page == page.Page) &&
-        page.Revision == document.CurrentRevisionId &&
         DetachedPdfReader.IsVisible == (page.DetachedText is not null) &&
-        (!DetachedPdfReader.IsVisible || detachedAddress?.Text == page.DetachedText) &&
+        (!DetachedPdfReader.IsVisible || detachedAddress is { } detached &&
+            detached.Text == page.DetachedText && detached.Language == page.SourceLanguage) &&
         target != document.Language && (!PdfPageNotice.IsVisible || DetachedPdfReader.IsVisible) &&
         (CurrentNativePdfWindow(document.Id) is not { } window || window.Center == page.Page)
             ? new(page.Document, page.Page, document.CurrentRevisionId, document.Language, target, page.DetachedText)
@@ -990,21 +990,22 @@ public partial class ReadingPage
         PdfLayoutAddress? translated = null)
     {
         var session = AppState.Session;
-        if (!readingPageActive || session.Busy) return;
+        if (!readingPageActive || session.Busy || session.Document is not { } document ||
+            !address.MatchesDocument(document)) return;
         lastInlinePdfFollow = null;
         pdfFragmentFocus = null;
         if (address.DetachedText is not null)
         {
             if (detachedAddress is { } detached && detached.Document == address.Document &&
-                detached.Page == address.Page && detached.Text == address.DetachedText && !loadingDetachedSentence)
+                detached.Page == address.Page && detached.Language == address.SourceLanguage &&
+                detached.Text == address.DetachedText && !loadingDetachedSentence)
             {
                 await LoadDetachedSentenceAsync(detached, position: null, sentenceId: sentenceId, sourceOffset: start);
                 if (FocusTranslatedFragment(detachedSentence?.Sentence)) UpdateInlinePdfHighlight();
             }
             return;
         }
-        if (DetachedPdfReader.IsVisible || session.Document is not { } document ||
-            document.Id != address.Document || document.CurrentRevisionId != address.Revision) return;
+        if (DetachedPdfReader.IsVisible) return;
         var position = Array.FindIndex(document.Sentences,
             sentence => (sentenceId is null || sentence.Id == sentenceId) &&
                 sentence.StartUtf16 < end && sentence.EndUtf16 > start);
@@ -1016,7 +1017,8 @@ public partial class ReadingPage
         if (position != document.Position || (translated is not null && utteranceActive)) StopSpeech();
         if (position != document.Position)
             await session.SelectSentenceAsync(position, pdfPage: document.Format == "pdf" ? address.Page : null);
-        if (session.Error.Length == 0 && session.Sentence?.Id == document.Sentences[position].Id)
+        if (session.Error.Length == 0 && address.MatchesDocument(session.Document) &&
+            session.Sentence?.Id == document.Sentences[position].Id)
         {
             FocusTranslatedFragment(session.Sentence);
             UpdateHighlight();

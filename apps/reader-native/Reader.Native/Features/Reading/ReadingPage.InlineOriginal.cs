@@ -7,7 +7,12 @@ namespace Reader.Native.Features.Reading;
 
 public partial class ReadingPage
 {
-    private sealed record InlinePdfAddress(string Document, int Page, string? Revision, string? DetachedText);
+    private sealed record InlinePdfAddress(string Document, int Page, string? Revision, string SourceLanguage,
+        string? DetachedText)
+    {
+        public bool MatchesDocument(Document? document) => document is not null &&
+            document.Id == Document && document.CurrentRevisionId == Revision && document.Language == SourceLanguage;
+    }
     private sealed record InlinePdfFrame(InlinePdfAddress Address, PhotoPreview Preview, string Text,
         OcrLine[] Boxes, IReadOnlyDictionary<int, PdfBoxAppearance>? Appearance);
     private sealed record PdfWordAnchor(VisualElement View, InlinePdfAddress Address, Rect Bounds);
@@ -130,10 +135,11 @@ public partial class ReadingPage
             // Reading-position lookups may complete out of order before any frame starts.
             if (positionRequest != inlinePdfPositionRequest || !showInlineOriginal ||
                 session.Document is not { } selected || selected.Id != document.Id ||
-                selected.CurrentRevisionId != document.CurrentRevisionId) return;
+                selected.CurrentRevisionId != document.CurrentRevisionId || selected.Language != document.Language) return;
             var detachedText = detachedAddress is { } detached && detached.Document == document.Id &&
-                detached.Page == page && DetachedPdfReader.IsVisible ? detached.Text : null;
-            var address = new InlinePdfAddress(document.Id, page, document.CurrentRevisionId, detachedText);
+                detached.Page == page && detached.Language == document.Language && DetachedPdfReader.IsVisible
+                ? detached.Text : null;
+            var address = new InlinePdfAddress(document.Id, page, document.CurrentRevisionId, document.Language, detachedText);
             if (inlinePdfAddress == address)
             {
                 if (inlinePdfLoading is not null && inlinePdfLoading != address)
@@ -162,7 +168,7 @@ public partial class ReadingPage
             if (previous is not null)
             {
                 // Retain one compressed frame. Rebuilding decoded surfaces is cheaper than caching them.
-                recentInlinePdfFrame = previous.Document == address.Document && previous.Revision == address.Revision &&
+                recentInlinePdfFrame = previous.MatchesDocument(document) &&
                     CanReuseInlinePdfFrame(previous) && inlinePdfPreview is { Bytes.Length: <= 12 * 1024 * 1024 } image
                     ? new(previous, image, inlineNativeText, inlineNativeBoxes, inlinePdfAppearance) : null;
                 ClearInlinePdfFrame();
@@ -206,8 +212,7 @@ public partial class ReadingPage
             }
 
             if (cancellation.IsCancellationRequested || request != inlinePdfRequest || !showInlineOriginal || !readingPageActive ||
-                session.Document is not { } current || current.Id != address.Document ||
-                current.CurrentRevisionId != address.Revision ||
+                !address.MatchesDocument(session.Document) ||
                 (isPdf && CurrentNativePdfWindow(address.Document) is { } activeWindow && activeWindow.Center != address.Page)) return;
             var changedPage = previous is null ||
                 previous.Document != address.Document || previous.Page != address.Page;
@@ -420,6 +425,9 @@ public partial class ReadingPage
         var overlay = detached ? DetachedInlinePdfHighlight : InlinePdfHighlight;
         var source = detached ? detachedAddress?.Text : AppState.Session.Document?.Text;
         if (source is null || inlinePdfAddress is not { } address ||
+            !address.MatchesDocument(AppState.Session.Document) ||
+            detached != (address.DetachedText is not null) ||
+            (detached && source != address.DetachedText) ||
             !overlay.IsVisible || overlay.Drawable is not PdfReadingHighlight drawing ||
             args.GetPosition(view) is not { } point ||
             drawing.HitAt(source.Length, point, (float)view.Width, (float)view.Height) is not { } hit) return;
@@ -463,8 +471,7 @@ public partial class ReadingPage
     {
         if (!wordOnly) RefreshPdfTranslationLayout();
         if (!showInlineOriginal || inlinePdfAddress is not { } address || inlinePdfPreview is not { } preview ||
-            AppState.Session.Document is not { } document || document.Id != address.Document ||
-            document.CurrentRevisionId != address.Revision) return;
+            AppState.Session.Document is not { } document || !address.MatchesDocument(document)) return;
 
         var detached = DetachedPdfReader.IsVisible;
         var overlay = detached ? DetachedInlinePdfHighlight : InlinePdfHighlight;
