@@ -761,12 +761,13 @@ pub(crate) fn pdf_list_label_ranges<'a>(document: &'a Document, text: &'a str, s
             return None;
         }
         let label = marker.as_bytes();
-        if !(label.len() == 1 && label[0].is_ascii_lowercase())
+        let absolute = start.checked_add(begin)?;
+        if !(label.is_empty() && is_ocr_list_dot(document, absolute))
+            && !(label.len() == 1 && label[0].is_ascii_lowercase())
             && !((1..=3).contains(&label.len()) && label.iter().all(u8::is_ascii_digit))
         {
             return None;
         }
-        let absolute = start.checked_add(begin)?;
         let original = document.text.get(absolute..)?.strip_prefix(token)?;
         if !original.starts_with(|ch: char| ch.is_whitespace() && !matches!(ch, '\r' | '\n')) {
             return None;
@@ -774,6 +775,23 @@ pub(crate) fn pdf_list_label_ranges<'a>(document: &'a Document, text: &'a str, s
         let before = document.text.get(..absolute)?.rsplit(['\r', '\n']).next()?;
         before.chars().all(|ch| ch.is_whitespace() || ch == '\u{fffc}')
             .then_some(begin..begin + token.len())
+    })
+}
+
+fn is_ocr_list_dot(document: &Document, start: usize) -> bool {
+    document.ocr_lines.as_deref().unwrap_or_default().iter().any(|line| {
+        let [dot, next, ..] = line.words.as_slice() else { return false; };
+        if dot.text != "." || !dot.source_span.is_some_and(|span| span.start_utf8 == start)
+            || !next.text.starts_with(char::is_uppercase)
+        {
+            return false;
+        }
+        let rotation = crate::ocr::line_rotation(line).unwrap_or_default();
+        let (x, y, width, height) = crate::ocr::reading_box((dot.x, dot.y, dot.width, dot.height), rotation);
+        let (next_x, next_y, _, next_height) = crate::ocr::reading_box((next.x, next.y, next.width, next.height), rotation);
+        let gap = next_x - x - width;
+        (0.0..=2.0 * next_height).contains(&gap) && height <= 0.45 * next_height
+            && (next_y + 0.45 * next_height..=next_y + 1.1 * next_height).contains(&(y + height / 2.0))
     })
 }
 

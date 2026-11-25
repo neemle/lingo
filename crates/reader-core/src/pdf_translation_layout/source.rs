@@ -2,7 +2,7 @@ use super::{plan, Bounds, PageLayout, Region, SourceFragment};
 use crate::ocr::{OcrLine, OcrSpan};
 use crate::Result;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, ops::Range};
+use std::{borrow::Cow, collections::BTreeMap, ops::Range};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -100,6 +100,8 @@ pub fn project(
         .iter()
         .map(|anchor| (anchor.start_utf16, &anchor.style))
         .collect();
+    let geometry = tighten_ocr_bands(geometry, &styles);
+    let geometry = geometry.as_ref();
     let fragments = rows
         .iter()
         .map(|row| project_row(row, geometry, offset, &styles))
@@ -183,6 +185,61 @@ pub fn project(
         })
         .collect();
     Ok(ProjectedLayout { layout, anchors })
+}
+
+fn tighten_ocr_bands<'a>(geometry: &'a [OcrLine], styles: &BTreeMap<usize, &SourceStyle>) -> Cow<'a, [OcrLine]> {
+    let mut adjusted = Cow::Borrowed(geometry);
+    for (index, line) in geometry.iter().enumerate() {
+        let rotation = crate::ocr::line_rotation(line).unwrap_or_default();
+        let inverse = (360 - rotation) % 360;
+        let reading = |word: &crate::ocr::OcrWord| Bounds {
+            x: word.x, y: word.y, width: word.width, height: word.height,
+        }.reading_box(rotation);
+        let mut updates = Vec::new();
+        for (word_index, triple) in line.words.windows(3).enumerate() {
+            let [left, word, right] = [&triple[0], &triple[1], &triple[2]];
+            // Exact font information is stronger evidence than neighboring OCR boxes.
+            if word.source_span.and_then(|span| styles.get(&span.start_utf16))
+                .is_some_and(|style| style.font_height.is_some_and(|height| height > 0.0))
+            {
+                continue;
+            }
+            if let Some(bounds) = word_band(reading(left), reading(word), reading(right)) {
+                updates.push((word_index + 1, bounds.reading_box(inverse)));
+            }
+        }
+        if updates.is_empty() { continue; }
+        let revised = &mut adjusted.to_mut()[index];
+        for (word_index, bounds) in updates {
+            let word = &mut revised.words[word_index];
+            (word.x, word.y, word.width, word.height) = (bounds.x, bounds.y, bounds.width, bounds.height);
+        }
+        let first = reading(&revised.words[0]);
+        let words = revised.words[1..].iter().map(reading).fold(first, Bounds::union);
+        let bounds = Bounds { x: line.x, y: line.y, width: line.width, height: line.height }.reading_box(rotation);
+        // Keep the horizontal ink envelope, while removing unsupported vertical spill.
+        let revised_bounds = Bounds { y: words.y, height: words.height, ..bounds }.reading_box(inverse);
+        (revised.x, revised.y, revised.width, revised.height) =
+            (revised_bounds.x, revised_bounds.y, revised_bounds.width, revised_bounds.height);
+    }
+    adjusted
+}
+
+fn word_band(left: Bounds, word: Bounds, right: Bounds) -> Option<Bounds> {
+    let height = left.height.max(right.height);
+    let top = left.y.min(right.y);
+    let bottom = left.bottom().max(right.bottom());
+    if height <= 0.0 || left.height.min(right.height) < 0.70 * height
+        || left.overlap(right).1 < 0.70 * height
+        || word.height < 1.85 * height
+        || word.y > top - 0.25 * height || word.bottom() < bottom + 0.25 * height
+        || !(left.x < word.x && word.x < right.x)
+        || word.x - left.right() > 1.5 * height || right.x - word.right() > 1.5 * height
+    {
+        return None;
+    }
+    let padding = height * 0.06;
+    Some(Bounds { y: top - padding, height: bottom - top + 2.0 * padding, ..word })
 }
 
 fn wider_line(
@@ -410,6 +467,42 @@ mod tests {
         across_columns[2].x += 36.0 / 612.0;
         let layout = project(&rows, &across_columns, 0, &styles, true).unwrap();
         assert!(layout.layout.regions[0].wider_bounds.is_none());
+    }
+
+    #[test]
+    fn narrows_an_oversized_scan_word_only_with_aligned_neighbors() {
+        for rotation in [0, 90, 180, 270] {
+            let inverse = (360 - rotation) % 360;
+            let word = |text: &str, x, y, height, start| {
+                let bounds = Bounds { x, y, width: 0.04, height }.reading_box(inverse);
+                let end = start + text.len();
+                OcrWord { text: text.into(), x: bounds.x, y: bounds.y, width: bounds.width,
+                    height: bounds.height, raw_start_utf16: Some(start), source_span: Some(OcrSpan {
+                        start_utf8: start, end_utf8: end, start_utf16: start, end_utf16: end,
+                    }) }
+            };
+            let bounds = Bounds { x: 0.1, y: 0.18, width: 0.14, height: 0.06 }.reading_box(inverse);
+            let line = OcrLine { rotation: Some(rotation), page: 0, text: "Vous ? Venez".into(),
+                x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height,
+                confidence: None, correction: None, block_start: false, source_span: None,
+                words: vec![word("Vous", 0.1, 0.2, 0.02, 0), word("?", 0.15, 0.18, 0.06, 5),
+                    word("Venez", 0.2, 0.2, 0.02, 7)],
+            };
+            let geometry = [line];
+            let corrected = tighten_ocr_bands(&geometry, &BTreeMap::new());
+            let reading = |word: &OcrWord| Bounds {
+                x: word.x, y: word.y, width: word.width, height: word.height,
+            }.reading_box(rotation);
+            let original = reading(&geometry[0].words[1]);
+            let revised = reading(&corrected[0].words[1]);
+            assert!((original.height - 0.06).abs() < 1e-9);
+            assert!((revised.height - 0.0224).abs() < 1e-9);
+            assert!((revised.x - original.x).abs() < 1e-9);
+            assert_eq!(corrected[0].words[1].source_span.unwrap().start_utf16, 5);
+
+            let known_font = SourceStyle::test_style([1.; 3], 0.055);
+            assert!(matches!(tighten_ocr_bands(&geometry, &BTreeMap::from([(5, &known_font)])), Cow::Borrowed(_)));
+        }
     }
 
     #[test]
