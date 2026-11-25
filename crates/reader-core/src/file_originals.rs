@@ -454,7 +454,7 @@ impl Store {
             .unwrap_or(&name);
         let text = extracted.text;
         let mut document = Document {
-            sentences: crate::pdf_sentences::Layout::PageReferences.segment(&text, &id),
+            sentences: crate::pdf_sentences::Layout::ListItems.segment(&text, &id),
             id,
             title: title.into(),
             language,
@@ -479,6 +479,7 @@ impl Store {
             pdf_abbreviation_boundaries: true,
             pdf_quote_boundaries: true,
             pdf_reference_boundaries: true,
+            pdf_list_item_boundaries: true,
             prose_sentence_boundaries: false,
             created_at: now(),
             source_hash: hash,

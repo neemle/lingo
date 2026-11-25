@@ -757,10 +757,13 @@ pub(crate) fn pdf_list_label_ranges<'a>(document: &'a Document, text: &'a str, s
         let begin = prefix + line.len() - body.len();
         let token = body.split_whitespace().next()?;
         let absolute = start.checked_add(begin)?;
+        let prefix = document.text.get(..absolute)?;
+        let (previous, before) = prefix.rsplit_once(['\r', '\n']).unwrap_or(("", prefix));
+        let previous_line = previous.strip_suffix('\r').unwrap_or(previous)
+            .rsplit(['\r', '\n']).next().unwrap_or("");
         let printed_label = token.strip_suffix('.').is_some_and(|marker| {
-            !crate::pdf_sentences::is_page_reference(marker, &body[token.len()..])
-                && (alphabetical_list_label(marker).is_some()
-                    || ((1..=3).contains(&marker.len()) && marker.bytes().all(|ch| ch.is_ascii_digit())))
+            crate::pdf_sentences::printed_list_label(marker, &body[token.len()..])
+                && !crate::pdf_sentences::wrapped_page_number(marker, previous_line)
         });
         if !printed_label && !is_ocr_list_marker(document, token, absolute) {
             return None;
@@ -769,7 +772,6 @@ pub(crate) fn pdf_list_label_ranges<'a>(document: &'a Document, text: &'a str, s
         if !original.starts_with(|ch: char| ch.is_whitespace() && !matches!(ch, '\r' | '\n')) {
             return None;
         }
-        let before = document.text.get(..absolute)?.rsplit(['\r', '\n']).next()?;
         before.chars().all(|ch| ch.is_whitespace() || ch == '\u{fffc}')
             .then_some(begin..begin + token.len())
     })

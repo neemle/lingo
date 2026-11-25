@@ -18,11 +18,13 @@ pub(crate) enum Layout {
     Titles = 3,
     ClosingQuotes = 4,
     PageReferences = 5,
+    ListItems = 6,
 }
 
 impl Layout {
     pub(crate) fn from_storage(value: u8) -> Self {
         match value {
+            6 => Self::ListItems,
             5 => Self::PageReferences,
             4 => Self::ClosingQuotes,
             3 => Self::Titles,
@@ -34,6 +36,7 @@ impl Layout {
 
     pub(crate) fn segment(self, text: &str, id: &str) -> Vec<Sentence> {
         match self {
+            Self::ListItems => attach_closing_quotes(text, id, crate::segment_pdf_with_list_items(text, id)),
             Self::PageReferences => attach_closing_quotes(text, id, crate::segment_pdf_with_references(text, id)),
             Self::ClosingQuotes => attach_closing_quotes(text, id, crate::segment_pdf_with_titles(text, id)),
             Self::Titles => crate::segment_pdf_with_titles(text, id),
@@ -45,7 +48,9 @@ impl Layout {
 }
 
 pub(crate) fn segment_document(document: &Document, text: &str) -> Vec<Sentence> {
-    if document.format == "pdf" && document.pdf_reference_boundaries {
+    if document.format == "pdf" && document.pdf_list_item_boundaries {
+        Layout::ListItems.segment(text, &document.id)
+    } else if document.format == "pdf" && document.pdf_reference_boundaries {
         Layout::PageReferences.segment(text, &document.id)
     } else if (document.format == "pdf" && document.pdf_quote_boundaries) ||
         (document.format != "pdf" && document.ocr_lines.is_some())
@@ -200,14 +205,18 @@ pub(crate) fn upgrade_documents(connection: &mut Connection) -> Result<()> {
 }
 
 pub(crate) fn upgrade_prose_documents(connection: &mut Connection) -> Result<()> {
-    upgrade_anchored_sentences(connection, 7, false)
+    upgrade_anchored_sentences(connection, 7, None)
 }
 
 pub(crate) fn upgrade_pdf_references(connection: &mut Connection) -> Result<()> {
-    upgrade_anchored_sentences(connection, 8, true)
+    upgrade_anchored_sentences(connection, 8, Some(Layout::PageReferences))
 }
 
-fn upgrade_anchored_sentences(connection: &mut Connection, target_version: u32, pdf_references: bool) -> Result<()> {
+pub(crate) fn upgrade_pdf_list_items(connection: &mut Connection) -> Result<()> {
+    upgrade_anchored_sentences(connection, 9, Some(Layout::ListItems))
+}
+
+fn upgrade_anchored_sentences(connection: &mut Connection, target_version: u32, pdf_layout: Option<Layout>) -> Result<()> {
     let version = |db: &Connection| db.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
         .map_err(storage_error);
     if version(connection)? >= target_version {
@@ -217,15 +226,17 @@ fn upgrade_anchored_sentences(connection: &mut Connection, target_version: u32, 
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(storage_error)?;
     if version(&tx)? < target_version {
         let ids = {
-            let selection = if pdf_references {
-                "SELECT id FROM documents WHERE json_extract(body,'$.format')='pdf'
+            let selection = match pdf_layout {
+                Some(Layout::ListItems) => "SELECT id FROM documents WHERE json_extract(body,'$.format')='pdf'
+                 AND json_extract(body,'$.pdfQuoteBoundaries')=1
+                 AND coalesce(json_extract(body,'$.pdfListItemBoundaries'),0)=0",
+                Some(_) => "SELECT id FROM documents WHERE json_extract(body,'$.format')='pdf'
                  AND json_extract(body,'$.pdfQuoteBoundaries')=1
                  AND coalesce(json_extract(body,'$.pdfReferenceBoundaries'),0)=0
-                 AND instr(lower(json_extract(body,'$.text')),'p.')>0"
-            } else {
-                "SELECT id FROM documents WHERE json_extract(body,'$.format') IN ('txt','docx')
+                 AND instr(lower(json_extract(body,'$.text')),'p.')>0",
+                None => "SELECT id FROM documents WHERE json_extract(body,'$.format') IN ('txt','docx')
                  AND coalesce(json_extract(body,'$.proseSentenceBoundaries'),0)=0
-                 AND coalesce(json_type(body,'$.ocrLines'),'null')='null'"
+                 AND coalesce(json_type(body,'$.ocrLines'),'null')='null'",
             };
             let mut query = tx.prepare(selection).map_err(storage_error)?;
             let rows = query.query_map([], |row| row.get::<_, String>(0)).map_err(storage_error)?;
@@ -237,8 +248,11 @@ fn upgrade_anchored_sentences(connection: &mut Connection, target_version: u32, 
                 [&id], |row| Ok((row.get(0)?, row.get(1)?)),
             ).map_err(storage_error)?;
             let mut document: Document = serde_json::from_str(&body).map_err(storage_error)?;
-            let sentences = if pdf_references {
-                Layout::PageReferences.segment(&document.text, &document.id)
+            if pdf_layout == Some(Layout::ListItems) && !has_list_marker(&document.text) {
+                continue;
+            }
+            let sentences = if let Some(layout) = pdf_layout {
+                layout.segment(&document.text, &document.id)
             } else if document.ocr_lines.is_none() {
                 segment_prose(&document.text, &document.id)
             } else { continue; };
@@ -266,15 +280,19 @@ fn upgrade_anchored_sentences(connection: &mut Connection, target_version: u32, 
                 });
             }
             document.sentences = sentences;
-            if pdf_references { document.pdf_reference_boundaries = true; }
-            else { document.prose_sentence_boundaries = true; }
+            if let Some(layout) = pdf_layout {
+                document.pdf_reference_boundaries = true;
+                document.pdf_list_item_boundaries = layout == Layout::ListItems;
+            } else {
+                document.prose_sentence_boundaries = true;
+            }
             document.speech_resume = inline_resume;
             crate::document_revisions::append(&mut document, &tx)?;
             let body = serde_json::to_string(&document).map_err(storage_error)?;
             tx.execute("UPDATE documents SET body=?1 WHERE id=?2", params![body, id]).map_err(storage_error)?;
         }
-        if pdf_references {
-            crate::pdf_detached_pages::upgrade_sentence_layouts(&tx, Layout::PageReferences)?;
+        if let Some(layout) = pdf_layout {
+            crate::pdf_detached_pages::upgrade_sentence_layouts(&tx, layout)?;
         }
         tx.pragma_update(None, "user_version", target_version).map_err(storage_error)?;
     }
@@ -354,9 +372,46 @@ pub(crate) fn is_abbreviated_title(word: &str) -> bool {
 }
 
 pub(crate) fn is_page_reference(abbreviation: &str, suffix: &str) -> bool {
-    if !matches!(abbreviation, "p" | "pp" | "P" | "PP" | "Pp") { return false; }
+    if !is_page_abbreviation(abbreviation) { return false; }
     let number = suffix.trim_start_matches(|ch: char| ch.is_whitespace() && !matches!(ch, '\n' | '\r'));
     number.len() < suffix.len() && number.starts_with(|ch: char| ch.is_ascii_digit())
+}
+
+fn is_page_abbreviation(word: &str) -> bool {
+    matches!(word, "p" | "pp" | "P" | "PP" | "Pp")
+}
+
+pub(crate) fn printed_list_label(marker: &str, suffix: &str) -> bool {
+    !is_page_reference(marker, suffix)
+        && ((marker.len() == 1 && marker.as_bytes()[0].is_ascii_lowercase())
+            || ((1..=3).contains(&marker.len()) && marker.bytes().all(|byte| byte.is_ascii_digit())))
+}
+
+pub(crate) fn list_marker_period(previous: &str, line: &str) -> Option<usize> {
+    let body = line.trim_start_matches(|ch: char| ch.is_whitespace() || ch == '\u{fffc}');
+    let token = body.split_whitespace().next()?;
+    let marker = token.strip_suffix('.')?;
+    let suffix = &body[token.len()..];
+    let heading = suffix.trim_start_matches(|ch: char| ch.is_whitespace() && !matches!(ch, '\r' | '\n'));
+    if !printed_list_label(marker, suffix) || !heading.starts_with(char::is_alphabetic) {
+        return None;
+    }
+    // A citation can wrap onto the next physical line before its number.
+    if wrapped_page_number(marker, previous) {
+        return None;
+    }
+    Some(line.len() - body.len() + marker.len())
+}
+
+pub(crate) fn wrapped_page_number(marker: &str, previous: &str) -> bool {
+    marker.starts_with(|ch: char| ch.is_ascii_digit())
+        && previous.split_whitespace().last().and_then(|word| word.strip_suffix('.'))
+            .is_some_and(is_page_abbreviation)
+}
+
+pub(crate) fn has_list_marker(text: &str) -> bool {
+    std::iter::once("").chain(text.lines()).zip(text.lines())
+        .any(|(previous, line)| list_marker_period(previous, line).is_some())
 }
 
 pub(crate) fn mask_page_reference_periods(boundaries: &mut [u8]) {
@@ -404,6 +459,24 @@ mod tests {
             assert_eq!(text[..sentence.end_utf8].encode_utf16().count(), sentence.end_utf16);
         }
         assert_eq!(Layout::from_storage(4).segment("Voir p. 189. Puis revenez.", "pdf").len(), 3);
+    }
+
+    #[test]
+    fn printed_exercise_labels_stay_with_their_text_without_absorbing_a_new_item() {
+        let text = "11. Préparez votre essai argumenté.\na. Analysez le sujet proposé p.\n35. Relevez les mots-clés :\nb. Pensez au style.\n\n12. Choisissez votre plan.";
+        let sentences = Layout::ListItems.segment(text, "pdf");
+        assert_eq!(sentences.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(), [
+            "11. Préparez votre essai argumenté.", "a. Analysez le sujet proposé p.\n35.",
+            "Relevez les mots-clés :", "b. Pensez au style.", "12. Choisissez votre plan.",
+        ]);
+        let document = Document { text: text.into(), ..Document::default() };
+        assert_eq!(crate::document_layout::pdf_list_label_ranges(&document, text, 0)
+            .map(|range| &text[range]).collect::<Vec<_>>(), ["11.", "a.", "b.", "12."]);
+        for sentence in sentences {
+            assert_eq!(&text[sentence.start_utf8..sentence.end_utf8], sentence.text);
+            assert_eq!(text[..sentence.start_utf8].encode_utf16().count(), sentence.start_utf16);
+            assert_eq!(text[..sentence.end_utf8].encode_utf16().count(), sentence.end_utf16);
+        }
     }
 
     #[test]

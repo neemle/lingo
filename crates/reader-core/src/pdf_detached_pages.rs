@@ -94,7 +94,8 @@ pub(crate) fn upgrade_sentence_layouts(db: &Connection, target: Layout) -> Resul
     let pages = {
         let mut statement = db.prepare(
             "SELECT p.document_id,p.page FROM pdf_detached_pages p
-             WHERE p.soft_lines<?1 AND (?1=4 OR (p.soft_lines=4 AND instr(lower(p.text),'p.')>0))
+             WHERE p.soft_lines<?1 AND (?1=4 OR (?1=5 AND p.soft_lines=4 AND instr(lower(p.text),'p.')>0)
+                 OR (?1=6 AND p.soft_lines IN (4,5)))
              AND NOT EXISTS(
                  SELECT 1 FROM pdf_detached_speech_resume s WHERE s.document_id=p.document_id AND s.page=p.page
              ) AND (?1=4 OR NOT EXISTS(
@@ -114,9 +115,17 @@ pub(crate) fn upgrade_sentence_layouts(db: &Connection, target: Layout) -> Resul
              WHERE p.document_id=?1 AND p.page=?2",
             params![id, page], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).map_err(database_error)?;
+        if target == Layout::ListItems && !crate::pdf_sentences::has_list_marker(&text) {
+            continue;
+        }
         let prior = Layout::from_storage(layout);
         let before = prior.segment(&text, "");
         let after = target.segment(&text, "");
+        if target == Layout::ListItems && before.iter().map(|s| (s.start_utf8, s.end_utf8))
+            .eq(after.iter().map(|s| (s.start_utf8, s.end_utf8)))
+        {
+            continue;
+        }
         if !anchors_unchanged(&annotations::list(db, &id, page)?, &before, &after) {
             continue;
         }
@@ -348,7 +357,7 @@ pub(crate) fn read(db: &Connection, id: &str, page: u16) -> Result<Option<(Strin
 }
 
 pub(crate) fn write_text_layer(db: &Connection, id: &str, page: u16, text: &str) -> Result<()> {
-    write(db, id, page, text, None, None, Layout::PageReferences)
+    write(db, id, page, text, None, None, Layout::ListItems)
 }
 
 pub(crate) fn replace_native_layer(
@@ -432,12 +441,15 @@ pub(crate) fn write_ocr(
 ) -> Result<()> {
     let text = ocr::recognized_lines(lines, page_count)?;
     let payload = serde_json::to_string(lines).map_err(database_error)?;
-    if let Some((previous, _)) = read(db, id, page)? {
+    let layout = if let Some((previous, _)) = read(db, id, page)? {
         if previous != text {
             ocr_edit::reanchor_replaced_ocr(db, id, page, &previous, &text)?;
         }
-    }
-    write(db, id, page, &text, Some(language), Some(&payload), Layout::PageReferences)
+        page_layout(db, id, page)?
+    } else {
+        Layout::ListItems
+    };
+    write(db, id, page, &text, Some(language), Some(&payload), layout)
 }
 
 fn write(
@@ -472,6 +484,8 @@ pub(crate) struct ArchivedPage {
     quote_boundaries: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     reference_boundaries: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    list_item_boundaries: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<annotations::ArchivedAnnotation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -480,7 +494,9 @@ pub(crate) struct ArchivedPage {
 
 impl ArchivedPage {
     fn layout(&self) -> Layout {
-        if self.reference_boundaries {
+        if self.list_item_boundaries {
+            Layout::ListItems
+        } else if self.reference_boundaries {
             Layout::PageReferences
         } else if self.quote_boundaries {
             Layout::ClosingQuotes
@@ -498,7 +514,8 @@ impl ArchivedPage {
         self.structured_sentences = (layout as u8) >= Layout::Structured as u8;
         self.abbreviation_boundaries = (layout as u8) >= Layout::Titles as u8;
         self.quote_boundaries = (layout as u8) >= Layout::ClosingQuotes as u8;
-        self.reference_boundaries = layout == Layout::PageReferences;
+        self.reference_boundaries = (layout as u8) >= Layout::PageReferences as u8;
+        self.list_item_boundaries = layout == Layout::ListItems;
     }
 
     pub(crate) fn validate(&self, document: &crate::Document, page_count: u16) -> Result<()> {
@@ -628,7 +645,8 @@ pub(crate) fn visit_cached_pages(
             structured_sentences: (layout as u8) >= Layout::Structured as u8,
             abbreviation_boundaries: (layout as u8) >= Layout::Titles as u8,
             quote_boundaries: (layout as u8) >= Layout::ClosingQuotes as u8,
-            reference_boundaries: layout == Layout::PageReferences,
+            reference_boundaries: (layout as u8) >= Layout::PageReferences as u8,
+            list_item_boundaries: layout == Layout::ListItems,
             text,
             language: row.get(2).map_err(database_error)?,
             lines: encoded.as_deref().map(serde_json::from_str).transpose().map_err(database_error)?,

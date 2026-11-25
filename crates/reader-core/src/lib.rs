@@ -126,6 +126,8 @@ pub struct Document {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) pdf_reference_boundaries: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) pdf_list_item_boundaries: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) prose_sentence_boundaries: bool,
     pub created_at: i64,
     pub source_hash: String,
@@ -460,28 +462,38 @@ pub fn segment(text: &str, id: &str) -> Vec<Sentence> {
 }
 
 pub(crate) fn segment_pdf(text: &str, id: &str) -> Vec<Sentence> {
-    segment_pdf_lines(text, id, false, false, false)
+    segment_pdf_lines(text, id, false, false, false, false)
 }
 
 pub(crate) fn segment_pdf_structured(text: &str, id: &str) -> Vec<Sentence> {
-    segment_pdf_lines(text, id, true, false, false)
+    segment_pdf_lines(text, id, true, false, false, false)
 }
 
 pub(crate) fn segment_pdf_with_titles(text: &str, id: &str) -> Vec<Sentence> {
-    segment_pdf_lines(text, id, true, true, false)
+    segment_pdf_lines(text, id, true, true, false, false)
 }
 
 pub(crate) fn segment_pdf_with_references(text: &str, id: &str) -> Vec<Sentence> {
-    segment_pdf_lines(text, id, true, true, true)
+    segment_pdf_lines(text, id, true, true, true, false)
 }
 
-fn segment_pdf_lines(text: &str, id: &str, structured: bool, titles: bool, references: bool) -> Vec<Sentence> {
+pub(crate) fn segment_pdf_with_list_items(text: &str, id: &str) -> Vec<Sentence> {
+    segment_pdf_lines(text, id, true, true, true, true)
+}
+
+fn segment_pdf_lines(text: &str, id: &str, structured: bool, titles: bool, references: bool, list_items: bool) -> Vec<Sentence> {
     let mut softened = text.as_bytes().to_vec();
     let mut start = 0;
     let mut lines = text.split_inclusive('\n').peekable();
+    let mut marker = lines.peek().filter(|_| list_items).and_then(|line| pdf_sentences::list_marker_period("", line));
     while let Some(line) = lines.next() {
         let end = start + line.len();
+        if let Some(period) = marker {
+            softened[start + period] = b' ';
+        }
+        marker = lines.peek().filter(|_| list_items).and_then(|next| pdf_sentences::list_marker_period(line, next));
         if line.ends_with('\n') && !line.trim().is_empty()
+            && marker.is_none()
             && lines.peek().is_some_and(|next| {
                 let next = next.trim();
                 !next.is_empty() && (!structured || !document_layout::keep_pdf_sentence_break(line.trim(), next))
@@ -611,7 +623,8 @@ impl Store {
         pdf_sentences::upgrade_documents(connection)?;
         card_learning::upgrade_noun_keys(connection)?;
         pdf_sentences::upgrade_prose_documents(connection)?;
-        pdf_sentences::upgrade_pdf_references(connection)
+        pdf_sentences::upgrade_pdf_references(connection)?;
+        pdf_sentences::upgrade_pdf_list_items(connection)
     }
     pub fn snapshot(&self) -> Result<Snapshot> {
         fn rows<T: serde::de::DeserializeOwned>(
@@ -892,7 +905,7 @@ impl Store {
             .to_lowercase();
         let prose_sentence_boundaries = matches!(format.as_str(), "txt" | "docx") && ocr_lines.is_none();
         let sentences = if format == "pdf" {
-            pdf_sentences::Layout::PageReferences.segment(&text, &id)
+            pdf_sentences::Layout::ListItems.segment(&text, &id)
         } else if ocr_lines.is_some() {
             pdf_sentences::Layout::ClosingQuotes.segment(&text, &id)
         } else if prose_sentence_boundaries {
@@ -931,6 +944,7 @@ impl Store {
             pdf_abbreviation_boundaries: format == "pdf",
             pdf_quote_boundaries: format == "pdf",
             pdf_reference_boundaries: format == "pdf",
+            pdf_list_item_boundaries: format == "pdf",
             prose_sentence_boundaries,
             created_at: now(),
             source_hash: hash,
